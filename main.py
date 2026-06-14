@@ -331,7 +331,7 @@ def _render_indicator_panel(ticker: str) -> None:
 
     with st.expander("Technical Indicators", expanded=True):
         if row is None:
-            st.info("No indicator data yet — click **Run Analysis** in the sidebar.")
+            st.info("No indicator data yet — analysis runs automatically after each data refresh.")
             return
 
         date_str = row.get("date")
@@ -454,34 +454,12 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.divider()
 
-    # ---- Generate Signals button -------------------------------------------
+    # ---- Last run timestamp ------------------------------------------------
     last_ts = get_metadata("last_analysis_run") or get_last_signal_timestamp()
     if last_ts:
         st.caption(f"Signals last generated: {last_ts.strftime('%Y-%m-%d %H:%M')} UTC")
     else:
-        st.caption("No signals generated yet.")
-
-    if st.button("⚡ Generate Signals", type="primary", use_container_width=False):
-        tickers = get_all_tickers(config)
-        bar     = st.progress(0, text="Detecting regime…")
-        status  = st.empty()
-
-        def _on_progress(current: int, total: int, ticker: str) -> None:
-            bar.progress(current / total, text=f"Scoring {ticker} ({current}/{total})")
-            status.caption(f"Last completed: **{ticker}**")
-
-        outcome = generate_signals(
-            tickers=tickers, config=config, progress_callback=_on_progress
-        )
-        bar.progress(1.0, text="Done")
-
-        n_errors = len(outcome["errors"])
-        n_ok     = len(outcome["signals"])
-        if n_errors:
-            st.warning(f"Generated {n_ok} signals with {n_errors} error(s). Check logs.")
-        else:
-            st.success(f"Generated signals for {n_ok} assets.")
-        st.rerun()
+        st.caption("Signals not yet generated — updates run automatically at 21:30 UTC on weekdays.")
 
     st.divider()
 
@@ -489,7 +467,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     rows = get_latest_signals(list(watchlist.keys()))
 
     if not rows:
-        st.info("No signals yet — click **Generate Signals** above.")
+        st.info("No signals yet — signals are generated automatically after each data refresh.")
         return
 
     # ---- Signal distribution -----------------------------------------------
@@ -1293,28 +1271,6 @@ def main() -> None:
                 results = pull_incremental()
                 new_rows = sum(results.values())
             st.success(f"Fetched {new_rows} new rows across {len(results)} tickers.")
-            st.rerun()
-
-        # Run Analysis button
-        if st.button("🧮 Run Analysis", use_container_width=True):
-            tickers = get_all_tickers(config)
-            progress_bar = st.progress(0, text="Starting analysis…")
-            status_text  = st.empty()
-
-            def _on_progress(current: int, total: int, ticker: str) -> None:
-                pct = current / total
-                progress_bar.progress(pct, text=f"Analysed {ticker} ({current}/{total})")
-                status_text.caption(f"Last completed: **{ticker}**")
-
-            analysis_results = run_analysis(
-                tickers=tickers, config=config, progress_callback=_on_progress
-            )
-            progress_bar.progress(1.0, text="Analysis complete")
-            errors = [r for r in analysis_results if "error" in r]
-            if errors:
-                st.warning(f"Completed with {len(errors)} error(s). Check logs.")
-            else:
-                st.success(f"Analysis complete for {len(analysis_results)} assets.")
             st.rerun()
 
         # Watchlist selector — only shown on Charts page
