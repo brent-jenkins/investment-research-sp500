@@ -72,10 +72,10 @@ database:
   path: "database/investment_research.db"
 
 scheduler:
-  # Cron expression for daily data pull (default: 6:30 PM weekdays)
-  hour: 18
+  # Cron expression for daily data pull — 21:30 UTC = after NYSE close (16:00 ET)
+  hour: 21
   minute: 30
-  timezone: "America/New_York"
+  timezone: "UTC"
 
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html

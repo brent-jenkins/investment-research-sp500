@@ -9,8 +9,7 @@ User=root
 Group=root
 WorkingDirectory=/root/investment-research
 
-# Use the virtualenv Python so all installed packages are available
-ExecStart=/root/investment-research/venv/bin/python -m streamlit run main.py
+ExecStart=/usr/local/bin/streamlit run /root/investment-research/main.py
 
 # Restart policy: always restart, with a 10-second backoff, up to 5 times
 # before systemd considers the service failed

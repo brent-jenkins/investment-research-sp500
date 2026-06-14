@@ -10,7 +10,7 @@
 #   1. Updates apt and installs system dependencies + Python 3.11
 #   2. Compiles the TA-Lib C library from source (Linux native)
 #   3. Installs Caddy web server via the official apt repo
-#   4. Creates a Python virtualenv and installs all Python packages
+#   4. Installs all Python packages system-wide via python3.11 -m pip
 #   5. Creates .streamlit/config.toml for headless server mode
 #   6. Copies Caddyfile to /etc/caddy/Caddyfile
 #   7. Installs and starts the investment-research systemd service
@@ -40,7 +40,6 @@ apt-get install -y \
     git \
     curl \
     python3.11 \
-    python3.11-venv \
     python3.11-dev \
     software-properties-common \
     debian-keyring \
@@ -78,26 +77,21 @@ apt-get update -y
 apt-get install -y caddy
 echo "    Caddy installed: $(caddy version)"
 
-# ── 4. Python virtualenv + packages ───────────────────────────────────────────
+# ── 4. Python packages ────────────────────────────────────────────────────────
 
 echo ""
-echo ">>> [4/7] Creating Python virtualenv and installing packages..."
+echo ">>> [4/7] Installing Python packages system-wide..."
 cd "$APP_DIR"
 
-python3.11 -m venv venv
-# shellcheck source=/dev/null
-source venv/bin/activate
-
-pip install --upgrade pip wheel
+python3.11 -m pip install --upgrade pip wheel
 
 # Install everything in requirements.txt (TA-Lib-Precompiled line is
 # commented out on all platforms; we add the Linux TA-Lib wrapper below)
-pip install -r requirements.txt
+python3.11 -m pip install -r requirements.txt
 
 # Linux TA-Lib Python wrapper — links against the C library compiled above
-pip install TA-Lib
+python3.11 -m pip install TA-Lib
 
-deactivate
 echo "    Python packages installed."
 
 # ── 5. App directories & Streamlit config ─────────────────────────────────────
