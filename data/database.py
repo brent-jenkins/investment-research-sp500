@@ -310,7 +310,31 @@ def _apply_migrations(engine) -> None:
 
 
 def init_db() -> None:
-    """Create all tables in the database if they do not already exist."""
+    """Create all tables in the database if they do not already exist.
+
+    Explicitly references every model class so Base.metadata is fully
+    populated before create_all() runs.  SQLAlchemy's declarative system
+    registers classes automatically at definition time when they live in
+    the same module, but the explicit list below makes the dependency
+    visible and keeps things correct if models are ever split into separate
+    files (where they would need to be imported first).
+    """
+    # Importing Base from this module already pulls in all six classes, but
+    # listing them here makes the requirement unambiguous and enforced.
+    _register = (
+        PriceData,
+        Indicator,
+        Signal,
+        Trade,
+        Performance,
+        SystemMetadata,
+    )
+    if not all(c.__tablename__ in Base.metadata.tables for c in _register):
+        raise RuntimeError(
+            "One or more model classes are not registered with Base.metadata — "
+            "check that all models inherit from the same Base instance."
+        )
+
     engine = get_engine()
     Base.metadata.create_all(engine)
     _apply_migrations(engine)
