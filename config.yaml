@@ -30,6 +30,17 @@ watchlist:
       name: "Industrial Select Sector"
       exchange: "NYSE"
 
+  energy:
+    - ticker: "USO"
+      name: "United States Oil Fund"
+      exchange: "NYSE"
+    - ticker: "BNO"
+      name: "United States Brent Oil Fund"
+      exchange: "NYSE"
+    - ticker: "UNG"
+      name: "United States Natural Gas Fund"
+      exchange: "NYSE"
+
   commodities:
     - ticker: "GLD"
       name: "SPDR Gold Shares"
@@ -37,11 +48,20 @@ watchlist:
     - ticker: "SLV"
       name: "iShares Silver Trust"
       exchange: "NYSE"
-    - ticker: "USO"
-      name: "United States Oil Fund"
-      exchange: "NYSE"
     - ticker: "CORN"
       name: "Teucrium Corn Fund"
+      exchange: "NYSE"
+    - ticker: "CPER"
+      name: "United States Copper Index Fund"
+      exchange: "NYSE"
+    - ticker: "PDBC"
+      name: "Invesco Optimum Yield Diversified Commodity Strategy"
+      exchange: "NYSE"
+    - ticker: "DBA"
+      name: "Invesco DB Agriculture Fund"
+      exchange: "NYSE"
+    - ticker: "WEAT"
+      name: "Teucrium Wheat Fund"
       exchange: "NYSE"
 
   bonds:
