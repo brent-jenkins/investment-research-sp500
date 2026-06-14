@@ -920,8 +920,10 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     refresh_val,  refresh_sub  = _age_display(last_refresh)
     analysis_val, analysis_sub = _age_display(last_analysis)
-    refresh_level              = _age_level(last_refresh)
-    analysis_level             = _age_level(last_analysis)
+    # Data refresh: amber after 2 days, red after 4 days (markets closed weekends
+    # so 2 days is the natural cadence; 4+ days indicates something is wrong).
+    refresh_level  = _age_level(last_refresh,  warn_hours=48.0, error_hours=96.0)
+    analysis_level = _age_level(last_analysis, warn_hours=48.0, error_hours=96.0)
 
     delta_secs = (next_run - datetime.utcnow()).total_seconds()
     if delta_secs < 3600:

@@ -246,9 +246,18 @@ class SystemMetadata(Base):
 
 
 def set_metadata(key: str, value: str) -> None:
-    """Upsert a key-value pair in system_metadata, recording the current UTC time."""
+    """Upsert a key-value pair in system_metadata, recording the current UTC time.
+
+    Creates the table with raw DDL if it does not yet exist so this function
+    is safe to call even before init_db() has run (e.g. from background jobs
+    that start before the first Streamlit render).
+    """
     engine = get_engine()
     with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS system_metadata "
+            "(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"
+        ))
         conn.execute(
             text(
                 "INSERT OR REPLACE INTO system_metadata (key, value, updated_at) "
@@ -261,11 +270,15 @@ def set_metadata(key: str, value: str) -> None:
 def get_metadata(key: str) -> "datetime | None":
     """Return the value stored for *key* as a datetime, or None if not set."""
     engine = get_engine()
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT value FROM system_metadata WHERE key = :key"),
-            {"key": key},
-        ).fetchone()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM system_metadata WHERE key = :key"),
+                {"key": key},
+            ).fetchone()
+    except Exception:
+        # Table does not exist yet — treat as no value recorded.
+        return None
     if row is None:
         return None
     try:

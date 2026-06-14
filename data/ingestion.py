@@ -155,6 +155,11 @@ def pull_history(
             results[ticker] = 0
             logger.warning("  No data for %s", ticker)
 
+    try:
+        set_metadata("last_refresh_run", datetime.utcnow().isoformat())
+    except Exception as exc:
+        logger.warning("Could not stamp last_refresh_run metadata: %s", exc)
+
     return results
 
 
@@ -209,7 +214,11 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     finally:
         session.close()
 
-    set_metadata("last_refresh_run", datetime.utcnow().isoformat())
+    try:
+        set_metadata("last_refresh_run", datetime.utcnow().isoformat())
+    except Exception as exc:
+        logger.warning("Could not stamp last_refresh_run metadata: %s", exc)
+
     return results
 
 
