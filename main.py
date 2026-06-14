@@ -50,6 +50,11 @@ from output.signals import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Ensure the DB schema exists before any page renders or background jobs fire.
+# init_db() is idempotent — create_all() and _apply_migrations() are no-ops
+# when tables and columns are already present.
+init_db()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
