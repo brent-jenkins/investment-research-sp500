@@ -9,7 +9,9 @@ import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from data.ingestion import pull_incremental
+from analysis.confluence import generate_signals
+from analysis.engine import run_analysis
+from data.ingestion import get_all_tickers, pull_incremental
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,25 @@ def _daily_refresh_job() -> None:
         "Refresh complete — fetched %d assets (%d new rows), skipped %d assets.",
         len(open_tickers), total_rows, len(skipped_tickers),
     )
+
+    # ── Post-refresh analysis pipeline ────────────────────────────────────
+    # Run for the full watchlist so every asset has current indicators and
+    # signals, even those whose exchange was closed today (their historical
+    # data is still in the DB and their scores should remain current).
+    logger.info("Starting automatic post-refresh analysis...")
+    all_tickers = get_all_tickers(config)
+
+    try:
+        run_analysis(tickers=all_tickers, config=config)
+    except Exception as exc:
+        logger.error("run_analysis failed: %s", exc, exc_info=True)
+
+    try:
+        generate_signals(tickers=all_tickers, config=config)
+    except Exception as exc:
+        logger.error("generate_signals failed: %s", exc, exc_info=True)
+
+    logger.info("Automatic analysis complete.")
 
 
 def start_scheduler() -> BackgroundScheduler:
