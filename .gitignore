@@ -48,6 +48,9 @@ Caddyfile
 config.yaml
 get-pip.py
 
+# SSH private keys
+ssh-keys/
+
 # OS
 .DS_Store
 Thumbs.db
