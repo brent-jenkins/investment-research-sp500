@@ -456,7 +456,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     st.divider()
 
     # ---- Generate Signals button -------------------------------------------
-    last_ts = get_last_signal_timestamp()
+    last_ts = get_metadata("last_analysis_run") or get_last_signal_timestamp()
     if last_ts:
         st.caption(f"Signals last generated: {last_ts.strftime('%Y-%m-%d %H:%M')} UTC")
     else:
