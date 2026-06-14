@@ -24,3 +24,4 @@ python-dateutil>=2.9.0
 requests>=2.31.0
 pytz>=2024.1
 fredapi>=0.5.0
+pandas-market-calendars>=4.3.0
