@@ -22,7 +22,7 @@ import yaml
 from analysis.confluence import generate_signals, get_last_signal_timestamp, get_latest_signals
 from analysis.engine import run_analysis
 from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime
-from data.database import init_db
+from data.database import get_metadata, init_db
 from data.ingestion import (
     get_all_tickers,
     get_last_update_timestamp,
@@ -140,18 +140,22 @@ def _age_level(ts: datetime | None, warn_hours: float = 48.0, error_hours: float
 
 
 def _age_display(ts: datetime | None) -> tuple[str, str]:
-    """Return (primary_value, sub_caption) strings for a stored timestamp."""
+    """Return (primary_value, sub_caption) strings for a stored timestamp.
+
+    Primary is the human-readable timestamp; sub is the relative age so the
+    user sees both the exact time and how long ago it was at a glance.
+    """
     if ts is None:
         return "Never", "no data recorded"
     _ts = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
     hours = (datetime.utcnow() - _ts).total_seconds() / 3600
     if hours < 1:
-        primary = f"{int(hours * 60)}m ago"
+        age = f"{int(hours * 60)}m ago"
     elif hours < 24:
-        primary = f"{int(hours)}h ago"
+        age = f"{int(hours)}h ago"
     else:
-        primary = f"{hours / 24:.1f}d ago"
-    return primary, _ts.strftime("%Y-%m-%d %H:%M UTC")
+        age = f"{hours / 24:.1f}d ago"
+    return _ts.strftime("%Y-%m-%d %H:%M UTC"), age
 
 
 def _next_scheduled_run() -> datetime:
@@ -892,8 +896,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     # ── Collect all status data ───────────────────────────────────────────
     deploy_ts, deploy_msg      = _git_log_info()
     uptime                     = _service_uptime()
-    last_refresh               = get_last_update_timestamp()
-    last_analysis              = get_last_signal_timestamp()
+    last_refresh               = get_metadata("last_refresh_run")
+    last_analysis              = get_metadata("last_analysis_run")
     next_run                   = _next_scheduled_run()
     db_size_str, db_level      = _db_size(config)
 

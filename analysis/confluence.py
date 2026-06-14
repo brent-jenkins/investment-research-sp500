@@ -15,7 +15,7 @@ from analysis.regime import Regime, detect_regime
 from analysis.trend import compute_trend
 from analysis.volatility import compute_volatility
 from analysis.volume import compute_volume
-from data.database import Signal, get_engine, init_db
+from data.database import Signal, get_engine, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_price_df
 
 logger = logging.getLogger(__name__)
@@ -213,6 +213,7 @@ def generate_signals(
         if progress_callback:
             progress_callback(idx, total, ticker)
 
+    set_metadata("last_analysis_run", datetime.utcnow().isoformat())
     return {
         "regime":  regime_result,
         "signals": signals,

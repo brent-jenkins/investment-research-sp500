@@ -11,7 +11,7 @@ import yaml
 import yfinance as yf
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import PriceData, get_engine, get_session, init_db
+from data.database import PriceData, get_engine, get_session, init_db, set_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,7 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     finally:
         session.close()
 
+    set_metadata("last_refresh_run", datetime.utcnow().isoformat())
     return results
 
 

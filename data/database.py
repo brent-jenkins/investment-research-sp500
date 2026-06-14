@@ -235,6 +235,45 @@ class Performance(Base):
     )
 
 
+class SystemMetadata(Base):
+    """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
+
+    __tablename__ = "system_metadata"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+def set_metadata(key: str, value: str) -> None:
+    """Upsert a key-value pair in system_metadata, recording the current UTC time."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT OR REPLACE INTO system_metadata (key, value, updated_at) "
+                "VALUES (:key, :value, :ts)"
+            ),
+            {"key": key, "value": value, "ts": datetime.utcnow().isoformat()},
+        )
+
+
+def get_metadata(key: str) -> "datetime | None":
+    """Return the value stored for *key* as a datetime, or None if not set."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT value FROM system_metadata WHERE key = :key"),
+            {"key": key},
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(row[0]))
+    except Exception:
+        return None
+
+
 def _apply_migrations(engine) -> None:
     """Add columns that were introduced after initial schema creation.
 
