@@ -1386,7 +1386,7 @@ def main() -> None:
     selected = st.session_state.get("selected_ticker")
 
     if selected is None:
-        _render_home_page(config, watchlist)
+        st.info("Select an asset from the watchlist in the sidebar to view its chart.")
         return
 
     name = watchlist.get(selected, selected)
