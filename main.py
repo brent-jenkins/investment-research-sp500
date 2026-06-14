@@ -1138,10 +1138,27 @@ def main() -> None:
         return
 
     name = watchlist.get(selected, selected)
-    df = get_price_df(selected, days=config["data"]["history_days"])
 
     st.markdown(f"## {name}")
     st.caption(f"Ticker: **{selected}**")
+
+    # Chart range selector — persists across renders but resets when switching
+    # to a new ticker so the user always starts fresh on the default view.
+    _RANGE_DAYS = {"1Y": 365, "3Y": 1095, "5Y": 1826, "10Y": 3652}
+    if st.session_state.get("_chart_range_ticker") != selected:
+        st.session_state["chart_range"] = "1Y"
+        st.session_state["_chart_range_ticker"] = selected
+
+    chart_range = st.radio(
+        "Range",
+        list(_RANGE_DAYS.keys()),
+        index=list(_RANGE_DAYS.keys()).index(st.session_state["chart_range"]),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="chart_range",
+    )
+
+    df = get_price_df(selected, days=_RANGE_DAYS[chart_range])
 
     if df.empty:
         st.warning(
@@ -1150,12 +1167,14 @@ def main() -> None:
         )
         return
 
-    # Key metrics row
+    # Key metrics row — always computed from the full loaded window so YTD
+    # uses this calendar year regardless of which range is selected.
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
     daily_chg = (latest["close"] - prev["close"]) / prev["close"] * 100
-    ytd_start = df[df["date"].dt.year == latest["date"].year].iloc[0]
-    ytd_chg = (latest["close"] - ytd_start["close"]) / ytd_start["close"] * 100
+    this_year = latest["date"].year
+    ytd_rows = df[df["date"].dt.year == this_year]
+    ytd_chg = (latest["close"] - ytd_rows.iloc[0]["close"]) / ytd_rows.iloc[0]["close"] * 100 if len(ytd_rows) > 1 else 0.0
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Last Close", f"{latest['close']:,.2f}")
