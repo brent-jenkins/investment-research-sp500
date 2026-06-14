@@ -16,34 +16,35 @@ cat > "$HOOKS_DIR/pre-push" << 'HOOK'
 #!/usr/bin/env bash
 # .git/hooks/pre-push — managed by setup-hooks.sh (re-run to update)
 #
-# Automatically deploys to research.example.com whenever commits are pushed
-# to the main branch.
-#
-# Recursion guard: deploy.ps1 calls 'git push origin main' internally, which
-# would re-enter this hook. Setting DEPLOYING=1 before launching deploy.ps1
-# propagates to all child processes (PowerShell → git → this hook), so the
-# inner push exits immediately without triggering a second deployment.
+# After a push to main lands on GitHub, SSH into the server to pull and
+# restart. The SSH runs in a background process (detached) so git can
+# finish sending objects to GitHub first — otherwise the server's git pull
+# would fetch the previous commit, not the one just pushed.
 
-if [[ "${DEPLOYING:-}" == "1" ]]; then
-    exit 0
-fi
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SSH_KEY="$REPO_ROOT/ssh-keys/deploy_key"
+VM_IP="${VM_IP:-203.0.113.10}"
+LOG="/tmp/investment-research-deploy.log"
 
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
     if [[ "$remote_ref" == "refs/heads/main" ]]; then
         echo ""
-        echo "Auto-deploying to research.example.com..."
+        echo "Deploying to research.example.com (runs after push completes)..."
+
+        # Detach so this hook exits and lets git finish the push to GitHub.
+        # The 15-second sleep ensures GitHub has received the objects before
+        # the server tries to pull them.
+        nohup bash -c "
+            sleep 15
+            ssh -i '$SSH_KEY' -o StrictHostKeyChecking=no root@$VM_IP \
+                'cd /root/investment-research && git pull origin main && systemctl restart investment-research' \
+                >> '$LOG' 2>&1
+            echo 'Deploy exit code: '\$? >> '$LOG'
+        " > /dev/null 2>&1 &
+        disown
+
+        echo "Deploy queued — server will pull in ~15 s. Tail log: tail -f $LOG"
         echo ""
-
-        # cygpath converts the Git Bash path (/c/GitHub/...) to a Windows path
-        # (C:\GitHub\...) that PowerShell's -File parameter can resolve.
-        WIN_ROOT="$(cygpath -w "$(git rev-parse --show-toplevel)")"
-
-        DEPLOYING=1 powershell.exe -NonInteractive -ExecutionPolicy Bypass \
-            -File "${WIN_ROOT}\\deploy.ps1"
-
-        # Exit 0 whether deploy succeeded or failed — the push itself has already
-        # been handled by deploy.ps1 (step 1/3), so aborting here serves no purpose.
-        # Errors are visible in the deploy.ps1 output above.
         exit 0
     fi
 done
@@ -56,4 +57,4 @@ chmod +x "$HOOKS_DIR/pre-push"
 echo "Done — pre-push hook installed at $HOOKS_DIR/pre-push"
 echo ""
 echo "Pushes to main will now automatically deploy to research.example.com."
-echo "To skip deployment for a single push: DEPLOYING=1 git push origin main"
+echo "Deploy runs ~15 s after push. To skip: VM_IP= git push origin main (or just uninstall the hook)."

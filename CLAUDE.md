@@ -180,7 +180,7 @@ Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall
 bash setup-hooks.sh
 ```
 
-The hook launches `deploy.ps1` via `powershell.exe -File`. It sets `DEPLOYING=1` before calling the script so that `deploy.ps1`'s own internal `git push` doesn't re-enter the hook (infinite recursion guard). To push without triggering deployment: `DEPLOYING=1 git push origin main`.
+The hook SSHes directly into the server after a 15-second background delay, so git finishes pushing to GitHub before the server runs `git pull`. Output is appended to `/tmp/investment-research-deploy.log` on the local machine. To push without triggering deployment: skip the hook by temporarily removing it or not installing it on that machine.
 
 ### Key files
 
