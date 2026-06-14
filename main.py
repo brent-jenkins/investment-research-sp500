@@ -1404,7 +1404,7 @@ def main() -> None:
     chart_range = st.radio(
         "Range",
         list(_RANGE_DAYS.keys()),
-        index=list(_RANGE_DAYS.keys()).index(st.session_state["chart_range"]),
+        index=list(_RANGE_DAYS.keys()).index(st.session_state.get("chart_range", "1Y")),
         horizontal=True,
         label_visibility="collapsed",
         key="chart_range",
