@@ -25,7 +25,6 @@ from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_
 from data.database import get_metadata, init_db
 from data.ingestion import (
     get_all_tickers,
-    get_last_update_timestamp,
     get_price_df,
     pull_incremental,
 )
@@ -1048,8 +1047,9 @@ def main() -> None:
 
         st.divider()
 
-        # Last update timestamp
-        last_ts = get_last_update_timestamp()
+        # Last update timestamp — read from system_metadata so the time
+        # reflects when the refresh actually ran, not a midnight trading date.
+        last_ts = get_metadata("last_refresh_run")
         if last_ts:
             st.caption(f"Last data pull: {last_ts.strftime('%Y-%m-%d %H:%M')} UTC")
         else:
