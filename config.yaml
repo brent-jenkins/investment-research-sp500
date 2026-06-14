@@ -60,6 +60,11 @@ scheduler:
   minute: 30
   timezone: "America/New_York"
 
+macro:
+  # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html
+  # Leave blank to skip yield curve scoring (VIX scoring still works without it)
+  fred_api_key: ""
+
 confluence:
   # Minimum number of signals that must agree for a BUY/SELL call
   min_signals_required: 3

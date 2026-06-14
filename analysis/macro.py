@@ -1,5 +1,7 @@
-"""Macro / cross-asset signals: VIX level, yield-curve proxy, dollar strength."""
+"""Macro indicators: FRED yield curve (10Y-2Y spread), VIX regime."""
 
+import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +10,12 @@ import yaml
 
 from data.ingestion import get_price_df
 
+logger = logging.getLogger(__name__)
+
+# Tickers that are themselves macro indicators — skip yield-curve scoring
+# to avoid circular logic (TLT IS bond prices; VIX IS volatility).
+_MACRO_TICKERS = frozenset({"^VIX", "TLT", "IEF", "HYG"})
+
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -15,58 +23,144 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def score_macro(
-    ticker: str,
-    vix_df: Optional[pd.DataFrame] = None,
-    tlt_df: Optional[pd.DataFrame] = None,
-    vix_fear_threshold: float = 30.0,
-    vix_calm_threshold: float = 20.0,
-    tlt_days: int = 20,
-) -> int:
-    """Score the macro backdrop for a given asset.
+def _yield_curve_from_fred(api_key: str, lookback_days: int = 10) -> Optional[float]:
+    """Fetch the latest 10Y-2Y Treasury spread from FRED (series T10Y2Y).
 
-    Uses VIX level as a fear gauge and TLT trend as a bond/risk proxy.
-    Individual equity/commodity tickers use these scores; passing bond/vol
-    tickers themselves returns 0 to avoid circular logic.
+    Args:
+        api_key: FRED API key from config.
+        lookback_days: How many days back to search for the latest data point
+            (FRED sometimes lags weekends / holidays).
+
+    Returns:
+        The most recent spread value in percentage points, or None on failure.
+    """
+    try:
+        from fredapi import Fred  # imported here so missing package = graceful None
+        fred = Fred(api_key=api_key)
+        start = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        series = fred.get_series("T10Y2Y", observation_start=start)
+        series = series.dropna()
+        if series.empty:
+            return None
+        return float(series.iloc[-1])
+    except Exception as exc:
+        logger.warning("FRED fetch failed: %s", exc)
+        return None
+
+
+def _classify_yield_curve(spread: float) -> tuple[str, int]:
+    """Map a 10Y-2Y spread to a regime label and score.
+
+    Returns:
+        (regime_label, score) where:
+        - spread > 0.5  → "normal",   +1 (term premium present, risk-on)
+        - -0.1 to 0.5  → "flat",      0
+        - < -0.1       → "inverted", -1 (recession signal)
+    """
+    if spread > 0.5:
+        return "normal", 1
+    if spread >= -0.1:
+        return "flat", 0
+    return "inverted", -1
+
+
+def _vix_from_db(days: int = 5) -> Optional[float]:
+    """Return the latest VIX closing price stored in the local database."""
+    try:
+        vix_df = get_price_df("^VIX", days=days)
+        if vix_df.empty:
+            return None
+        return float(vix_df["close"].iloc[-1])
+    except Exception:
+        return None
+
+
+def _classify_vix(level: float) -> tuple[str, int]:
+    """Classify VIX level into regime and score.
+
+    Returns:
+        (regime_label, score) — low/normal → positive bias, high/extreme → negative.
+    """
+    if level < 12:
+        return "low", 1
+    if level < 20:
+        return "normal", 0
+    if level < 30:
+        return "high", -1
+    return "extreme", -1
+
+
+def compute_macro(ticker: str, config: Optional[dict] = None) -> dict:
+    """Compute macro indicators for a given ticker.
+
+    Data sources:
+    - FRED API for 10Y-2Y yield curve spread (requires ``macro.fred_api_key``
+      in config.yaml — returns None gracefully if key is missing or invalid).
+    - Local SQLite database for VIX price data.
+
+    Scoring:
+    - Yield curve normal (+1) or inverted (-1), else 0.
+    - VIX low/normal (+1/0) or high/extreme (-1).
+    - Combined = average, then mapped: ≥ 0.5 → +1, ≤ -0.5 → -1, else 0.
+
+    Macro assets (^VIX, TLT, IEF, HYG) are returned as neutral (score=0)
+    to avoid self-referential scoring.
 
     Args:
         ticker: The asset being scored.
-        vix_df: Optional pre-loaded VIX DataFrame (avoids redundant DB reads).
-        tlt_df: Optional pre-loaded TLT DataFrame.
-        vix_fear_threshold: VIX above this level is bearish for risk assets.
-        vix_calm_threshold: VIX below this level is bullish for risk assets.
-        tlt_days: Window for TLT trend determination.
+        config: Loaded config.yaml dict. Loaded from file if not provided.
 
     Returns:
-        1 (macro tailwind), -1 (macro headwind), or 0 (neutral / not applicable).
+        Dict with 'score' (-1/0/1) and raw macro indicator values.
     """
-    # Avoid scoring macro assets against themselves
-    if ticker in ("^VIX", "TLT", "IEF", "HYG"):
-        return 0
+    if config is None:
+        config = _load_config()
 
-    if vix_df is None:
-        vix_df = get_price_df("^VIX", days=60)
-    if tlt_df is None:
-        tlt_df = get_price_df("TLT", days=60)
+    empty = {
+        "score": 0,
+        "yield_curve_spread": None,
+        "yield_curve_regime": None,
+        "vix_level": None,
+        "vix_regime": None,
+    }
 
-    vix_score = 0
-    if not vix_df.empty:
-        last_vix = vix_df["close"].iloc[-1]
-        if last_vix < vix_calm_threshold:
-            vix_score = 1
-        elif last_vix > vix_fear_threshold:
-            vix_score = -1
+    if ticker in _MACRO_TICKERS:
+        return empty
 
-    tlt_score = 0
-    if not tlt_df.empty and len(tlt_df) >= tlt_days:
-        tlt_close = tlt_df["close"]
-        tlt_trend = tlt_close.iloc[-1] - tlt_close.iloc[-tlt_days]
-        # Rising bonds (TLT up) often signals risk-off; falling bonds = risk-on
-        tlt_score = -1 if tlt_trend > 0 else 1
+    macro_cfg = config.get("macro", {})
+    fred_key  = macro_cfg.get("fred_api_key", "")
 
-    combined = vix_score + tlt_score
-    if combined > 0:
-        return 1
-    if combined < 0:
-        return -1
-    return 0
+    # Yield curve
+    yc_spread = None
+    yc_regime = None
+    yc_score  = 0
+    if fred_key:
+        yc_spread = _yield_curve_from_fred(fred_key)
+        if yc_spread is not None:
+            yc_regime, yc_score = _classify_yield_curve(yc_spread)
+    else:
+        logger.debug("No FRED API key configured — skipping yield curve.")
+
+    # VIX
+    vix_level = _vix_from_db()
+    vix_regime = None
+    vix_score  = 0
+    if vix_level is not None:
+        vix_regime, vix_score = _classify_vix(vix_level)
+
+    # Combined score
+    active_scores = [s for s in (yc_score, vix_score) if s != 0 or
+                     (yc_spread is not None or vix_level is not None)]
+    if not active_scores:
+        combined = 0
+    else:
+        avg = sum(active_scores) / len(active_scores)
+        combined = 1 if avg >= 0.5 else (-1 if avg <= -0.5 else 0)
+
+    return {
+        "score":               combined,
+        "yield_curve_spread":  yc_spread,
+        "yield_curve_regime":  yc_regime,
+        "vix_level":           vix_level,
+        "vix_regime":          vix_regime,
+    }

@@ -1,5 +1,6 @@
-"""Mean-reversion signals: RSI, Bollinger Bands."""
+"""Mean-reversion indicators: RSI, Bollinger Bands, 52-week Z-score."""
 
+import numpy as np
 import pandas as pd
 
 try:
@@ -9,58 +10,139 @@ except ImportError:
     _TALIB_AVAILABLE = False
 
 
-def score_mean_reversion(
-    df: pd.DataFrame,
-    rsi_period: int = 14,
-    rsi_oversold: float = 30.0,
-    rsi_overbought: float = 70.0,
-    bb_period: int = 20,
-    bb_std: float = 2.0,
-) -> int:
-    """Compute a mean-reversion score based on RSI and Bollinger Band position.
+def _pandas_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """Wilder-smoothed RSI fallback."""
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
+
+
+def compute_mean_reversion(df: pd.DataFrame, config: dict) -> dict:
+    """Compute mean-reversion indicators for the latest date in *df*.
+
+    Indicators calculated:
+    - RSI (14-day, Wilder smoothing)
+    - Bollinger Bands (20-day SMA ± 2 std dev): upper, middle, lower, %B
+    - Bollinger Band width (upper - lower)
+    - 52-week Z-score: (close - 252-day mean) / 252-day std
+
+    Scoring (all three must agree for a signal):
+    - RSI oversold (<30) → bullish; overbought (>70) → bearish
+    - Price below lower BB → bullish; above upper BB → bearish
+    - 52-week Z-score < -1.5 → bullish; > +1.5 → bearish
 
     Args:
-        df: Price DataFrame with a 'close' column.
-        rsi_period: RSI look-back period.
-        rsi_oversold: RSI level below which the asset is considered oversold.
-        rsi_overbought: RSI level above which the asset is considered overbought.
-        bb_period: Bollinger Band SMA period.
-        bb_std: Number of standard deviations for the bands.
+        df: Price DataFrame sorted ascending with a 'close' column.
+        config: Loaded config.yaml dict.
 
     Returns:
-        1 (oversold / mean-reversion buy), -1 (overbought / sell), or 0 (neutral).
+        Dict with 'score' (-1/0/1) and raw indicator values for the latest row.
     """
+    sig = config["signals"]
+    rsi_period  = sig["rsi_period"]
+    bb_period   = sig["bollinger_period"]
+    bb_std      = sig["bollinger_std"]
+    rsi_oversold   = 30.0
+    rsi_overbought = 70.0
+    z_thr = 1.5
+
+    empty = {
+        "score": 0,
+        "rsi": None,
+        "bb_upper": None, "bb_middle": None, "bb_lower": None,
+        "bb_pct_b": None, "bb_width": None,
+        "z_score_52w": None,
+    }
+
     if df.empty or len(df) < bb_period + rsi_period:
-        return 0
+        return empty
 
     close = df["close"].astype(float)
 
+    # RSI
     if _TALIB_AVAILABLE:
-        rsi = talib.RSI(close.values, rsi_period)[-1]
-        bb_upper, bb_middle, bb_lower = talib.BBANDS(
+        rsi_series = pd.Series(talib.RSI(close.values, rsi_period), index=close.index)
+    else:
+        rsi_series = _pandas_rsi(close, rsi_period)
+
+    # Bollinger Bands
+    if _TALIB_AVAILABLE:
+        upper_arr, mid_arr, lower_arr = talib.BBANDS(
             close.values, bb_period, bb_std, bb_std
         )
-        upper = bb_upper[-1]
-        lower = bb_lower[-1]
-        last_close = close.iloc[-1]
+        bb_upper  = pd.Series(upper_arr, index=close.index)
+        bb_middle = pd.Series(mid_arr,   index=close.index)
+        bb_lower  = pd.Series(lower_arr, index=close.index)
     else:
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(rsi_period).mean()
-        loss = (-delta.clip(upper=0)).rolling(rsi_period).mean()
-        rs = gain / loss.replace(0, float("nan"))
-        rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+        bb_middle = close.rolling(bb_period).mean()
+        std       = close.rolling(bb_period).std()
+        bb_upper  = bb_middle + bb_std * std
+        bb_lower  = bb_middle - bb_std * std
 
-        sma = close.rolling(bb_period).mean()
-        std = close.rolling(bb_period).std()
-        upper = float((sma + bb_std * std).iloc[-1])
-        lower = float((sma - bb_std * std).iloc[-1])
-        last_close = float(close.iloc[-1])
+    bb_width = bb_upper - bb_lower
+    band_range = bb_upper - bb_lower
+    bb_pct_b = (close - bb_lower) / band_range.replace(0, np.nan)
 
-    if rsi != rsi:  # NaN
-        return 0
+    # 52-week Z-score (252 trading days)
+    roll_mean = close.rolling(252).mean()
+    roll_std  = close.rolling(252).std()
+    z_score   = (close - roll_mean) / roll_std.replace(0, np.nan)
 
-    if rsi < rsi_oversold and last_close < lower:
-        return 1   # oversold
-    if rsi > rsi_overbought and last_close > upper:
-        return -1  # overbought
-    return 0
+    def _last(s: pd.Series):
+        v = s.iloc[-1]
+        return None if (v != v) else float(v)
+
+    last_rsi    = _last(rsi_series)
+    last_close  = float(close.iloc[-1])
+    last_upper  = _last(bb_upper)
+    last_lower  = _last(bb_lower)
+    last_z      = _last(z_score)
+
+    # Scoring — require RSI + at least one other signal to agree
+    rsi_signal  = 0
+    bb_signal   = 0
+    z_signal    = 0
+
+    if last_rsi is not None:
+        if last_rsi < rsi_oversold:
+            rsi_signal = 1
+        elif last_rsi > rsi_overbought:
+            rsi_signal = -1
+
+    if last_upper is not None and last_lower is not None:
+        if last_close < last_lower:
+            bb_signal = 1
+        elif last_close > last_upper:
+            bb_signal = -1
+
+    if last_z is not None:
+        if last_z < -z_thr:
+            z_signal = 1
+        elif last_z > z_thr:
+            z_signal = -1
+
+    votes = [rsi_signal, bb_signal, z_signal]
+    bullish = votes.count(1)
+    bearish = votes.count(-1)
+    # RSI must agree and at least one more
+    if rsi_signal == 1 and bullish >= 2:
+        score = 1
+    elif rsi_signal == -1 and bearish >= 2:
+        score = -1
+    else:
+        score = 0
+
+    return {
+        "score":      score,
+        "rsi":        last_rsi,
+        "bb_upper":   last_upper,
+        "bb_middle":  _last(bb_middle),
+        "bb_lower":   last_lower,
+        "bb_pct_b":   _last(bb_pct_b),
+        "bb_width":   _last(bb_width),
+        "z_score_52w": last_z,
+    }

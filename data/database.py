@@ -112,6 +112,20 @@ class Indicator(Base):
     volume_sma_20 = Column(Float)
     volume_ratio = Column(Float)  # volume / volume_sma_20
     obv = Column(Float)
+    obv_trend = Column(Float)     # OBV change over 20 days
+
+    # Mean reversion (extra)
+    bb_width = Column(Float)      # bb_upper - bb_lower
+    z_score_52w = Column(Float)   # (close - 52w mean) / 52w std
+
+    # Macro
+    vix_level = Column(Float)
+    vix_regime = Column(String(10))        # low / normal / high / extreme
+    yield_curve_spread = Column(Float)     # 10Y - 2Y (FRED T10Y2Y)
+    yield_curve_regime = Column(String(10))  # normal / flat / inverted
+
+    # Cross-module
+    golden_cross = Column(Float)   # 1 = golden, -1 = death, 0 = neither
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -205,10 +219,36 @@ class Performance(Base):
     )
 
 
+def _apply_migrations(engine) -> None:
+    """Add columns that were introduced after initial schema creation.
+
+    SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS, so we attempt
+    each ALTER and silently skip columns that already exist.
+    """
+    new_columns = [
+        ("indicators", "obv_trend",           "FLOAT"),
+        ("indicators", "bb_width",            "FLOAT"),
+        ("indicators", "z_score_52w",         "FLOAT"),
+        ("indicators", "vix_level",           "FLOAT"),
+        ("indicators", "vix_regime",          "VARCHAR(10)"),
+        ("indicators", "yield_curve_spread",  "FLOAT"),
+        ("indicators", "yield_curve_regime",  "VARCHAR(10)"),
+        ("indicators", "golden_cross",        "FLOAT"),
+    ]
+    for table, column, col_type in new_columns:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+        except Exception:
+            pass  # column already exists — each ALTER TABLE gets its own transaction
+                  # so a duplicate-column error never poisons subsequent statements
+
+
 def init_db() -> None:
     """Create all tables in the database if they do not already exist."""
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _apply_migrations(engine)
 
 
 def get_session() -> Session:
