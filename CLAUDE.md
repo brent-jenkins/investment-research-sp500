@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python -m streamlit run main.py
 ```
 
-First-run sequence: **Refresh Data** → **Run Analysis**. Refresh pulls ~1 year of OHLCV history for all 20 watchlist assets (incremental on subsequent runs). Run Analysis computes all technical indicators and writes them to the `indicators` table. The background APScheduler job fires automatically on weekdays at 18:30 ET while the process is running.
+First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls ~1 year of OHLCV history for all 20 watchlist assets (incremental on subsequent runs). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals (on the Signals page) detects the market regime then scores every asset and writes to the `signals` table. The background APScheduler job fires automatically on weekdays at 18:30 ET while the process is running.
 
 The FRED API key for yield-curve data lives in `config.yaml` under `macro.fred_api_key`. Without it, VIX scoring still works; yield-curve scoring returns 0.
 
@@ -32,15 +32,26 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
                               ├── analysis/volume.py
                               └── analysis/macro.py  (FRED + VIX from DB)
                                           │
-                              ┌───────────┴───────────┐
-                              ▼                       ▼
-                    indicators table       analysis/confluence.py
-                                                      │
-                                                      ▼
-                                           output/signals.py ──► signals table
+                                          ▼
+                                   indicators table
+                                          │
+                                          ▼
+                              analysis/regime.py:detect_regime()
+                              (reads ^GSPC indicators → Regime enum)
+                                          │
+                                          ▼
+                              analysis/confluence.py:generate_signals()
+                              (regime-weighted dot product per ticker)
+                                          │
+                                          ▼
+                                    signals table
 ```
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
+
+The app has two pages toggled via a sidebar radio button:
+- **Charts** — candlestick chart, volume, and indicator panel for the selected asset
+- **Signals** — regime card, ranked table of all assets by confluence score, Generate Signals button
 
 ### Configuration
 
@@ -55,13 +66,26 @@ Everything flows from `config.yaml`. All indicator periods, confluence threshold
 
 Each `compute_*` function in the analysis modules returns the **latest** scalar values only (not a full time series). The score from each module feeds into `confluence.py:generate_signal()`.
 
-### Signal pipeline
+### Regime detection
 
-`analysis/confluence.py:generate_signal()` calls all five `compute_*` functions, tallies agreeing votes, and emits **BUY / SELL / NEUTRAL** based on thresholds in `config.yaml` under `confluence:`.
+`analysis/regime.py:detect_regime()` reads the most recent stored ^GSPC indicators (SMA 200, ADX, VIX) and applies priority-ordered rules:
+1. VIX > 30 → `HIGH_VOLATILITY`
+2. price > SMA200, ADX > 25, VIX < 20 → `TRENDING_BULL`
+3. price < SMA200, ADX > 25, VIX > 20 → `TRENDING_BEAR`
+4. ADX < 20, VIX < 15 → `RANGING_LOW_VOL`
+5. else → `UNKNOWN`
 
-- `min_signals_required` (default 3) — minimum agreeing votes.
-- `buy_threshold` / `sell_threshold` (default 0.60) — fraction of total modules that must agree.
-- `confluence_score` returned is `(bullish - bearish) / total_modules` ∈ [-1, 1].
+Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the five analysis modules.
+
+### Confluence scoring
+
+`analysis/confluence.py:generate_signals()` calls `score_ticker()` for each asset, which:
+1. Calls all five `compute_*` functions fresh from stored price data
+2. Computes `weighted_score = Σ(module_score × regime_weight)` ∈ [-1, 1]
+3. Classifies as `STRONG_BUY` (≥0.6), `BUY` (≥0.3), `NEUTRAL`, `SELL` (≤-0.3), `STRONG_SELL` (≤-0.6)
+4. Upserts to the `signals` table keyed on `(ticker, today's date)`
+
+The regime string is stored in both the `regime` column and the legacy `notes` column of the signals table. `get_latest_signals()` returns rows sorted by `confluence_score` descending.
 
 ### TA-Lib fallback pattern
 

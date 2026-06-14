@@ -152,9 +152,10 @@ class Signal(Base):
     macro_score = Column(Integer)
 
     # Aggregate
-    confluence_score = Column(Float)   # mean of module scores
-    signal = Column(String(10))        # BUY / SELL / NEUTRAL
-    strength = Column(Float)           # 0-1 confidence
+    confluence_score = Column(Float)      # weighted score ∈ [-1, +1]
+    signal = Column(String(15))           # STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL
+    strength = Column(Float)              # |confluence_score|
+    regime = Column(String(20))           # TRENDING_BULL / TRENDING_BEAR / etc.
 
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -234,6 +235,7 @@ def _apply_migrations(engine) -> None:
         ("indicators", "yield_curve_spread",  "FLOAT"),
         ("indicators", "yield_curve_regime",  "VARCHAR(10)"),
         ("indicators", "golden_cross",        "FLOAT"),
+        ("signals",    "regime",              "VARCHAR(20)"),
     ]
     for table, column, col_type in new_columns:
         try:

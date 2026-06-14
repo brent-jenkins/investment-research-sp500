@@ -16,7 +16,9 @@ import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
+from analysis.confluence import generate_signals, get_last_signal_timestamp, get_latest_signals
 from analysis.engine import run_analysis
+from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime
 from data.database import init_db
 from data.ingestion import (
     get_all_tickers,
@@ -217,6 +219,201 @@ def _render_indicator_panel(ticker: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Signals page
+# ---------------------------------------------------------------------------
+
+# Colour map for signal classifications
+_SIGNAL_COLOURS: dict[str, str] = {
+    "STRONG_BUY":  "#1a5c38",   # dark green
+    "BUY":         "#26a69a",   # teal / light green
+    "NEUTRAL":     "#6b7280",   # grey
+    "SELL":        "#f59e0b",   # amber / orange
+    "STRONG_SELL": "#ef5350",   # red
+}
+
+_SCORE_COLOURS: dict[int, str] = {
+    1:  "#26a69a",   # green
+    0:  "#374151",   # dark grey
+    -1: "#ef5350",   # red
+}
+
+
+def _signal_badge(label: str) -> str:
+    """Return an HTML span badge for a signal classification."""
+    colour = _SIGNAL_COLOURS.get(label, "#6b7280")
+    display = label.replace("_", " ")
+    return (
+        f'<span style="background:{colour};color:white;padding:2px 8px;'
+        f'border-radius:4px;font-size:0.8rem;font-weight:600;">{display}</span>'
+    )
+
+
+def _score_cell(score: int | None) -> str:
+    """Return an HTML span for a single module score cell."""
+    if score is None:
+        return '<span style="color:#6b7280">—</span>'
+    colour = _SCORE_COLOURS.get(int(score), "#374151")
+    symbol = {1: "▲", 0: "●", -1: "▼"}.get(int(score), "●")
+    return (
+        f'<span style="color:{colour};font-weight:700;font-size:1rem">{symbol}</span>'
+    )
+
+
+def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
+    """Render the Signals page: regime card, generate button, ranked table."""
+
+    st.markdown("## 📊 Market Signals")
+
+    # ---- Regime card -------------------------------------------------------
+    regime_result = detect_regime()
+    regime        = regime_result["regime"]
+    colour        = regime_result["colour"]
+    description   = regime_result["description"]
+    details       = regime_result["details"]
+    weights       = regime_result["weights"]
+
+    st.markdown(
+        f'<div style="background:{colour}22;border-left:4px solid {colour};'
+        f'padding:12px 16px;border-radius:6px;margin-bottom:16px">'
+        f'<span style="color:{colour};font-size:1.2rem;font-weight:700">'
+        f'⚡ {regime.replace("_", " ")}</span><br>'
+        f'<span style="color:#d1d5db;font-size:0.9rem">{description}</span>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Regime detail metrics
+    d1, d2, d3, d4 = st.columns(4)
+    price   = details.get("price")
+    sma_200 = details.get("sma_200")
+    adx     = details.get("adx")
+    vix     = details.get("vix")
+
+    d1.metric("^GSPC Price",   f"{price:,.0f}"   if price   else "—")
+    d2.metric("vs SMA 200",
+              f"{(price/sma_200 - 1)*100:+.1f}%" if (price and sma_200) else "—")
+    d3.metric("ADX",           f"{adx:.1f}"      if adx     else "—")
+    d4.metric("VIX",           f"{vix:.1f}"      if vix     else "—")
+
+    # Weight profile for current regime
+    with st.expander("Regime weight profile", expanded=False):
+        cols = st.columns(5)
+        labels = ["Trend", "Mean Rev", "Volatility", "Volume", "Macro"]
+        keys   = ["trend", "mean_reversion", "volatility", "volume", "macro"]
+        for col, lbl, key in zip(cols, labels, keys):
+            col.metric(lbl, f"{weights[key]:.0%}")
+
+    st.divider()
+
+    # ---- Generate Signals button -------------------------------------------
+    last_ts = get_last_signal_timestamp()
+    if last_ts:
+        st.caption(f"Signals last generated: {last_ts.strftime('%Y-%m-%d %H:%M')} UTC")
+    else:
+        st.caption("No signals generated yet.")
+
+    if st.button("⚡ Generate Signals", type="primary", use_container_width=False):
+        tickers = get_all_tickers(config)
+        bar     = st.progress(0, text="Detecting regime…")
+        status  = st.empty()
+
+        def _on_progress(current: int, total: int, ticker: str) -> None:
+            bar.progress(current / total, text=f"Scoring {ticker} ({current}/{total})")
+            status.caption(f"Last completed: **{ticker}**")
+
+        outcome = generate_signals(
+            tickers=tickers, config=config, progress_callback=_on_progress
+        )
+        bar.progress(1.0, text="Done")
+
+        n_errors = len(outcome["errors"])
+        n_ok     = len(outcome["signals"])
+        if n_errors:
+            st.warning(f"Generated {n_ok} signals with {n_errors} error(s). Check logs.")
+        else:
+            st.success(f"Generated signals for {n_ok} assets.")
+        st.rerun()
+
+    st.divider()
+
+    # ---- Ranked signals table ----------------------------------------------
+    rows = get_latest_signals(list(watchlist.keys()))
+
+    if not rows:
+        st.info("No signals yet — click **Generate Signals** above.")
+        return
+
+    st.markdown("### Asset Rankings")
+    st.caption(
+        "▲ bullish &nbsp;&nbsp; ● neutral &nbsp;&nbsp; ▼ bearish &nbsp;&nbsp;"
+        "(colour-coded per module)"
+    )
+
+    # Build display DataFrame
+    table_rows = []
+    for r in rows:
+        ticker = r.get("ticker", "")
+        table_rows.append(
+            {
+                "Ticker":    ticker,
+                "Name":      watchlist.get(ticker, ticker),
+                "_signal":   r.get("signal", "NEUTRAL"),
+                "Score":     r.get("confluence_score") or 0.0,
+                "_trend":    r.get("trend_score") or 0,
+                "_mr":       r.get("mean_reversion_score") or 0,
+                "_vol":      r.get("volatility_score") or 0,
+                "_volume":   r.get("volume_score") or 0,
+                "_macro":    r.get("macro_score") or 0,
+            }
+        )
+
+    # Render as an HTML table for full colour control
+    header_html = (
+        "<table style='width:100%;border-collapse:collapse;font-size:0.88rem'>"
+        "<thead><tr style='border-bottom:1px solid #374151'>"
+        "<th style='text-align:left;padding:6px'>Ticker</th>"
+        "<th style='text-align:left;padding:6px'>Name</th>"
+        "<th style='text-align:center;padding:6px'>Signal</th>"
+        "<th style='text-align:right;padding:6px'>Score</th>"
+        "<th style='text-align:center;padding:6px'>Trend</th>"
+        "<th style='text-align:center;padding:6px'>Mean Rev</th>"
+        "<th style='text-align:center;padding:6px'>Volatility</th>"
+        "<th style='text-align:center;padding:6px'>Volume</th>"
+        "<th style='text-align:center;padding:6px'>Macro</th>"
+        "</tr></thead><tbody>"
+    )
+
+    body_parts = []
+    for i, r in enumerate(table_rows):
+        bg = "#1f2937" if i % 2 == 0 else "#111827"
+        score = r["Score"]
+        score_colour = (
+            "#26a69a" if score > 0.1
+            else "#ef5350" if score < -0.1
+            else "#6b7280"
+        )
+        body_parts.append(
+            f"<tr style='background:{bg}'>"
+            f"<td style='padding:6px;font-weight:600'>{r['Ticker']}</td>"
+            f"<td style='padding:6px;color:#9ca3af'>{r['Name']}</td>"
+            f"<td style='padding:6px;text-align:center'>{_signal_badge(r['_signal'])}</td>"
+            f"<td style='padding:6px;text-align:right;color:{score_colour};font-weight:700'>"
+            f"{score:+.3f}</td>"
+            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_trend'])}</td>"
+            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_mr'])}</td>"
+            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_vol'])}</td>"
+            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_volume'])}</td>"
+            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_macro'])}</td>"
+            "</tr>"
+        )
+
+    st.markdown(
+        header_html + "".join(body_parts) + "</tbody></table>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
@@ -260,6 +457,20 @@ def main() -> None:
         st.title("📈 Investment Research")
         st.divider()
 
+        # Page navigation
+        page = st.radio(
+            "Navigation",
+            options=["📈 Charts", "📊 Signals"],
+            index=0 if st.session_state.get("page", "charts") == "charts" else 1,
+            label_visibility="collapsed",
+        )
+        current_page = "signals" if page == "📊 Signals" else "charts"
+        if st.session_state.get("page") != current_page:
+            st.session_state["page"] = current_page
+            st.rerun()
+
+        st.divider()
+
         # Last update timestamp
         last_ts = get_last_update_timestamp()
         if last_ts:
@@ -297,36 +508,41 @@ def main() -> None:
                 st.success(f"Analysis complete for {len(analysis_results)} assets.")
             st.rerun()
 
-        st.divider()
+        # Watchlist selector — only shown on Charts page
+        if current_page == "charts":
+            st.divider()
+            st.subheader("Watchlist")
+            group_labels = {
+                "indices": "Indices",
+                "sector_etfs": "Sector ETFs",
+                "commodities": "Commodities",
+                "bonds": "Bonds",
+                "volatility": "Volatility",
+            }
 
-        # Grouped watchlist selector
-        st.subheader("Watchlist")
-        group_labels = {
-            "indices": "Indices",
-            "sector_etfs": "Sector ETFs",
-            "commodities": "Commodities",
-            "bonds": "Bonds",
-            "volatility": "Volatility",
-        }
+            selected_ticker: str | None = st.session_state.get("selected_ticker")
 
-        selected_ticker: str | None = st.session_state.get("selected_ticker")
-
-        for group_key, group_label in group_labels.items():
-            group = config["watchlist"].get(group_key, [])
-            if not group:
-                continue
-            st.markdown(f"**{group_label}**")
-            for entry in group:
-                ticker = entry["ticker"]
-                name = entry["name"]
-                label = f"{ticker}  —  {name}"
-                is_selected = ticker == selected_ticker
-                btn_type = "primary" if is_selected else "secondary"
-                if st.button(label, key=f"wb_{ticker}", use_container_width=True, type=btn_type):
-                    st.session_state["selected_ticker"] = ticker
-                    st.rerun()
+            for group_key, group_label in group_labels.items():
+                group = config["watchlist"].get(group_key, [])
+                if not group:
+                    continue
+                st.markdown(f"**{group_label}**")
+                for entry in group:
+                    ticker = entry["ticker"]
+                    name = entry["name"]
+                    label = f"{ticker}  —  {name}"
+                    is_selected = ticker == selected_ticker
+                    btn_type = "primary" if is_selected else "secondary"
+                    if st.button(label, key=f"wb_{ticker}", use_container_width=True, type=btn_type):
+                        st.session_state["selected_ticker"] = ticker
+                        st.rerun()
 
     # ---- Main content --------------------------------------------------
+    if st.session_state.get("page") == "signals":
+        _render_signals_page(config, watchlist)
+        return
+
+    # Charts page
     selected = st.session_state.get("selected_ticker")
 
     if selected is None:

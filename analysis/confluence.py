@@ -1,17 +1,24 @@
-"""Confluence engine: aggregates module scores into a final BUY/SELL/NEUTRAL signal."""
+"""Confluence scoring: applies regime-weighted module scores to produce signals."""
 
+import logging
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-import pandas as pd
 import yaml
+from sqlalchemy import text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from analysis.macro import compute_macro
 from analysis.mean_reversion import compute_mean_reversion
+from analysis.regime import Regime, detect_regime
 from analysis.trend import compute_trend
 from analysis.volatility import compute_volatility
 from analysis.volume import compute_volume
-from data.ingestion import get_price_df
+from data.database import Signal, get_engine, init_db
+from data.ingestion import get_all_tickers, get_price_df
+
+logger = logging.getLogger(__name__)
 
 
 def _load_config() -> dict:
@@ -20,29 +27,66 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def generate_signal(
-    ticker: str,
-    df: Optional[pd.DataFrame] = None,
-    config: Optional[dict] = None,
-    vix_close: Optional[float] = None,
-) -> dict:
-    """Run all analysis modules and aggregate into a final signal.
+# Signal classification thresholds (weighted score ∈ [-1, +1])
+_THRESHOLDS = [
+    ( 0.60,  1.00, "STRONG_BUY"),
+    ( 0.30,  0.60, "BUY"),
+    (-0.30,  0.30, "NEUTRAL"),
+    (-0.60, -0.30, "SELL"),
+    (-1.00, -0.60, "STRONG_SELL"),
+]
+
+
+def _classify(score: float) -> str:
+    """Map a weighted confluence score to a named signal classification."""
+    for lo, hi, label in _thresholds_sorted():
+        if lo <= score <= hi:
+            return label
+    return "NEUTRAL"
+
+
+def _thresholds_sorted():
+    """Yield (lo, hi, label) sorted so the first match wins correctly."""
+    return sorted(_THRESHOLDS, key=lambda t: -t[0])
+
+
+def _weighted_score(scores: dict[str, int], weights: dict[str, float]) -> float:
+    """Compute the dot product of module scores and their regime weights.
 
     Args:
-        ticker: Asset to analyse.
-        df: Pre-loaded price DataFrame. Fetched from DB if not provided.
-        config: Loaded config dict. Loaded from file if not provided.
-        vix_close: Pre-fetched VIX close (avoids redundant DB reads when
-            generating signals for many tickers in a batch).
+        scores:  Dict mapping module name → score (-1, 0, or 1).
+        weights: Dict mapping module name → weight (sums to 1.0).
 
     Returns:
-        Dict with keys: ticker, signal ('BUY'/'SELL'/'NEUTRAL'),
-        confluence_score (-1 to +1), strength (0-1), and per-module scores.
+        Weighted confluence score in the range [-1.0, +1.0].
     """
-    if config is None:
-        config = _load_config()
-    if df is None:
-        df = get_price_df(ticker, days=config["data"]["history_days"])
+    return round(
+        sum(scores.get(k, 0) * w for k, w in weights.items()), 3
+    )
+
+
+def score_ticker(
+    ticker: str,
+    regime_result: dict,
+    config: dict,
+    vix_close: Optional[float] = None,
+) -> dict:
+    """Compute a regime-weighted confluence signal for a single ticker.
+
+    Calls all five ``compute_*`` analysis functions, applies the regime's
+    weight profile, and classifies the result.
+
+    Args:
+        ticker:        Asset symbol to score.
+        regime_result: Return value of :func:`~analysis.regime.detect_regime`.
+        config:        Loaded config.yaml dict.
+        vix_close:     Pre-fetched VIX close price (avoids redundant DB reads).
+
+    Returns:
+        Dict with ticker, signal classification, weighted score, and
+        per-module scores.
+    """
+    df = get_price_df(ticker, days=config["data"]["history_days"])
 
     trend_res  = compute_trend(df, config)
     mr_res     = compute_mean_reversion(df, config)
@@ -50,44 +94,172 @@ def generate_signal(
     volume_res = compute_volume(df, config)
     macro_res  = compute_macro(ticker, config)
 
-    scores = [
-        trend_res["score"],
-        mr_res["score"],
-        vol_res["score"],
-        volume_res["score"],
-        macro_res["score"],
-    ]
+    module_scores = {
+        "trend":          trend_res["score"],
+        "mean_reversion": mr_res["score"],
+        "volatility":     vol_res["score"],
+        "volume":         volume_res["score"],
+        "macro":          macro_res["score"],
+    }
 
-    conf_cfg = config["confluence"]
-    total    = conf_cfg["total_signal_modules"]
-    buy_thr  = conf_cfg["buy_threshold"]
-    sell_thr = conf_cfg["sell_threshold"]
-    min_req  = conf_cfg["min_signals_required"]
-
-    bullish = sum(1 for s in scores if s == 1)
-    bearish = sum(1 for s in scores if s == -1)
-
-    if bullish >= min_req and bullish / total >= buy_thr:
-        final_signal = "BUY"
-        strength = bullish / total
-    elif bearish >= min_req and bearish / total >= sell_thr:
-        final_signal = "SELL"
-        strength = bearish / total
-    else:
-        final_signal = "NEUTRAL"
-        strength = max(bullish, bearish) / total
-
-    confluence_score = (bullish - bearish) / total
+    weights        = regime_result["weights"]
+    w_score        = _weighted_score(module_scores, weights)
+    classification = _classify(w_score)
 
     return {
         "ticker":               ticker,
-        "signal":               final_signal,
-        "confluence_score":     round(confluence_score, 3),
-        "strength":             round(strength, 3),
-        "regime_score":         0,   # regime folded into trend module
-        "trend_score":          trend_res["score"],
-        "mean_reversion_score": mr_res["score"],
-        "volatility_score":     vol_res["score"],
-        "volume_score":         volume_res["score"],
-        "macro_score":          macro_res["score"],
+        "regime":               regime_result["regime"].value,
+        "signal":               classification,
+        "confluence_score":     w_score,
+        "trend_score":          module_scores["trend"],
+        "mean_reversion_score": module_scores["mean_reversion"],
+        "volatility_score":     module_scores["volatility"],
+        "volume_score":         module_scores["volume"],
+        "macro_score":          module_scores["macro"],
     }
+
+
+def _persist_signal(result: dict, as_of: datetime) -> None:
+    """Upsert a single signal result into the ``signals`` table."""
+    engine = get_engine()
+    stmt = sqlite_insert(Signal).values(
+        ticker=result["ticker"],
+        date=as_of,
+        regime_score=0,   # legacy column — regime now stored in 'regime'
+        trend_score=result["trend_score"],
+        mean_reversion_score=result["mean_reversion_score"],
+        volatility_score=result["volatility_score"],
+        volume_score=result["volume_score"],
+        macro_score=result["macro_score"],
+        confluence_score=result["confluence_score"],
+        signal=result["signal"],
+        strength=abs(result["confluence_score"]),
+        notes=result["regime"],
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["ticker", "date"],
+        set_={
+            "trend_score":          stmt.excluded.trend_score,
+            "mean_reversion_score": stmt.excluded.mean_reversion_score,
+            "volatility_score":     stmt.excluded.volatility_score,
+            "volume_score":         stmt.excluded.volume_score,
+            "macro_score":          stmt.excluded.macro_score,
+            "confluence_score":     stmt.excluded.confluence_score,
+            "signal":               stmt.excluded.signal,
+            "strength":             stmt.excluded.strength,
+            "notes":                stmt.excluded.notes,
+        },
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt)
+
+
+def generate_signals(
+    tickers: Optional[list[str]] = None,
+    config: Optional[dict] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> dict:
+    """Generate regime-weighted confluence signals for all watchlist assets.
+
+    Workflow:
+    1. Detect the current market regime from stored ^GSPC indicators.
+    2. For each ticker, compute fresh module scores via the analysis modules.
+    3. Apply the regime's weight profile to produce a weighted score ∈ [-1, 1].
+    4. Classify as STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL.
+    5. Persist to the ``signals`` table (upsert keyed on ticker + today's date).
+
+    Args:
+        tickers:           Symbols to score. Defaults to the full watchlist.
+        config:            Loaded config dict. Read from file if not provided.
+        progress_callback: Called as ``cb(current, total, ticker)`` after each
+                           ticker — use to drive a Streamlit progress bar.
+
+    Returns:
+        Dict with:
+        - ``regime``  — the detected :class:`~analysis.regime.Regime` result dict
+        - ``signals`` — list of per-ticker signal dicts
+        - ``errors``  — list of dicts for any tickers that failed
+        - ``as_of``   — datetime the signals were generated
+    """
+    init_db()
+    if config is None:
+        config = _load_config()
+    if tickers is None:
+        tickers = get_all_tickers(config)
+
+    as_of = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Detect regime once — applies to all tickers
+    regime_result = detect_regime()
+    logger.info("Regime detected: %s", regime_result["regime"])
+
+    # Pre-fetch VIX to avoid one DB query per ticker
+    vix_df = get_price_df("^VIX", days=5)
+    vix_close = float(vix_df["close"].iloc[-1]) if not vix_df.empty else None
+
+    signals: list[dict] = []
+    errors:  list[dict] = []
+    total = len(tickers)
+
+    for idx, ticker in enumerate(tickers, 1):
+        try:
+            result = score_ticker(ticker, regime_result, config, vix_close=vix_close)
+            _persist_signal(result, as_of)
+            signals.append(result)
+        except Exception as exc:
+            logger.error("Signal generation failed for %s: %s", ticker, exc)
+            errors.append({"ticker": ticker, "error": str(exc)})
+
+        if progress_callback:
+            progress_callback(idx, total, ticker)
+
+    return {
+        "regime":  regime_result,
+        "signals": signals,
+        "errors":  errors,
+        "as_of":   as_of,
+    }
+
+
+def get_latest_signals(tickers: Optional[list[str]] = None) -> list[dict]:
+    """Read the most recent signal row per ticker from the database.
+
+    Returns a list of dicts sorted by confluence_score descending, ready
+    for display.  Missing tickers (no signals yet) are excluded.
+    """
+    if tickers is None:
+        tickers = get_all_tickers()
+
+    engine = get_engine()
+    rows = []
+    with engine.connect() as conn:
+        for ticker in tickers:
+            row = conn.execute(
+                text(
+                    "SELECT ticker, date, signal, confluence_score, "
+                    "trend_score, mean_reversion_score, volatility_score, "
+                    "volume_score, macro_score, notes AS regime "
+                    "FROM signals WHERE ticker = :ticker "
+                    "ORDER BY date DESC LIMIT 1"
+                ),
+                {"ticker": ticker},
+            ).mappings().first()
+            if row:
+                rows.append(dict(row))
+
+    return sorted(rows, key=lambda r: r.get("confluence_score") or 0, reverse=True)
+
+
+def get_last_signal_timestamp() -> Optional[datetime]:
+    """Return the most recent ``date`` stored in the signals table."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT MAX(date) FROM signals")
+        ).scalar()
+    if result is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(result))
+    except Exception:
+        return None
