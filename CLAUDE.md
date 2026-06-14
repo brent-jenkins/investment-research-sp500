@@ -119,6 +119,64 @@ New columns are added to existing tables via `_apply_migrations()` in `data/data
 
 `yf.download()` for a single ticker returns a MultiIndex column DataFrame in yfinance ≥ 0.2.x. `ingestion.py` flattens this with `df.columns = [col[0] for col in df.columns]` before processing. Any new code that calls `yf.download` for a single ticker must do the same.
 
+## Deployment (Ubuntu 22.04 / cloud VM)
+
+The app runs as a systemd service behind a Caddy HTTPS reverse proxy.
+
+### First-time setup on a fresh VM
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/YOUR/investment-research.git /root/investment-research
+cd /root/investment-research
+
+# 2. Run the one-time setup script (takes ~5 min)
+bash setup.sh research.yourdomain.com
+```
+
+`setup.sh` installs Python 3.11, compiles the TA-Lib C library from source, installs Caddy, creates a Python virtualenv, installs all packages, writes `.streamlit/config.toml`, and registers `investment-research.service` with systemd.
+
+### Password-protecting the dashboard
+
+Caddy's `basicauth` directive guards the app. After `setup.sh` runs:
+
+```bash
+caddy hash-password          # enter your password, copy the hash output
+nano /etc/caddy/Caddyfile    # replace REPLACE_WITH_HASH (and 'admin' if desired)
+systemctl reload caddy
+```
+
+### Ongoing deploys (from Windows)
+
+```bash
+# Edit VM_IP at the top of deploy.sh, then:
+bash deploy.sh
+```
+
+`deploy.sh` (Git Bash): `git push` → SSH into VM → `git pull` → `pip install` → `systemctl restart`.
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `setup.sh` | One-time server bootstrap |
+| `investment-research.service` | systemd unit; app lives in `/root/investment-research/`, uses `venv/bin/python` |
+| `Caddyfile` | Caddy reverse-proxy template (gitignored once real domain/hash are filled in) |
+| `.streamlit/config.toml.example` | Reference for the server config created by `setup.sh` (actual file is gitignored) |
+| `deploy.sh` | Windows Git Bash deploy script |
+
+### TA-Lib: Windows vs Linux
+
+`requirements.txt` has both package names commented out with explanations. `setup.sh` installs `TA-Lib` (Linux wrapper) after compiling the C library. Windows dev installs `TA-Lib-Precompiled` manually if needed; all analysis modules have pure-pandas fallbacks so it is optional on both platforms.
+
+### Useful server commands
+
+```bash
+journalctl -u investment-research -f   # live app logs
+systemctl status investment-research   # service health
+systemctl reload caddy                 # apply Caddyfile changes without downtime
+```
+
 ## Adding a new analysis module
 
 1. Create `analysis/your_module.py` with a `compute_your_module(df, config) -> dict` returning `{"score": int, ...raw_values}`.

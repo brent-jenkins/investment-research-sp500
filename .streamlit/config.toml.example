@@ -1,0 +1,28 @@
+# .streamlit/config.toml — Streamlit server configuration for Linux deployment
+#
+# This file is created automatically on the server by setup.sh.
+# It is NOT committed to git (.streamlit/ is gitignored).
+#
+# To use locally on Windows, copy this to .streamlit/config.toml and
+# remove or adjust the server.address line.
+
+[server]
+# Only listen on loopback; Caddy handles the public-facing HTTPS port.
+headless = true
+port = 8501
+address = "127.0.0.1"
+enableCORS = false
+# XSRF protection can interfere with Caddy's reverse proxy; Caddy's TLS
+# + basicauth provides the security boundary instead.
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+# External URL used when Streamlit generates share links.
+# Replace with your actual domain after running setup.sh.
+serverAddress = "research.yourdomain.com"
+serverPort = 443
+
+[client]
+# "minimal" hides the Deploy button and reduces top-bar clutter.
+toolbarMode = "minimal"

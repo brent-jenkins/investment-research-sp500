@@ -5,10 +5,20 @@ pandas>=2.0.0
 numpy>=1.26.0
 pyyaml>=6.0.1
 APScheduler>=3.10.4
-# TA-Lib-Precompiled has no wheel for Python 3.14+. All analysis modules
-# include pure-pandas fallbacks and work without it. To enable TA-Lib for
-# older Python versions, uncomment the line below.
+# ── TA-Lib: platform-specific ────────────────────────────────────────────────
+# The two platforms use different PyPI packages that wrap the same C library.
+# Only ONE should be installed at a time; leave the other commented out.
+#
+# Windows (local dev):
+#   Requires the pre-compiled C library bundled in the wheel.
+#   No wheel for Python 3.14+; use pure-pandas fallbacks instead.
 # TA-Lib-Precompiled>=0.4.25
+#
+# Linux (server, Ubuntu 22.04):
+#   Requires the TA-Lib C library compiled from source first (setup.sh does this).
+#   Then: pip install TA-Lib
+# TA-Lib>=0.4.29
+# ─────────────────────────────────────────────────────────────────────────────
 plotly>=5.19.0
 python-dateutil>=2.9.0
 requests>=2.31.0

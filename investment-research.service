@@ -1,0 +1,33 @@
+[Unit]
+Description=Investment Research Dashboard (Streamlit)
+Documentation=https://github.com/YOUR/investment-research
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/investment-research
+
+# Use the virtualenv Python so all installed packages are available
+ExecStart=/root/investment-research/venv/bin/python -m streamlit run main.py
+
+# Restart policy: always restart, with a 10-second backoff, up to 5 times
+# before systemd considers the service failed
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/root
+
+# Logging: send stdout/stderr to the systemd journal
+# View with: journalctl -u investment-research -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=investment-research
+
+[Install]
+WantedBy=multi-user.target

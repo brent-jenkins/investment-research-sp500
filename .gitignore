@@ -36,8 +36,11 @@ database/*.db
 database/*.db-shm
 database/*.db-wal
 
-# Streamlit cache
-.streamlit/
+# Streamlit — config.toml is generated on the server by setup.sh (server-specific
+# settings: port, address, domain). The example template is tracked instead.
+# secrets.toml may contain API keys added via st.secrets in future.
+.streamlit/config.toml
+.streamlit/secrets.toml
 
 # OS
 .DS_Store
