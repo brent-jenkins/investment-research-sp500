@@ -13,7 +13,9 @@ pip install -r requirements.txt
 python -m streamlit run main.py
 ```
 
-First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls ~1 year of OHLCV history for all 20 watchlist assets (incremental on subsequent runs). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals (on the Signals page) detects the market regime then scores every asset and writes to the `signals` table. The background APScheduler job fires automatically on weekdays at 18:30 ET while the process is running.
+First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls ~1 year of OHLCV history for all watchlist assets (incremental on subsequent runs). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
+
+After the first run, analysis and signals are automated: on every Streamlit startup the app re-runs analysis if price data exists, and the APScheduler job fires at **21:30 UTC on weekdays** to pull incremental prices and immediately run analysis + signals for the full watchlist. Manual clicks are only needed on the very first run.
 
 The FRED API key for yield-curve data lives in `config.yaml` under `macro.fred_api_key`. Without it, VIX scoring still works; yield-curve scoring returns 0.
 
@@ -99,7 +101,17 @@ All writes use `sqlite_insert(...).on_conflict_do_update(...)` (upsert) so every
 
 For **reading** indicator data in the UI, use raw SQL via `get_engine().connect()` rather than ORM queries — the ORM mapper can silently return `None` when the live schema has columns the mapper hasn't seen. See `_render_indicator_panel()` in `main.py` for the pattern.
 
+`data/database.py` also defines a `SystemMetadata` key-value table (`key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME`). Two helpers manage it: `set_metadata(key, value)` (upserts via `INSERT OR REPLACE`) and `get_metadata(key) -> datetime | None` (parses the stored ISO string). `pull_incremental()` stamps `last_refresh_run` and `generate_signals()` stamps `last_analysis_run` so the home-page status panel can display actual wall-clock times rather than midnight trade dates.
+
 The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.map()` per column subset) rather than a custom HTML table. This lets Streamlit's theme control fonts, row backgrounds, and borders while only the meaningful cells carry explicit colours (signal badge, score, module symbols). Set `height=header_px + row_height_px * len(rows)` to expand the frame to its full content and suppress the scrollbar.
+
+### Home page and startup automation
+
+`main.py:_initialise()` is called on every Streamlit session start. On the **first** request of a session it checks `_has_price_data()` (a lightweight `SELECT 1 FROM price_data LIMIT 1`). If price data exists it synchronously runs `run_analysis()` then `generate_signals()` for the full watchlist and stores a completion message in `st.session_state["_startup_msg"]`. The main render loop pops that key and calls `st.toast()` so the user sees a non-intrusive notification.
+
+`_render_home_page()` draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
+
+The **APScheduler post-refresh pipeline** in `data/scheduler.py` runs nightly at 21:30 UTC: `pull_incremental()` → stamp `last_refresh_run` → `run_analysis()` → `generate_signals()` → stamp `last_analysis_run`. Each step is wrapped in its own `try/except` so an analysis failure never prevents the timestamp from being written.
 
 ### Trade lifecycle
 
@@ -113,7 +125,7 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 ### Schema migrations
 
-New columns are added to existing tables via `_apply_migrations()` in `data/database.py`. Each `ALTER TABLE` runs in its own `engine.begin()` block so a duplicate-column error never aborts subsequent statements. `init_db()` calls both `Base.metadata.create_all()` and `_apply_migrations()`, and is called on **every page render** in `_initialise()` (idempotent — fast when schema is current). Never wrap multiple `ALTER TABLE` calls in a single `engine.begin()`.
+New columns are added to existing tables via `_apply_migrations()` in `data/database.py`. Each `ALTER TABLE` runs in its own `engine.begin()` block so a duplicate-column error never aborts subsequent statements. `init_db()` calls both `Base.metadata.create_all()` and `_apply_migrations()`. It is called **at module level in `main.py`** (immediately after logging setup, before any function definitions) to guarantee tables exist on fresh deployments, and again inside `_initialise()` on every page render (idempotent — fast when schema is current). Never wrap multiple `ALTER TABLE` calls in a single `engine.begin()`.
 
 ### yfinance MultiIndex handling
 
@@ -134,7 +146,7 @@ cd /root/investment-research
 bash setup.sh research.yourdomain.com
 ```
 
-`setup.sh` installs Python 3.11, compiles the TA-Lib C library from source, installs Caddy, creates a Python virtualenv, installs all packages, writes `.streamlit/config.toml`, and registers `investment-research.service` with systemd.
+`setup.sh` installs Python 3.11, compiles the TA-Lib C library from source, installs Caddy, installs all packages system-wide via `python3.11 -m pip`, writes `.streamlit/config.toml`, and registers `investment-research.service` with systemd. There is no virtualenv — packages are installed at the system level.
 
 ### Password-protecting the dashboard
 
@@ -148,22 +160,40 @@ systemctl reload caddy
 
 ### Ongoing deploys (from Windows)
 
+The easiest path is a plain `git push origin main` — the pre-push hook calls `deploy.ps1` automatically (see [Git hooks](#git-hooks) below). To deploy without that hook, or from a machine where it isn't installed:
+
 ```bash
-# Edit VM_IP at the top of deploy.sh, then:
-bash deploy.sh
+bash deploy.sh          # Git Bash — VM_IP is hardcoded in the script
 ```
 
-`deploy.sh` (Git Bash): `git push` → SSH into VM → `git pull` → `pip install` → `systemctl restart`.
+```powershell
+.\deploy.ps1            # PowerShell — gitignored, local-only; SSH key at ssh-keys\
+```
+
+Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall any new packages via `python3.11 -m pip install -r requirements.txt --quiet`, and `systemctl restart` the service.
+
+### Git hooks
+
+`setup-hooks.sh` installs a pre-push hook that auto-deploys whenever you push to `main`. Run once after cloning:
+
+```bash
+bash setup-hooks.sh
+```
+
+The hook launches `deploy.ps1` via `powershell.exe -File`. It sets `DEPLOYING=1` before calling the script so that `deploy.ps1`'s own internal `git push` doesn't re-enter the hook (infinite recursion guard). To push without triggering deployment: `DEPLOYING=1 git push origin main`.
 
 ### Key files
 
 | File | Purpose |
 |---|---|
-| `setup.sh` | One-time server bootstrap |
-| `investment-research.service` | systemd unit; app lives in `/root/investment-research/`, uses `venv/bin/python` |
-| `Caddyfile` | Caddy reverse-proxy template (gitignored once real domain/hash are filled in) |
+| `setup.sh` | One-time server bootstrap (no virtualenv; installs packages system-wide) |
+| `investment-research.service` | systemd unit; ExecStart uses `/usr/local/bin/streamlit` directly |
+| `Caddyfile` | Caddy reverse-proxy template (gitignored — contains domain/hash) |
 | `.streamlit/config.toml.example` | Reference for the server config created by `setup.sh` (actual file is gitignored) |
-| `deploy.sh` | Windows Git Bash deploy script |
+| `deploy.sh` | Git Bash deploy script (VM_IP hardcoded; SSH key at `ssh-keys/`) |
+| `deploy.ps1` | PowerShell deploy script — gitignored (local-only, contains SSH key path) |
+| `setup-hooks.sh` | Installs the pre-push git hook; run once after cloning |
+| `config.yaml` | Runtime config — **gitignored** (contains FRED API key; manage on server directly) |
 
 ### TA-Lib: Windows vs Linux
 
@@ -187,4 +217,4 @@ systemctl reload caddy                 # apply Caddyfile changes without downtim
 
 ## Adding assets to the watchlist
 
-Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically.
+Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has 27 assets across 6 groups: `us_equity`, `sector_etfs`, `energy`, `commodities`, `fixed_income`, `crypto`. When adding a new group, also add its label to the `group_labels` dict in `main.py`'s sidebar block so it displays correctly.

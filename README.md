@@ -13,6 +13,16 @@ First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals
 
 Add your FRED API key to `config.yaml` under `macro.fred_api_key` (free at https://fred.stlouisfed.org/docs/api/api_key.html). Without it, yield-curve scoring returns 0; VIX scoring still works.
 
+## After cloning
+
+Run this once to install the git hooks:
+
+```bash
+bash setup-hooks.sh
+```
+
+This installs a pre-push hook that automatically deploys to [research.example.com](https://research.example.com) whenever you push to `main`. To push without deploying (e.g. draft commits): `DEPLOYING=1 git push origin main`.
+
 ## Server deployment
 
 ### Infrastructure
