@@ -588,17 +588,17 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
         "volume_score", "macro_score",
     ]
 
-    # Require score ≥ 0.4 in the correct direction AND at least 2/5 modules
-    # agreeing — filters out single high-weight module signals and prevents
-    # bearish assets leaking into the long column (or vice versa).
+    # Require score ≥ 0.5 in the correct direction AND at least 3/5 modules
+    # agreeing — ensures top picks represent genuine multi-module conviction,
+    # not a single high-weight module carrying a weak or borderline signal.
     def _qualifies(r, direction: int) -> bool:
         score = r.get("confluence_score") or 0.0
-        if direction == 1 and score < 0.4:
+        if direction == 1 and score < 0.5:
             return False
-        if direction == -1 and score > -0.4:
+        if direction == -1 and score > -0.5:
             return False
         agreeing = sum(1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction)
-        return agreeing >= 2
+        return agreeing >= 3
 
     long_picks  = [r for r in rows           if _qualifies(r,  1)][:3]
     short_picks = [r for r in reversed(rows) if _qualifies(r, -1)][:3]
