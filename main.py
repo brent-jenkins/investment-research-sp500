@@ -526,18 +526,28 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 
     lc, sc = st.columns(2)
 
+    _MODULE_KEYS = [
+        "trend_score", "mean_reversion_score", "volatility_score",
+        "volume_score", "macro_score",
+    ]
+
     def _pick_card(container, picks, heading, card_fg):
         container.markdown(f"**{heading}**")
         if not picks:
             container.caption("No qualifying signals.")
             return
         for r in picks:
-            ticker = html.escape(r.get("ticker", ""))
-            name   = html.escape(watchlist.get(r.get("ticker", ""), r.get("ticker", "")))
+            ticker    = html.escape(r.get("ticker", ""))
+            name      = html.escape(watchlist.get(r.get("ticker", ""), r.get("ticker", "")))
             if len(name) > 35:
                 name = name[:33] + "…"
-            score  = r.get("confluence_score") or 0.0
-            signal = (r.get("signal") or "NEUTRAL").replace("_", " ")
+            score     = r.get("confluence_score") or 0.0
+            signal    = (r.get("signal") or "NEUTRAL").replace("_", " ")
+            direction = 1 if score > 0 else -1
+            agreeing  = sum(
+                1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction
+            )
+            pct = min(int(abs(score) * 100), 100)
             container.markdown(
                 f'<div style="background:{card_fg}18;border-left:3px solid {card_fg};'
                 f'padding:8px 12px;border-radius:4px;margin-bottom:6px">'
@@ -545,6 +555,11 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
                 f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:8px">{name}</span><br>'
                 f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
                 f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.3f}</span>'
+                f'<div style="background:#374151;border-radius:2px;height:3px;margin-top:6px">'
+                f'<div style="background:{card_fg};width:{pct}%;height:3px;border-radius:2px"></div>'
+                f'</div>'
+                f'<span style="color:#6b7280;font-size:0.7rem">'
+                f'{agreeing}/5 modules · {pct}% strength</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
