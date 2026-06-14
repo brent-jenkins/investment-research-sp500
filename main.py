@@ -698,11 +698,11 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
                 f'<span style="font-weight:700;color:{card_fg}">{ticker}</span>'
                 f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:8px">{name}</span><br>'
                 f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
-                f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.3f}</span>'
+                f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.0%}</span>'
                 f'<div style="background:#374151;border-radius:2px;height:3px;margin-top:6px">'
                 f'<div style="background:{card_fg};width:{pct}%;height:3px;border-radius:2px"></div>'
                 f'</div>'
-                f'<span style="color:#6b7280;font-size:0.7rem">{agreeing}/5 modules · {pct}% strength</span>'
+                f'<span style="color:#6b7280;font-size:0.7rem">{agreeing}/5 modules agree</span>'
                 f'{support_html}'
                 f'{caution_html}'
                 f'</div>',
