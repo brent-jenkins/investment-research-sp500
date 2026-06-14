@@ -51,11 +51,12 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has four pages toggled via a sidebar radio button:
-- **Charts** — candlestick chart, volume, and indicator panel for the selected asset
+The app has five pages toggled via a sidebar radio button (default: **Signals**):
 - **Signals** — regime card, ranked table of all assets by confluence score, Generate Signals button
+- **Charts** — candlestick chart, volume, and indicator panel for the selected asset
 - **Trade Log** — log new eToro trades (auto-populates current signal), open-position tracker with live prices and unrealised P&L, close-trade form
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
+- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run)
 
 ### Configuration
 
@@ -101,15 +102,15 @@ All writes use `sqlite_insert(...).on_conflict_do_update(...)` (upsert) so every
 
 For **reading** indicator data in the UI, use raw SQL via `get_engine().connect()` rather than ORM queries — the ORM mapper can silently return `None` when the live schema has columns the mapper hasn't seen. See `_render_indicator_panel()` in `main.py` for the pattern.
 
-`data/database.py` also defines a `SystemMetadata` key-value table (`key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME`). Two helpers manage it: `set_metadata(key, value)` (upserts via `INSERT OR REPLACE`) and `get_metadata(key) -> datetime | None` (parses the stored ISO string). `pull_incremental()` stamps `last_refresh_run` and `generate_signals()` stamps `last_analysis_run` so the home-page status panel can display actual wall-clock times rather than midnight trade dates.
+`data/database.py` also defines a `SystemMetadata` key-value table (`key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME`). Two helpers manage it: `set_metadata(key, value)` (upserts via `INSERT OR REPLACE`) and `get_metadata(key) -> datetime | None` (parses the stored ISO string). `pull_incremental()` stamps `last_refresh_run` and `generate_signals()` stamps `last_analysis_run` so the Status page can display actual wall-clock times rather than midnight trade dates.
 
 The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.map()` per column subset) rather than a custom HTML table. This lets Streamlit's theme control fonts, row backgrounds, and borders while only the meaningful cells carry explicit colours (signal badge, score, module symbols). Set `height=header_px + row_height_px * len(rows)` to expand the frame to its full content and suppress the scrollbar.
 
-### Home page and startup automation
+### Status page and startup automation
 
 `main.py:_initialise()` is called on every Streamlit session start. On the **first** request of a session it checks `_has_price_data()` (a lightweight `SELECT 1 FROM price_data LIMIT 1`). If price data exists it synchronously runs `run_analysis()` then `generate_signals()` for the full watchlist and stores a completion message in `st.session_state["_startup_msg"]`. The main render loop pops that key and calls `st.toast()` so the user sees a non-intrusive notification.
 
-`_render_home_page()` draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
+`_render_home_page()` powers both the **Status** page and the Charts landing (shown when no asset is selected). It draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
 
 The **APScheduler post-refresh pipeline** in `data/scheduler.py` runs nightly at 21:30 UTC: `pull_incremental()` → stamp `last_refresh_run` → `run_analysis()` → `generate_signals()` → stamp `last_analysis_run`. Each step is wrapped in its own `try/except` so an analysis failure never prevents the timestamp from being written.
 

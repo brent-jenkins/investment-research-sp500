@@ -1106,11 +1106,11 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Home page (Charts landing — no asset selected)
+# Status page (also shown on Charts landing when no asset is selected)
 # ---------------------------------------------------------------------------
 
 def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
-    """System status panel shown when no asset is selected on the Charts page."""
+    """System status panel — rendered as the Status page and as the Charts landing."""
     # Clear all cached data so the status panel always reflects the latest DB
     # state — without this, cached metadata values would be served even after
     # a refresh or analysis run completed since the last render.
@@ -1235,14 +1235,15 @@ def main() -> None:
         st.divider()
 
         # Page navigation
-        _PAGES = ["📈 Charts", "📊 Signals", "📋 Trade Log", "🏆 Performance"]
+        _PAGES = ["📊 Signals", "📈 Charts", "📋 Trade Log", "🏆 Performance", "🖥️ Status"]
         _PAGE_KEYS = {
-            "📈 Charts":      "charts",
             "📊 Signals":     "signals",
+            "📈 Charts":      "charts",
             "📋 Trade Log":   "trade_log",
             "🏆 Performance": "performance",
+            "🖥️ Status":      "status",
         }
-        current_key = st.session_state.get("page", "charts")
+        current_key = st.session_state.get("page", "signals")
         default_idx = next(
             (i for i, k in enumerate(_PAGE_KEYS.values()) if k == current_key), 0
         )
@@ -1309,10 +1310,14 @@ def main() -> None:
                         st.rerun()
 
     # ---- Main content --------------------------------------------------
-    page_key = st.session_state.get("page", "charts")
+    page_key = st.session_state.get("page", "signals")
 
     if page_key == "signals":
         _render_signals_page(config, watchlist)
+        return
+
+    if page_key == "status":
+        _render_home_page(config, watchlist)
         return
 
     if page_key == "trade_log":
