@@ -83,6 +83,18 @@ def _cached_latest_price(ticker: str) -> float | None:
     return get_latest_price(ticker)
 
 
+@st.cache_data(ttl=60)
+def _cached_last_refresh() -> "datetime | None":
+    """Last data refresh timestamp, cached for 60 s to avoid repeated DB reads."""
+    return get_metadata("last_refresh_run")
+
+
+@st.cache_data(ttl=60)
+def _cached_last_analysis() -> "datetime | None":
+    """Last analysis run timestamp, cached for 60 s to avoid repeated DB reads."""
+    return get_metadata("last_analysis_run")
+
+
 def _has_price_data() -> bool:
     """Return True if the price_data table contains at least one row."""
     from sqlalchemy import text as sa_text
@@ -888,6 +900,11 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
 
 def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     """System status panel shown when no asset is selected on the Charts page."""
+    # Clear all cached data so the status panel always reflects the latest DB
+    # state — without this, cached metadata values would be served even after
+    # a refresh or analysis run completed since the last render.
+    st.cache_data.clear()
+
     st.markdown("## 📈 Investment Research")
     st.caption("Select an asset from the sidebar to view its price chart and indicators.")
     st.divider()
@@ -896,8 +913,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     # ── Collect all status data ───────────────────────────────────────────
     deploy_ts, deploy_msg      = _git_log_info()
     uptime                     = _service_uptime()
-    last_refresh               = get_metadata("last_refresh_run")
-    last_analysis              = get_metadata("last_analysis_run")
+    last_refresh               = _cached_last_refresh()
+    last_analysis              = _cached_last_analysis()
     next_run                   = _next_scheduled_run()
     db_size_str, db_level      = _db_size(config)
 
