@@ -8,8 +8,11 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import html
 import logging
-from datetime import datetime, date
+import subprocess
+import time
+from datetime import datetime, date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -85,6 +88,124 @@ def _has_price_data() -> bool:
         return row is not None
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# System status helpers (used by _render_home_page)
+# ---------------------------------------------------------------------------
+
+_LEVEL_COLOUR = {
+    "ok":   "#16a34a",
+    "warn": "#f59e0b",
+    "error":"#dc2626",
+    "info": "#6366f1",
+}
+
+
+def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") -> None:
+    """Render a colour-coded status card into a Streamlit column."""
+    colour  = _LEVEL_COLOUR.get(level, "#6b7280")
+    sub_html = (
+        f'<div style="font-size:0.78rem;color:#9ca3af;margin-top:3px">'
+        f'{html.escape(sub)}</div>'
+    ) if sub else ""
+    col.markdown(
+        f'<div style="border-left:3px solid {colour};background:{colour}18;'
+        f'padding:10px 14px;border-radius:0 6px 6px 0;min-height:72px">'
+        f'<div style="font-size:0.68rem;color:{colour};text-transform:uppercase;'
+        f'letter-spacing:0.08em;font-weight:700;margin-bottom:4px">'
+        f'{html.escape(label)}</div>'
+        f'<div style="font-size:0.95rem;font-weight:600">{html.escape(value)}</div>'
+        f'{sub_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _age_level(ts: datetime | None, warn_hours: float = 48.0, error_hours: float = 168.0) -> str:
+    """Return 'ok' / 'warn' / 'error' based on how many hours old *ts* is."""
+    if ts is None:
+        return "error"
+    _ts = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+    hours = (datetime.utcnow() - _ts).total_seconds() / 3600
+    if hours < warn_hours:
+        return "ok"
+    if hours < error_hours:
+        return "warn"
+    return "error"
+
+
+def _age_display(ts: datetime | None) -> tuple[str, str]:
+    """Return (primary_value, sub_caption) strings for a stored timestamp."""
+    if ts is None:
+        return "Never", "no data recorded"
+    _ts = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+    hours = (datetime.utcnow() - _ts).total_seconds() / 3600
+    if hours < 1:
+        primary = f"{int(hours * 60)}m ago"
+    elif hours < 24:
+        primary = f"{int(hours)}h ago"
+    else:
+        primary = f"{hours / 24:.1f}d ago"
+    return primary, _ts.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _next_scheduled_run() -> datetime:
+    """Return the next 21:30 UTC weekday datetime (Mon–Fri)."""
+    now = datetime.utcnow()
+    candidate = now.replace(hour=21, minute=30, second=0, microsecond=0)
+    if now >= candidate or now.weekday() >= 5:
+        candidate += timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _git_log_info() -> tuple[str, str]:
+    """Return (timestamp_str, short_message) for the most recent git commit."""
+    try:
+        res = subprocess.run(
+            ["git", "log", "-1", "--format=%ci|%s"],
+            capture_output=True, text=True, cwd=str(_ROOT), timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            raw_ts, _, msg = res.stdout.strip().partition("|")
+            dt  = datetime.strptime(raw_ts.strip()[:19], "%Y-%m-%d %H:%M:%S")
+            msg = msg.strip()
+            if len(msg) > 60:
+                msg = msg[:57] + "…"
+            return dt.strftime("%Y-%m-%d %H:%M UTC"), msg
+    except Exception:
+        pass
+    return "Unknown", ""
+
+
+def _service_uptime() -> str:
+    """Return a human-readable uptime string for the current process via psutil."""
+    try:
+        import psutil
+        elapsed = time.time() - psutil.Process().create_time()
+        d, rem = divmod(int(elapsed), 86400)
+        h, rem = divmod(rem, 3600)
+        m = rem // 60
+        if d:
+            return f"{d}d {h}h {m}m"
+        if h:
+            return f"{h}h {m}m"
+        return f"{m}m"
+    except Exception:
+        return "Unknown"
+
+
+def _db_size(config: dict) -> tuple[str, str]:
+    """Return (size_string, level) for the SQLite database file."""
+    try:
+        db_path = _ROOT / config["database"]["path"]
+        if db_path.exists():
+            mb = db_path.stat().st_size / (1024 * 1024)
+            return f"{mb:.1f} MB", "ok"
+        return "Not found", "error"
+    except Exception:
+        return "Unknown", "warn"
 
 
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
@@ -753,6 +874,59 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Home page (Charts landing — no asset selected)
+# ---------------------------------------------------------------------------
+
+def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
+    """System status panel shown when no asset is selected on the Charts page."""
+    st.markdown("## 📈 Investment Research")
+    st.caption("Select an asset from the sidebar to view its price chart and indicators.")
+    st.divider()
+    st.markdown("### System Status")
+
+    # ── Collect all status data ───────────────────────────────────────────
+    deploy_ts, deploy_msg      = _git_log_info()
+    uptime                     = _service_uptime()
+    last_refresh               = get_last_update_timestamp()
+    last_analysis              = get_last_signal_timestamp()
+    next_run                   = _next_scheduled_run()
+    db_size_str, db_level      = _db_size(config)
+
+    refresh_val,  refresh_sub  = _age_display(last_refresh)
+    analysis_val, analysis_sub = _age_display(last_analysis)
+    refresh_level              = _age_level(last_refresh)
+    analysis_level             = _age_level(last_analysis)
+
+    delta_secs = (next_run - datetime.utcnow()).total_seconds()
+    if delta_secs < 3600:
+        next_sub = f"in {int(delta_secs / 60)}m"
+    elif delta_secs < 86400:
+        next_sub = f"in {delta_secs / 3600:.1f}h"
+    else:
+        next_sub = f"in {delta_secs / 86400:.1f}d"
+
+    # ── Row 1: deployment / uptime / database ─────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    _status_card(c1, "Last Deployment", deploy_ts, deploy_msg, "info")
+    _status_card(c2, "Service Uptime",  uptime,    "Process running", "ok")
+    _status_card(c3, "Database Size",   db_size_str, "", db_level)
+
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+
+    # ── Row 2: data freshness / next run ──────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    _status_card(c1, "Last Data Refresh",  refresh_val,  refresh_sub,  refresh_level)
+    _status_card(c2, "Last Analysis Run",  analysis_val, analysis_sub, analysis_level)
+    _status_card(c3, "Next Scheduled Run",
+                 next_run.strftime("%a %Y-%m-%d %H:%M UTC"), next_sub, "info")
+
+    st.divider()
+    mc1, mc2 = st.columns(2)
+    mc1.metric("Watchlist Assets", len(watchlist))
+    mc2.metric("Asset Groups", len(config["watchlist"]))
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
@@ -932,14 +1106,7 @@ def main() -> None:
     selected = st.session_state.get("selected_ticker")
 
     if selected is None:
-        st.markdown("## Welcome to Investment Research")
-        st.info("Select an asset from the sidebar to view its price chart.")
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Watchlist size", len(watchlist))
-        last = get_last_update_timestamp()
-        col2.metric("Last update", last.strftime("%Y-%m-%d") if last else "None")
-        col3.metric("Database", "Ready")
+        _render_home_page(config, watchlist)
         return
 
     name = watchlist.get(selected, selected)
