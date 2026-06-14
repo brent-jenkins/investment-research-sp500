@@ -1,0 +1,15 @@
+streamlit>=1.32.0
+yfinance>=0.2.38
+SQLAlchemy>=2.0.0
+pandas>=2.0.0
+numpy>=1.26.0
+pyyaml>=6.0.1
+APScheduler>=3.10.4
+# TA-Lib-Precompiled has no wheel for Python 3.14+. All analysis modules
+# include pure-pandas fallbacks and work without it. To enable TA-Lib for
+# older Python versions, uncomment the line below.
+# TA-Lib-Precompiled>=0.4.25
+plotly>=5.19.0
+python-dateutil>=2.9.0
+requests>=2.31.0
+pytz>=2024.1

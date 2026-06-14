@@ -1,0 +1,86 @@
+watchlist:
+  indices:
+    - ticker: "^GSPC"
+      name: "S&P 500"
+    - ticker: "^IXIC"
+      name: "NASDAQ Composite"
+    - ticker: "^FTSE"
+      name: "FTSE 100"
+    - ticker: "^GDAXI"
+      name: "DAX"
+
+  sector_etfs:
+    - ticker: "XLE"
+      name: "Energy Select Sector"
+    - ticker: "XLF"
+      name: "Financial Select Sector"
+    - ticker: "XLK"
+      name: "Technology Select Sector"
+    - ticker: "XLV"
+      name: "Health Care Select Sector"
+    - ticker: "XLI"
+      name: "Industrial Select Sector"
+
+  commodities:
+    - ticker: "GLD"
+      name: "SPDR Gold Shares"
+    - ticker: "SLV"
+      name: "iShares Silver Trust"
+    - ticker: "USO"
+      name: "United States Oil Fund"
+    - ticker: "CORN"
+      name: "Teucrium Corn Fund"
+
+  bonds:
+    - ticker: "TLT"
+      name: "iShares 20+ Year Treasury Bond"
+    - ticker: "IEF"
+      name: "iShares 7-10 Year Treasury Bond"
+    - ticker: "HYG"
+      name: "iShares iBoxx High Yield Corporate Bond"
+
+  volatility:
+    - ticker: "^VIX"
+      name: "CBOE Volatility Index"
+
+data:
+  # How many calendar days of history to fetch on initial load
+  history_days: 365
+  # Seconds to wait between yfinance requests to avoid throttling
+  rate_limit_seconds: 1.5
+  # Retry attempts on failed fetch
+  max_retries: 3
+
+database:
+  path: "database/investment_research.db"
+
+scheduler:
+  # Cron expression for daily data pull (default: 6:30 PM weekdays)
+  hour: 18
+  minute: 30
+  timezone: "America/New_York"
+
+confluence:
+  # Minimum number of signals that must agree for a BUY/SELL call
+  min_signals_required: 3
+  # Total number of signal modules (regime, trend, mean_reversion, volatility, volume, macro)
+  total_signal_modules: 6
+  # Score thresholds: score = agreeing_signals / total_signal_modules
+  buy_threshold: 0.60
+  sell_threshold: 0.60
+
+signals:
+  # Lookback periods (trading days) used across analysis modules
+  short_window: 20
+  medium_window: 50
+  long_window: 200
+  rsi_period: 14
+  atr_period: 14
+  bollinger_period: 20
+  bollinger_std: 2.0
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  adx_period: 14
+  adx_trend_threshold: 25
+  volume_avg_period: 20
