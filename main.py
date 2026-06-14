@@ -414,44 +414,43 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.markdown("## 📊 Market Signals")
 
-    # ---- Regime card -------------------------------------------------------
+    # ---- Regime pill (compact) ---------------------------------------------
     regime_result = detect_regime()
-    regime        = regime_result["regime"]
-    colour        = regime_result["colour"]
-    description   = regime_result["description"]
-    details       = regime_result["details"]
-    weights       = regime_result["weights"]
+    regime  = regime_result["regime"]
+    colour  = regime_result["colour"]
+    details = regime_result["details"]
 
-    st.markdown(
-        f'<div style="background:{colour}22;border-left:4px solid {colour};'
-        f'padding:12px 16px;border-radius:6px;margin-bottom:16px">'
-        f'<span style="color:{colour};font-size:1.2rem;font-weight:700">'
-        f'⚡ {regime.replace("_", " ")}</span><br>'
-        f'<span style="color:#d1d5db;font-size:0.9rem">{description}</span>'
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    # Regime detail metrics
-    d1, d2, d3, d4 = st.columns(4)
     price   = details.get("price")
     sma_200 = details.get("sma_200")
     adx     = details.get("adx")
     vix     = details.get("vix")
 
-    d1.metric("^GSPC Price",   f"{price:,.0f}"   if price   else "—")
-    d2.metric("vs SMA 200",
-              f"{(price/sma_200 - 1)*100:+.1f}%" if (price and sma_200) else "—")
-    d3.metric("ADX",           f"{adx:.1f}"      if adx     else "—")
-    d4.metric("VIX",           f"{vix:.1f}"      if vix     else "—")
+    price_pct = f"{(price / sma_200 - 1) * 100:+.1f}% vs SMA200" if (price and sma_200) else "—"
+    adx_str   = f"ADX {adx:.1f}" if adx else "—"
+    vix_str   = f"VIX {vix:.1f}" if vix else "—"
 
-    # Weight profile for current regime
-    with st.expander("Regime weight profile", expanded=False):
-        cols = st.columns(5)
-        labels = ["Trend", "Mean Rev", "Volatility", "Volume", "Macro"]
-        keys   = ["trend", "mean_reversion", "volatility", "volume", "macro"]
-        for col, lbl, key in zip(cols, labels, keys):
-            col.metric(lbl, f"{weights[key]:.0%}")
+    st.markdown(
+        f'<div style="display:inline-flex;align-items:center;gap:16px;'
+        f'background:{colour}18;border:1px solid {colour}44;'
+        f'padding:6px 14px;border-radius:20px;margin-bottom:4px">'
+        f'<span style="color:{colour};font-weight:700">⚡ {regime.replace("_", " ")}</span>'
+        f'<span style="color:#6b7280;font-size:0.8rem">^GSPC {price_pct}</span>'
+        f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>'
+        f'<span style="color:#6b7280;font-size:0.8rem">{vix_str}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _REGIME_NOTES: dict[str, str] = {
+        "TRENDING_BULL":   "Trend signals carry the most weight. Favour momentum and breakout plays — mean reversion signals are less reliable in a strong uptrend.",
+        "TRENDING_BEAR":   "Trend signals carry the most weight. Favour short positions and breakdown plays — avoid buying dips unless confirmed by multiple modules.",
+        "HIGH_VOLATILITY": "Volatility signals are most informative. Prioritise defensive positions and tight risk management — directional signals are less reliable when VIX is elevated.",
+        "RANGING_LOW_VOL": "Mean reversion signals carry the most weight. Look for oversold bounces and range-bound plays — trend-following signals are less reliable in a sideways market.",
+        "UNKNOWN":         "Regime is unclear — signals are weighted equally across all modules. Treat all calls with extra caution.",
+    }
+    note = _REGIME_NOTES.get(regime, "")
+    if note:
+        st.caption(note)
 
     st.divider()
 
