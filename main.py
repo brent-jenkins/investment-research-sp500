@@ -493,6 +493,68 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
         st.info("No signals yet — click **Generate Signals** above.")
         return
 
+    # ---- Signal distribution -----------------------------------------------
+    _DIST_CFG = [
+        ("STRONG BUY",  "#16a34a"),
+        ("BUY",         "#26a69a"),
+        ("NEUTRAL",     "#6b7280"),
+        ("SELL",        "#f59e0b"),
+        ("STRONG SELL", "#ef5350"),
+    ]
+    counts = {lbl: 0 for lbl, _ in _DIST_CFG}
+    for r in rows:
+        lbl = (r.get("signal") or "NEUTRAL").replace("_", " ")
+        if lbl in counts:
+            counts[lbl] += 1
+
+    dist_cols = st.columns(5)
+    for col, (lbl, fg) in zip(dist_cols, _DIST_CFG):
+        col.markdown(
+            f'<div style="text-align:center;padding:10px 4px;border-radius:6px;'
+            f'background:{fg}22;border:1px solid {fg}55">'
+            f'<div style="color:{fg};font-weight:700;font-size:1.5rem">{counts[lbl]}</div>'
+            f'<div style="color:#9ca3af;font-size:0.72rem;margin-top:2px">{lbl}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ---- Top picks ----------------------------------------------------------
+    long_picks  = [r for r in rows           if (r.get("confluence_score") or 0) >= 0.3][:3]
+    short_picks = [r for r in reversed(rows) if (r.get("confluence_score") or 0) <= -0.3][:3]
+
+    lc, sc = st.columns(2)
+
+    def _pick_card(container, picks, heading, card_fg):
+        container.markdown(f"**{heading}**")
+        if not picks:
+            container.caption("No qualifying signals.")
+            return
+        for r in picks:
+            ticker = html.escape(r.get("ticker", ""))
+            name   = html.escape(watchlist.get(r.get("ticker", ""), r.get("ticker", "")))
+            if len(name) > 35:
+                name = name[:33] + "…"
+            score  = r.get("confluence_score") or 0.0
+            signal = (r.get("signal") or "NEUTRAL").replace("_", " ")
+            container.markdown(
+                f'<div style="background:{card_fg}18;border-left:3px solid {card_fg};'
+                f'padding:8px 12px;border-radius:4px;margin-bottom:6px">'
+                f'<span style="font-weight:700;color:{card_fg}">{ticker}</span>'
+                f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:8px">{name}</span><br>'
+                f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
+                f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.3f}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    _pick_card(lc, long_picks,  "🟢 Top Long Opportunities",  "#16a34a")
+    _pick_card(sc, short_picks, "🔴 Top Short Opportunities", "#ef5350")
+
+    st.divider()
+
+    # ---- Full rankings table -----------------------------------------------
     st.markdown("### Asset Rankings")
     st.caption("▲ bullish  ●  neutral  ▼ bearish")
 
@@ -503,15 +565,15 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     for r in rows:
         ticker = r.get("ticker", "")
         records.append({
-            "Ticker":    ticker,
-            "Name":      watchlist.get(ticker, ticker),
-            "Signal":    (r.get("signal") or "NEUTRAL").replace("_", " "),
-            "Score":     r.get("confluence_score") or 0.0,
-            "Trend":     _sym(r.get("trend_score")),
-            "Mean Rev":  _sym(r.get("mean_reversion_score")),
+            "Ticker":     ticker,
+            "Name":       watchlist.get(ticker, ticker),
+            "Signal":     (r.get("signal") or "NEUTRAL").replace("_", " "),
+            "Score":      r.get("confluence_score") or 0.0,
+            "Trend":      _sym(r.get("trend_score")),
+            "Mean Rev":   _sym(r.get("mean_reversion_score")),
             "Volatility": _sym(r.get("volatility_score")),
-            "Volume":    _sym(r.get("volume_score")),
-            "Macro":     _sym(r.get("macro_score")),
+            "Volume":     _sym(r.get("volume_score")),
+            "Macro":      _sym(r.get("macro_score")),
         })
 
     table_df = pd.DataFrame(records)
