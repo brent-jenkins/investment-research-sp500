@@ -605,8 +605,18 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ---- Top picks ----------------------------------------------------------
-    long_picks  = [r for r in rows           if (r.get("confluence_score") or 0) >= 0.3][:3]
-    short_picks = [r for r in reversed(rows) if (r.get("confluence_score") or 0) <= -0.3][:3]
+    # Require score ≥ 0.4 AND at least 2/5 modules agreeing — filters out
+    # single high-weight module signals that aren't broadly confirmed.
+    def _qualifies(r, min_score: float) -> bool:
+        score = r.get("confluence_score") or 0.0
+        if abs(score) < min_score:
+            return False
+        direction = 1 if score > 0 else -1
+        agreeing = sum(1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction)
+        return agreeing >= 2
+
+    long_picks  = [r for r in rows           if _qualifies(r, 0.4)][:3]
+    short_picks = [r for r in reversed(rows) if _qualifies(r, 0.4)][:3]
 
     lc, sc = st.columns(2)
 
