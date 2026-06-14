@@ -53,7 +53,7 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 The app has five pages toggled via a sidebar radio button (default: **Signals**):
 - **Signals** — regime card, ranked table of all assets by confluence score, Generate Signals button
-- **Charts** — candlestick chart, volume, and indicator panel for the selected asset
+- **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
 - **Trade Log** — log new eToro trades (auto-populates current signal), open-position tracker with live prices and unrealised P&L, close-trade form
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
 - **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run)
@@ -218,4 +218,4 @@ systemctl reload caddy                 # apply Caddyfile changes without downtim
 
 ## Adding assets to the watchlist
 
-Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has 46 assets across 9 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`. When adding a new group, also add its label to the `group_labels` dict in `main.py`'s sidebar block so it displays correctly. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.
+Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has 46 assets across 9 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`. When adding a new group, also add its label to the `_GROUP_LABELS` dict in `main.py` so it appears on the Charts landing page. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.

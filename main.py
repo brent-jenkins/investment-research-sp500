@@ -1261,6 +1261,48 @@ def _initialise() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Charts landing (grouped asset cards)
+# ---------------------------------------------------------------------------
+
+_GROUP_LABELS = {
+    "indices":       "Indices",
+    "sector_etfs":   "Sector ETFs",
+    "energy":        "Energy",
+    "commodities":   "Commodities",
+    "bonds":         "Bonds",
+    "volatility":    "Volatility",
+    "international": "International",
+    "forex":         "Forex",
+    "crypto":        "Crypto",
+}
+
+
+def _render_charts_landing(config: dict) -> None:
+    """Grouped asset cards shown on Charts before any ticker is selected."""
+    st.markdown("## 📈 Charts")
+    st.caption("Select an asset to view its price chart and indicators.")
+
+    for group_key, group_label in _GROUP_LABELS.items():
+        group = config["watchlist"].get(group_key, [])
+        if not group:
+            continue
+        st.markdown(f"#### {group_label}")
+        cols = st.columns(4)
+        for i, entry in enumerate(group):
+            ticker = entry["ticker"]
+            name   = entry["name"]
+            with cols[i % 4]:
+                if st.button(
+                    f"**{ticker}**  \n{name}",
+                    key=f"cl_{ticker}",
+                    use_container_width=True,
+                ):
+                    st.session_state["selected_ticker"] = ticker
+                    st.rerun()
+        st.markdown("")
+
+
+# ---------------------------------------------------------------------------
 # Main UI
 # ---------------------------------------------------------------------------
 
@@ -1330,38 +1372,6 @@ def main() -> None:
             st.success(f"Fetched {new_rows} new rows across {len(results)} tickers.")
             st.rerun()
 
-        # Watchlist selector — only shown on Charts page
-        if current_page == "charts":
-            st.divider()
-            st.subheader("Watchlist")
-            group_labels = {
-                "indices": "Indices",
-                "sector_etfs": "Sector ETFs",
-                "energy": "Energy",
-                "commodities": "Commodities",
-                "bonds": "Bonds",
-                "volatility": "Volatility",
-                "international": "International",
-                "forex": "Forex",
-                "crypto": "Crypto",
-            }
-
-            selected_ticker: str | None = st.session_state.get("selected_ticker")
-
-            for group_key, group_label in group_labels.items():
-                group = config["watchlist"].get(group_key, [])
-                if not group:
-                    continue
-                st.markdown(f"**{group_label}**")
-                for entry in group:
-                    ticker = entry["ticker"]
-                    name = entry["name"]
-                    label = f"{ticker}  —  {name}"
-                    is_selected = ticker == selected_ticker
-                    btn_type = "primary" if is_selected else "secondary"
-                    if st.button(label, key=f"wb_{ticker}", use_container_width=True, type=btn_type):
-                        st.session_state["selected_ticker"] = ticker
-                        st.rerun()
 
     # ---- Main content --------------------------------------------------
     page_key = st.session_state.get("page", "signals")
@@ -1386,10 +1396,14 @@ def main() -> None:
     selected = st.session_state.get("selected_ticker")
 
     if selected is None:
-        st.info("Select an asset from the watchlist in the sidebar to view its chart.")
+        _render_charts_landing(config)
         return
 
     name = watchlist.get(selected, selected)
+
+    if st.button("← All Assets", key="charts_back"):
+        st.session_state["selected_ticker"] = None
+        st.rerun()
 
     st.markdown(f"## {name}")
     st.caption(f"Ticker: **{selected}**")
