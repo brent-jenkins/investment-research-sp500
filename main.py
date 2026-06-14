@@ -583,6 +583,11 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ---- Top picks ----------------------------------------------------------
+    _MODULE_KEYS = [
+        "trend_score", "mean_reversion_score", "volatility_score",
+        "volume_score", "macro_score",
+    ]
+
     # Require score ≥ 0.4 AND at least 2/5 modules agreeing — filters out
     # single high-weight module signals that aren't broadly confirmed.
     def _qualifies(r, min_score: float) -> bool:
@@ -597,11 +602,6 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     short_picks = [r for r in reversed(rows) if _qualifies(r, 0.4)][:3]
 
     lc, sc = st.columns(2)
-
-    _MODULE_KEYS = [
-        "trend_score", "mean_reversion_score", "volatility_score",
-        "volume_score", "macro_score",
-    ]
 
     # Per-module plain-English tips: {score: (long_trade_tip, short_trade_tip)}
     # The long_tip is used when direction==1; short_tip when direction==-1.
