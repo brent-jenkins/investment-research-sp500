@@ -1,156 +1,212 @@
-"""Compute and persist rolling performance metrics per asset."""
+"""Trade logging, P&L calculation, and open-position tracking."""
 
-import numpy as np
-import pandas as pd
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import yfinance as yf
 import yaml
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import text
 
-from data.database import Performance, get_engine, get_session, init_db
-from data.ingestion import get_all_tickers, get_price_df
+from data.database import Trade, get_engine, get_session
+
+logger = logging.getLogger(__name__)
 
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         return yaml.safe_load(f)
 
 
-def _sharpe(returns: pd.Series, periods: int = 252) -> float:
-    """Annualised Sharpe ratio (assumes risk-free rate ≈ 0 for simplicity)."""
-    if returns.std() == 0:
-        return 0.0
-    return float(returns.mean() / returns.std() * np.sqrt(periods))
+# ---------------------------------------------------------------------------
+# Live prices
+# ---------------------------------------------------------------------------
 
+def get_latest_price(ticker: str) -> Optional[float]:
+    """Fetch the most recent close price from yfinance (live, uncached).
 
-def _sortino(returns: pd.Series, periods: int = 252) -> float:
-    """Annualised Sortino ratio."""
-    downside = returns[returns < 0]
-    if downside.std() == 0:
-        return 0.0
-    return float(returns.mean() / downside.std() * np.sqrt(periods))
-
-
-def _max_drawdown(cum_returns: pd.Series) -> float:
-    """Maximum drawdown from peak as a negative fraction."""
-    rolling_max = cum_returns.cummax()
-    drawdown = (cum_returns - rolling_max) / rolling_max.replace(0, np.nan)
-    return float(drawdown.min())
-
-
-def compute_performance(ticker: str, days: int = 365) -> Optional[pd.DataFrame]:
-    """Compute daily rolling performance metrics for a single ticker.
-
-    Args:
-        ticker: Asset to compute metrics for.
-        days: Calendar days of history to use.
-
-    Returns:
-        DataFrame with performance columns or None if insufficient data.
+    Caller should wrap with st.cache_data(ttl=300) in the UI layer.
     """
-    df = get_price_df(ticker, days=days)
-    if df.empty or len(df) < 30:
+    try:
+        data = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
+        if data.empty:
+            return None
+        if hasattr(data.columns, "levels"):
+            data.columns = [col[0] for col in data.columns]
+        return float(data["Close"].iloc[-1])
+    except Exception as exc:
+        logger.warning("Live price fetch failed for %s: %s", ticker, exc)
         return None
 
-    df = df.sort_values("date").reset_index(drop=True)
-    df["daily_return"] = df["adj_close"].pct_change()
-    df["cumulative_return"] = (1 + df["daily_return"]).cumprod() - 1
 
-    rolling_max = (1 + df["daily_return"]).cumprod().cummax()
-    cum_value = (1 + df["daily_return"]).cumprod()
-    df["drawdown"] = (cum_value - rolling_max) / rolling_max
+# ---------------------------------------------------------------------------
+# Signal lookup
+# ---------------------------------------------------------------------------
 
-    results = []
-    window = 252
-    for i in range(len(df)):
-        start_i = max(0, i - window + 1)
-        window_returns = df["daily_return"].iloc[start_i : i + 1].dropna()
-        cum_slice = (1 + window_returns).cumprod()
-
-        sharpe = _sharpe(window_returns) if len(window_returns) > 20 else None
-        sortino = _sortino(window_returns) if len(window_returns) > 20 else None
-        mdd = _max_drawdown(cum_slice) if len(cum_slice) > 1 else None
-        calmar = (
-            float(window_returns.mean() * 252 / abs(mdd))
-            if mdd and mdd != 0
-            else None
-        )
-
-        results.append(
-            {
-                "ticker": ticker,
-                "date": df["date"].iloc[i],
-                "daily_return": df["daily_return"].iloc[i],
-                "cumulative_return": df["cumulative_return"].iloc[i],
-                "drawdown": df["drawdown"].iloc[i],
-                "max_drawdown": mdd,
-                "sharpe_ratio": sharpe,
-                "sortino_ratio": sortino,
-                "calmar_ratio": calmar,
-                "win_rate": None,
-                "avg_win": None,
-                "avg_loss": None,
-                "profit_factor": None,
-            }
-        )
-
-    return pd.DataFrame(results)
-
-
-def persist_performance(ticker: str, days: int = 365) -> int:
-    """Compute and upsert performance metrics for a ticker into the database.
-
-    Returns the number of rows written.
-    """
-    init_db()
-    perf_df = compute_performance(ticker, days=days)
-    if perf_df is None or perf_df.empty:
-        return 0
-
+def get_current_signal(ticker: str) -> dict:
+    """Return the most recent signal row for *ticker* from the signals table."""
     engine = get_engine()
-    rows = perf_df.where(pd.notnull(perf_df), None).to_dict(orient="records")
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT signal, confluence_score, notes AS regime, "
+                "trend_score, mean_reversion_score, volatility_score, "
+                "volume_score, macro_score "
+                "FROM signals WHERE ticker = :t ORDER BY date DESC LIMIT 1"
+            ),
+            {"t": ticker},
+        ).mappings().first()
+    return dict(row) if row else {}
 
-    stmt = sqlite_insert(Performance).values(rows)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["ticker", "date"],
-        set_={col: getattr(stmt.excluded, col) for col in perf_df.columns if col not in ("ticker", "date")},
-    )
-    with engine.begin() as conn:
-        conn.execute(stmt)
 
-    return len(rows)
+# ---------------------------------------------------------------------------
+# Trade lifecycle
+# ---------------------------------------------------------------------------
 
-
-def get_performance_summary(tickers: Optional[list[str]] = None) -> pd.DataFrame:
-    """Return the most recent performance row for each ticker as a summary table."""
-    config = _load_config()
-    if tickers is None:
-        tickers = get_all_tickers(config)
+def log_trade(
+    ticker: str,
+    direction: str,
+    signal_type: str,
+    confluence_score: float,
+    regime: str,
+    trend_score: int,
+    mean_reversion_score: int,
+    volatility_score: int,
+    volume_score: int,
+    macro_score: int,
+    entry_price: float,
+    quantity: float,
+    entry_date: Optional[datetime] = None,
+    notes: str = "",
+) -> int:
+    """Insert a new open trade and return its database id."""
+    if entry_date is None:
+        entry_date = datetime.utcnow()
 
     session = get_session()
     try:
-        rows = []
-        for ticker in tickers:
-            row = (
-                session.query(Performance)
-                .filter(Performance.ticker == ticker)
-                .order_by(Performance.date.desc())
-                .first()
-            )
-            if row:
-                rows.append(
-                    {
-                        "ticker": ticker,
-                        "date": row.date,
-                        "cumulative_return": row.cumulative_return,
-                        "max_drawdown": row.max_drawdown,
-                        "sharpe_ratio": row.sharpe_ratio,
-                        "sortino_ratio": row.sortino_ratio,
-                    }
-                )
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+        trade = Trade(
+            ticker=ticker,
+            direction=direction,
+            signal_type=signal_type,
+            confluence_score=confluence_score,
+            regime=regime,
+            trend_score=trend_score,
+            mean_reversion_score=mean_reversion_score,
+            volatility_score=volatility_score,
+            volume_score=volume_score,
+            macro_score=macro_score,
+            entry_price=entry_price,
+            quantity=quantity,
+            entry_date=entry_date,
+            is_open=True,
+            notes=notes,
+        )
+        session.add(trade)
+        session.flush()
+        trade_id = trade.id
+        session.commit()
+        return trade_id
     finally:
         session.close()
+
+
+def close_trade(
+    trade_id: int,
+    exit_price: float,
+    exit_date: Optional[datetime] = None,
+) -> dict:
+    """Close a trade: write exit data, compute P&L, return a summary dict."""
+    if exit_date is None:
+        exit_date = datetime.utcnow()
+
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM trades WHERE id = :id"),
+            {"id": trade_id},
+        ).mappings().first()
+
+    if row is None:
+        raise ValueError(f"Trade {trade_id} not found")
+
+    entry_price    = float(row["entry_price"] or 0)
+    direction      = row.get("direction") or "LONG"
+    quantity       = float(row["quantity"] or 1)
+    entry_date_raw = row["entry_date"]
+
+    if isinstance(entry_date_raw, str):
+        entry_dt = datetime.fromisoformat(entry_date_raw)
+    elif isinstance(entry_date_raw, datetime):
+        entry_dt = entry_date_raw
+    else:
+        entry_dt = datetime.utcnow()
+
+    multiplier   = 1 if direction == "LONG" else -1
+    pnl          = round((exit_price - entry_price) * multiplier * quantity, 4)
+    pnl_pct      = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
+    holding_days = max(0, (exit_date - entry_dt).days)
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE trades SET exit_price=:ep, exit_date=:ed, pnl=:pnl, "
+                "pnl_pct=:ppct, holding_days=:hd, is_open=0 WHERE id=:id"
+            ),
+            {"ep": exit_price, "ed": exit_date, "pnl": pnl,
+             "ppct": pnl_pct, "hd": holding_days, "id": trade_id},
+        )
+
+    return {
+        "id":           trade_id,
+        "ticker":       row["ticker"],
+        "pnl":          pnl,
+        "pnl_pct":      pnl_pct,
+        "holding_days": holding_days,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Queries
+# ---------------------------------------------------------------------------
+
+def get_open_trades() -> list[dict]:
+    """Return all open trades ordered by entry date descending."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT * FROM trades WHERE is_open = 1 ORDER BY entry_date DESC")
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_closed_trades(
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+) -> list[dict]:
+    """Return closed trades, optionally filtered by exit date range."""
+    engine = get_engine()
+    sql    = "SELECT * FROM trades WHERE is_open = 0"
+    params: dict = {}
+    if from_date:
+        sql += " AND exit_date >= :from_date"
+        params["from_date"] = from_date
+    if to_date:
+        sql += " AND exit_date <= :to_date"
+        params["to_date"] = to_date
+    sql += " ORDER BY exit_date ASC"
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_all_trades() -> list[dict]:
+    """Return every trade (open and closed) ordered by entry date descending."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT * FROM trades ORDER BY entry_date DESC")
+        ).mappings().all()
+    return [dict(r) for r in rows]

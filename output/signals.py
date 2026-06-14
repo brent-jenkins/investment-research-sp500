@@ -1,125 +1,182 @@
-"""Persist and retrieve generated signals from the database."""
+"""Signal accuracy analysis: win rates, profit factor, and breakdowns."""
 
-from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-import yaml
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-from data.database import Signal, get_engine, get_session, init_db
-from data.ingestion import get_all_tickers
-from analysis.confluence import generate_signal
 
 
-def _load_config() -> dict:
-    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+def _closed(trades: list[dict]) -> list[dict]:
+    return [t for t in trades if not t.get("is_open") and t.get("pnl") is not None]
 
 
-def run_all_signals(
-    tickers: Optional[list[str]] = None,
-    as_of: Optional[datetime] = None,
-) -> list[dict]:
-    """Generate and persist signals for all (or specified) tickers.
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 
-    Args:
-        tickers: Symbols to score. Defaults to the full watchlist.
-        as_of: Timestamp to record against each signal. Defaults to now.
+def accuracy_summary(trades: list[dict]) -> dict:
+    """Overall performance statistics across all closed trades."""
+    closed = _closed(trades)
+    if not closed:
+        return {}
 
-    Returns:
-        List of signal dicts, one per ticker.
-    """
-    init_db()
-    config = _load_config()
+    pnls     = [float(t["pnl"]) for t in closed]
+    pnl_pcts = [float(t["pnl_pct"]) for t in closed if t.get("pnl_pct") is not None]
+    winners  = [p for p in pnls if p > 0]
+    losers   = [p for p in pnls if p < 0]
 
-    if tickers is None:
-        tickers = get_all_tickers(config)
-    if as_of is None:
-        as_of = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    gross_profit  = sum(winners)
+    gross_loss    = abs(sum(losers))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
-    engine = get_engine()
-    results = []
-
-    for ticker in tickers:
-        result = generate_signal(ticker, config=config)
-        result["date"] = as_of
-
-        stmt = sqlite_insert(Signal).values(
-            ticker=result["ticker"],
-            date=as_of,
-            regime_score=result["regime_score"],
-            trend_score=result["trend_score"],
-            mean_reversion_score=result["mean_reversion_score"],
-            volatility_score=result["volatility_score"],
-            volume_score=result["volume_score"],
-            macro_score=result["macro_score"],
-            confluence_score=result["confluence_score"],
-            signal=result["signal"],
-            strength=result["strength"],
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["ticker", "date"],
-            set_={
-                "regime_score": stmt.excluded.regime_score,
-                "trend_score": stmt.excluded.trend_score,
-                "mean_reversion_score": stmt.excluded.mean_reversion_score,
-                "volatility_score": stmt.excluded.volatility_score,
-                "volume_score": stmt.excluded.volume_score,
-                "macro_score": stmt.excluded.macro_score,
-                "confluence_score": stmt.excluded.confluence_score,
-                "signal": stmt.excluded.signal,
-                "strength": stmt.excluded.strength,
-            },
-        )
-        with engine.begin() as conn:
-            conn.execute(stmt)
-
-        results.append(result)
-
-    return results
+    return {
+        "total_trades":  len(closed),
+        "winners":       len(winners),
+        "losers":        len(losers),
+        "win_rate":      len(winners) / len(closed),
+        "avg_win_pct":   sum(p for p in pnl_pcts if p > 0) / len([p for p in pnl_pcts if p > 0]) if any(p > 0 for p in pnl_pcts) else 0.0,
+        "avg_loss_pct":  sum(p for p in pnl_pcts if p < 0) / len([p for p in pnl_pcts if p < 0]) if any(p < 0 for p in pnl_pcts) else 0.0,
+        "gross_profit":  gross_profit,
+        "gross_loss":    gross_loss,
+        "profit_factor": profit_factor,
+        "best_trade":    max(pnls),
+        "worst_trade":   min(pnls),
+        "total_pnl":     sum(pnls),
+    }
 
 
-def get_latest_signals(tickers: Optional[list[str]] = None) -> pd.DataFrame:
-    """Retrieve the most recent signal for each ticker.
+# ---------------------------------------------------------------------------
+# Breakdowns
+# ---------------------------------------------------------------------------
 
-    Returns a DataFrame with one row per ticker, sorted by confluence_score descending.
-    """
-    config = _load_config()
-    if tickers is None:
-        tickers = get_all_tickers(config)
+_SIGNAL_ORDER = ["STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL"]
 
-    session = get_session()
-    try:
-        rows = []
-        for ticker in tickers:
-            row = (
-                session.query(Signal)
-                .filter(Signal.ticker == ticker)
-                .order_by(Signal.date.desc())
-                .first()
-            )
-            if row:
-                rows.append(
-                    {
-                        "ticker": row.ticker,
-                        "date": row.date,
-                        "signal": row.signal,
-                        "confluence_score": row.confluence_score,
-                        "strength": row.strength,
-                        "regime": row.regime_score,
-                        "trend": row.trend_score,
-                        "mean_reversion": row.mean_reversion_score,
-                        "volatility": row.volatility_score,
-                        "volume": row.volume_score,
-                        "macro": row.macro_score,
-                    }
-                )
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame(rows)
-        return df.sort_values("confluence_score", ascending=False).reset_index(drop=True)
-    finally:
-        session.close()
+
+def accuracy_by_signal_type(trades: list[dict]) -> pd.DataFrame:
+    """Win rate and average P&L broken down by signal classification."""
+    closed = _closed(trades)
+    if not closed:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(closed)
+    if "signal_type" not in df.columns or df["signal_type"].isna().all():
+        return pd.DataFrame()
+
+    rows = []
+    for sig_type, group in df.groupby("signal_type", dropna=True):
+        pnls = group["pnl"].dropna().astype(float)
+        wins = int((pnls > 0).sum())
+        rows.append({
+            "Signal":    str(sig_type).replace("_", " "),
+            "_key":      str(sig_type),
+            "Trades":    len(group),
+            "Wins":      wins,
+            "Win Rate":  wins / len(group) if group.shape[0] else 0.0,
+            "Avg P&L":   float(pnls.mean()) if len(pnls) else 0.0,
+            "Total P&L": float(pnls.sum())  if len(pnls) else 0.0,
+        })
+
+    result = pd.DataFrame(rows)
+    result["_ord"] = result["_key"].map(
+        lambda x: _SIGNAL_ORDER.index(x) if x in _SIGNAL_ORDER else 99
+    )
+    return (
+        result.sort_values("_ord")
+        .drop(columns=["_key", "_ord"])
+        .reset_index(drop=True)
+    )
+
+
+def accuracy_by_regime(trades: list[dict]) -> pd.DataFrame:
+    """Win rate and average P&L broken down by market regime."""
+    closed = _closed(trades)
+    if not closed:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(closed)
+    if "regime" not in df.columns or df["regime"].isna().all():
+        return pd.DataFrame()
+
+    rows = []
+    for regime, group in df.groupby("regime", dropna=True):
+        pnls = group["pnl"].dropna().astype(float)
+        wins = int((pnls > 0).sum())
+        rows.append({
+            "Regime":    str(regime).replace("_", " "),
+            "Trades":    len(group),
+            "Wins":      wins,
+            "Win Rate":  wins / len(group) if group.shape[0] else 0.0,
+            "Avg P&L":   float(pnls.mean()) if len(pnls) else 0.0,
+            "Total P&L": float(pnls.sum())  if len(pnls) else 0.0,
+        })
+
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Win Rate", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def accuracy_by_indicator(trades: list[dict]) -> pd.DataFrame:
+    """Per-module hit rate: how often each indicator's directional call was correct."""
+    closed = _closed(trades)
+    if not closed:
+        return pd.DataFrame()
+
+    modules = {
+        "trend":          "Trend",
+        "mean_reversion": "Mean Reversion",
+        "volatility":     "Volatility",
+        "volume":         "Volume",
+        "macro":          "Macro",
+    }
+
+    rows = []
+    for key, label in modules.items():
+        score_col = f"{key}_score"
+        relevant  = [t for t in closed if t.get(score_col) is not None]
+        if not relevant:
+            continue
+
+        bullish = [t for t in relevant if int(t.get(score_col, 0)) > 0]
+        bearish = [t for t in relevant if int(t.get(score_col, 0)) < 0]
+        neutral = [t for t in relevant if int(t.get(score_col, 0)) == 0]
+
+        b_correct = [t for t in bullish if float(t.get("pnl", 0)) > 0]
+        s_correct = [t for t in bearish if float(t.get("pnl", 0)) < 0]
+
+        total   = len(bullish) + len(bearish)
+        correct = len(b_correct) + len(s_correct)
+
+        rows.append({
+            "Indicator":       label,
+            "Bullish Calls":   len(bullish),
+            "Bullish Correct": len(b_correct),
+            "Bearish Calls":   len(bearish),
+            "Bearish Correct": len(s_correct),
+            "Neutral":         len(neutral),
+            "Hit Rate":        correct / total if total > 0 else None,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Equity curve
+# ---------------------------------------------------------------------------
+
+def equity_curve(trades: list[dict]) -> pd.DataFrame:
+    """Cumulative P&L over time from closed trades, sorted by exit date."""
+    closed = [
+        t for t in trades
+        if not t.get("is_open")
+        and t.get("exit_date") is not None
+        and t.get("pnl") is not None
+    ]
+    if not closed:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(closed)
+    df["exit_date"] = pd.to_datetime(df["exit_date"])
+    df = df.sort_values("exit_date").reset_index(drop=True)
+    df["cumulative_pnl"] = df["pnl"].astype(float).cumsum()
+    return df[["exit_date", "ticker", "pnl", "pnl_pct", "cumulative_pnl"]]

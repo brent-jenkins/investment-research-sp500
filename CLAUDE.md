@@ -49,9 +49,11 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has two pages toggled via a sidebar radio button:
+The app has four pages toggled via a sidebar radio button:
 - **Charts** — candlestick chart, volume, and indicator panel for the selected asset
 - **Signals** — regime card, ranked table of all assets by confluence score, Generate Signals button
+- **Trade Log** — log new eToro trades (auto-populates current signal), open-position tracker with live prices and unrealised P&L, close-trade form
+- **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
 
 ### Configuration
 
@@ -98,6 +100,16 @@ All writes use `sqlite_insert(...).on_conflict_do_update(...)` (upsert) so every
 For **reading** indicator data in the UI, use raw SQL via `get_engine().connect()` rather than ORM queries — the ORM mapper can silently return `None` when the live schema has columns the mapper hasn't seen. See `_render_indicator_panel()` in `main.py` for the pattern.
 
 The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.map()` per column subset) rather than a custom HTML table. This lets Streamlit's theme control fonts, row backgrounds, and borders while only the meaningful cells carry explicit colours (signal badge, score, module symbols). Set `height=header_px + row_height_px * len(rows)` to expand the frame to its full content and suppress the scrollbar.
+
+### Trade lifecycle
+
+`output/performance.py` handles the full trade lifecycle:
+- `get_current_signal(ticker)` — reads the most recent signals row (uses `notes AS regime` since the `regime` column is written by the legacy path)
+- `log_trade(...)` — inserts an open trade via ORM session, captures signal context columns (signal_type, confluence_score, regime, five module scores) at entry time
+- `close_trade(trade_id, exit_price)` — raw SQL UPDATE; computes `pnl = (exit - entry) × multiplier × qty`, `pnl_pct`, and `holding_days`
+- Live prices via `get_latest_price(ticker)` use a 5-day yfinance window; the UI wraps this with `@st.cache_data(ttl=300)` to limit API calls
+
+`output/signals.py` is pure-pandas analysis over a list[dict] of closed trades — no DB calls. Functions: `accuracy_summary`, `accuracy_by_signal_type`, `accuracy_by_regime`, `accuracy_by_indicator`, `equity_curve`.
 
 ### Schema migrations
 

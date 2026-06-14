@@ -166,7 +166,7 @@ class Signal(Base):
 
 
 class Trade(Base):
-    """Hypothetical trades triggered by signals (for back-testing / journaling)."""
+    """eToro trades logged manually after replicating confluence signals."""
 
     __tablename__ = "trades"
 
@@ -174,15 +174,30 @@ class Trade(Base):
     ticker = Column(String(20), nullable=False, index=True)
     signal_id = Column(Integer, index=True)
 
+    # Signal context at time of entry
+    signal_type = Column(String(15))       # STRONG_BUY / BUY / SELL / STRONG_SELL
+    confluence_score = Column(Float)
+    regime = Column(String(20))
+    trend_score = Column(Integer)
+    mean_reversion_score = Column(Integer)
+    volatility_score = Column(Integer)
+    volume_score = Column(Integer)
+    macro_score = Column(Integer)
+
+    # Trade details
     direction = Column(String(5), nullable=False)   # LONG / SHORT
     entry_date = Column(DateTime)
     entry_price = Column(Float)
     exit_date = Column(DateTime)
     exit_price = Column(Float)
     quantity = Column(Float)
+
+    # Outcome (populated on close)
     pnl = Column(Float)
     pnl_pct = Column(Float)
+    holding_days = Column(Integer)
     is_open = Column(Boolean, default=True)
+
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -236,6 +251,15 @@ def _apply_migrations(engine) -> None:
         ("indicators", "yield_curve_regime",  "VARCHAR(10)"),
         ("indicators", "golden_cross",        "FLOAT"),
         ("signals",    "regime",              "VARCHAR(20)"),
+        ("trades",     "signal_type",         "VARCHAR(15)"),
+        ("trades",     "confluence_score",    "FLOAT"),
+        ("trades",     "regime",              "VARCHAR(20)"),
+        ("trades",     "trend_score",         "INTEGER"),
+        ("trades",     "mean_reversion_score","INTEGER"),
+        ("trades",     "volatility_score",    "INTEGER"),
+        ("trades",     "volume_score",        "INTEGER"),
+        ("trades",     "macro_score",         "INTEGER"),
+        ("trades",     "holding_days",        "INTEGER"),
     ]
     for table, column, col_type in new_columns:
         try:

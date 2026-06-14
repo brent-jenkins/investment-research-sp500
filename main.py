@@ -9,7 +9,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import logging
-from datetime import datetime
+from datetime import datetime, date
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -27,6 +27,22 @@ from data.ingestion import (
     pull_incremental,
 )
 from data.scheduler import start_scheduler
+from output.performance import (
+    close_trade,
+    get_all_trades,
+    get_closed_trades,
+    get_current_signal,
+    get_latest_price,
+    get_open_trades,
+    log_trade,
+)
+from output.signals import (
+    accuracy_by_indicator,
+    accuracy_by_regime,
+    accuracy_by_signal_type,
+    accuracy_summary,
+    equity_curve,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,6 +67,12 @@ def _build_watchlist(config: dict) -> dict[str, str]:
         for entry in group:
             items[entry["ticker"]] = entry["name"]
     return items
+
+
+@st.cache_data(ttl=300)
+def _cached_latest_price(ticker: str) -> float | None:
+    """Live price from yfinance, cached for 5 minutes to limit API calls."""
+    return get_latest_price(ticker)
 
 
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
@@ -373,6 +395,352 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Trade Log page
+# ---------------------------------------------------------------------------
+
+def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
+    st.markdown("## 📋 Trade Log")
+
+    # ---- Log New Trade -----------------------------------------------------
+    with st.expander("➕ Log New Trade", expanded=True):
+        ticker_keys = list(watchlist.keys())
+        sel_ticker  = st.selectbox(
+            "Asset",
+            ticker_keys,
+            format_func=lambda t: f"{t} — {watchlist[t]}",
+            key="log_ticker",
+        )
+
+        sig = get_current_signal(sel_ticker)
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Signal",          (sig.get("signal") or "—").replace("_", " "))
+        sc2.metric("Confluence Score", f"{sig.get('confluence_score', 0):+.3f}" if sig else "—")
+        sc3.metric("Regime",          (sig.get("regime") or "—").replace("_", " "))
+
+        with st.form("log_trade_form", clear_on_submit=True):
+            fc1, fc2, fc3 = st.columns(3)
+            direction   = fc1.radio("Direction", ["LONG", "SHORT"], horizontal=True)
+            entry_price = fc2.number_input("Entry Price", min_value=0.0, step=0.01, format="%.4f")
+            quantity    = fc3.number_input("Quantity (units)", min_value=0.001, value=1.0, step=1.0, format="%.3f")
+            notes_text  = st.text_input("Notes (optional)")
+            submitted   = st.form_submit_button("Log Trade", type="primary")
+
+            if submitted:
+                if entry_price <= 0:
+                    st.error("Entry price must be greater than 0.")
+                else:
+                    trade_id = log_trade(
+                        ticker=sel_ticker,
+                        direction=direction,
+                        signal_type=sig.get("signal", ""),
+                        confluence_score=float(sig.get("confluence_score") or 0),
+                        regime=sig.get("regime", ""),
+                        trend_score=int(sig.get("trend_score") or 0),
+                        mean_reversion_score=int(sig.get("mean_reversion_score") or 0),
+                        volatility_score=int(sig.get("volatility_score") or 0),
+                        volume_score=int(sig.get("volume_score") or 0),
+                        macro_score=int(sig.get("macro_score") or 0),
+                        entry_price=entry_price,
+                        quantity=quantity,
+                        notes=notes_text,
+                    )
+                    st.success(f"Trade #{trade_id} logged for {sel_ticker}.")
+                    st.rerun()
+
+    st.divider()
+
+    # ---- Open Trades -------------------------------------------------------
+    st.markdown("### Open Trades")
+    open_trades = get_open_trades()
+
+    if not open_trades:
+        st.info("No open trades. Use the form above to log one.")
+    else:
+        live_prices = {t["ticker"]: _cached_latest_price(t["ticker"])
+                       for t in open_trades}
+
+        rows = []
+        for t in open_trades:
+            ticker    = t["ticker"]
+            live      = live_prices.get(ticker)
+            entry     = float(t.get("entry_price") or 0)
+            qty       = float(t.get("quantity") or 1)
+            direction = t.get("direction", "LONG")
+            entry_dt  = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
+            days_held = int((pd.Timestamp.utcnow() - entry_dt).days) if entry_dt else None
+
+            if live and entry:
+                mult      = 1 if direction == "LONG" else -1
+                unreal_pct = (live - entry) / entry * mult * 100
+            else:
+                unreal_pct = None
+
+            rows.append({
+                "ID":          t["id"],
+                "Ticker":      ticker,
+                "Signal":      (t.get("signal_type") or "—").replace("_", " "),
+                "Dir":         direction,
+                "Entry Date":  entry_dt.strftime("%Y-%m-%d") if entry_dt else "—",
+                "Entry Price": entry,
+                "Live Price":  live,
+                "Unreal P&L %": unreal_pct,
+                "Days Held":   days_held,
+            })
+
+        open_df = pd.DataFrame(rows)
+
+        def _style_unreal(val):
+            if not isinstance(val, float):
+                return ""
+            if val > 0:  return "color:#16a34a;font-weight:bold"
+            if val < 0:  return "color:#dc2626;font-weight:bold"
+            return ""
+
+        styler = (
+            open_df.style
+            .map(_style_unreal, subset=["Unreal P&L %"])
+            .format({
+                "Entry Price":  "{:,.4f}",
+                "Live Price":   lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
+                "Unreal P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+            })
+        )
+        st.dataframe(styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(rows))
+
+    st.divider()
+
+    # ---- Close a Trade -----------------------------------------------------
+    if open_trades:
+        st.markdown("### Close a Trade")
+        trade_labels = {
+            t["id"]: (
+                f"#{t['id']}  {t['ticker']}  "
+                f"{(t.get('signal_type') or '').replace('_', ' ')}  "
+                f"@ {float(t.get('entry_price') or 0):,.4f}"
+            )
+            for t in open_trades
+        }
+        with st.form("close_trade_form"):
+            selected_id = st.selectbox(
+                "Select trade to close",
+                options=list(trade_labels.keys()),
+                format_func=lambda x: trade_labels[x],
+            )
+            exit_price = st.number_input("Exit Price", min_value=0.0, step=0.01, format="%.4f")
+            close_btn  = st.form_submit_button("Close Trade", type="primary")
+
+            if close_btn:
+                if exit_price <= 0:
+                    st.error("Exit price must be greater than 0.")
+                else:
+                    result = close_trade(selected_id, exit_price)
+                    pnl    = result["pnl"]
+                    icon   = "🟢" if pnl >= 0 else "🔴"
+                    st.success(
+                        f"{icon} Closed {result['ticker']} — "
+                        f"P&L: {pnl:+.4f} pts  ({result['pnl_pct']:+.2f}%)  "
+                        f"over {result['holding_days']} day(s)."
+                    )
+                    st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Performance page
+# ---------------------------------------------------------------------------
+
+_PNL_GREEN = "#16a34a"
+_PNL_RED   = "#dc2626"
+
+
+def _pnl_colour(val: float) -> str:
+    return _PNL_GREEN if val >= 0 else _PNL_RED
+
+
+def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
+    st.markdown("## 🏆 Performance")
+
+    # ---- Date range filter -------------------------------------------------
+    with st.expander("📅 Date range filter", expanded=False):
+        fc1, fc2 = st.columns(2)
+        from_date: date | None = fc1.date_input("From (exit date)", value=None)
+        to_date:   date | None = fc2.date_input("To (exit date)",   value=None)
+
+    from_dt = datetime(from_date.year, from_date.month, from_date.day) if from_date else None
+    to_dt   = datetime(to_date.year,  to_date.month,  to_date.day, 23, 59, 59) if to_date else None
+
+    all_trades    = get_all_trades()
+    closed_trades = get_closed_trades(from_dt, to_dt)
+
+    # ---- Summary stats -----------------------------------------------------
+    summary = accuracy_summary(all_trades)
+
+    if not summary:
+        st.info("No closed trades yet. Log and close trades on the **Trade Log** page.")
+        return
+
+    s1, s2, s3, s4, s5 = st.columns(5)
+    s1.metric("Total Trades",  summary["total_trades"])
+    s2.metric("Win Rate",      f"{summary['win_rate']:.0%}")
+    s3.metric("Profit Factor", f"{summary['profit_factor']:.2f}" if summary["profit_factor"] != float("inf") else "∞")
+    s4.metric("Best Trade",    f"{summary['best_trade']:+.4f}",  delta=f"{summary['best_trade']:+.4f}")
+    s5.metric("Worst Trade",   f"{summary['worst_trade']:+.4f}", delta=f"{summary['worst_trade']:+.4f}")
+
+    col_l, col_r = st.columns(2)
+    col_l.metric("Avg Win %",  f"{summary['avg_win_pct']:+.2f}%")
+    col_r.metric("Avg Loss %", f"{summary['avg_loss_pct']:+.2f}%")
+
+    st.divider()
+
+    # ---- Equity curve ------------------------------------------------------
+    curve_df = equity_curve(closed_trades if closed_trades else all_trades)
+
+    if not curve_df.empty:
+        st.markdown("### Equity Curve")
+        final_pnl    = float(curve_df["cumulative_pnl"].iloc[-1])
+        curve_colour = _pnl_colour(final_pnl)
+
+        fig_curve = go.Figure()
+        fig_curve.add_hline(y=0, line_dash="dot", line_color="grey", line_width=1)
+        fig_curve.add_trace(go.Scatter(
+            x=curve_df["exit_date"],
+            y=curve_df["cumulative_pnl"],
+            mode="lines+markers",
+            line=dict(color=curve_colour, width=2),
+            fill="tozeroy",
+            fillcolor=f"rgba({'22,163,74' if final_pnl >= 0 else '220,38,38'},0.12)",
+            hovertemplate=(
+                "<b>%{x|%Y-%m-%d}</b><br>"
+                "Cumulative P&L: %{y:+.4f}<extra></extra>"
+            ),
+        ))
+        fig_curve.update_layout(
+            template="plotly_dark",
+            height=320,
+            margin=dict(l=40, r=20, t=20, b=40),
+            xaxis_title="Exit Date",
+            yaxis_title="Cumulative P&L (pts)",
+        )
+        st.plotly_chart(fig_curve, use_container_width=True)
+
+    st.divider()
+
+    # ---- Win rate by signal type -------------------------------------------
+    sig_df  = accuracy_by_signal_type(closed_trades)
+    reg_df  = accuracy_by_regime(closed_trades)
+
+    if not sig_df.empty or not reg_df.empty:
+        ch1, ch2 = st.columns(2)
+
+        if not sig_df.empty:
+            with ch1:
+                st.markdown("### Win Rate by Signal Type")
+                bar_colours = [
+                    _pnl_colour(r - 0.5) for r in sig_df["Win Rate"]
+                ]
+                fig_sig = go.Figure(go.Bar(
+                    x=sig_df["Signal"],
+                    y=sig_df["Win Rate"] * 100,
+                    marker_color=bar_colours,
+                    text=[f"{r:.0%}" for r in sig_df["Win Rate"]],
+                    textposition="outside",
+                ))
+                fig_sig.add_hline(y=50, line_dash="dot", line_color="grey", line_width=1)
+                fig_sig.update_layout(
+                    template="plotly_dark",
+                    height=300,
+                    margin=dict(l=20, r=20, t=20, b=60),
+                    yaxis=dict(title="Win Rate (%)", range=[0, 110]),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_sig, use_container_width=True)
+
+        if not reg_df.empty:
+            with ch2:
+                st.markdown("### Win Rate by Regime")
+                bar_colours = [_pnl_colour(r - 0.5) for r in reg_df["Win Rate"]]
+                fig_reg = go.Figure(go.Bar(
+                    x=reg_df["Regime"],
+                    y=reg_df["Win Rate"] * 100,
+                    marker_color=bar_colours,
+                    text=[f"{r:.0%}" for r in reg_df["Win Rate"]],
+                    textposition="outside",
+                ))
+                fig_reg.add_hline(y=50, line_dash="dot", line_color="grey", line_width=1)
+                fig_reg.update_layout(
+                    template="plotly_dark",
+                    height=300,
+                    margin=dict(l=20, r=20, t=20, b=60),
+                    yaxis=dict(title="Win Rate (%)", range=[0, 110]),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_reg, use_container_width=True)
+
+        st.divider()
+
+    # ---- Indicator accuracy ------------------------------------------------
+    ind_df = accuracy_by_indicator(closed_trades)
+
+    if not ind_df.empty:
+        st.markdown("### Indicator Accuracy")
+        st.caption("Hit rate = (bullish calls that were profitable + bearish calls that lost) / total directional calls")
+
+        def _style_hit(val):
+            if val is None or not isinstance(val, float):
+                return ""
+            if val >= 0.6:  return f"color:{_PNL_GREEN};font-weight:bold"
+            if val <= 0.4:  return f"color:{_PNL_RED};font-weight:bold"
+            return ""
+
+        ind_styler = (
+            ind_df.style
+            .map(_style_hit, subset=["Hit Rate"])
+            .format({"Hit Rate": lambda v: f"{v:.0%}" if isinstance(v, float) else "—"})
+        )
+        st.dataframe(ind_styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(ind_df))
+
+    st.divider()
+
+    # ---- Closed trades table -----------------------------------------------
+    if closed_trades:
+        st.markdown("### Closed Trades")
+        ct_rows = []
+        for t in reversed(closed_trades):     # most recent first
+            ct_rows.append({
+                "Ticker":    t.get("ticker", ""),
+                "Signal":    (t.get("signal_type") or "—").replace("_", " "),
+                "Dir":       t.get("direction", "LONG"),
+                "Entry":     float(t.get("entry_price") or 0),
+                "Exit":      float(t.get("exit_price")  or 0),
+                "P&L pts":   float(t.get("pnl")         or 0),
+                "P&L %":     float(t.get("pnl_pct")     or 0),
+                "Days":      t.get("holding_days"),
+                "Regime":    (t.get("regime") or "—").replace("_", " "),
+            })
+
+        ct_df = pd.DataFrame(ct_rows)
+
+        def _style_pnl(val):
+            if not isinstance(val, (int, float)):
+                return ""
+            return f"color:{_pnl_colour(val)};font-weight:bold"
+
+        ct_styler = (
+            ct_df.style
+            .map(_style_pnl, subset=["P&L pts", "P&L %"])
+            .format({
+                "Entry":   "{:,.4f}",
+                "Exit":    "{:,.4f}",
+                "P&L pts": "{:+.4f}",
+                "P&L %":   "{:+.2f}%",
+            })
+        )
+        st.dataframe(ct_styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(ct_rows))
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
@@ -417,13 +785,24 @@ def main() -> None:
         st.divider()
 
         # Page navigation
+        _PAGES = ["📈 Charts", "📊 Signals", "📋 Trade Log", "🏆 Performance"]
+        _PAGE_KEYS = {
+            "📈 Charts":      "charts",
+            "📊 Signals":     "signals",
+            "📋 Trade Log":   "trade_log",
+            "🏆 Performance": "performance",
+        }
+        current_key = st.session_state.get("page", "charts")
+        default_idx = next(
+            (i for i, k in enumerate(_PAGE_KEYS.values()) if k == current_key), 0
+        )
         page = st.radio(
             "Navigation",
-            options=["📈 Charts", "📊 Signals"],
-            index=0 if st.session_state.get("page", "charts") == "charts" else 1,
+            options=_PAGES,
+            index=default_idx,
             label_visibility="collapsed",
         )
-        current_page = "signals" if page == "📊 Signals" else "charts"
+        current_page = _PAGE_KEYS[page]
         if st.session_state.get("page") != current_page:
             st.session_state["page"] = current_page
             st.rerun()
@@ -497,8 +876,18 @@ def main() -> None:
                         st.rerun()
 
     # ---- Main content --------------------------------------------------
-    if st.session_state.get("page") == "signals":
+    page_key = st.session_state.get("page", "charts")
+
+    if page_key == "signals":
         _render_signals_page(config, watchlist)
+        return
+
+    if page_key == "trade_log":
+        _render_trade_log_page(config, watchlist)
+        return
+
+    if page_key == "performance":
+        _render_performance_page(config, watchlist)
         return
 
     # Charts page
