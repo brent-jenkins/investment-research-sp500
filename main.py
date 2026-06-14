@@ -222,41 +222,16 @@ def _render_indicator_panel(ticker: str) -> None:
 # Signals page
 # ---------------------------------------------------------------------------
 
-# Colour map for signal classifications
-_SIGNAL_COLOURS: dict[str, str] = {
-    "STRONG_BUY":  "#1a5c38",   # dark green
-    "BUY":         "#26a69a",   # teal / light green
-    "NEUTRAL":     "#6b7280",   # grey
-    "SELL":        "#f59e0b",   # amber / orange
-    "STRONG_SELL": "#ef5350",   # red
+# CSS applied to the Signal column cells via Pandas Styler (space-separated labels)
+_SIGNAL_CSS: dict[str, str] = {
+    "STRONG BUY":  "background-color:#1a5c38;color:white;font-weight:600",
+    "BUY":         "background-color:#26a69a;color:white;font-weight:600",
+    "NEUTRAL":     "font-weight:600",
+    "SELL":        "background-color:#f59e0b;color:white;font-weight:600",
+    "STRONG SELL": "background-color:#ef5350;color:white;font-weight:600",
 }
 
-_SCORE_COLOURS: dict[int, str] = {
-    1:  "#26a69a",   # green
-    0:  "#374151",   # dark grey
-    -1: "#ef5350",   # red
-}
-
-
-def _signal_badge(label: str) -> str:
-    """Return an HTML span badge for a signal classification."""
-    colour = _SIGNAL_COLOURS.get(label, "#6b7280")
-    display = label.replace("_", " ")
-    return (
-        f'<span style="background:{colour};color:white;padding:2px 8px;'
-        f'border-radius:4px;font-size:0.8rem;font-weight:600;">{display}</span>'
-    )
-
-
-def _score_cell(score: int | None) -> str:
-    """Return an HTML span for a single module score cell."""
-    if score is None:
-        return '<span style="color:#6b7280">—</span>'
-    colour = _SCORE_COLOURS.get(int(score), "#374151")
-    symbol = {1: "▲", 0: "●", -1: "▼"}.get(int(score), "●")
-    return (
-        f'<span style="color:{colour};font-weight:700;font-size:1rem">{symbol}</span>'
-    )
+_SCORE_SYMBOL: dict[int, str] = {1: "▲", 0: "●", -1: "▼"}
 
 
 def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
@@ -344,72 +319,56 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
         return
 
     st.markdown("### Asset Rankings")
-    st.caption(
-        "▲ bullish &nbsp;&nbsp; ● neutral &nbsp;&nbsp; ▼ bearish &nbsp;&nbsp;"
-        "(colour-coded per module)"
-    )
+    st.caption("▲ bullish  ●  neutral  ▼ bearish")
 
-    # Build display DataFrame
-    table_rows = []
+    def _sym(val) -> str:
+        return _SCORE_SYMBOL.get(int(val) if val is not None else 0, "●")
+
+    records = []
     for r in rows:
         ticker = r.get("ticker", "")
-        table_rows.append(
-            {
-                "Ticker":    ticker,
-                "Name":      watchlist.get(ticker, ticker),
-                "_signal":   r.get("signal", "NEUTRAL"),
-                "Score":     r.get("confluence_score") or 0.0,
-                "_trend":    r.get("trend_score") or 0,
-                "_mr":       r.get("mean_reversion_score") or 0,
-                "_vol":      r.get("volatility_score") or 0,
-                "_volume":   r.get("volume_score") or 0,
-                "_macro":    r.get("macro_score") or 0,
-            }
-        )
+        records.append({
+            "Ticker":    ticker,
+            "Name":      watchlist.get(ticker, ticker),
+            "Signal":    (r.get("signal") or "NEUTRAL").replace("_", " "),
+            "Score":     r.get("confluence_score") or 0.0,
+            "Trend":     _sym(r.get("trend_score")),
+            "Mean Rev":  _sym(r.get("mean_reversion_score")),
+            "Volatility": _sym(r.get("volatility_score")),
+            "Volume":    _sym(r.get("volume_score")),
+            "Macro":     _sym(r.get("macro_score")),
+        })
 
-    # Render as an HTML table for full colour control
-    header_html = (
-        "<table style='width:100%;border-collapse:collapse;font-size:0.88rem'>"
-        "<thead><tr style='border-bottom:1px solid #374151'>"
-        "<th style='text-align:left;padding:6px'>Ticker</th>"
-        "<th style='text-align:left;padding:6px'>Name</th>"
-        "<th style='text-align:center;padding:6px'>Signal</th>"
-        "<th style='text-align:right;padding:6px'>Score</th>"
-        "<th style='text-align:center;padding:6px'>Trend</th>"
-        "<th style='text-align:center;padding:6px'>Mean Rev</th>"
-        "<th style='text-align:center;padding:6px'>Volatility</th>"
-        "<th style='text-align:center;padding:6px'>Volume</th>"
-        "<th style='text-align:center;padding:6px'>Macro</th>"
-        "</tr></thead><tbody>"
+    table_df = pd.DataFrame(records)
+
+    def _style_signal(val: str) -> str:
+        return _SIGNAL_CSS.get(val, "")
+
+    def _style_score(val: float) -> str:
+        if val > 0.1:  return "color:#16a34a;font-weight:bold"
+        if val < -0.1: return "color:#dc2626;font-weight:bold"
+        return ""
+
+    def _style_module(val: str) -> str:
+        if val == "▲": return "color:#16a34a;font-weight:bold"
+        if val == "▼": return "color:#dc2626;font-weight:bold"
+        return ""
+
+    module_cols = ["Trend", "Mean Rev", "Volatility", "Volume", "Macro"]
+    styler = (
+        table_df.style
+        .map(_style_signal, subset=["Signal"])
+        .map(_style_score,  subset=["Score"])
+        .map(_style_module, subset=module_cols)
+        .format({"Score": "{:+.3f}"})
     )
-
-    body_parts = []
-    for i, r in enumerate(table_rows):
-        bg = "#1f2937" if i % 2 == 0 else "#111827"
-        score = r["Score"]
-        score_colour = (
-            "#26a69a" if score > 0.1
-            else "#ef5350" if score < -0.1
-            else "#6b7280"
-        )
-        body_parts.append(
-            f"<tr style='background:{bg}'>"
-            f"<td style='padding:6px;font-weight:600'>{r['Ticker']}</td>"
-            f"<td style='padding:6px;color:#9ca3af'>{r['Name']}</td>"
-            f"<td style='padding:6px;text-align:center'>{_signal_badge(r['_signal'])}</td>"
-            f"<td style='padding:6px;text-align:right;color:{score_colour};font-weight:700'>"
-            f"{score:+.3f}</td>"
-            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_trend'])}</td>"
-            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_mr'])}</td>"
-            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_vol'])}</td>"
-            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_volume'])}</td>"
-            f"<td style='padding:6px;text-align:center'>{_score_cell(r['_macro'])}</td>"
-            "</tr>"
-        )
-
-    st.markdown(
-        header_html + "".join(body_parts) + "</tbody></table>",
-        unsafe_allow_html=True,
+    row_height_px = 35
+    header_px     = 38
+    st.dataframe(
+        styler,
+        use_container_width=True,
+        hide_index=True,
+        height=header_px + row_height_px * len(records),
     )
 
 
