@@ -519,6 +519,91 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ---- Market intelligence -----------------------------------------------
+    bullish_n = counts["STRONG BUY"] + counts["BUY"]
+    bearish_n = counts["SELL"] + counts["STRONG SELL"]
+    total_n   = sum(counts.values())
+    _intel: list[str] = []
+
+    if total_n > 0:
+        bull_pct = bullish_n / total_n
+        bear_pct = bearish_n / total_n
+        if bull_pct >= 0.6:
+            _intel.append(
+                f"{bullish_n} of {total_n} assets show buy signals — broad bullish breadth "
+                f"supports adding long exposure on short-term pullbacks."
+            )
+        elif bear_pct >= 0.6:
+            _intel.append(
+                f"{bearish_n} of {total_n} assets show sell signals — broad bearish breadth "
+                f"suggests reducing longs and favouring cash or short positions."
+            )
+        elif bull_pct > bear_pct:
+            _intel.append(
+                f"Signals lean bullish ({bullish_n} buys vs {bearish_n} sells across {total_n} assets) "
+                f"— selective long exposure is favoured, though broad momentum is not overwhelming."
+            )
+        elif bear_pct > bull_pct:
+            _intel.append(
+                f"Signals lean bearish ({bearish_n} sells vs {bullish_n} buys from {total_n} assets) "
+                f"— consider lightening longs and waiting for clearer confirmation before new entries."
+            )
+        else:
+            _intel.append(
+                f"Signals are evenly split ({bullish_n} buys, {bearish_n} sells across {total_n} assets) "
+                f"— the market lacks a clear directional bias; patience or range-bound strategies are preferred."
+            )
+
+    if vix:
+        if vix >= 30:
+            _intel.append(
+                f"VIX at {vix:.1f} signals elevated fear. Historically, spikes above 30 mark "
+                f"panic-driven selling — contrarian long opportunities may emerge, but strict "
+                f"position sizing is critical."
+            )
+        elif vix >= 20:
+            _intel.append(
+                f"VIX at {vix:.1f} indicates above-average uncertainty — options premiums are "
+                f"elevated, so factor heightened risk into position sizing."
+            )
+        elif vix < 15:
+            _intel.append(
+                f"VIX at {vix:.1f} signals complacency. Low-volatility regimes can persist, but "
+                f"historically precede sharper corrections — avoid overleveraging."
+            )
+
+    if regime == "TRENDING_BULL" and adx:
+        if adx >= 35:
+            _intel.append(
+                f"ADX at {adx:.1f} confirms a very strong trend — entries on short-term pullbacks "
+                f"to the 20-day moving average typically offer better risk/reward than chasing new highs."
+            )
+        elif adx >= 25:
+            _intel.append(
+                f"ADX at {adx:.1f} confirms a sustained trend — look for pullback entries "
+                f"rather than buying extended moves."
+            )
+    elif regime == "TRENDING_BEAR":
+        _intel.append(
+            "In a confirmed downtrend, rallies toward the 20-day moving average tend to be "
+            "selling opportunities rather than dip-buying entry points."
+        )
+    elif regime == "RANGING_LOW_VOL":
+        _intel.append(
+            "Low-volatility ranging conditions favour mean reversion: buy near support, "
+            "sell near resistance, and use tighter profit targets than in trending markets."
+        )
+    elif regime == "HIGH_VOLATILITY":
+        _intel.append(
+            "In high-volatility regimes, reduce standard position sizes by 30–50% to account "
+            "for wider price swings, and prioritise assets with the strongest multi-module agreement."
+        )
+
+    if _intel:
+        st.info(" ".join(_intel[:2]))
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # ---- Top picks ----------------------------------------------------------
     long_picks  = [r for r in rows           if (r.get("confluence_score") or 0) >= 0.3][:3]
     short_picks = [r for r in reversed(rows) if (r.get("confluence_score") or 0) <= -0.3][:3]
@@ -529,6 +614,42 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
         "trend_score", "mean_reversion_score", "volatility_score",
         "volume_score", "macro_score",
     ]
+
+    # Per-module plain-English tips: {score: (long_trade_tip, short_trade_tip)}
+    # The long_tip is used when direction==1; short_tip when direction==-1.
+    # Supporting tip = module agrees with trade direction; caution tip = module disagrees.
+    _MTIPS: dict[str, dict[int, tuple[str, str]]] = {
+        "trend_score": {
+            1:  ("price is above key moving averages with confirmed momentum (ADX)",
+                 "price is above moving averages — trend is working against this short"),
+            -1: ("price is below key moving averages — trend is working against this long",
+                 "price is below key moving averages with confirmed downside momentum"),
+        },
+        "mean_reversion_score": {
+            1:  ("RSI and Bollinger Bands indicate oversold conditions — pullback entry opportunity",
+                 "RSI/Bollinger Bands show oversold — short squeeze risk, exercise caution"),
+            -1: ("RSI/Bollinger Bands indicate overbought — elevated pullback risk",
+                 "RSI and Bollinger Bands indicate overbought conditions — mean reversion expected"),
+        },
+        "volatility_score": {
+            1:  ("low and stable volatility — favourable entry conditions",
+                 "low volatility — short positions carry more risk of sudden reversals"),
+            -1: ("elevated volatility — widen stops and reduce position size",
+                 "elevated volatility — can amplify downside moves, but also reversals"),
+        },
+        "volume_score": {
+            1:  ("above-average volume is confirming the price move",
+                 "above-average volume on the downside adds conviction to this short"),
+            -1: ("below-average volume — the move lacks broad participation",
+                 "low volume — limited downside participation, watch for a reversal"),
+        },
+        "macro_score": {
+            1:  ("macro backdrop is supportive — favourable yield curve and VIX readings",
+                 "macro backdrop is supportive, which may create headwinds for this short"),
+            -1: ("macro headwinds present — monitor yield curve shape and VIX trend",
+                 "macro headwinds are reinforcing the bearish case"),
+        },
+    }
 
     def _pick_card(container, picks, heading, card_fg):
         container.markdown(f"**{heading}**")
@@ -543,13 +664,37 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
             score     = r.get("confluence_score") or 0.0
             signal    = (r.get("signal") or "NEUTRAL").replace("_", " ")
             direction = 1 if score > 0 else -1
-            agreeing  = sum(
-                1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction
-            )
-            pct = min(int(abs(score) * 100), 100)
+            agreeing  = sum(1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction)
+            pct       = min(int(abs(score) * 100), 100)
+
+            support_tips: list[str] = []
+            caution_tips: list[str] = []
+            for mk in _MODULE_KEYS:
+                ms = r.get(mk) or 0
+                if ms == 0:
+                    continue
+                tip_pair = _MTIPS.get(mk, {}).get(ms)
+                if tip_pair is None:
+                    continue
+                long_tip, short_tip = tip_pair
+                tip = long_tip if direction == 1 else short_tip
+                if ms == direction:
+                    support_tips.append(tip)
+                else:
+                    caution_tips.append(tip)
+
+            support_html = (
+                f'<div style="color:#6b7280;font-size:0.72rem;margin-top:5px">'
+                f'✓ {" · ".join(support_tips[:2])}</div>'
+            ) if support_tips else ""
+            caution_html = (
+                f'<div style="color:#f59e0b;font-size:0.72rem;margin-top:2px">'
+                f'⚠ {" · ".join(caution_tips[:2])}</div>'
+            ) if caution_tips else ""
+
             container.markdown(
                 f'<div style="background:{card_fg}18;border-left:3px solid {card_fg};'
-                f'padding:8px 12px;border-radius:4px;margin-bottom:6px">'
+                f'padding:8px 12px;border-radius:4px;margin-bottom:8px">'
                 f'<span style="font-weight:700;color:{card_fg}">{ticker}</span>'
                 f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:8px">{name}</span><br>'
                 f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
@@ -557,8 +702,9 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
                 f'<div style="background:#374151;border-radius:2px;height:3px;margin-top:6px">'
                 f'<div style="background:{card_fg};width:{pct}%;height:3px;border-radius:2px"></div>'
                 f'</div>'
-                f'<span style="color:#6b7280;font-size:0.7rem">'
-                f'{agreeing}/5 modules · {pct}% strength</span>'
+                f'<span style="color:#6b7280;font-size:0.7rem">{agreeing}/5 modules · {pct}% strength</span>'
+                f'{support_html}'
+                f'{caution_html}'
                 f'</div>',
                 unsafe_allow_html=True,
             )
