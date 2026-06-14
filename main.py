@@ -22,7 +22,7 @@ import yaml
 from analysis.confluence import generate_signals, get_last_signal_timestamp, get_latest_signals
 from analysis.engine import run_analysis
 from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime
-from data.database import get_metadata, init_db
+from data.database import get_engine, get_metadata, init_db
 from data.ingestion import (
     get_all_tickers,
     get_price_df,
@@ -226,6 +226,45 @@ def _db_size(config: dict) -> tuple[str, str]:
         return "Not found", "error"
     except Exception:
         return "Unknown", "warn"
+
+
+def _price_coverage(watchlist: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
+    """Return (fresh, stale, missing) ticker lists based on latest price date.
+
+    Fresh  = data within the last 4 calendar days (covers long weekends).
+    Stale  = data present but older than 4 days.
+    Missing = no rows at all in price_data for that ticker.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                sa_text("SELECT ticker, MAX(date) AS latest FROM price_data GROUP BY ticker")
+            ).fetchall()
+        latest_by_ticker = {r[0]: r[1] for r in rows}
+    except Exception:
+        latest_by_ticker = {}
+
+    cutoff = datetime.utcnow() - timedelta(days=4)
+    fresh, stale, missing = [], [], []
+    for ticker in watchlist:
+        raw = latest_by_ticker.get(ticker)
+        if raw is None:
+            missing.append(ticker)
+            continue
+        # SQLite returns dates as strings or datetime objects depending on driver
+        if isinstance(raw, str):
+            try:
+                dt = datetime.fromisoformat(raw)
+            except ValueError:
+                missing.append(ticker)
+                continue
+        else:
+            dt = raw
+        dt = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+        (fresh if dt >= cutoff else stale).append(ticker)
+
+    return fresh, stale, missing
 
 
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
@@ -1116,10 +1155,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     # a refresh or analysis run completed since the last render.
     st.cache_data.clear()
 
-    st.markdown("## 📈 Investment Research")
-    st.caption("Select an asset from the sidebar to view its price chart and indicators.")
-    st.divider()
-    st.markdown("### System Status")
+    st.markdown("## 🖥️ System Status")
 
     # ── Collect all status data ───────────────────────────────────────────
     deploy_ts, deploy_msg      = _git_log_info()
@@ -1163,6 +1199,24 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     mc1, mc2 = st.columns(2)
     mc1.metric("Watchlist Assets", len(watchlist))
     mc2.metric("Asset Groups", len(config["watchlist"]))
+
+    # ── Data coverage ─────────────────────────────────────────────────────────
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+    st.markdown("### Data Coverage")
+    fresh, stale, missing = _price_coverage(watchlist)
+    total = len(watchlist)
+
+    cc1, cc2, cc3 = st.columns(3)
+    fresh_level  = "ok"    if len(fresh)   == total else ("warn" if len(fresh) >= total * 0.9 else "error")
+    stale_level  = "ok"    if len(stale)   == 0     else "warn"
+    missing_level = "ok"   if len(missing) == 0     else "error"
+
+    _status_card(cc1, "Fresh (≤4 days)",   f"{len(fresh)} / {total}",
+                 "up to date" if len(fresh) == total else f"{total - len(fresh)} not fresh", fresh_level)
+    _status_card(cc2, "Stale (>4 days)",   f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
+                 ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "") if stale else "none", stale_level)
+    _status_card(cc3, "Missing entirely",  f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
+                 ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
 
 
 # ---------------------------------------------------------------------------
