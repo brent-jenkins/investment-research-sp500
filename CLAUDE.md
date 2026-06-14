@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python -m streamlit run main.py
 ```
 
-First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls ~1 year of OHLCV history for all watchlist assets (incremental on subsequent runs). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
+First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls up to 10 years of OHLCV history per asset on the first load for each ticker; subsequent runs are incremental (only days since the last stored date). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
 
 After the first run, analysis and signals are automated: on every Streamlit startup the app re-runs analysis if price data exists, and the APScheduler job fires at **21:30 UTC on weekdays** to pull incremental prices and immediately run analysis + signals for the full watchlist. Manual clicks are only needed on the very first run.
 
@@ -217,4 +217,4 @@ systemctl reload caddy                 # apply Caddyfile changes without downtim
 
 ## Adding assets to the watchlist
 
-Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has 27 assets across 6 groups: `us_equity`, `sector_etfs`, `energy`, `commodities`, `fixed_income`, `crypto`. When adding a new group, also add its label to the `group_labels` dict in `main.py`'s sidebar block so it displays correctly.
+Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has 46 assets across 9 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`. When adding a new group, also add its label to the `group_labels` dict in `main.py`'s sidebar block so it displays correctly. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.

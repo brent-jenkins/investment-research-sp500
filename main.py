@@ -1096,6 +1096,9 @@ def main() -> None:
                 "commodities": "Commodities",
                 "bonds": "Bonds",
                 "volatility": "Volatility",
+                "international": "International",
+                "forex": "Forex",
+                "crypto": "Crypto",
             }
 
             selected_ticker: str | None = st.session_state.get("selected_ticker")
