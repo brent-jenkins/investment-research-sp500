@@ -75,6 +75,18 @@ def _cached_latest_price(ticker: str) -> float | None:
     return get_latest_price(ticker)
 
 
+def _has_price_data() -> bool:
+    """Return True if the price_data table contains at least one row."""
+    from sqlalchemy import text as sa_text
+    from data.database import get_engine
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(sa_text("SELECT 1 FROM price_data LIMIT 1")).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
     """Build a Plotly candlestick + volume chart for a ticker."""
     fig = go.Figure()
@@ -752,7 +764,8 @@ def _initialise() -> None:
     already present. This guarantees schema changes are picked up immediately
     after a code update without requiring a Streamlit session restart.
 
-    The scheduler is only started once per session (tracked in session_state).
+    The scheduler and startup analysis are only run once per session (guarded
+    by session_state) so subsequent re-renders skip them.
     """
     init_db()
     if "app_initialised" not in st.session_state:
@@ -760,6 +773,23 @@ def _initialise() -> None:
             start_scheduler()
         except Exception as exc:
             logger.warning("Scheduler could not start: %s", exc)
+
+        # On first page load, if price data exists, automatically run analysis
+        # and generate signals so the dashboard is immediately ready after a
+        # deployment or service restart without any manual steps.
+        if _has_price_data():
+            try:
+                _cfg = _load_config()
+                _tickers = get_all_tickers(_cfg)
+                run_analysis(tickers=_tickers, config=_cfg)
+                generate_signals(tickers=_tickers, config=_cfg)
+                ts = datetime.utcnow().strftime("%H:%M UTC")
+                st.session_state["_startup_msg"] = ("ok", f"Analysis updated on startup — {ts}")
+                logger.info("Startup analysis complete.")
+            except Exception as exc:
+                logger.warning("Startup analysis failed: %s", exc)
+                st.session_state["_startup_msg"] = ("err", f"Startup analysis failed: {exc}")
+
         st.session_state["app_initialised"] = True
 
 
@@ -776,6 +806,13 @@ def main() -> None:
     )
 
     _initialise()
+
+    # Show a brief toast if startup analysis just ran (fires once per session)
+    _startup = st.session_state.pop("_startup_msg", None)
+    if _startup:
+        _lvl, _msg = _startup
+        st.toast(_msg, icon="✅" if _lvl == "ok" else "⚠️")
+
     config = _load_config()
     watchlist = _build_watchlist(config)
 
@@ -853,6 +890,7 @@ def main() -> None:
             group_labels = {
                 "indices": "Indices",
                 "sector_etfs": "Sector ETFs",
+                "energy": "Energy",
                 "commodities": "Commodities",
                 "bonds": "Bonds",
                 "volatility": "Volatility",
