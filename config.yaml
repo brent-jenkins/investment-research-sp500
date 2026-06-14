@@ -147,9 +147,9 @@ data:
   # How many calendar days of history to fetch on initial load
   history_days: 365
   # Seconds to wait between yfinance requests to avoid throttling
-  rate_limit_seconds: 1.5
+  rate_limit_seconds: 2.5
   # Retry attempts on failed fetch
-  max_retries: 3
+  max_retries: 5
 
 database:
   path: "database/investment_research.db"
