@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy import text
 
-from data.database import get_engine, set_metadata
+from data.database import get_engine, get_metadata_str, set_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,7 @@ def detect_overlays() -> dict[str, bool]:
     overlays: dict[str, bool] = {
         "MACRO_STRESS":     False,
         "VOL_REGIME_SHIFT": False,
+        "CREDIT_STRESS":    False,
     }
 
     _PAIR_OVERLAY = [
@@ -226,6 +227,22 @@ def detect_overlays() -> dict[str, bool]:
     except Exception as exc:
         logger.warning("Overlay detection failed: %s", exc)
 
+    # CREDIT_STRESS: HYG underperforming TLT by > 1 standard deviation.
+    # The spread z-score is computed in compute_all_pairs() (which runs before
+    # generate_signals()) and stored in system_metadata to avoid a full
+    # price-data recalculation here.
+    try:
+        spread_z_str = get_metadata_str("hyg_tlt_spread_z")
+        if spread_z_str is not None:
+            spread_z = float(spread_z_str)
+            if spread_z < -1.0:
+                overlays["CREDIT_STRESS"] = True
+                logger.info(
+                    "Overlay CREDIT_STRESS active: HYG/TLT return-spread z=%.2f", spread_z
+                )
+    except Exception as exc:
+        logger.warning("CREDIT_STRESS detection failed: %s", exc)
+
     # Persist so the UI can display without recomputing
     active_str = ",".join(k for k, v in overlays.items() if v)
     try:
@@ -256,6 +273,17 @@ OVERLAY_DESCRIPTIONS: dict[str, dict] = {
             "inversely correlated (VIX spikes when equities fall). This atypical behaviour "
             "suggests the fear gauge is mis-calibrated or that a structural shift is underway. "
             "Treat directional signals with extra caution."
+        ),
+    },
+    "CREDIT_STRESS": {
+        "label":  "Credit Stress",
+        "colour": "#7c3aed",
+        "text": (
+            "High-yield bonds (HYG) are underperforming long Treasuries (TLT) by more than "
+            "one standard deviation — a widening credit spread that historically precedes "
+            "equity market stress. Falling junk bond prices relative to safe-haven bonds "
+            "signal rising default-risk perception in the credit market. "
+            "Buy signal confidence is reduced by 15% across all equity assets."
         ),
     },
 }

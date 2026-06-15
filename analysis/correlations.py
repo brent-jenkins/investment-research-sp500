@@ -11,7 +11,7 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import get_engine
+from data.database import get_engine, set_metadata
 from data.ingestion import get_price_df
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,158 @@ RELATIONSHIP_MAP: list[dict] = [
         "diverge_template": "Silver and gold diverging — industrial demand may be distorting the metals relationship",
         "confirm_template": "Silver tracking gold as expected",
     },
+    # ── New pairs added to expand macro coverage ─────────────────────────────
+    {
+        "ticker_a": "TLT",
+        "ticker_b": "GLD",
+        "expected_sign": 1,
+        "label": "Long Bonds vs Gold",
+        "desc": "positive — both benefit from falling real yields",
+        "diverge_template": (
+            "Long bonds and gold diverging — shift in rate expectations or a change in what "
+            "is driving gold (inflation vs rate vs safe-haven demand); one leg of the real-yield "
+            "trade is out of sync"
+        ),
+        "confirm_template": "Bonds and gold moving together — consistent with a falling real-yield environment",
+    },
+    {
+        "ticker_a": "USO",
+        "ticker_b": "UNG",
+        "expected_sign": 1,
+        "label": "Oil vs Natural Gas",
+        "desc": "positive — oil and gas usually move together on broad energy demand",
+        "diverge_template": (
+            "Oil and natural gas prices diverging — energy mix shift underway; supply or demand "
+            "dynamics are specific to one fuel (LNG trade flows, pipeline constraints, or "
+            "weather-driven gas demand)"
+        ),
+        "confirm_template": "Oil and natural gas tracking together — broad energy demand signals are aligned",
+    },
+    {
+        "ticker_a": "XLF",
+        "ticker_b": "TLT",
+        "expected_sign": -1,
+        "label": "Financials vs Long Bonds",
+        "desc": "inverse — banks benefit from rising rates (falling TLT); hurt when rates fall",
+        "diverge_template": (
+            "Financials and long bonds moving together — rate sensitivity is breaking down; "
+            "possible systemic concern overriding normal bank margin dynamics or a credit event "
+            "where both bonds and bank stocks fall simultaneously"
+        ),
+        "confirm_template": (
+            "Financial stocks and long bonds inversely correlated — rate outlook is driving "
+            "bank valuations normally"
+        ),
+    },
+    {
+        "ticker_a": "XLK",
+        "ticker_b": "^VIX",
+        "expected_sign": -1,
+        "label": "Technology vs Volatility",
+        "desc": "inverse — tech is most sensitive to risk appetite; VIX spikes hit high-beta growth hardest",
+        "diverge_template": (
+            "Technology stocks and volatility moving in the same direction — tech is losing its "
+            "growth-premium sensitivity, or a volatility spike is not triggering the usual "
+            "rotation out of high-duration growth stocks"
+        ),
+        "confirm_template": (
+            "Technology and VIX inversely correlated — risk appetite is driving tech valuations "
+            "as expected"
+        ),
+    },
+    {
+        "ticker_a": "XLU",
+        "ticker_b": "TLT",
+        "expected_sign": 1,
+        "label": "Utilities vs Long Bonds",
+        "desc": "positive — utilities act like bonds; yield-seeking investors rotate between them",
+        "diverge_template": (
+            "Utilities and long bonds diverging — yield-seeking rotation is disrupted; utilities "
+            "may be pricing in sector-specific headwinds (regulation, capex) or bonds are moving "
+            "on macro factors that haven't reached equities yet"
+        ),
+        "confirm_template": (
+            "Utilities tracking long bonds as expected — yield-sensitive sector behaving normally "
+            "as a bond proxy"
+        ),
+    },
+    {
+        "ticker_a": "GLD",
+        "ticker_b": "^GSPC",
+        "expected_sign": -1,
+        "label": "Gold vs S&P 500",
+        "desc": "inverse — gold/equity ratio is the classic risk-off indicator",
+        "diverge_template": (
+            "Gold and equities moving together — the traditional risk-off role of gold is "
+            "suspended; may signal a macro regime with no clear safe-harbour assets, or gold "
+            "is being driven by currency debasement rather than fear"
+        ),
+        "confirm_template": "Gold and S&P 500 inversely correlated — risk-off/risk-on dynamic is intact",
+    },
+    {
+        "ticker_a": "EEM",
+        "ticker_b": "UUP",
+        "expected_sign": -1,
+        "label": "Emerging Markets vs Dollar",
+        "desc": "inverse — strong dollar raises EM debt costs and weighs on commodity exporters",
+        "diverge_template": (
+            "Emerging markets and dollar moving together — strong dollar is not suppressing EM "
+            "equities as expected; possible commodity tailwind or capital inflow offsetting the "
+            "dollar headwind"
+        ),
+        "confirm_template": (
+            "Emerging markets inversely tracking the dollar — dollar strength/weakness is "
+            "driving EM equities as expected"
+        ),
+    },
+    {
+        "ticker_a": "HYG",
+        "ticker_b": "TLT",
+        "expected_sign": -1,
+        "label": "High Yield vs Long Bonds",
+        "desc": "inverse — credit spread proxy; HYG falling vs TLT rising = credit stress building",
+        "diverge_template": (
+            "High yield and long bonds moving together — credit spreads are compressing "
+            "atypically, or both are falling simultaneously (a CREDIT_STRESS signal: HYG "
+            "underperforming in a rising-rate environment)"
+        ),
+        "confirm_template": (
+            "High yield and long bonds inversely correlated — credit spreads behaving normally "
+            "relative to rate moves"
+        ),
+    },
+    {
+        "ticker_a": "BTC-USD",
+        "ticker_b": "GLD",
+        "expected_sign": 1,
+        "label": "Bitcoin vs Gold",
+        "desc": "positive loosely — both treated as inflation hedges; decorrelates in stress",
+        "diverge_template": (
+            "Bitcoin and gold decorrelating — one is acting as an inflation hedge while the "
+            "other is not; often driven by crypto-specific regulatory events or when gold is "
+            "geopolitical- rather than monetary-driven"
+        ),
+        "confirm_template": (
+            "Bitcoin and gold tracking together — both acting as inflation hedges or alternative "
+            "stores of value"
+        ),
+    },
+    {
+        "ticker_a": "XLE",
+        "ticker_b": "USO",
+        "expected_sign": 1,
+        "label": "Energy Stocks vs Oil",
+        "desc": "positive — energy stocks should track oil; XLE/USO ratio signals relative value",
+        "diverge_template": (
+            "Energy stocks and crude oil diverging — XLE/USO ratio has shifted; energy equities "
+            "may be cheap relative to oil price (catch-up opportunity) or structural headwinds "
+            "(energy transition, capex concerns) are overriding the commodity signal"
+        ),
+        "confirm_template": (
+            "Energy stocks tracking oil price as expected — commodity signal is feeding through "
+            "to equity valuations"
+        ),
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -149,6 +301,51 @@ CATCH_UP_MAP: dict[tuple[str, str], dict] = {
         "description": (
             "Gold has outpaced Silver — SLV has not yet caught up with GLD's recent move. "
             "Silver typically follows gold with higher beta, suggesting a catch-up ahead."
+        ),
+    },
+    ("XLF", "TLT"): {
+        "lead": "TLT",
+        "lag":  "XLF",
+        "direction": "inverse",         # TLT falls (rates rise) → XLF should rise
+        "min_lead_move": 0.03,
+        "description": (
+            "Rate expectations have shifted: TLT has fallen (yields rising) but financial "
+            "stocks haven't fully reflected the benefit yet. XLF typically expands net "
+            "interest margins in rising-rate environments — catch-up ahead."
+        ),
+    },
+    ("XLU", "TLT"): {
+        "lead": "TLT",
+        "lag":  "XLU",
+        "direction": "positive",        # TLT rises (rates fall) → XLU should also rise
+        "min_return_gap": 0.03,
+        "description": (
+            "Long bonds (TLT) have rallied but utilities (XLU) haven't fully reflected the "
+            "yield decline. Utilities typically track bond prices as a yield-seeking "
+            "alternative — rotation into XLU may follow as income investors rebalance."
+        ),
+    },
+    ("EEM", "UUP"): {
+        "lead": "UUP",
+        "lag":  "EEM",
+        "direction": "inverse",         # UUP falls (dollar weakens) → EEM should rise
+        "min_lead_move": 0.02,
+        "description": (
+            "The dollar (UUP) has weakened but emerging market equities (EEM) haven't caught "
+            "up yet. Dollar weakness historically boosts EM by reducing USD-denominated debt "
+            "costs and lifting commodity prices — catch-up opportunity in EEM."
+        ),
+    },
+    ("XLE", "USO"): {
+        "lead": "USO",
+        "lag":  "XLE",
+        "direction": "positive",        # USO rises (oil price up) → XLE should follow
+        "min_return_gap": 0.03,
+        "description": (
+            "Oil (USO) has outpaced energy stocks (XLE) — the XLE/USO price ratio is below "
+            "its historical norm, suggesting energy equities are underpriced relative to the "
+            "commodity. Sector-level catch-up typically follows within weeks as earnings "
+            "revisions respond to sustained oil prices."
         ),
     },
 }
@@ -474,6 +671,56 @@ def get_active_opportunity_flags(lookback_hours: int = 28) -> list[dict]:
         return []
 
 
+def compute_credit_stress_z(config: Optional[dict] = None) -> Optional[float]:
+    """Compute the z-score of the current HYG-minus-TLT 30-day rolling return spread.
+
+    A z-score below -1.0 means HYG is underperforming TLT by more than one historical
+    standard deviation — a widening credit spread that is the basis for the CREDIT_STRESS
+    overlay in :func:`~analysis.regime.detect_overlays`.
+
+    Returns:
+        Float z-score, or None when there is insufficient price history.
+    """
+    if config is None:
+        config = _load_config()
+    days = config.get("data", {}).get("history_days", 365)
+
+    try:
+        df_hyg = get_price_df("HYG", days=days)
+        df_tlt = get_price_df("TLT", days=days)
+        if df_hyg.empty or df_tlt.empty:
+            return None
+
+        hyg = df_hyg.set_index("date")["close"].astype(float).sort_index()
+        tlt = df_tlt.set_index("date")["close"].astype(float).sort_index()
+
+        combined = pd.concat(
+            [hyg.rename("HYG"), tlt.rename("TLT")], axis=1, join="inner"
+        ).dropna()
+
+        if len(combined) < 60:
+            return None
+
+        # Rolling 30-day percentage return for each asset; spread = HYG excess over TLT
+        hyg_30d = combined["HYG"].pct_change(30)
+        tlt_30d = combined["TLT"].pct_change(30)
+        spread  = (hyg_30d - tlt_30d).dropna()
+
+        if len(spread) < 20:
+            return None
+
+        hist_mean = float(spread.mean())
+        hist_std  = float(spread.std())
+        if hist_std < 0.0001:
+            return None
+
+        return round((float(spread.iloc[-1]) - hist_mean) / hist_std, 3)
+
+    except Exception as exc:
+        logger.warning("compute_credit_stress_z failed: %s", exc)
+        return None
+
+
 def compute_all_pairs(config: Optional[dict] = None) -> list[dict]:
     """Compute correlation metrics for every pair in RELATIONSHIP_MAP and persist to DB.
 
@@ -519,6 +766,17 @@ def compute_all_pairs(config: Optional[dict] = None) -> list[dict]:
 
     if catch_up_flags:
         _persist_opportunity_flags(catch_up_flags, engine, as_of)
+
+    # Update HYG/TLT return-spread z-score for the CREDIT_STRESS overlay detection.
+    # Stored in system_metadata so detect_overlays() can read it without a full
+    # price-data recalculation on every generate_signals() call.
+    try:
+        spread_z = compute_credit_stress_z(config)
+        if spread_z is not None:
+            set_metadata("hyg_tlt_spread_z", str(spread_z))
+            logger.info("HYG/TLT return-spread z=%.2f", spread_z)
+    except Exception as exc:
+        logger.warning("Credit stress z update failed: %s", exc)
 
     return results
 

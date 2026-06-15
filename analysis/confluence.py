@@ -21,9 +21,16 @@ from data.ingestion import get_all_tickers, get_price_df
 
 logger = logging.getLogger(__name__)
 
-# Watchlist groups whose assets are subject to the MACRO_STRESS buy-confidence modifier.
+# Watchlist groups whose assets are subject to the MACRO_STRESS buy-confidence modifier
+# (equity indices, sector ETFs, bonds, and international equity indices).
 _EQUITY_BOND_GROUPS: frozenset[str] = frozenset({
     "indices", "sector_etfs", "bonds", "international",
+})
+
+# Equity-only groups subject to the CREDIT_STRESS modifier (bonds excluded because
+# credit stress specifically reduces confidence in equity — not fixed-income — longs).
+_EQUITY_ONLY_GROUPS: frozenset[str] = frozenset({
+    "indices", "sector_etfs", "international",
 })
 
 
@@ -32,6 +39,16 @@ def _equity_bond_tickers(config: dict) -> frozenset[str]:
     result: set[str] = set()
     for group, entries in config.get("watchlist", {}).items():
         if group in _EQUITY_BOND_GROUPS:
+            for e in entries:
+                result.add(e["ticker"])
+    return frozenset(result)
+
+
+def _equity_only_tickers(config: dict) -> frozenset[str]:
+    """Return equity-only tickers (indices, sector ETFs, international) — bonds excluded."""
+    result: set[str] = set()
+    for group, entries in config.get("watchlist", {}).items():
+        if group in _EQUITY_ONLY_GROUPS:
             for e in entries:
                 result.add(e["ticker"])
     return frozenset(result)
@@ -137,6 +154,12 @@ def score_ticker(
         if ticker in _equity_bond_tickers(config) and w_score > 0:
             w_score = round(w_score * 0.80, 3)
             overlay_applied.append("MACRO_STRESS")
+
+    # CREDIT_STRESS: 15% reduction for equity (not bond) buy signals
+    if overlays and overlays.get("CREDIT_STRESS"):
+        if ticker in _equity_only_tickers(config) and w_score > 0:
+            w_score = round(w_score * 0.85, 3)
+            overlay_applied.append("CREDIT_STRESS")
 
     classification = _classify(w_score)
 

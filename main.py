@@ -498,7 +498,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
         st.markdown("### Active Intelligence")
 
         # Regime overlay cards
-        for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT"):
+        for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
             if overlay_key not in active_overlays:
                 continue
             meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
@@ -1982,7 +1982,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
     # Active overlays (compact)
     overlay_raw     = get_metadata_str("active_overlays") or ""
     active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
-    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT"):
+    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
         if overlay_key not in active_overlays:
             continue
         meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
