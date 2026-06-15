@@ -71,7 +71,7 @@ RELATIONSHIP_MAP: list[dict] = [
         "expected_sign": -1,
         "label": "Long Bonds vs S&P 500",
         "desc": "varies by regime — flight to safety in risk-off environments",
-        "diverge_template": "Bonds and equities both rising — risk-on correlation, not a flight-to-safety signal",
+        "diverge_template": "Bonds and equities moving together — the traditional flight-to-safety relationship has broken down; historically unusual and may signal a macro regime shift",
         "confirm_template": "Bond/equity relationship consistent with current risk regime",
     },
     {
@@ -164,9 +164,15 @@ def _compute_pair(
         return _empty
 
     try:
-        s_a = df_a.set_index("date")["close"].astype(float).rename(ticker_a)
-        s_b = df_b.set_index("date")["close"].astype(float).rename(ticker_b)
-        combined = pd.concat([s_a, s_b], axis=1, join="inner")
+        # Use daily returns rather than raw price levels.  Price levels are
+        # non-stationary: two trending series can show high correlation within
+        # any 30-day window purely because of shared autocorrelation, producing
+        # a hist_std so inflated that meaningful divergences collapse to near-zero
+        # z-scores.  Return correlations are stationary and measure the actual
+        # day-to-day co-movement relationship.
+        s_a = df_a.set_index("date")["close"].astype(float).pct_change().rename(ticker_a)
+        s_b = df_b.set_index("date")["close"].astype(float).pct_change().rename(ticker_b)
+        combined = pd.concat([s_a, s_b], axis=1, join="inner").dropna()
     except Exception as exc:
         logger.warning("Alignment failed for %s/%s: %s", ticker_a, ticker_b, exc)
         return _empty
@@ -400,7 +406,9 @@ def build_correlation_matrix(window: int = 30) -> tuple[pd.DataFrame, list[str]]
             df = get_price_df(ticker, days=max(window * 3, 180))
             if df.empty:
                 continue
-            s = df.set_index("date")["close"].astype(float)
+            # Daily returns — consistent with _compute_pair; avoids spurious
+            # level-based correlations from shared autocorrelation in price series.
+            s = df.set_index("date")["close"].astype(float).pct_change()
             series[ticker] = s
         except Exception:
             pass
@@ -408,7 +416,7 @@ def build_correlation_matrix(window: int = 30) -> tuple[pd.DataFrame, list[str]]
     if len(series) < 2:
         return pd.DataFrame(), []
 
-    combined = pd.concat(series.values(), axis=1, keys=series.keys(), join="inner")
+    combined = pd.concat(series.values(), axis=1, keys=series.keys(), join="inner").dropna()
 
     if len(combined) < window:
         corr_matrix = combined.corr()
