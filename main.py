@@ -2036,35 +2036,104 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             unsafe_allow_html=True,
         )
 
-    # Top 3 signals
+    # ── Top Long / Short Opportunities ─────────────────────────────────────
     all_signals = get_latest_signals(list(watchlist.keys()))
-    if all_signals:
-        st.markdown(
-            "<div style='margin-top:12px;margin-bottom:6px'><strong>Top 3 Signals Today</strong></div>",
-            unsafe_allow_html=True,
-        )
-        _SIG_C = {
-            "STRONG_BUY":  "#16a34a",
-            "BUY":         "#26a69a",
-            "NEUTRAL":     "#6b7280",
-            "SELL":        "#f59e0b",
-            "STRONG_SELL": "#ef5350",
+
+    # Tickers in equity/bond groups trigger a confidence warning under MACRO_STRESS
+    _EQ_BOND_GROUPS = {"indices", "sector_etfs", "bonds", "international"}
+    _eq_bond_tickers: set[str] = {
+        entry["ticker"]
+        for gname, group in config.get("watchlist", {}).items()
+        for entry in group
+        if gname in _EQ_BOND_GROUPS
+    }
+    macro_stress_active = "MACRO_STRESS" in active_overlays
+
+    long_picks = [
+        s for s in all_signals
+        if s.get("signal") in ("BUY", "STRONG_BUY") and (s.get("confluence_score") or 0) > 0
+    ][:3]
+    short_picks = [
+        s for s in reversed(all_signals)
+        if s.get("signal") in ("SELL", "STRONG_SELL") and (s.get("confluence_score") or 0) < 0
+    ][:3]
+
+    def _brief_rationale(sig: dict, direction: int) -> str:
+        _labels = {
+            "trend_score":          "trend momentum",
+            "mean_reversion_score": "mean reversion",
+            "volatility_score":     "volatility conditions",
+            "volume_score":         "volume confirmation",
+            "macro_score":          "macro backdrop",
         }
-        top3 = all_signals[:3]
-        t3_cols = st.columns(3)
-        for i, sig in enumerate(top3):
-            s_key  = sig.get("signal", "NEUTRAL")
-            score  = sig.get("confluence_score", 0) or 0
-            sc     = _SIG_C.get(s_key, "#6b7280")
-            t3_cols[i].markdown(
-                f"<div style='background:{sc}22;border:1px solid {sc}44;"
-                f"padding:8px 12px;border-radius:6px;text-align:center'>"
-                f"<div style='font-weight:700;color:{sc}'>{html.escape(sig['ticker'])}</div>"
-                f"<div style='color:{sc};font-size:0.78rem'>{s_key.replace('_',' ')}</div>"
-                f"<div style='color:#64748b;font-size:0.75rem'>{score:+.3f}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
+        agreeing = [lbl for key, lbl in _labels.items() if (sig.get(key) or 0) == direction]
+        if not agreeing:
+            return "Cross-module signal with limited individual confirmation."
+        if len(agreeing) >= 4:
+            return f"Strong conviction — {', '.join(agreeing[:3])} and more all align."
+        if len(agreeing) >= 2:
+            return f"{agreeing[0].capitalize()} and {agreeing[1]} align in the same direction."
+        return f"{agreeing[0].capitalize()} is the primary driver of this signal."
+
+    def _opp_card(sig: dict, direction: int, fg: str, strong_fg: str) -> str:
+        ticker    = sig.get("ticker", "")
+        score     = sig.get("confluence_score") or 0.0
+        signal    = sig.get("signal", "")
+        is_strong = "STRONG" in signal
+        col       = strong_fg if is_strong else fg
+        weight    = "800" if is_strong else "600"
+        sig_label = signal.replace("_", " ")
+        name      = html.escape(watchlist.get(ticker, ticker))
+        if len(name) > 32:
+            name = name[:30] + "…"
+
+        badges = ""
+        if ticker not in tradeable_set:
+            badges += (
+                "<span style='background:#475569;color:#e2e8f0;padding:1px 6px;"
+                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Analysis only</span>"
             )
+        if direction == 1 and macro_stress_active and ticker in _eq_bond_tickers:
+            badges += (
+                "<span style='background:#92400e;color:#fef3c7;padding:1px 6px;"
+                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −20%</span>"
+            )
+
+        return (
+            f"<div style='background:{col}18;border-left:3px solid {col};"
+            f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
+            f"<div style='display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px'>"
+            f"<span style='font-weight:{weight};color:{col};font-size:0.95rem'>"
+            f"{html.escape(ticker)}</span>"
+            f"<span style='color:#94a3b8;font-size:0.78rem'>{name}</span>"
+            f"{badges}</div>"
+            f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:5px'>"
+            f"<span style='color:{col};font-size:0.8rem;font-weight:{weight}'>{sig_label}</span>"
+            f"<span style='color:{col};font-weight:700'>{score:+.3f}</span>"
+            f"</div>"
+            f"<div style='color:#94a3b8;font-size:0.75rem;line-height:1.4'>"
+            f"{html.escape(_brief_rationale(sig, direction))}</div>"
+            f"</div>"
+        )
+
+    st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+    lc, rc = st.columns(2)
+
+    with lc:
+        st.markdown("**🟢 Top Long Opportunities**")
+        if long_picks:
+            for sig in long_picks:
+                st.markdown(_opp_card(sig, 1, "#26a69a", "#16a34a"), unsafe_allow_html=True)
+        else:
+            st.caption("No long signals today.")
+
+    with rc:
+        st.markdown("**🔴 Top Short Opportunities**")
+        if short_picks:
+            for sig in short_picks:
+                st.markdown(_opp_card(sig, -1, "#f59e0b", "#ef5350"), unsafe_allow_html=True)
+        else:
+            st.caption("No short signals today.")
 
     # Catch-up opportunities
     catch_ups = get_active_opportunity_flags()
