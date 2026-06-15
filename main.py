@@ -482,48 +482,57 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
     if has_overlays or has_catch_ups:
         st.markdown("### Active Intelligence")
 
+        def _hex_rgba(hx: str, alpha: float) -> str:
+            """Convert a 6-digit hex colour to an rgba() string."""
+            h = hx.lstrip("#")
+            return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
+
         # Regime overlay cards
         for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT"):
             if overlay_key not in active_overlays:
                 continue
-            meta = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
+            meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
             colour = meta.get("colour", "#6b7280")
             label  = html.escape(meta.get("label", overlay_key.replace("_", " ")))
             body   = html.escape(meta.get("text", ""))
+            bg     = _hex_rgba(colour, 0.10)
             st.markdown(
-                f"<div style='border-left:4px solid {colour};padding:10px 16px;"
-                f"background:rgba(0,0,0,0.2);border-radius:0 6px 6px 0;margin-bottom:8px'>"
-                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:4px'>"
-                f"<span style='background:{colour};color:#fff;padding:2px 8px;"
-                f"border-radius:4px;font-size:0.72rem;font-weight:bold;letter-spacing:0.05em'>"
+                f"<div style='border-left:4px solid {colour};padding:12px 18px;"
+                f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:10px'>"
+                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:6px'>"
+                f"<span style='background:{colour};color:#fff;padding:2px 9px;"
+                f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.06em'>"
                 f"REGIME OVERLAY</span>"
-                f"<strong style='color:{colour}'>{label}</strong></div>"
-                f"<span style='color:#cbd5e1;font-size:0.85rem'>{body}</span>"
+                f"<strong style='color:{colour};font-size:0.95rem'>{label}</strong></div>"
+                f"<p style='color:#f1f5f9;font-size:0.875rem;line-height:1.55;margin:0'>{body}</p>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
 
         # Catch-up opportunity cards
+        _cu_colour = "#d97706"
+        _cu_bg     = _hex_rgba(_cu_colour, 0.10)
         for flag in catch_up_flags:
-            ticker_disp  = html.escape(flag.get("ticker", ""))
-            source_disp  = html.escape(flag.get("flag_source", ""))
-            desc_disp    = html.escape(flag.get("description", ""))
-            z            = flag.get("z_score")
-            z_str        = f"z={z:.2f}" if z is not None else ""
-            corr         = flag.get("pair_corr_30d")
-            corr_str     = f"  |  30d corr {corr:+.3f}" if corr is not None else ""
+            ticker_disp = html.escape(flag.get("ticker", ""))
+            source_disp = html.escape(flag.get("flag_source", ""))
+            desc_disp   = html.escape(flag.get("description", ""))
+            z           = flag.get("z_score")
+            z_str       = f"z={z:.2f}" if z is not None else ""
+            corr        = flag.get("pair_corr_30d")
+            corr_str    = f" | 30d corr {corr:+.3f}" if corr is not None else ""
             st.markdown(
-                f"<div style='border-left:4px solid #d97706;padding:10px 16px;"
-                f"background:rgba(0,0,0,0.2);border-radius:0 6px 6px 0;margin-bottom:8px'>"
-                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:4px'>"
-                f"<span style='background:#d97706;color:#fff;padding:2px 8px;"
-                f"border-radius:4px;font-size:0.72rem;font-weight:bold;letter-spacing:0.05em'>"
+                f"<div style='border-left:4px solid {_cu_colour};padding:12px 18px;"
+                f"background:{_cu_bg};border-radius:0 6px 6px 0;margin-bottom:10px'>"
+                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:6px;"
+                f"flex-wrap:wrap'>"
+                f"<span style='background:{_cu_colour};color:#fff;padding:2px 9px;"
+                f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.06em'>"
                 f"CATCH-UP OPPORTUNITY</span>"
-                f"<strong style='color:#fbbf24'>{ticker_disp}</strong>"
-                f"<span style='color:#6b7280;font-size:0.78rem'>{source_disp}</span>"
-                f"<span style='color:#6b7280;font-size:0.78rem'>{z_str}{corr_str}</span>"
+                f"<strong style='color:#fbbf24;font-size:0.95rem'>{ticker_disp}</strong>"
+                f"<span style='color:#94a3b8;font-size:0.8rem'>{source_disp}</span>"
+                f"<span style='color:#94a3b8;font-size:0.8rem'>{z_str}{corr_str}</span>"
                 f"</div>"
-                f"<span style='color:#cbd5e1;font-size:0.85rem'>{desc_disp}</span>"
+                f"<p style='color:#f1f5f9;font-size:0.875rem;line-height:1.55;margin:0'>{desc_disp}</p>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
