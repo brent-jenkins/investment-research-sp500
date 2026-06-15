@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from analysis.correlations import compute_correlations
 from analysis.macro import compute_macro
 from analysis.mean_reversion import compute_mean_reversion
-from analysis.regime import Regime, detect_regime
+from analysis.regime import Regime, detect_regime, detect_overlays
 from analysis.trend import compute_trend
 from analysis.volatility import compute_volatility
 from analysis.volume import compute_volume
@@ -20,6 +20,21 @@ from data.database import Signal, get_engine, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_price_df
 
 logger = logging.getLogger(__name__)
+
+# Watchlist groups whose assets are subject to the MACRO_STRESS buy-confidence modifier.
+_EQUITY_BOND_GROUPS: frozenset[str] = frozenset({
+    "indices", "sector_etfs", "bonds", "international",
+})
+
+
+def _equity_bond_tickers(config: dict) -> frozenset[str]:
+    """Return the set of tickers belonging to equity index or bond watchlist groups."""
+    result: set[str] = set()
+    for group, entries in config.get("watchlist", {}).items():
+        if group in _EQUITY_BOND_GROUPS:
+            for e in entries:
+                result.add(e["ticker"])
+    return frozenset(result)
 
 
 def _load_config() -> dict:
@@ -71,30 +86,38 @@ def score_ticker(
     regime_result: dict,
     config: dict,
     vix_close: Optional[float] = None,
+    overlays: Optional[dict] = None,
 ) -> dict:
     """Compute a regime-weighted confluence signal for a single ticker.
 
-    Calls all five ``compute_*`` analysis functions, applies the regime's
+    Calls all seven ``compute_*`` analysis functions, applies the regime's
     weight profile, and classifies the result.
+
+    When ``overlays`` contains active flags the following modifiers are applied
+    before classification:
+
+    - ``MACRO_STRESS``: positive (buy) scores for equity and bond assets are
+      multiplied by 0.80 — a 20% reduction in buy-signal confidence.
 
     Args:
         ticker:        Asset symbol to score.
         regime_result: Return value of :func:`~analysis.regime.detect_regime`.
         config:        Loaded config.yaml dict.
         vix_close:     Pre-fetched VIX close price (avoids redundant DB reads).
+        overlays:      Active regime overlays from :func:`~analysis.regime.detect_overlays`.
 
     Returns:
-        Dict with ticker, signal classification, weighted score, and
-        per-module scores.
+        Dict with ticker, signal classification, weighted score, per-module scores,
+        and a comma-separated ``overlay_applied`` field.
     """
     df = get_price_df(ticker, days=config["data"]["history_days"])
 
-    trend_res   = compute_trend(df, config)
-    mr_res      = compute_mean_reversion(df, config)
-    vol_res     = compute_volatility(df, config, vix_close=vix_close)
-    volume_res  = compute_volume(df, config)
-    macro_res   = compute_macro(ticker, config)
-    corr_res    = compute_correlations(ticker, config)
+    trend_res  = compute_trend(df, config)
+    mr_res     = compute_mean_reversion(df, config)
+    vol_res    = compute_volatility(df, config, vix_close=vix_close)
+    volume_res = compute_volume(df, config)
+    macro_res  = compute_macro(ticker, config)
+    corr_res   = compute_correlations(ticker, config)
 
     module_scores = {
         "trend":          trend_res["score"],
@@ -105,8 +128,16 @@ def score_ticker(
         "correlation":    corr_res["score"],
     }
 
-    weights        = regime_result["weights"]
-    w_score        = _weighted_score(module_scores, weights)
+    weights = regime_result["weights"]
+    w_score = _weighted_score(module_scores, weights)
+
+    # Apply regime overlays
+    overlay_applied: list[str] = []
+    if overlays and overlays.get("MACRO_STRESS"):
+        if ticker in _equity_bond_tickers(config) and w_score > 0:
+            w_score = round(w_score * 0.80, 3)
+            overlay_applied.append("MACRO_STRESS")
+
     classification = _classify(w_score)
 
     return {
@@ -120,6 +151,7 @@ def score_ticker(
         "volume_score":         module_scores["volume"],
         "macro_score":          module_scores["macro"],
         "correlation_score":    module_scores["correlation"],
+        "overlay_applied":      ",".join(overlay_applied),
     }
 
 
@@ -199,6 +231,11 @@ def generate_signals(
     regime_result = detect_regime()
     logger.info("Regime detected: %s", regime_result["regime"])
 
+    # Detect regime overlays from stored correlation data; stored to metadata for UI display
+    overlays = detect_overlays()
+    active_overlay_str = ",".join(k for k, v in overlays.items() if v)
+    logger.info("Active overlays: %s", active_overlay_str or "none")
+
     # Pre-fetch VIX to avoid one DB query per ticker
     vix_df = get_price_df("^VIX", days=5)
     vix_close = float(vix_df["close"].iloc[-1]) if not vix_df.empty else None
@@ -209,7 +246,10 @@ def generate_signals(
 
     for idx, ticker in enumerate(tickers, 1):
         try:
-            result = score_ticker(ticker, regime_result, config, vix_close=vix_close)
+            result = score_ticker(
+                ticker, regime_result, config,
+                vix_close=vix_close, overlays=overlays,
+            )
             _persist_signal(result, as_of)
             signals.append(result)
         except Exception as exc:

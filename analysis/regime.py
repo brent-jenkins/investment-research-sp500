@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy import text
 
-from data.database import get_engine
+from data.database import get_engine, set_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,93 @@ def detect_regime() -> dict:
         regime = Regime.UNKNOWN
 
     return _build_result(regime, details)
+
+
+def detect_overlays() -> dict[str, bool]:
+    """Check stored correlations for significant pair divergences that signal a regime overlay.
+
+    Reads the most recent row for each key pair from the ``correlations`` table.
+    Returns immediately with all-False if no correlation data exists yet (fresh install).
+
+    Overlay definitions:
+    - ``MACRO_STRESS``:      TLT/^GSPC DIVERGING (z ≥ 1.5) — bonds and equities moving together,
+                             breaking the traditional flight-to-safety relationship.
+    - ``VOL_REGIME_SHIFT``:  ^VIX/^GSPC DIVERGING (z ≥ 1.5) — VIX and the market moving in the
+                             same direction, signalling an atypical fear-gauge environment.
+
+    Results are stored in ``system_metadata`` under ``active_overlays`` (comma-separated list
+    of active keys, or ``none``) so the Signals page can display them without re-querying.
+
+    Returns:
+        Dict mapping overlay name → bool (True = currently active).
+    """
+    overlays: dict[str, bool] = {
+        "MACRO_STRESS":     False,
+        "VOL_REGIME_SHIFT": False,
+    }
+
+    _PAIR_OVERLAY = [
+        ("TLT",  "^GSPC", "MACRO_STRESS"),
+        ("^VIX", "^GSPC", "VOL_REGIME_SHIFT"),
+    ]
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            for ticker_a, ticker_b, overlay_key in _PAIR_OVERLAY:
+                row = conn.execute(
+                    text(
+                        "SELECT divergence, z_score FROM correlations "
+                        "WHERE ticker_a = :a AND ticker_b = :b "
+                        "ORDER BY date DESC LIMIT 1"
+                    ),
+                    {"a": ticker_a, "b": ticker_b},
+                ).mappings().first()
+
+                if row and row["divergence"] == "DIVERGING":
+                    z = abs(float(row["z_score"] or 0))
+                    if z >= 1.5:
+                        overlays[overlay_key] = True
+                        logger.info(
+                            "Overlay %s active: %s/%s z=%.2f",
+                            overlay_key, ticker_a, ticker_b, z,
+                        )
+    except Exception as exc:
+        logger.warning("Overlay detection failed: %s", exc)
+
+    # Persist so the UI can display without recomputing
+    active_str = ",".join(k for k, v in overlays.items() if v)
+    try:
+        set_metadata("active_overlays", active_str or "none")
+    except Exception as exc:
+        logger.warning("Could not store active_overlays: %s", exc)
+
+    return overlays
+
+
+# Plain-English descriptions shown on the Signals page
+OVERLAY_DESCRIPTIONS: dict[str, dict] = {
+    "MACRO_STRESS": {
+        "label":  "Macro Stress",
+        "colour": "#dc2626",
+        "text": (
+            "Long bonds (TLT) and equities (S&P 500) are moving together — this breaks "
+            "the traditional flight-to-safety relationship where bonds rise when equities fall. "
+            "Historically unusual and often precedes a macro regime shift. "
+            "Buy signal confidence is reduced by 20% for all equity and bond assets."
+        ),
+    },
+    "VOL_REGIME_SHIFT": {
+        "label":  "Vol Regime Shift",
+        "colour": "#f59e0b",
+        "text": (
+            "VIX and the S&P 500 are moving in the same direction — normally they are "
+            "inversely correlated (VIX spikes when equities fall). This atypical behaviour "
+            "suggests the fear gauge is mis-calibrated or that a structural shift is underway. "
+            "Treat directional signals with extra caution."
+        ),
+    },
+}
 
 
 def _build_result(regime: Regime, details: dict) -> dict:

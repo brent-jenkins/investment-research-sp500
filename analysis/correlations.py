@@ -1,7 +1,7 @@
 """Cross-asset correlation analysis: tracks relationship divergences between asset pairs."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -112,6 +112,47 @@ RELATIONSHIP_MAP: list[dict] = [
     },
 ]
 
+# ---------------------------------------------------------------------------
+# Catch-up opportunity configuration
+# ---------------------------------------------------------------------------
+
+# Pairs where a divergence implies one asset is lagging the other and should
+# catch up.  Each entry maps (ticker_a, ticker_b) — matching RELATIONSHIP_MAP
+# order — to a config dict describing who leads, who lags, and the trigger.
+CATCH_UP_MAP: dict[tuple[str, str], dict] = {
+    ("USO", "XLE"): {
+        "lead": "USO",
+        "lag":  "XLE",
+        "direction": "positive",        # both should move in same direction
+        "min_return_gap": 0.03,         # lead must outperform lag by ≥3% over 30d
+        "description": (
+            "Oil has outpaced energy stocks — XLE has not yet reflected USO's recent gains. "
+            "Energy stock prices typically follow crude oil within days to weeks."
+        ),
+    },
+    ("GLD", "UUP"): {
+        "lead": "UUP",
+        "lag":  "GLD",
+        "direction": "inverse",         # they should move inversely
+        "min_lead_move": 0.02,          # UUP must have fallen ≥2% over 30d
+        "description": (
+            "Dollar weakness has not yet been reflected in Gold's price — "
+            "GLD typically rises when UUP declines, and the relationship has "
+            "diverged from historical norms."
+        ),
+    },
+    ("SLV", "GLD"): {
+        "lead": "GLD",
+        "lag":  "SLV",
+        "direction": "positive",
+        "min_return_gap": 0.03,
+        "description": (
+            "Gold has outpaced Silver — SLV has not yet caught up with GLD's recent move. "
+            "Silver typically follows gold with higher beta, suggesting a catch-up ahead."
+        ),
+    },
+}
+
 # All unique tickers referenced across the relationship map
 _ALL_PAIR_TICKERS: frozenset[str] = frozenset(
     t for pair in RELATIONSHIP_MAP for t in (pair["ticker_a"], pair["ticker_b"])
@@ -144,13 +185,15 @@ def _compute_pair(
         All float fields are None when data is insufficient.
     """
     _empty = {
-        "corr_30d": None,
-        "corr_90d": None,
-        "hist_mean": None,
-        "hist_std": None,
-        "z_score": None,
-        "divergence": "NEUTRAL",
-        "pair_score": 0,
+        "corr_30d":    None,
+        "corr_90d":    None,
+        "hist_mean":   None,
+        "hist_std":    None,
+        "z_score":     None,
+        "divergence":  "NEUTRAL",
+        "pair_score":  0,
+        "return_30d_a": None,
+        "return_30d_b": None,
     }
 
     try:
@@ -162,6 +205,20 @@ def _compute_pair(
 
     if df_a.empty or df_b.empty:
         return _empty
+
+    # Compute 30-day returns on raw close prices (for catch-up opportunity detection).
+    def _recent_return(df: pd.DataFrame, window: int = 30) -> Optional[float]:
+        try:
+            close = df.set_index("date")["close"].astype(float).sort_index().dropna()
+            n = min(window, len(close) - 1)
+            if n < 1:
+                return None
+            return float((close.iloc[-1] - close.iloc[-1 - n]) / close.iloc[-1 - n])
+        except Exception:
+            return None
+
+    return_30d_a = _recent_return(df_a)
+    return_30d_b = _recent_return(df_b)
 
     try:
         # Use daily returns rather than raw price levels.  Price levels are
@@ -218,13 +275,15 @@ def _compute_pair(
         pair_score = 0
 
     return {
-        "corr_30d":  round(corr_30d, 4),
-        "corr_90d":  round(corr_90d, 4) if corr_90d is not None else None,
-        "hist_mean": round(hist_mean, 4),
-        "hist_std":  round(hist_std, 4),
-        "z_score":   round(z_score, 3),
-        "divergence": divergence,
-        "pair_score": pair_score,
+        "corr_30d":     round(corr_30d, 4),
+        "corr_90d":     round(corr_90d, 4) if corr_90d is not None else None,
+        "hist_mean":    round(hist_mean, 4),
+        "hist_std":     round(hist_std, 4),
+        "z_score":      round(z_score, 3),
+        "divergence":   divergence,
+        "pair_score":   pair_score,
+        "return_30d_a": round(return_30d_a, 5) if return_30d_a is not None else None,
+        "return_30d_b": round(return_30d_b, 5) if return_30d_b is not None else None,
     }
 
 
@@ -308,6 +367,113 @@ def _persist_pair(
         conn.execute(stmt)
 
 
+def _detect_catch_up(rel: dict, result: dict) -> Optional[dict]:
+    """Return a catch-up opportunity flag if a diverging pair implies one, else None.
+
+    Conditions:
+    - Pair must be DIVERGING (sign mismatch + z-score ≥ 1.5).
+    - The pair must have a CATCH_UP_MAP entry.
+    - The lead asset must have outpaced the lag asset by the configured threshold.
+    """
+    if result.get("divergence") != "DIVERGING":
+        return None
+    if abs(float(result.get("z_score") or 0)) < 1.5:
+        return None
+
+    key = (rel["ticker_a"], rel["ticker_b"])
+    cfg = CATCH_UP_MAP.get(key)
+    if cfg is None:
+        return None
+
+    ret_a = result.get("return_30d_a")
+    ret_b = result.get("return_30d_b")
+    if ret_a is None or ret_b is None:
+        return None
+
+    lead = cfg["lead"]
+    lag  = cfg["lag"]
+    lead_ret = ret_a if lead == rel["ticker_a"] else ret_b
+    lag_ret  = ret_a if lag  == rel["ticker_a"] else ret_b
+
+    triggered = False
+    if cfg["direction"] == "positive":
+        min_gap = cfg.get("min_return_gap", 0.03)
+        triggered = lead_ret > lag_ret + min_gap
+    elif cfg["direction"] == "inverse":
+        # Lead falling (dollar weakness) but lag hasn't responded with a rise
+        min_move = cfg.get("min_lead_move", 0.02)
+        triggered = lead_ret < -min_move and lag_ret <= 0.005
+
+    if not triggered:
+        return None
+
+    return {
+        "ticker":       lag,
+        "flag_type":    "CATCH_UP_OPPORTUNITY",
+        "flag_source":  f"{rel['ticker_a']}/{rel['ticker_b']} divergence",
+        "description":  cfg["description"],
+        "z_score":      result.get("z_score"),
+        "pair_corr_30d": result.get("corr_30d"),
+    }
+
+
+def _persist_opportunity_flags(flags: list[dict], engine, as_of: datetime) -> None:
+    """Upsert catch-up opportunity flags into the opportunity_flags table."""
+    from data.database import OpportunityFlag  # late import — avoids circular reference
+
+    for flag in flags:
+        stmt = sqlite_insert(OpportunityFlag).values(
+            date=as_of,
+            ticker=flag["ticker"],
+            flag_type=flag["flag_type"],
+            flag_source=flag.get("flag_source", ""),
+            description=flag.get("description", ""),
+            z_score=flag.get("z_score"),
+            pair_corr_30d=flag.get("pair_corr_30d"),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["ticker", "flag_type", "date"],
+            set_={
+                "flag_source":   stmt.excluded.flag_source,
+                "description":   stmt.excluded.description,
+                "z_score":       stmt.excluded.z_score,
+                "pair_corr_30d": stmt.excluded.pair_corr_30d,
+            },
+        )
+        try:
+            with engine.begin() as conn:
+                conn.execute(stmt)
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist opportunity flag for %s: %s",
+                flag["ticker"], exc,
+            )
+
+
+def get_active_opportunity_flags(lookback_hours: int = 28) -> list[dict]:
+    """Return catch-up opportunity flags detected within the last *lookback_hours*.
+
+    Falls back to an empty list if the opportunity_flags table does not yet exist
+    (e.g. before the first analysis run on a fresh install).
+    """
+    engine = get_engine()
+    cutoff = datetime.utcnow() - timedelta(hours=lookback_hours)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT * FROM opportunity_flags "
+                    "WHERE date >= :cutoff "
+                    "ORDER BY flag_type, ticker"
+                ),
+                {"cutoff": cutoff},
+            ).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        logger.warning("Could not read opportunity flags: %s", exc)
+        return []
+
+
 def compute_all_pairs(config: Optional[dict] = None) -> list[dict]:
     """Compute correlation metrics for every pair in RELATIONSHIP_MAP and persist to DB.
 
@@ -326,7 +492,8 @@ def compute_all_pairs(config: Optional[dict] = None) -> list[dict]:
     days  = config.get("data", {}).get("history_days", 365)
     as_of = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     engine = get_engine()
-    results: list[dict] = []
+    results:      list[dict] = []
+    catch_up_flags: list[dict] = []
 
     for rel in RELATIONSHIP_MAP:
         result = _compute_pair(rel["ticker_a"], rel["ticker_b"], rel["expected_sign"], days)
@@ -341,6 +508,17 @@ def compute_all_pairs(config: Optional[dict] = None) -> list[dict]:
                     "Failed to persist correlation %s/%s: %s",
                     rel["ticker_a"], rel["ticker_b"], exc,
                 )
+
+        flag = _detect_catch_up(rel, result)
+        if flag:
+            catch_up_flags.append(flag)
+            logger.info(
+                "Catch-up opportunity detected: %s (source: %s, z=%.2f)",
+                flag["ticker"], flag["flag_source"], flag.get("z_score") or 0,
+            )
+
+    if catch_up_flags:
+        _persist_opportunity_flags(catch_up_flags, engine, as_of)
 
     return results
 

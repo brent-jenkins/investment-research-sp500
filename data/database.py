@@ -266,6 +266,30 @@ class CorrelationData(Base):
     )
 
 
+class OpportunityFlag(Base):
+    """Catch-up and regime-overlay opportunity flags detected during correlation analysis."""
+
+    __tablename__ = "opportunity_flags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(DateTime, nullable=False, index=True)       # analysis date flag was detected
+    ticker = Column(String(20), nullable=False, index=True)   # asset with the opportunity
+    flag_type = Column(String(30), nullable=False)            # CATCH_UP_OPPORTUNITY
+    flag_source = Column(String(60))                          # e.g. "USO/XLE divergence"
+    description = Column(Text)
+    z_score = Column(Float)
+    pair_corr_30d = Column(Float)
+    price_at_flag = Column(Float)     # price when detected — baseline for confirmation
+    return_5d = Column(Float)         # 5-day return after flag (populated on later runs)
+    return_20d = Column(Float)        # 20-day return after flag (populated on later runs)
+    confirmed = Column(Boolean)       # True when return confirmed the flag's direction
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "flag_type", "date", name="uq_flag_ticker_type_date"),
+    )
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -296,6 +320,20 @@ def set_metadata(key: str, value: str) -> None:
             ),
             {"key": key, "value": value, "ts": datetime.utcnow().isoformat()},
         )
+
+
+def get_metadata_str(key: str) -> "str | None":
+    """Return the raw string value stored for *key*, or None if not set."""
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM system_metadata WHERE key = :key"),
+                {"key": key},
+            ).fetchone()
+    except Exception:
+        return None
+    return str(row[0]) if row and row[0] is not None else None
 
 
 def get_metadata(key: str) -> "datetime | None":
@@ -376,6 +414,7 @@ def init_db() -> None:
         Trade,
         Performance,
         CorrelationData,
+        OpportunityFlag,
         SystemMetadata,
     )
     if not all(c.__tablename__ in Base.metadata.tables for c in _register):
