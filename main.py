@@ -1848,15 +1848,24 @@ def _render_relationships_page(config: dict) -> None:
 # ---------------------------------------------------------------------------
 
 _GROUP_LABELS = {
-    "indices":       "Indices",
-    "sector_etfs":   "Sector ETFs",
-    "energy":        "Energy",
-    "commodities":   "Commodities",
-    "bonds":         "Bonds",
-    "volatility":    "Volatility",
-    "international": "International",
-    "forex":         "Forex",
-    "crypto":        "Crypto",
+    "indices":               "Indices",
+    "sector_etfs":           "Sector ETFs",
+    "energy":                "Energy",
+    "commodities":           "Commodities",
+    "bonds":                 "Bonds",
+    "volatility":            "Volatility",
+    "international":         "International",
+    "forex":                 "Forex",
+    "crypto":                "Crypto",
+    "volatility_complex":    "Volatility (Complex)",
+    "tech_subsectors":       "Tech Sub-Sectors",
+    "financial_subsectors":  "Financial Sub-Sectors",
+    "healthcare_subsectors": "Healthcare Sub-Sectors",
+    "international_expanded": "International (Expanded)",
+    "real_assets":           "Real Assets",
+    "fixed_income_expanded": "Fixed Income (Expanded)",
+    "commodities_expanded":  "Commodities (Expanded)",
+    "crypto_expanded":       "Crypto (Expanded)",
 }
 
 

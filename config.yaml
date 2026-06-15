@@ -1,3 +1,4 @@
+# 69 assets across 18 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -190,6 +191,132 @@ watchlist:
       exchange: "Crypto"
       tradeable: true
       trading212_instrument: "ETH/USD"
+
+  volatility_complex:
+    - ticker: "^VIX3M"
+      name: "3-Month VIX"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "VIXY"
+      name: "ProShares VIX Short-Term Futures"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "^VVIX"
+      name: "CBOE VVIX Index"
+      exchange: "NYSE"
+      tradeable: true
+
+  tech_subsectors:
+    - ticker: "SOXX"
+      name: "iShares Semiconductor ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "IGV"
+      name: "iShares Expanded Tech-Software ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "SKYY"
+      name: "First Trust Cloud Computing ETF"
+      exchange: "NYSE"
+      tradeable: true
+
+  financial_subsectors:
+    - ticker: "KRE"
+      name: "SPDR S&P Regional Banking ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "KBE"
+      name: "SPDR S&P Bank ETF"
+      exchange: "NYSE"
+      tradeable: true
+
+  healthcare_subsectors:
+    - ticker: "IBB"
+      name: "iShares Biotechnology ETF"
+      exchange: "NYSE"
+      tradeable: true
+
+  international_expanded:
+    - ticker: "FXI"
+      name: "iShares China Large-Cap ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "EWJ"
+      name: "iShares MSCI Japan ETF"
+      exchange: "TSE"
+      tradeable: true
+    - ticker: "EWG"
+      name: "iShares MSCI Germany ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "INDA"
+      name: "iShares MSCI India ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "EWZ"
+      name: "iShares MSCI Brazil ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "VGK"
+      name: "Vanguard FTSE Europe ETF"
+      exchange: "NYSE"
+      tradeable: true
+
+  real_assets:
+    - ticker: "VNQ"
+      name: "Vanguard Real Estate ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "AMLP"
+      name: "Alerian MLP ETF"
+      exchange: "NYSE"
+      tradeable: true
+
+  fixed_income_expanded:
+    - ticker: "LQD"
+      name: "iShares Investment Grade Corporate Bond"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "JNK"
+      name: "SPDR Bloomberg High Yield Bond"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "EMB"
+      name: "iShares JP Morgan EM Bond ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "MUB"
+      name: "iShares National Muni Bond ETF"
+      exchange: "NYSE"
+      tradeable: true
+
+  commodities_expanded:
+    - ticker: "PALL"
+      name: "Aberdeen Palladium ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "PPLT"
+      name: "Aberdeen Platinum ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "WOOD"
+      name: "iShares Global Timber & Forestry ETF"
+      exchange: "NYSE"
+      tradeable: true
+    - ticker: "UGA"
+      name: "United States Gasoline Fund"
+      exchange: "NYSE"
+      tradeable: true
+
+  crypto_expanded:
+    - ticker: "SOL-USD"
+      name: "Solana"
+      exchange: "Crypto"
+      tradeable: true
+    - ticker: "BNB-USD"
+      name: "Binance Coin"
+      exchange: "Crypto"
+      tradeable: true
 
 data:
   # How many calendar days of history to fetch on initial load

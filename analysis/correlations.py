@@ -262,6 +262,87 @@ RELATIONSHIP_MAP: list[dict] = [
             "to equity valuations"
         ),
     },
+    # ── New pairs: expanded coverage ─────────────────────────────────────────
+    {
+        "ticker_a": "SOXX",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "Semiconductors vs S&P 500",
+        "desc": "positive — semiconductors are a leading indicator for the broader market",
+        "diverge_template": (
+            "Semiconductors and equities diverging — chip stocks are not confirming the market "
+            "move; either a sector-specific headwind (inventory cycles, export controls, capex "
+            "slowdown) or a leading warning that broad market momentum is fading"
+        ),
+        "confirm_template": (
+            "Semiconductors tracking equities — chip stocks are confirming broad market direction "
+            "as expected"
+        ),
+    },
+    {
+        "ticker_a": "KRE",
+        "ticker_b": "TLT",
+        "expected_sign": -1,
+        "label": "Regional Banks vs Long Bonds",
+        "desc": "inverse — regional banks benefit from rising rates (falling TLT); hurt by falling rates",
+        "diverge_template": (
+            "Regional banks and long bonds moving together — rate sensitivity is breaking down; "
+            "a simultaneous fall could signal credit quality concerns overriding normal net "
+            "interest margin dynamics in smaller banks"
+        ),
+        "confirm_template": (
+            "Regional banks inversely tracking long bonds — rate outlook is driving bank "
+            "valuations normally"
+        ),
+    },
+    {
+        "ticker_a": "VNQ",
+        "ticker_b": "TLT",
+        "expected_sign": 1,
+        "label": "REITs vs Long Bonds",
+        "desc": "positive — REITs act as bond proxies; both benefit from falling rates",
+        "diverge_template": (
+            "REITs and long bonds diverging — the yield-seeking bond-proxy relationship has "
+            "broken down; REITs may be facing property-specific headwinds (vacancy rates, "
+            "refinancing risk) that bonds do not share"
+        ),
+        "confirm_template": (
+            "REITs tracking long bonds as expected — both responding to rate expectations "
+            "in tandem"
+        ),
+    },
+    {
+        "ticker_a": "FXI",
+        "ticker_b": "UUP",
+        "expected_sign": -1,
+        "label": "China Equities vs Dollar",
+        "desc": "inverse — strong dollar raises USD-denominated costs for China; yuan weakness weighs on Chinese assets",
+        "diverge_template": (
+            "Chinese equities and the dollar moving together — the typical dollar headwind "
+            "is not suppressing FXI; possible stimulus-driven domestic demand or a commodity "
+            "tailwind offsetting dollar pressure"
+        ),
+        "confirm_template": (
+            "China equities inversely tracking the dollar — dollar strength/weakness is "
+            "flowing through to Chinese asset prices as expected"
+        ),
+    },
+    {
+        "ticker_a": "EMB",
+        "ticker_b": "UUP",
+        "expected_sign": -1,
+        "label": "EM Bonds vs Dollar",
+        "desc": "inverse — strong dollar raises USD-denominated debt costs for emerging market sovereigns",
+        "diverge_template": (
+            "EM bonds and the dollar moving together — dollar strength is not widening EM "
+            "spreads as expected; possible commodity tailwind or credit quality improvement "
+            "offsetting the currency headwind in EM sovereign debt"
+        ),
+        "confirm_template": (
+            "EM bonds inversely tracking the dollar — USD strength/weakness is driving "
+            "emerging market bond prices as expected"
+        ),
+    },
 ]
 
 # ---------------------------------------------------------------------------

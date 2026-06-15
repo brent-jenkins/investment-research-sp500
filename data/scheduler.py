@@ -58,9 +58,12 @@ def _build_ticker_exchange_map(config: dict) -> dict[str, str]:
 def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
     """Return True if *calendar_name* has a trading session on *check_date*.
 
+    Crypto markets trade 24/7 and are never skipped.
     Fails open (returns True) on any calendar lookup error so assets are
     never silently skipped due to a misconfigured calendar name.
     """
+    if calendar_name == "Crypto":
+        return True
     try:
         cal = mcal.get_calendar(calendar_name)
         schedule = cal.schedule(
