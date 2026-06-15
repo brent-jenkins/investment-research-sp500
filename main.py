@@ -45,6 +45,7 @@ from output.performance import (
     get_open_trades,
     log_trade,
 )
+from analysis.macro import get_macro_dashboard
 from output.briefing import (
     STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
     STATUS_ICONS   as _BRIEF_STATUS_ICONS,
@@ -2051,7 +2052,152 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.divider()
 
-    # ── Section 2: Open Trade Monitor ──────────────────────────────────────
+    # ── Section 2: Macro Dashboard ─────────────────────────────────────────
+    st.markdown("### 📊 Macro Dashboard")
+
+    macro_dash = get_macro_dashboard(config)
+
+    if not macro_dash.get("has_data"):
+        st.info(
+            "No FRED macro data yet — the first fetch runs automatically at the next "
+            "EOD scheduler run (21:30 UTC on weekdays)."
+        )
+    else:
+        # ── Composite health score bar ──
+        comp   = macro_dash["composite_score"]
+        nb     = macro_dash["n_bullish"]
+        nbr    = macro_dash["n_bearish"]
+        nn     = macro_dash["n_neutral"]
+        ns     = macro_dash["n_series"]
+        score_colour = (
+            "#16a34a" if comp >= 0.25 else
+            "#ef5350" if comp <= -0.25 else
+            "#f59e0b"
+        )
+        score_label = (
+            "BULLISH"  if comp >= 0.25 else
+            "BEARISH"  if comp <= -0.25 else
+            "NEUTRAL"
+        )
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:16px;flex-wrap:wrap;"
+            f"background:{_hex_rgba(score_colour,0.08)};border:1px solid {score_colour}44;"
+            f"padding:8px 16px;border-radius:8px;margin-bottom:8px'>"
+            f"<div>"
+            f"<span style='font-size:1.1rem;font-weight:700;color:{score_colour}'>"
+            f"Macro Health: {comp:+.2f}</span> "
+            f"<span style='background:{score_colour};color:#fff;padding:1px 8px;"
+            f"border-radius:3px;font-size:0.7rem;font-weight:800'>{score_label}</span>"
+            f"</div>"
+            f"<div style='color:#64748b;font-size:0.82rem'>"
+            f"{ns} indicators · "
+            f"<span style='color:#16a34a'>▲ {nb} bullish</span> · "
+            f"<span style='color:#6b7280'>◆ {nn} neutral</span> · "
+            f"<span style='color:#ef5350'>▼ {nbr} bearish</span>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Plain-English summary
+        summary = html.escape(macro_dash.get("summary", ""))
+        st.markdown(
+            f"<p style='font-size:0.84rem;color:#64748b;margin:0 0 10px 0;font-style:italic'>"
+            f"{summary}</p>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Metric cards ────────────────────────────────────────────────────
+        _TREND_ARROW = {"rising": "↑", "falling": "↓", "flat": "→"}
+        _YC_COLOUR   = {"normal": "#16a34a", "flat": "#f59e0b", "inverted": "#ef5350"}
+        _CS_COLOUR   = {"NORMAL": "#16a34a", "ELEVATED": "#f59e0b", "STRESSED": "#ef5350"}
+
+        def _metric_card(
+            title: str, value_str: str, sub: str,
+            colour: str = "#6b7280", bg_alpha: float = 0.06,
+        ) -> str:
+            bg = _hex_rgba(colour, bg_alpha)
+            return (
+                f"<div style='background:{bg};border:1px solid {colour}33;"
+                f"border-radius:8px;padding:10px 14px;min-height:72px'>"
+                f"<div style='font-size:0.72rem;font-weight:600;color:#6b7280;"
+                f"text-transform:uppercase;letter-spacing:0.05em'>{html.escape(title)}</div>"
+                f"<div style='font-size:1.05rem;font-weight:700;color:{colour};margin:2px 0'>"
+                f"{html.escape(value_str)}</div>"
+                f"<div style='font-size:0.76rem;color:#64748b'>{html.escape(sub)}</div>"
+                f"</div>"
+            )
+
+        # Row 1: Real yields | Breakeven | HY Credit spread
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            ry    = macro_dash["real_yield"]
+            rt    = macro_dash["real_yield_trend"]
+            rt_ar = _TREND_ARROW.get(rt, "→")
+            ry_c  = "#16a34a" if rt == "falling" else ("#ef5350" if rt == "rising" else "#f59e0b")
+            v_str = f"{ry:+.2f}%" if ry is not None else "—"
+            st.markdown(
+                _metric_card("10Y Real Yield", f"{rt_ar} {v_str}", f"Trend: {rt}", ry_c),
+                unsafe_allow_html=True,
+            )
+        with c2:
+            bk  = macro_dash["breakeven"]
+            bt  = macro_dash["breakeven_trend"]
+            bt_ar = _TREND_ARROW.get(bt, "→")
+            bk_c  = "#16a34a" if 1.5 <= (bk or 0) <= 2.5 else "#f59e0b"
+            v_str = f"{bk:.2f}%" if bk is not None else "—"
+            st.markdown(
+                _metric_card("10Y Breakeven Inflation", f"{bt_ar} {v_str}", f"Trend: {bt}", bk_c),
+                unsafe_allow_html=True,
+            )
+        with c3:
+            hy_bps = macro_dash["hy_oas_bps"]
+            cs     = macro_dash["credit_status"] or "—"
+            cs_c   = _CS_COLOUR.get(cs, "#6b7280")
+            v_str  = f"{hy_bps:.0f} bps" if hy_bps is not None else "—"
+            p30    = macro_dash["hy_oas_pct_30d"]
+            sub    = f"Status: {cs}" + (f" | 30d: {p30:+.1f}%" if p30 is not None else "")
+            st.markdown(
+                _metric_card("HY Credit Spread (OAS)", v_str, sub, cs_c),
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        # Row 2: Yield curve 10Y2Y | Yield curve 10Y3M | IG spread + Composite details
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            yc2y  = macro_dash["t10y2y"]
+            sh2y  = macro_dash["t10y2y_shape"] or "—"
+            yc2_c = _YC_COLOUR.get(sh2y, "#6b7280")
+            v_str = f"{yc2y:+.2f}%" if yc2y is not None else "—"
+            st.markdown(
+                _metric_card("Yield Curve 10Y-2Y", v_str, f"Shape: {sh2y}", yc2_c),
+                unsafe_allow_html=True,
+            )
+        with c5:
+            yc3m  = macro_dash["t10y3m"]
+            sh3m  = macro_dash["t10y3m_shape"] or "—"
+            yc3_c = _YC_COLOUR.get(sh3m, "#6b7280")
+            v_str = f"{yc3m:+.2f}%" if yc3m is not None else "—"
+            st.markdown(
+                _metric_card("Yield Curve 10Y-3M", v_str, f"Shape: {sh3m}", yc3_c),
+                unsafe_allow_html=True,
+            )
+        with c6:
+            ig_bps = macro_dash["ig_oas_bps"]
+            ig_c   = "#16a34a" if ig_bps is not None and ig_bps < 100 else (
+                     "#ef5350" if ig_bps is not None and ig_bps > 150 else "#f59e0b"
+            )
+            v_str  = f"{ig_bps:.0f} bps" if ig_bps is not None else "—"
+            st.markdown(
+                _metric_card("IG Credit Spread (OAS)", v_str, "Investment Grade bonds", ig_c),
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ── Section 3: Open Trade Monitor ──────────────────────────────────────
     st.markdown("### 👀 Open Trade Monitor")
 
     open_trades = get_open_trades()
@@ -2089,7 +2235,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.divider()
 
-    # ── Section 3: Today's Opportunities ───────────────────────────────────
+    # ── Section 4: Today's Opportunities ───────────────────────────────────
     st.markdown("### 🎯 Today's Opportunities")
 
     open_tickers = {t["ticker"] for t in open_trades} if open_trades else set()

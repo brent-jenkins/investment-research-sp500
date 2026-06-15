@@ -28,6 +28,7 @@ from apscheduler.triggers.cron import CronTrigger
 from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
+from analysis.macro import fetch_and_store_macro_indicators
 from data.database import set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
@@ -162,6 +163,14 @@ def _eod_job() -> None:
         set_metadata("last_full_refresh", datetime.utcnow().isoformat())
     except Exception as exc:
         logger.warning("Could not stamp last_full_refresh: %s", exc)
+
+    # Fetch FRED macro indicators once per EOD run (not per-ticker).
+    # Must run before analysis so compute_macro() reads fresh scores from DB.
+    try:
+        logger.info("Fetching FRED macro indicators…")
+        fetch_and_store_macro_indicators(config)
+    except Exception as exc:
+        logger.error("FRED macro indicator fetch failed: %s", exc, exc_info=True)
 
     # Analyse all tickers (including those whose exchange was closed — their
     # stored history is still valid and their scores should remain up to date).

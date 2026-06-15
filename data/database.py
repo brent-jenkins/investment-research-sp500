@@ -266,6 +266,26 @@ class CorrelationData(Base):
     )
 
 
+class MacroIndicator(Base):
+    """FRED macro indicator time series — one row per series per date."""
+
+    __tablename__ = "macro_indicators"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    series_id = Column(String(40), nullable=False, index=True)
+    date = Column(DateTime, nullable=False, index=True)
+    value = Column(Float)
+    pct_change_30d = Column(Float)   # ~30-day pct change (M-o-M for monthly series)
+    z_score_2y = Column(Float)       # (value − 2yr mean) / 2yr std
+    score = Column(Integer)          # -1 / 0 / 1 for risk-asset scoring
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("series_id", "date", name="uq_macro_series_date"),
+    )
+
+
 class OpportunityFlag(Base):
     """Catch-up and regime-overlay opportunity flags detected during correlation analysis."""
 
@@ -414,6 +434,7 @@ def init_db() -> None:
         Trade,
         Performance,
         CorrelationData,
+        MacroIndicator,
         OpportunityFlag,
         SystemMetadata,
     )
