@@ -11,7 +11,7 @@ import yaml
 import yfinance as yf
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import PriceData, get_engine, get_session, init_db, set_metadata
+from data.database import PriceData, get_engine, get_metadata_str, get_session, init_db, set_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,21 @@ def get_all_tickers(config: Optional[dict] = None) -> list[str]:
         for entry in group:
             tickers.append(entry["ticker"])
     return tickers
+
+
+def _ticker_unavailable_key(ticker: str) -> str:
+    return f"unavailable_ticker:{ticker}"
+
+
+def _is_ticker_unavailable(ticker: str) -> bool:
+    return get_metadata_str(_ticker_unavailable_key(ticker)) == "true"
+
+
+def _mark_ticker_unavailable(ticker: str) -> None:
+    try:
+        set_metadata(_ticker_unavailable_key(ticker), "true")
+    except Exception as exc:
+        logger.warning("Could not flag %s as unavailable in metadata: %s", ticker, exc)
 
 
 def _fetch_ticker(
@@ -153,6 +168,11 @@ def pull_history(
     results: dict[str, int] = {}
     total = len(tickers)
     for idx, ticker in enumerate(tickers, 1):
+        if _is_ticker_unavailable(ticker):
+            logger.info("Ticker %s marked unavailable, skipping.", ticker)
+            results[ticker] = 0
+            continue
+
         logger.info("Fetching %s (%d/%d)…", ticker, idx, total)
         df = _fetch_ticker(ticker, start, end, max_retries=max_retries, rate_limit=rate_limit)
         if df is not None and not df.empty:
@@ -164,7 +184,8 @@ def pull_history(
             logger.info("  Stored %d rows for %s", count, ticker)
         else:
             results[ticker] = 0
-            logger.warning("  No data for %s", ticker)
+            logger.warning("  No data for %s after all retries — marking unavailable.", ticker)
+            _mark_ticker_unavailable(ticker)
 
     try:
         set_metadata("last_refresh_run", datetime.utcnow().isoformat())
@@ -194,6 +215,11 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
 
     try:
         for ticker in tickers:
+            if _is_ticker_unavailable(ticker):
+                logger.info("Ticker %s marked unavailable, skipping.", ticker)
+                results[ticker] = 0
+                continue
+
             # Find the most recent stored date for this ticker
             latest = (
                 session.query(PriceData.date)
@@ -224,6 +250,8 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
                 results[ticker] = count
             else:
                 results[ticker] = 0
+                logger.warning("  No data for %s after all retries — marking unavailable.", ticker)
+                _mark_ticker_unavailable(ticker)
     finally:
         session.close()
 

@@ -1,4 +1,4 @@
-# 71 assets across 19 groups
+# 67 assets across 19 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -290,23 +290,9 @@ watchlist:
       exchange: "NYSE"
       tradeable: true
 
-  commodities_expanded:
-    - ticker: "PALL"
-      name: "Aberdeen Palladium ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "PPLT"
-      name: "Aberdeen Platinum ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "WOOD"
-      name: "iShares Global Timber & Forestry ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "UGA"
-      name: "United States Gasoline Fund"
-      exchange: "NYSE"
-      tradeable: true
+  # PALL, PPLT, WOOD, and UGA were removed — all four were delisted or
+  # suspended from yfinance data delivery and returned no OHLCV history.
+  commodities_expanded: []
 
   crypto_expanded:
     - ticker: "SOL-USD"
@@ -413,8 +399,10 @@ macro:
     T10Y3M:
       label: "10Y-3M Yield Spread"
       category: "yield_curve"
-    USALOLITONOSTSAM:
-      label: "OECD US Leading Indicator"
+    # USALOLITONOSTSAM (OECD US Leading Indicator) was removed — FRED returns no
+    # data for this series.  Replaced with USSLIND (Conference Board US Leading Index).
+    USSLIND:
+      label: "US Leading Index (Conference Board)"
       category: "leading_indicators"
     DTWEXBGS:
       label: "Trade Weighted Dollar (Broad)"
