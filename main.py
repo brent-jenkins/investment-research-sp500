@@ -1004,22 +1004,33 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
         # ── Trade inputs (no st.form — dynamic calculations need live rerenders) ──
-        _f1, _f2 = st.columns(2)
-        direction = _f1.radio("Direction", ["LONG", "SHORT"], horizontal=True, key="log_direction")
-
-        # Market price from yfinance shown for reference only — not used as default
+        # Market price from yfinance shown for reference only — never used as default
         _ref_price = _cached_latest_price(sel_ticker)
-        _ref_label = (
-            f"Current market price (yfinance): **{_ref_price:,.4f}**"
-            if _ref_price else "Current market price: unavailable"
+        _ref_note  = (
+            f"yfinance reference: **{_ref_price:,.4f}**"
+            if _ref_price else "yfinance reference: unavailable"
+        )
+        st.markdown(
+            f"<div style='background:#1a0808;border:1px solid #dc2626;border-radius:4px;"
+            f"padding:6px 12px;font-size:0.8rem;color:#fca5a5;margin-bottom:10px'>"
+            f"⚠️  Enter prices <strong>exactly as shown in Trading212</strong>. "
+            f"Do not use the yfinance reference · {_ref_note}</div>",
+            unsafe_allow_html=True,
         )
 
+        _f1, _f2, _f3 = st.columns(3)
+        direction   = _f1.radio("Direction", ["LONG", "SHORT"], horizontal=True, key="log_direction")
         entry_price = _f2.number_input(
-            "Entry Price",
-            min_value=0.0, value=0.0, step=0.01, format="%.4f",
+            "Entry Price (T212 exact)",
+            min_value=0.0, value=0.0, step=0.0001, format="%.4f",
             key="log_entry_price",
         )
-        st.caption(f"Enter the exact price shown in Trading212 at time of trade · {_ref_label}")
+        units = _f3.number_input(
+            "Units (T212 exact)",
+            min_value=0.0, value=0.0, step=0.000001, format="%.6f",
+            help="Exact number of units shown in Trading212, e.g. 4.077272",
+            key="log_units",
+        )
 
         # Currency
         _c1, _c2 = st.columns(2)
@@ -1092,8 +1103,22 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
         # ── Investment summary box ─────────────────────────────────────────────
         if investment_amount > 0 and entry_price > 0:
-            breakeven_pct = (spread_cost / position_value * 100) if position_value > 0 else 0.0
             _ccy = account_ccy
+
+            # Break-even price: spread cost converted to instrument currency, divided by units
+            _be_html = ""
+            if spread_cost > 0 and units > 0 and fx_rate > 0:
+                spread_in_instr = spread_cost * fx_rate  # GBP → instrument ccy
+                be_delta        = spread_in_instr / units
+                be_price        = (entry_price - be_delta) if direction == "SHORT" else (entry_price + be_delta)
+                be_move_pct     = be_delta / entry_price * 100
+                _be_html = (
+                    f"<span style='color:#94a3b8'>Break-even price:</span>"
+                    f"<span style='color:#e2e8f0'> {instr_ccy} {be_price:>9.4f}</span>"
+                    f"<span style='color:#6b7280;font-size:0.72rem'>"
+                    f" ({direction}: needs {be_move_pct:.4f}% move)</span><br>"
+                )
+
             st.markdown(
                 f"<div style='background:#1e293b;border:1px solid #334155;border-radius:6px;"
                 f"padding:14px 18px;margin:12px 0;font-family:monospace;font-size:0.82rem;line-height:2'>"
@@ -1107,6 +1132,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 f"<span style='color:#e2e8f0'>{_ccy} {position_value:>10,.2f}</span><br>"
                 f"<span style='color:#94a3b8'>Margin Required: </span>"
                 f"<span style='color:#e2e8f0'>{_ccy} {margin_required:>10,.2f}</span><br>"
+                + (f"<span style='color:#94a3b8'>Units:           </span>"
+                   f"<span style='color:#e2e8f0'>{units:>14.6f}</span><br>"
+                   if units > 0 else "")
                 + (
                     f"<span style='color:#94a3b8'>Opening Spread:  </span>"
                     f"<span style='color:#e2e8f0'>{_ccy} {spread_cost:>10,.4f}</span><br>"
@@ -1119,12 +1147,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"<span style='color:#f59e0b'>{_ccy} {monthly_swap:>10.2f}</span><br>"
                     if overnight_rate > 0 else ""
                 )
-                + (
-                    f"<span style='color:#94a3b8'>Break-even move: </span>"
-                    f"<span style='color:#e2e8f0'>{breakeven_pct:.4f}%</span>"
-                    f"<span style='color:#6b7280;font-size:0.7rem'> (spread / position)</span><br>"
-                    if spread_cost > 0 and position_value > 0 else ""
-                )
+                + _be_html
                 + f"</div>",
                 unsafe_allow_html=True,
             )
@@ -1154,7 +1177,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 volume_score=int(sig.get("volume_score") or 0),
                 macro_score=int(sig.get("macro_score") or 0),
                 entry_price=entry_price,
-                quantity=float(investment_amount or 1),
+                quantity=float(units) if units > 0 else 1.0,
                 account_id=sel_acct["id"],
                 account_name=sel_acct["name"],
                 account_type=sel_acct.get("type", "PRACTICE"),
@@ -1172,7 +1195,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             )
             # Clear form state so widgets reset to defaults on next render
             for _k in [
-                "log_entry_price", "log_direction", "log_instr_ccy", "log_acct_ccy",
+                "log_entry_price", "log_units", "log_direction", "log_instr_ccy", "log_acct_ccy",
                 "log_investment", "log_leverage", "log_overnight_rate", "log_spread_cost",
                 "log_platform_instrument", "log_notes", "log_confirmed",
             ]:
@@ -1206,68 +1229,79 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         live_prices = {t["ticker"]: _cached_latest_price(t["ticker"])
                        for t in open_trades}
 
+        # Pre-fetch unique FX pairs needed (cached, so no extra API cost for same pair)
+        _fx_cache: dict[tuple, float] = {}
+        for t in open_trades:
+            ic = t.get("currency") or "GBP"
+            ac = t.get("account_currency") or "GBP"
+            if ic != ac and (ic, ac) not in _fx_cache:
+                _fx_cache[(ic, ac)] = _cached_fx_rate(ic, ac)
+
         rows = []
         for t in open_trades:
-            ticker         = t["ticker"]
-            live           = live_prices.get(ticker)
-            entry          = float(t.get("entry_price") or 0)
-            direction      = t.get("direction", "LONG")
-            leverage       = int(t.get("leverage") or 1)
-            pos_val        = float(t.get("position_value") or 0)
-            invest_amt     = float(t.get("investment_amount") or 0)
-            o_rate         = float(t.get("overnight_rate") or 0)
-            acct_ccy       = t.get("account_currency") or "GBP"
-            entry_dt       = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
-            days_held      = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else 0
-            mult           = 1 if direction == "LONG" else -1
+            ticker      = t["ticker"]
+            live        = live_prices.get(ticker)
+            entry       = float(t.get("entry_price") or 0)
+            qty         = float(t.get("quantity") or 0)
+            direction   = t.get("direction", "LONG")
+            pos_val     = float(t.get("position_value") or 0)
+            margin_req  = float(t.get("margin_required") or 0)
+            o_rate      = float(t.get("overnight_rate") or 0)
+            instr_ccy   = t.get("currency") or "GBP"
+            acct_ccy    = t.get("account_currency") or "GBP"
+            fx          = _fx_cache.get((instr_ccy, acct_ccy), 1.0)
+            entry_dt    = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
+            days_held   = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else 0
+            mult        = 1 if direction == "LONG" else -1
 
-            # Raw price move %
-            pos_pnl_pct = None
-            if live and entry:
-                pos_pnl_pct = (live - entry) / entry * mult * 100
+            # P&L in instrument currency (e.g. USD for INDA)
+            pnl_instr = None
+            if live and entry and qty:
+                pnl_instr = (live - entry) * qty * mult
 
-            # Leveraged margin return %
-            margin_pnl_pct = (pos_pnl_pct * leverage) if (pos_pnl_pct is not None and leverage > 1) else pos_pnl_pct
+            # P&L in account currency (e.g. GBP)
+            pnl_acct = (pnl_instr / fx) if (pnl_instr is not None and fx > 0) else None
 
-            # P&L in account currency using stored position_value (already in acct ccy)
-            pnl_acct = None
-            if pos_pnl_pct is not None and pos_val > 0:
-                pnl_acct = pos_val * pos_pnl_pct / 100
+            # Pos P&L %: return relative to position value
+            pos_pnl_pct = (pnl_acct / pos_val * 100) if (pnl_acct is not None and pos_val > 0) else None
 
-            # Accrued swap cost
-            daily_swap    = pos_val * o_rate / 100 if pos_val > 0 and o_rate > 0 else 0.0
-            accrued_swap  = daily_swap * days_held
+            # Margin P&L %: return relative to margin required (leveraged view)
+            margin_pnl_pct = (pnl_acct / margin_req * 100) if (pnl_acct is not None and margin_req > 0) else None
 
-            # Net P&L after swap
-            net_pnl = (pnl_acct - accrued_swap) if pnl_acct is not None else None
+            # Accrued swap — always a cost (negative)
+            daily_swap   = pos_val * o_rate / 100 if (pos_val > 0 and o_rate > 0) else 0.0
+            accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else None
+
+            # Net P&L = price P&L + swap cost (swap is negative)
+            net_pnl = (pnl_acct + accrued_swap) if (pnl_acct is not None and accrued_swap is not None) else pnl_acct
 
             rows.append({
                 "ID":           t["id"],
                 "Type":         t.get("account_type") or "PRACTICE",
                 "Ticker":       ticker,
                 "Dir":          direction,
-                "Ccy":          acct_ccy,
-                "Entry Date":   entry_dt.strftime("%Y-%m-%d") if entry_dt else "—",
-                "Entry Price":  entry,
-                "Live Price":   live,
-                "Pos P&L %":    pos_pnl_pct,
+                "Ccy":          instr_ccy,
+                "Units":        qty if qty > 0 else None,
+                "Entry":        entry,
+                "Live":         live,
+                "P&L (raw)":    pnl_instr,    # in instrument currency (e.g. USD)
+                "P&L £":        pnl_acct,     # in account currency (GBP)
                 "Margin P&L %": margin_pnl_pct,
-                "P&L":          pnl_acct,
-                "Swap":         accrued_swap if accrued_swap > 0 else None,
-                "Net P&L":      net_pnl,
+                "Swap":         accrued_swap,  # negative — always a cost
+                "Net P&L £":    net_pnl,
                 "Days":         days_held,
             })
 
         open_df = pd.DataFrame(rows)
 
-        _pct_cols  = ["Pos P&L %", "Margin P&L %"]
-        _val_cols  = ["P&L", "Net P&L"]
-        _swap_cols = ["Swap"]
-
         def _style_signed(val):
             if not isinstance(val, (int, float)): return ""
             return ("color:#16a34a;font-weight:bold" if val > 0
                     else "color:#dc2626;font-weight:bold" if val < 0 else "")
+
+        def _style_swap(val):
+            if not isinstance(val, (int, float)): return ""
+            return "color:#f59e0b;font-weight:bold"  # amber — always a cost
 
         def _style_acct_badge(val):
             if val == "LIVE":     return "color:#6ee7b7;font-weight:bold"
@@ -1277,20 +1311,28 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         styler = (
             open_df.style
             .map(_style_acct_badge, subset=["Type"])
-            .map(_style_signed, subset=_pct_cols + _val_cols)
+            .map(_style_signed,     subset=["P&L (raw)", "P&L £", "Margin P&L %", "Net P&L £"])
+            .map(_style_swap,       subset=["Swap"])
             .format({
-                "Entry Price":  "{:,.4f}",
-                "Live Price":   lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
-                "Pos P&L %":    lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+                "Entry":        "{:,.4f}",
+                "Live":         lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
+                "Units":        lambda v: f"{v:.6f}" if isinstance(v, float) else "—",
+                "P&L (raw)":    lambda v: f"{v:+.4f}" if isinstance(v, float) else "—",
+                "P&L £":        lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
                 "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
-                "P&L":          lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
                 "Swap":         lambda v: f"{v:.2f}" if isinstance(v, float) else "—",
-                "Net P&L":      lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+                "Net P&L £":    lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
             })
         )
 
         st.dataframe(styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(rows))
+        st.caption(
+            "P&L is indicative — minor differences from Trading212 are expected "
+            "due to data source and FX rate timing. "
+            "Ccy = instrument currency; P&L (raw) in instrument currency, P&L £ / Net P&L £ in GBP. "
+            "Swap is accrued overnight cost (position value × rate × days)."
+        )
 
     st.divider()
 

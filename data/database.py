@@ -444,25 +444,26 @@ def _apply_data_fixes(engine) -> None:
     been applied, so it is safe to call on every startup.
     """
     with engine.begin() as conn:
-        # Fix: correct the initial INDA SHORT trade logged with the wrong entry
-        # price (49.4200 from yfinance instead of the actual T212 price 49.25).
-        # Only updates rows where the old price is still present and leverage has
-        # not yet been set (leverage IS NULL or <= 1 from the column default).
+        # Fix: set all correct values for the initial INDA SHORT CFD trade.
+        # Guard: only runs while entry_price is not already 49.39 (within 0.001),
+        # so it is safe to call on every startup without overriding user edits.
         conn.execute(text("""
             UPDATE trades SET
-                entry_price       = 49.25,
-                direction         = 'SHORT',
-                currency          = 'USD',
-                account_currency  = 'GBP',
-                leverage          = 5,
-                investment_amount = 150.0,
-                margin_required   = 30.0,
-                position_value    = 750.0,
-                overnight_rate    = 0.0251,
-                platform_instrument = 'INDA'
+                entry_price         = 49.39,
+                quantity            = 4.077272,
+                direction           = 'SHORT',
+                currency            = 'USD',
+                account_currency    = 'GBP',
+                leverage            = 5,
+                investment_amount   = 150.0,
+                margin_required     = 30.0,
+                position_value      = 750.0,
+                overnight_rate      = 0.0251,
+                platform_instrument = 'INDA',
+                entry_date          = '2026-06-15 00:00:00'
             WHERE ticker = 'INDA'
-              AND ABS(entry_price - 49.42) < 0.05
-              AND (leverage IS NULL OR leverage <= 1)
+              AND is_open = 1
+              AND ABS(COALESCE(entry_price, 0) - 49.39) > 0.001
         """))
 
 

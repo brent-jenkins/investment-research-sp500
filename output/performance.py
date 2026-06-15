@@ -165,7 +165,9 @@ def close_trade(
     leverage          = int(row.get("leverage") or 1)
     position_value    = float(row.get("position_value") or 0)
     investment_amount = float(row.get("investment_amount") or 0)
+    margin_required   = float(row.get("margin_required") or 0)
     overnight_rate    = float(row.get("overnight_rate") or 0)
+    fx_rate_at_entry  = float(row.get("fx_rate_at_entry") or 1.0)
     entry_date_raw    = row["entry_date"]
 
     if isinstance(entry_date_raw, str):
@@ -178,14 +180,14 @@ def close_trade(
     multiplier   = 1 if direction == "LONG" else -1
     holding_days = max(0, (exit_date - entry_dt).days)
 
-    if leverage > 1 and position_value > 0 and entry_price > 0:
-        # CFD trade: P&L in account currency based on position value
-        price_move_pct = (exit_price - entry_price) / entry_price * multiplier
-        gross_pnl      = position_value * price_move_pct
-        swap_total     = holding_days * position_value * overnight_rate / 100
-        pnl            = round(gross_pnl - swap_total, 4)
-        base           = investment_amount if investment_amount > 0 else position_value
-        pnl_pct        = round(pnl / base * 100, 4) if base else 0.0
+    if leverage > 1 and quantity > 0 and entry_price > 0:
+        # CFD: P&L in instrument currency → convert to account currency via entry FX rate
+        pnl_instr  = (exit_price - entry_price) * quantity * multiplier
+        gross_pnl  = round(pnl_instr / fx_rate_at_entry, 4)
+        swap_total = round(holding_days * position_value * overnight_rate / 100, 4) if position_value > 0 else 0.0
+        pnl        = round(gross_pnl - swap_total, 4)
+        base       = margin_required if margin_required > 0 else (investment_amount if investment_amount > 0 else position_value)
+        pnl_pct    = round(pnl / base * 100, 4) if base else 0.0
     else:
         pnl     = round((exit_price - entry_price) * multiplier * quantity, 4)
         pnl_pct = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
