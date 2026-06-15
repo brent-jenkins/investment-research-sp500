@@ -298,7 +298,7 @@ def _cached_last_analysis() -> "datetime | None":
 @st.cache_data(ttl=60)
 def _cached_last_run_type() -> "str | None":
     """Run type of the most recent scheduled job ('full' or 'analysis_only')."""
-    return get_metadata("last_run_type")  # type: ignore[return-value]
+    return get_metadata_str("last_run_type")
 
 
 def _has_price_data() -> bool:
@@ -2192,6 +2192,18 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     }
     run_type_label = _RUN_TYPE_LABELS.get(last_run_type or "", "—")
 
+    # Colour: green for full refresh, blue for analysis-only, amber if missing
+    # or stale (last analysis more than 25 hours ago).
+    _stale = last_analysis is None or (
+        (datetime.utcnow() - last_analysis).total_seconds() > 25 * 3600
+    )
+    if not last_run_type or _stale:
+        run_type_level = "warn"
+    elif last_run_type == "full":
+        run_type_level = "ok"
+    else:
+        run_type_level = "info"
+
     # ── Row 1: deployment / uptime / database ─────────────────────────────
     c1, c2, c3 = st.columns(3)
     _status_card(c1, "Last Deployment", deploy_ts, deploy_msg, "info")
@@ -2207,7 +2219,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     _status_card(c3, "Last Run Type",           run_type_label,
                  "full = data pull + analysis" if last_run_type == "full"
                  else ("analysis only — no data pull" if last_run_type == "analysis_only" else ""),
-                 "info" if last_run_type else "warn")
+                 run_type_level)
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
