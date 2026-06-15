@@ -65,6 +65,15 @@ def get_current_signal(ticker: str) -> dict:
 # Trade lifecycle
 # ---------------------------------------------------------------------------
 
+def _swap_basis_amount(basis: str, investment: float, margin: float, position: float) -> float:
+    """Return the amount to apply the overnight rate to based on the chosen basis."""
+    if basis == "margin":
+        return margin if margin > 0 else investment
+    if basis == "position":
+        return position if position > 0 else investment
+    return investment  # default: "investment"
+
+
 def log_trade(
     ticker: str,
     direction: str,
@@ -87,10 +96,12 @@ def log_trade(
     currency: str = "GBP",
     account_currency: str = "GBP",
     fx_rate_at_entry: float = 1.0,
+    fx_rate_pair: Optional[str] = None,
     leverage: int = 1,
     investment_amount: Optional[float] = None,
     margin_required: Optional[float] = None,
     overnight_rate: float = 0.0,
+    swap_basis: str = "investment",
     position_value: Optional[float] = None,
     spread_cost: Optional[float] = None,
     platform_instrument: Optional[str] = None,
@@ -123,10 +134,12 @@ def log_trade(
             currency=currency,
             account_currency=account_currency,
             fx_rate_at_entry=fx_rate_at_entry,
+            fx_rate_pair=fx_rate_pair,
             leverage=leverage,
             investment_amount=investment_amount,
             margin_required=margin_required,
             overnight_rate=overnight_rate,
+            swap_basis=swap_basis,
             position_value=position_value,
             spread_cost=spread_cost,
             platform_instrument=platform_instrument,
@@ -167,6 +180,7 @@ def close_trade(
     investment_amount = float(row.get("investment_amount") or 0)
     margin_required   = float(row.get("margin_required") or 0)
     overnight_rate    = float(row.get("overnight_rate") or 0)
+    swap_basis        = row.get("swap_basis") or "investment"
     fx_rate_at_entry  = float(row.get("fx_rate_at_entry") or 1.0)
     entry_date_raw    = row["entry_date"]
 
@@ -184,7 +198,8 @@ def close_trade(
         # CFD: P&L in instrument currency → convert to account currency via entry FX rate
         pnl_instr  = (exit_price - entry_price) * quantity * multiplier
         gross_pnl  = round(pnl_instr / fx_rate_at_entry, 4)
-        swap_total = round(holding_days * position_value * overnight_rate / 100, 4) if position_value > 0 else 0.0
+        swap_amt   = _swap_basis_amount(swap_basis, investment_amount, margin_required, position_value)
+        swap_total = round(holding_days * swap_amt * overnight_rate / 100, 4) if swap_amt > 0 else 0.0
         pnl        = round(gross_pnl - swap_total, 4)
         base       = margin_required if margin_required > 0 else (investment_amount if investment_amount > 0 else position_value)
         pnl_pct    = round(pnl / base * 100, 4) if base else 0.0

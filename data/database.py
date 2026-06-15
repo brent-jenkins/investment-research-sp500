@@ -201,11 +201,13 @@ class Trade(Base):
     # CFD / leverage details
     currency = Column(String(3), default="GBP")          # instrument currency (e.g. USD for US ETFs)
     account_currency = Column(String(3), default="GBP")  # account currency (e.g. GBP)
-    fx_rate_at_entry = Column(Float, default=1.0)        # instrument/account rate at entry (e.g. GBPUSD)
+    fx_rate_at_entry = Column(Float, default=1.0)        # 1 account_ccy = X instrument_ccy at entry
+    fx_rate_pair = Column(String(16))                    # canonical pair used e.g. 'GBPUSD'
     leverage = Column(Integer, default=1)
     investment_amount = Column(Float)                     # cash invested in account currency
     margin_required = Column(Float)                       # investment_amount / leverage
-    overnight_rate = Column(Float, default=0.0)           # daily swap as % of position value
+    overnight_rate = Column(Float, default=0.0)           # daily swap as % of basis amount
+    swap_basis = Column(String(16), default="investment") # 'investment', 'margin', or 'position'
     position_value = Column(Float)                        # investment_amount × leverage
     spread_cost = Column(Float)                           # opening spread cost in account currency
     platform_instrument = Column(String(32))              # T212 instrument name if different from ticker
@@ -420,10 +422,12 @@ def _apply_migrations(engine) -> None:
         ("trades",     "currency",            "VARCHAR(3)   DEFAULT 'GBP'"),
         ("trades",     "account_currency",    "VARCHAR(3)   DEFAULT 'GBP'"),
         ("trades",     "fx_rate_at_entry",    "FLOAT        DEFAULT 1.0"),
+        ("trades",     "fx_rate_pair",        "VARCHAR(16)"),
         ("trades",     "leverage",            "INTEGER      DEFAULT 1"),
         ("trades",     "investment_amount",   "FLOAT"),
         ("trades",     "margin_required",     "FLOAT"),
         ("trades",     "overnight_rate",      "FLOAT        DEFAULT 0.0"),
+        ("trades",     "swap_basis",          "VARCHAR(16)  DEFAULT 'investment'"),
         ("trades",     "position_value",      "FLOAT"),
         ("trades",     "spread_cost",         "FLOAT"),
         ("trades",     "platform_instrument", "VARCHAR(32)"),

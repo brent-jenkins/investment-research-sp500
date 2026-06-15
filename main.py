@@ -135,26 +135,50 @@ def _cached_latest_price(ticker: str) -> float | None:
     return get_latest_price(ticker)
 
 
-@st.cache_data(ttl=300)
-def _cached_fx_rate(instrument_ccy: str, account_ccy: str) -> float:
-    """Fetch the FX rate between instrument currency and account currency.
+# Maps (instrument_ccy, account_ccy) → (yfinance_ticker, invert).
+# "invert" means the stored fx_rate = 1/close rather than close.
+# All entries use well-known pairs that yfinance reliably serves.
+# Convention: fx_rate = "1 account_ccy = fx_rate instrument_ccy"
+# so P&L conversion is always: pnl_account = pnl_instrument / fx_rate.
+_CCY_PAIR_LOOKUP: "dict[tuple[str, str], tuple[str, bool]]" = {
+    ("USD", "GBP"): ("GBPUSD=X", False),   # 1 GBP = 1.34 USD; pnl_gbp = pnl_usd / 1.34
+    ("EUR", "GBP"): ("GBPEUR=X", False),   # 1 GBP = 1.18 EUR; pnl_gbp = pnl_eur / 1.18
+    ("GBP", "USD"): ("GBPUSD=X", True),    # fx_rate = 1/GBPUSD ≈ 0.746; pnl_usd = pnl_gbp / 0.746
+    ("GBP", "EUR"): ("EURGBP=X", False),   # 1 EUR = 0.86 GBP; pnl_eur = pnl_gbp / 0.86
+    ("USD", "EUR"): ("EURUSD=X", False),   # 1 EUR = 1.08 USD; pnl_eur = pnl_usd / 1.08
+    ("EUR", "USD"): ("EURUSD=X", True),    # fx_rate = 1/EURUSD ≈ 0.926; pnl_usd = pnl_eur / 0.926
+}
 
-    Returns 1.0 when currencies match or the fetch fails (safe fallback).
-    E.g. instrument=USD, account=GBP → fetches GBPUSD=X → returns ~1.27,
-    meaning 1 GBP = 1.27 USD, so to convert USD P&L to GBP divide by this rate.
+
+@st.cache_data(ttl=300)
+def _cached_fx_rate(instrument_ccy: str, account_ccy: str) -> "float | None":
+    """Fetch the FX conversion rate: 1 account_ccy = ? instrument_ccy.
+
+    Returns None when the pair is unknown or the fetch fails.
+    Callers should show a manual-entry fallback on None.
     """
     if instrument_ccy == account_ccy:
         return 1.0
-    pair = f"{account_ccy}{instrument_ccy}=X"
+    pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
+    if pair_info is None:
+        return None
+    yf_ticker, invert = pair_info
     try:
-        data = yf.download(pair, period="2d", progress=False, auto_adjust=True)
-        if data.empty:
-            return 1.0
-        if hasattr(data.columns, "levels"):
-            data.columns = [col[0] for col in data.columns]
-        return float(data["Close"].iloc[-1])
+        hist = yf.Ticker(yf_ticker).history(period="5d")
+        if hist.empty:
+            return None
+        close = float(hist["Close"].iloc[-1])
+        return (1.0 / close) if invert else close
     except Exception:
-        return 1.0
+        return None
+
+
+def _fx_pair_label(instrument_ccy: str, account_ccy: str) -> str:
+    """Return the canonical pair name used for a currency combo, e.g. 'GBPUSD'."""
+    if instrument_ccy == account_ccy:
+        return ""
+    pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
+    return pair_info[0].replace("=X", "") if pair_info else ""
 
 
 def _hex_rgba(hx: str, alpha: float) -> str:
@@ -1047,12 +1071,26 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         account_ccy = _c2.selectbox("Account Currency",    ["GBP", "USD", "EUR"], key="log_acct_ccy")
 
         fx_rate = 1.0
+        fx_rate_pair = ""
         if instr_ccy != account_ccy:
-            fx_rate = _cached_fx_rate(instr_ccy, account_ccy)
-            st.caption(
-                f"FX rate at entry: 1 {account_ccy} = {fx_rate:.4f} {instr_ccy}  "
-                f"(live from yfinance — stored for reference)"
-            )
+            fx_rate_pair = _fx_pair_label(instr_ccy, account_ccy)
+            _fetched = _cached_fx_rate(instr_ccy, account_ccy)
+            if _fetched is not None:
+                fx_rate = _fetched
+                _pair_display = f" ({fx_rate_pair})" if fx_rate_pair else ""
+                st.caption(
+                    f"1 {account_ccy} = {fx_rate:.4f} {instr_ccy}{_pair_display} — live from yfinance"
+                )
+            else:
+                st.warning(
+                    f"FX rate unavailable for {account_ccy}/{instr_ccy} "
+                    f"({fx_rate_pair or 'unknown pair'}) — please enter manually."
+                )
+                fx_rate = st.number_input(
+                    f"FX Rate (1 {account_ccy} = ? {instr_ccy})",
+                    min_value=0.0001, value=1.0, step=0.0001, format="%.4f",
+                    key="log_fx_rate_manual",
+                )
 
         # Leverage + investment
         _l1, _l2, _l3 = st.columns(3)
@@ -1075,21 +1113,46 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             unsafe_allow_html=True,
         )
 
-        # Overnight rate
-        _o1, _o2 = st.columns(2)
+        # Overnight rate + swap basis
+        _o1, _o2, _o3 = st.columns([2, 2, 3])
         overnight_rate = _o1.number_input(
             "Overnight Rate (%)",
             min_value=0.0, value=0.0, step=0.0001, format="%.4f",
-            help="Daily swap as a percentage of position value (e.g. 0.0251)",
+            help="Daily swap as a percentage of the basis amount (e.g. 0.0694)",
             key="log_overnight_rate",
         )
-        daily_swap    = position_value * overnight_rate / 100
-        monthly_swap  = daily_swap * 30
-        if overnight_rate > 0 and position_value > 0:
-            _o2.markdown(
+        _BASIS_OPTIONS = ["investment", "margin", "position"]
+        _BASIS_LABELS  = {
+            "investment": "Investment basis",
+            "margin":     "Margin basis",
+            "position":   "Position value basis",
+        }
+        swap_basis = _o2.selectbox(
+            "Swap Basis",
+            options=_BASIS_OPTIONS,
+            format_func=lambda x: _BASIS_LABELS[x],
+            index=0,
+            help=(
+                "Investment basis: rate × investment amount (matches Trading212). "
+                "Margin basis: rate × margin locked up. "
+                "Position value basis: rate × full position value."
+            ),
+            key="log_swap_basis",
+        )
+        _basis_amounts = {
+            "investment": investment_amount,
+            "margin":     margin_required,
+            "position":   position_value,
+        }
+        _swap_base_amt = _basis_amounts[swap_basis]
+        daily_swap   = _swap_base_amt * overnight_rate / 100
+        monthly_swap = daily_swap * 30
+        if overnight_rate > 0 and _swap_base_amt > 0:
+            _o3.markdown(
                 f"<div style='padding-top:28px;font-size:0.82rem;color:#94a3b8'>"
-                f"{account_ccy} {position_value:,.2f} × {overnight_rate:.4f}% = "
+                f"{account_ccy} {_swap_base_amt:,.2f} × {overnight_rate:.4f}% = "
                 f"<strong style='color:#f59e0b'>{account_ccy} {daily_swap:.2f}/night</strong>"
+                f" ({_BASIS_LABELS[swap_basis].lower()})"
                 f" · ~{account_ccy} {monthly_swap:.2f} over 30 days"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -1141,6 +1204,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 f"<span style='color:#e2e8f0'>{_ccy} {position_value:>10,.2f}</span><br>"
                 f"<span style='color:#94a3b8'>Margin Required: </span>"
                 f"<span style='color:#e2e8f0'>{_ccy} {margin_required:>10,.2f}</span><br>"
+                + (
+                    f"<span style='color:#94a3b8'>FX Rate:         </span>"
+                    f"<span style='color:#e2e8f0'>1 {account_ccy} = {fx_rate:.4f} {instr_ccy}</span>"
+                    f"<span style='color:#6b7280;font-size:0.72rem'> ({fx_rate_pair})</span><br>"
+                    if instr_ccy != account_ccy else ""
+                )
                 + (f"<span style='color:#94a3b8'>Units:           </span>"
                    f"<span style='color:#e2e8f0'>{units:>14.6f}</span><br>"
                    if units > 0 else "")
@@ -1151,7 +1220,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 )
                 + (
                     f"<span style='color:#94a3b8'>Daily Swap:      </span>"
-                    f"<span style='color:#f59e0b'>{_ccy} {daily_swap:>9.2f}/night</span><br>"
+                    f"<span style='color:#f59e0b'>{_ccy} {daily_swap:>9.2f}/night</span>"
+                    f"<span style='color:#6b7280;font-size:0.72rem'> ({_BASIS_LABELS[swap_basis].lower()})</span><br>"
                     f"<span style='color:#94a3b8'>30-day Swap Est: </span>"
                     f"<span style='color:#f59e0b'>{_ccy} {monthly_swap:>10.2f}</span><br>"
                     if overnight_rate > 0 else ""
@@ -1194,10 +1264,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 currency=instr_ccy,
                 account_currency=account_ccy,
                 fx_rate_at_entry=fx_rate,
+                fx_rate_pair=fx_rate_pair if fx_rate_pair else None,
                 leverage=int(leverage),
                 investment_amount=float(investment_amount),
                 margin_required=float(margin_required),
                 overnight_rate=float(overnight_rate),
+                swap_basis=swap_basis,
                 position_value=float(position_value),
                 spread_cost=float(spread_cost) if spread_cost > 0 else None,
                 platform_instrument=platform_instrument if platform_instrument else None,
@@ -1205,8 +1277,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             # Clear form state so widgets reset to defaults on next render
             for _k in [
                 "log_entry_price", "log_units", "log_direction", "log_instr_ccy", "log_acct_ccy",
-                "log_investment", "log_leverage", "log_overnight_rate", "log_spread_cost",
-                "log_platform_instrument", "log_notes", "log_confirmed",
+                "log_investment", "log_leverage", "log_overnight_rate", "log_swap_basis",
+                "log_spread_cost", "log_platform_instrument", "log_notes", "log_confirmed",
+                "log_fx_rate_manual",
             ]:
                 st.session_state.pop(_k, None)
             st.success(
@@ -1244,7 +1317,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             ic = t.get("currency") or "GBP"
             ac = t.get("account_currency") or "GBP"
             if ic != ac and (ic, ac) not in _fx_cache:
-                _fx_cache[(ic, ac)] = _cached_fx_rate(ic, ac)
+                _fetched_fx = _cached_fx_rate(ic, ac)
+                _fx_cache[(ic, ac)] = _fetched_fx if _fetched_fx is not None else 1.0
 
         rows = []
         for t in open_trades:
@@ -1256,7 +1330,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             leverage    = int(t.get("leverage") or 1)
             pos_val     = float(t.get("position_value") or 0)
             margin_req  = float(t.get("margin_required") or 0)
+            inv_amt     = float(t.get("investment_amount") or 0)
             o_rate      = float(t.get("overnight_rate") or 0)
+            s_basis     = t.get("swap_basis") or "investment"
             spread      = float(t.get("spread_cost") or 0)
             instr_ccy   = t.get("currency") or "GBP"
             acct_ccy    = t.get("account_currency") or "GBP"
@@ -1294,8 +1370,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             # Margin P&L %: Position P&L % × leverage (return on margin locked up)
             margin_pnl_pct = (pos_pnl_pct * leverage) if pos_pnl_pct is not None else None
 
-            # Accrued swap — always a cost (negative)
-            daily_swap   = pos_val * o_rate / 100 if (pos_val > 0 and o_rate > 0) else 0.0
+            # Accrued swap — always a cost (negative); use stored basis
+            _swap_amt    = inv_amt if s_basis == "investment" else (margin_req if s_basis == "margin" else pos_val)
+            daily_swap   = _swap_amt * o_rate / 100 if (_swap_amt > 0 and o_rate > 0) else 0.0
             accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else None
 
             # Net P&L = price P&L + swap cost (swap is negative)
@@ -1359,7 +1436,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "P&L uses a spread-adjusted close price (SHORT: +spread/units, LONG: −spread/units). "
             "Margin P&L % = position price move % × leverage. "
             "Ccy = instrument currency; P&L (raw) in instrument currency, P&L £ / Net P&L £ in GBP. "
-            "Swap is accrued overnight cost (position value × rate × days)."
+            "Swap is accrued overnight cost (basis amount × rate × days); basis is stored per trade (investment/margin/position)."
         )
 
     st.divider()
@@ -2362,6 +2439,7 @@ _GROUP_LABELS = {
     "fixed_income_expanded": "Fixed Income (Expanded)",
     "commodities_expanded":  "Commodities (Expanded)",
     "crypto_expanded":       "Crypto (Expanded)",
+    "uk_etfs":               "UK ETFs (GBP)",
 }
 
 

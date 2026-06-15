@@ -1,4 +1,4 @@
-# 69 assets across 18 groups
+# 71 assets across 19 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -317,6 +317,18 @@ watchlist:
       name: "Binance Coin"
       exchange: "Crypto"
       tradeable: true
+
+  uk_etfs:
+    - ticker: "VUSA.L"
+      name: "Vanguard S&P 500 UCITS ETF"
+      exchange: "LSE"
+      tradeable: true
+      trading212_instrument: "VUSA"
+    - ticker: "ISF.L"
+      name: "iShares Core FTSE 100 UCITS ETF"
+      exchange: "LSE"
+      tradeable: true
+      trading212_instrument: "ISF"
 
 data:
   # How many calendar days of history to fetch on initial load
