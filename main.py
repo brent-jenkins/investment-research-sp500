@@ -155,7 +155,7 @@ def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") 
     """Render a colour-coded status card into a Streamlit column."""
     colour  = _LEVEL_COLOUR.get(level, "#6b7280")
     sub_html = (
-        f'<div style="font-size:0.78rem;color:#9ca3af;margin-top:3px">'
+        f'<div style="font-size:0.78rem;color:#64748b;margin-top:3px">'
         f'{html.escape(sub)}</div>'
     ) if sub else ""
     col.markdown(
@@ -514,7 +514,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
                 f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.06em'>"
                 f"REGIME OVERLAY</span>"
                 f"<strong style='color:{colour};font-size:0.95rem'>{label}</strong></div>"
-                f"<p style='color:#f1f5f9;font-size:0.875rem;line-height:1.55;margin:0'>{body}</p>"
+                f"<p style='font-size:0.875rem;line-height:1.55;margin:0'>{body}</p>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -539,10 +539,10 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
                 f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.06em'>"
                 f"CATCH-UP OPPORTUNITY</span>"
                 f"<strong style='color:#fbbf24;font-size:0.95rem'>{ticker_disp}</strong>"
-                f"<span style='color:#94a3b8;font-size:0.8rem'>{source_disp}</span>"
-                f"<span style='color:#94a3b8;font-size:0.8rem'>{z_str}{corr_str}</span>"
+                f"<span style='color:#64748b;font-size:0.8rem'>{source_disp}</span>"
+                f"<span style='color:#64748b;font-size:0.8rem'>{z_str}{corr_str}</span>"
                 f"</div>"
-                f"<p style='color:#f1f5f9;font-size:0.875rem;line-height:1.55;margin:0'>{desc_disp}</p>"
+                f"<p style='font-size:0.875rem;line-height:1.55;margin:0'>{desc_disp}</p>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -625,7 +625,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
             f'<div style="text-align:center;padding:10px 4px;border-radius:6px;'
             f'background:{fg}22;border:1px solid {fg}55">'
             f'<div style="color:{fg};font-weight:700;font-size:1.5rem">{counts[lbl]}</div>'
-            f'<div style="color:#9ca3af;font-size:0.72rem;margin-top:2px">{lbl}</div>'
+            f'<div style="color:#64748b;font-size:0.72rem;margin-top:2px">{lbl}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -821,7 +821,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
                 f'<div style="background:{card_fg}18;border-left:3px solid {card_fg};'
                 f'padding:8px 12px;border-radius:4px;margin-bottom:8px">'
                 f'<span style="font-weight:700;color:{card_fg}">{ticker}</span>'
-                f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:8px">{name}</span><br>'
+                f'<span style="color:#64748b;font-size:0.8rem;margin-left:8px">{name}</span><br>'
                 f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
                 f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.0%}</span>'
                 f'<div style="background:#374151;border-radius:2px;height:3px;margin-top:6px">'
@@ -1308,7 +1308,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 f"<div style='border-left:4px solid {card_colour};padding:8px 16px;"
                 f"background:rgba(0,0,0,0.2);border-radius:0 4px 4px 0;margin-top:8px'>"
                 f"<strong style='color:{card_colour}'>Confidence: {card_label}</strong>"
-                f"<br><span style='color:#cbd5e1'>{rec_text}</span></div>",
+                f"<br><span style='font-size:0.88rem'>{rec_text}</span></div>",
                 unsafe_allow_html=True,
             )
 
@@ -1710,7 +1710,7 @@ def _render_relationships_page(config: dict) -> None:
             colours = {
                 "CONFIRMING": "background-color:#1a5c38;color:white;font-weight:600",
                 "DIVERGING":  "background-color:#7f1d1d;color:white;font-weight:600",
-                "NEUTRAL":    "color:#9ca3af",
+                "NEUTRAL":    "color:#6b7280",
             }
             return colours.get(val, "")
 
@@ -1782,9 +1782,9 @@ def _render_relationships_page(config: dict) -> None:
                 f'<div style="border-left:3px solid #ef5350;background:#ef535018;'
                 f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
                 f'<span style="color:#ef5350;font-weight:700">⚠ {html.escape(p["label"])}</span>'
-                f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:10px">'
+                f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
                 f'{html.escape(c_str)} · {html.escape(z_str)}</span><br>'
-                f'<span style="color:#d1d5db;font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
+                f'<span style="font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -1800,9 +1800,9 @@ def _render_relationships_page(config: dict) -> None:
                 f'<div style="border-left:3px solid #16a34a;background:#16a34a18;'
                 f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
                 f'<span style="color:#16a34a;font-weight:700">✓ {html.escape(p["label"])}</span>'
-                f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:10px">'
+                f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
                 f'{html.escape(c_str)}</span><br>'
-                f'<span style="color:#d1d5db;font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
+                f'<span style="font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -1890,7 +1890,7 @@ def _render_trade_card(e: dict) -> None:
         sl_str = f"Stop: {stop_loss:,.4f}"
         if atr is not None:
             sl_str += f" (2×ATR {atr:.4f})"
-        stop_html = f"<span style='color:#94a3b8'>{html.escape(sl_str)}</span>"
+        stop_html = f"<span style='color:#64748b'>{html.escape(sl_str)}</span>"
 
     st.markdown(
         f"<div style='border-left:4px solid {colour};padding:12px 16px;"
@@ -1901,13 +1901,13 @@ def _render_trade_card(e: dict) -> None:
         f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
         f"<strong style='font-size:1rem'>{ticker}</strong>"
-        f"<span style='color:#94a3b8;font-size:0.85rem'>{direction} · {days_held}d held</span>"
+        f"<span style='color:#64748b;font-size:0.85rem'>{direction} · {days_held}d held</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_str}</span>"
         f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
         f"</div>"
         # Detail row
-        f"<div style='display:flex;gap:24px;flex-wrap:wrap;font-size:0.82rem;color:#cbd5e1'>"
-        f"<span>Signal: {entry_sig} → <strong style='color:#f1f5f9'>{curr_sig}</strong></span>"
+        f"<div style='display:flex;gap:24px;flex-wrap:wrap;font-size:0.82rem'>"
+        f"<span>Signal: {entry_sig} → <strong>{curr_sig}</strong></span>"
         f"<span>Score: {e_score:+.3f} → {c_score:+.3f} "
         f"<span style='color:{delta_col}'>(Δ {delta:+.3f})</span></span>"
         f"{stop_html}"
@@ -1996,7 +1996,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
             f"<span style='background:{oc};color:#fff;padding:1px 7px;"
             f"border-radius:3px;font-size:0.68rem;font-weight:800'>OVERLAY</span> "
             f"<strong style='color:{oc}'>{olabel}</strong>"
-            f"<p style='color:#f1f5f9;font-size:0.82rem;line-height:1.5;margin:4px 0 0 0'>"
+            f"<p style='font-size:0.82rem;line-height:1.5;margin:4px 0 0 0'>"
             f"{obody}</p></div>",
             unsafe_allow_html=True,
         )
@@ -2026,7 +2026,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
                 f"padding:8px 12px;border-radius:6px;text-align:center'>"
                 f"<div style='font-weight:700;color:{sc}'>{html.escape(sig['ticker'])}</div>"
                 f"<div style='color:{sc};font-size:0.78rem'>{s_key.replace('_',' ')}</div>"
-                f"<div style='color:#cbd5e1;font-size:0.75rem'>{score:+.3f}</div>"
+                f"<div style='color:#64748b;font-size:0.75rem'>{score:+.3f}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
