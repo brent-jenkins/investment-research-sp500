@@ -447,3 +447,13 @@ notifications:
     to_addresses:          # List of recipient addresses
       - "you@example.com"
     alert_cooldown_hours: 8  # Minimum hours between auto-sent alert emails
+
+learning:
+  enabled: true
+  # Minimum closed trades required before weights are adjusted for the first time
+  min_trades_before_adjustment: 20
+  # Recalculate weights every N closed trades after the minimum is reached
+  weight_update_frequency: 10
+  # Clamp per-indicator weight to this range after learning adjustment
+  max_single_weight: 0.30
+  min_single_weight: 0.05

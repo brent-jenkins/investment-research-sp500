@@ -160,6 +160,82 @@ def accuracy_by_indicator(trades: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def accuracy_by_confluence_band(trades: list[dict]) -> pd.DataFrame:
+    """Win rate broken down by |confluence_score| band at entry (0.30–0.45, 0.45–0.60, 0.60+)."""
+    closed = _closed(trades)
+    if not closed:
+        return pd.DataFrame()
+
+    bands = [
+        (0.30, 0.45, "Weak (0.30–0.45)"),
+        (0.45, 0.60, "Moderate (0.45–0.60)"),
+        (0.60, 1.00, "Strong (0.60+)"),
+    ]
+
+    rows = []
+    for lo, hi, label in bands:
+        group = [
+            t for t in closed
+            if t.get("confluence_score") is not None
+            and lo <= abs(float(t["confluence_score"])) < hi
+        ]
+        # Include the upper boundary for the top band
+        if hi == 1.00:
+            group = [
+                t for t in closed
+                if t.get("confluence_score") is not None
+                and lo <= abs(float(t["confluence_score"])) <= hi
+            ]
+        if not group:
+            continue
+        pnls = [float(t["pnl"]) for t in group]
+        wins = sum(1 for p in pnls if p > 0)
+        rows.append({
+            "Band":      label,
+            "Trades":    len(group),
+            "Wins":      wins,
+            "Win Rate":  wins / len(group),
+            "Avg P&L":   sum(pnls) / len(pnls),
+            "Total P&L": sum(pnls),
+        })
+
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def accuracy_by_asset_class(trades: list[dict], ticker_to_group: dict[str, str]) -> pd.DataFrame:
+    """Win rate broken down by watchlist asset class group."""
+    closed = _closed(trades)
+    if not closed:
+        return pd.DataFrame()
+
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for t in closed:
+        group = ticker_to_group.get(t.get("ticker", ""), "Other")
+        groups[group].append(t)
+
+    rows = []
+    for group, group_trades in sorted(groups.items()):
+        pnls = [float(t["pnl"]) for t in group_trades]
+        wins = sum(1 for p in pnls if p > 0)
+        rows.append({
+            "Asset Class": group.replace("_", " ").title(),
+            "_group_key":  group,
+            "Trades":      len(group_trades),
+            "Wins":        wins,
+            "Win Rate":    wins / len(group_trades),
+            "Avg P&L":     sum(pnls) / len(pnls),
+            "Total P&L":   sum(pnls),
+        })
+
+    return (
+        pd.DataFrame(rows)
+        .sort_values("Win Rate", ascending=False)
+        .drop(columns=["_group_key"])
+        .reset_index(drop=True)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Signal validation (practice → live readiness)
 # ---------------------------------------------------------------------------

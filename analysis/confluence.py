@@ -1,5 +1,6 @@
 """Confluence scoring: applies regime-weighted module scores to produce signals."""
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -16,8 +17,13 @@ from analysis.regime import Regime, detect_regime, detect_overlays
 from analysis.trend import compute_trend
 from analysis.volatility import compute_volatility
 from analysis.volume import compute_volume
-from data.database import Signal, get_engine, init_db, set_metadata
+from data.database import Signal, get_engine, get_metadata_str, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_price_df
+
+# Modules whose accuracy can be tracked via the trades table
+# (correlation_score is not stored on trades, so it stays at its regime weight)
+_TRACKABLE_MODULES = ["trend", "mean_reversion", "volatility", "volume", "macro"]
+_ALL_MODULES       = _TRACKABLE_MODULES + ["correlation"]
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +104,164 @@ def _weighted_score(scores: dict[str, int], weights: dict[str, float]) -> float:
     )
 
 
+# ---------------------------------------------------------------------------
+# Feedback learning helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_trades_for_learning() -> list[dict]:
+    """Minimal SQL query returning only the columns needed for accuracy learning."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT signal_type, confluence_score, regime, pnl, "
+                "trend_score, mean_reversion_score, volatility_score, "
+                "volume_score, macro_score "
+                "FROM trades WHERE is_open = 0 AND pnl IS NOT NULL"
+            )
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def recalculate_learned_weights(config: dict) -> Optional[dict]:
+    """Derive per-module weights from closed-trade accuracy and persist them.
+
+    Win rate for each module is measured as: (calls where the module's sign
+    matched the trade outcome) / (total non-neutral calls by that module).
+    Correlation score is not stored on trades so it inherits a neutral 50% rate.
+    Returns the new weight dict, or None if there are insufficient trades.
+    """
+    learning_cfg = config.get("learning", {})
+    if not learning_cfg.get("enabled", True):
+        return None
+
+    min_trades = learning_cfg.get("min_trades_before_adjustment", 20)
+    max_w      = learning_cfg.get("max_single_weight", 0.30)
+    min_w      = learning_cfg.get("min_single_weight", 0.05)
+
+    trades = _fetch_trades_for_learning()
+    if len(trades) < min_trades:
+        logger.info("Learning: %d closed trades — minimum is %d, skipping", len(trades), min_trades)
+        return None
+
+    win_rates: dict[str, float] = {}
+    for module in _TRACKABLE_MODULES:
+        col = f"{module}_score"
+        directional = [t for t in trades if t.get(col) is not None and int(t.get(col, 0)) != 0]
+        if not directional:
+            win_rates[module] = 0.5
+            continue
+        correct = sum(
+            1 for t in directional
+            if (int(t[col]) > 0 and float(t.get("pnl", 0)) > 0)
+            or (int(t[col]) < 0 and float(t.get("pnl", 0)) < 0)
+        )
+        win_rates[module] = correct / len(directional)
+
+    win_rates["correlation"] = 0.5  # not trackable, held at neutral
+
+    # Convert win rates to proportional raw weights
+    raw = {k: max(0.001, v) for k, v in win_rates.items()}
+    total = sum(raw.values())
+    normalized = {k: v / total for k, v in raw.items()}
+
+    # Clamp then renormalize
+    clamped = {k: max(min_w, min(max_w, v)) for k, v in normalized.items()}
+    total_c = sum(clamped.values())
+    final_weights = {k: round(v / total_c, 4) for k, v in clamped.items()}
+
+    # Persist to metadata
+    n = len(trades)
+    payload = {"weights": final_weights, "win_rates": win_rates, "n_trades": n}
+    set_metadata("learned_weights", json.dumps(payload))
+
+    # Append to weight history (keep last 20 snapshots)
+    history_raw = get_metadata_str("weight_history") or "[]"
+    try:
+        history = json.loads(history_raw)
+    except Exception:
+        history = []
+    history.append({
+        "ts":       datetime.utcnow().isoformat(),
+        "n_trades": n,
+        "weights":  final_weights,
+    })
+    set_metadata("weight_history", json.dumps(history[-20:]))
+
+    logger.info("Learned weights updated from %d trades: %s", n, final_weights)
+    return final_weights
+
+
+def maybe_update_weights(config: dict) -> bool:
+    """Trigger weight recalculation if the trade count has hit an update boundary.
+
+    Should be called after each trade is closed.  Returns True when weights
+    were actually recalculated.
+    """
+    learning_cfg = config.get("learning", {})
+    if not learning_cfg.get("enabled", True):
+        return False
+
+    min_trades = learning_cfg.get("min_trades_before_adjustment", 20)
+    freq       = learning_cfg.get("weight_update_frequency", 10)
+
+    trades = _fetch_trades_for_learning()
+    n = len(trades)
+    if n < min_trades:
+        return False
+    if (n - min_trades) % freq == 0:
+        recalculate_learned_weights(config)
+        return True
+    return False
+
+
+def get_learned_weights() -> Optional[dict]:
+    """Return the stored learned-weight payload, or None if not yet computed.
+
+    Returns a dict with keys: ``weights`` (per-module), ``win_rates``,
+    ``n_trades``.
+    """
+    raw = get_metadata_str("learned_weights")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def get_weight_history() -> list[dict]:
+    """Return the stored weight-history snapshots (up to 20), oldest first."""
+    raw = get_metadata_str("weight_history")
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+def _effective_weights(regime_weights: dict, config: dict) -> dict:
+    """Blend regime weights with learned weights when learning is enabled.
+
+    Uses a 60 / 40 split: 60% regime-derived, 40% accuracy-derived.
+    Because both dicts sum to 1.0, the blend also sums to 1.0.
+    Falls back to pure regime weights when learning is disabled or no
+    learned weights exist yet.
+    """
+    if not config.get("learning", {}).get("enabled", True):
+        return regime_weights
+    learned = get_learned_weights()
+    if learned is None:
+        return regime_weights
+    lw = learned["weights"]
+    blended = {
+        k: round(0.6 * regime_weights.get(k, 0.0) + 0.4 * lw.get(k, 0.0), 4)
+        for k in regime_weights
+    }
+    return blended
+
+
 def score_ticker(
     ticker: str,
     regime_result: dict,
@@ -145,7 +309,7 @@ def score_ticker(
         "correlation":    corr_res["score"],
     }
 
-    weights = regime_result["weights"]
+    weights = _effective_weights(regime_result["weights"], config)
     w_score = _weighted_score(module_scores, weights)
 
     # Apply regime overlays

@@ -20,7 +20,14 @@ import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
-from analysis.confluence import generate_signals, get_last_signal_timestamp, get_latest_signals
+from analysis.confluence import (
+    generate_signals,
+    get_last_signal_timestamp,
+    get_latest_signals,
+    get_learned_weights,
+    get_weight_history,
+    maybe_update_weights,
+)
 from analysis.correlations import (
     build_correlation_matrix,
     compute_all_pairs,
@@ -57,6 +64,8 @@ from output.briefing import (
     should_send_alert,
 )
 from output.signals import (
+    accuracy_by_asset_class,
+    accuracy_by_confluence_band,
     accuracy_by_indicator,
     accuracy_by_regime,
     accuracy_by_signal_type,
@@ -1369,6 +1378,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                         f"P&L: {pnl:+.4f} pts  ({result['pnl_pct']:+.2f}%)  "
                         f"over {result['holding_days']} day(s)."
                     )
+                    updated = maybe_update_weights(_load_config())
+                    if updated:
+                        st.info("System Learning: indicator weights recalculated from trade history.")
                     st.rerun()
 
 
@@ -1713,6 +1725,229 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
             ct_styler = ct_styler.map(_style_acct_col, subset=["Account"])
         st.dataframe(ct_styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(ct_rows))
+
+    # ---- System Learning ---------------------------------------------------
+    _render_learning_dashboard(config)
+
+
+def _render_learning_dashboard(config: dict) -> None:
+    """Learning dashboard: indicator accuracy, weight evolution, and diagnostics."""
+    if not config.get("learning", {}).get("enabled", True):
+        return
+
+    st.divider()
+
+    with st.expander("🧠 System Learning", expanded=False):
+        learning_cfg  = config.get("learning", {})
+        min_trades    = learning_cfg.get("min_trades_before_adjustment", 20)
+        freq          = learning_cfg.get("weight_update_frequency", 10)
+
+        # Count all closed trades (unfiltered — learning uses the full history)
+        from output.performance import get_closed_trades as _get_all_closed
+        all_closed = _get_all_closed()
+        n_closed   = len(all_closed)
+
+        # Status banner
+        learned = get_learned_weights()
+        if learned is None:
+            needed = min_trades - n_closed
+            st.info(
+                f"Collecting data — {n_closed} / {min_trades} closed trades needed "
+                f"before the first weight adjustment. {max(0, needed)} more to go."
+            )
+            st.caption(
+                "Until then, signals use the default regime-based weights. "
+                "Close more practice trades to build the accuracy dataset."
+            )
+            return
+
+        n_learned = learned["n_trades"]
+        next_update_at = min_trades + (((n_closed - min_trades) // freq) + 1) * freq
+        trades_until_next = max(0, next_update_at - n_closed)
+
+        st.success(
+            f"Active — weights last recalculated at {n_learned} closed trades. "
+            f"Next recalculation in {trades_until_next} trade(s) "
+            f"(at {next_update_at} total)."
+        )
+
+        # ── Weight comparison table ──────────────────────────────────────────
+        st.markdown("#### Current Indicator Weights")
+        st.caption(
+            "Accuracy-derived weights blend 40 % with regime-specific weights at signal generation. "
+            "Equal base = 1/6 per module."
+        )
+
+        lw   = learned["weights"]
+        wr   = learned.get("win_rates", {})
+        base = 1.0 / 6
+        _MODULE_LABELS = {
+            "trend":          "Trend",
+            "mean_reversion": "Mean Reversion",
+            "volatility":     "Volatility",
+            "volume":         "Volume",
+            "macro":          "Macro",
+            "correlation":    "Correlation",
+        }
+
+        wt_rows = []
+        for key, label in _MODULE_LABELS.items():
+            learned_pct = lw.get(key, base)
+            win_rate    = wr.get(key)
+            wt_rows.append({
+                "Indicator": label,
+                "Equal Base": base,
+                "Accuracy Weight": learned_pct,
+                "Delta": learned_pct - base,
+                "Win Rate": win_rate if win_rate is not None else float("nan"),
+            })
+
+        wt_df = pd.DataFrame(wt_rows)
+
+        def _style_delta(val):
+            if not isinstance(val, float) or pd.isna(val):
+                return ""
+            if val > 0.005:  return f"color:{_PNL_GREEN};font-weight:bold"
+            if val < -0.005: return f"color:{_PNL_RED};font-weight:bold"
+            return ""
+
+        def _style_wr(val):
+            if not isinstance(val, float) or pd.isna(val):
+                return ""
+            if val >= 0.6:  return f"color:{_PNL_GREEN};font-weight:bold"
+            if val <= 0.4:  return f"color:{_PNL_RED};font-weight:bold"
+            return ""
+
+        wt_styler = (
+            wt_df.style
+            .map(_style_delta, subset=["Delta"])
+            .map(_style_wr,    subset=["Win Rate"])
+            .format({
+                "Equal Base":       "{:.1%}",
+                "Accuracy Weight":  "{:.1%}",
+                "Delta":            "{:+.1%}",
+                "Win Rate":         lambda v: f"{v:.0%}" if isinstance(v, float) and not pd.isna(v) else "—",
+            })
+        )
+        st.dataframe(wt_styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(wt_df))
+
+        st.divider()
+
+        # ── Confluence band and asset class breakdowns ───────────────────────
+        band_df  = accuracy_by_confluence_band(all_closed)
+        ticker_to_group = {
+            entry["ticker"]: group_key
+            for group_key, group_entries in config.get("watchlist", {}).items()
+            for entry in group_entries
+        }
+        class_df = accuracy_by_asset_class(all_closed, ticker_to_group)
+
+        if not band_df.empty or not class_df.empty:
+            bl1, bl2 = st.columns(2)
+
+            if not band_df.empty:
+                with bl1:
+                    st.markdown("#### Win Rate by Signal Strength")
+                    fig_band = go.Figure(go.Bar(
+                        x=band_df["Band"],
+                        y=band_df["Win Rate"] * 100,
+                        marker_color=[_pnl_colour(r - 0.5) for r in band_df["Win Rate"]],
+                        text=[f"{r:.0%}" for r in band_df["Win Rate"]],
+                        textposition="outside",
+                    ))
+                    fig_band.add_hline(y=50, line_dash="dot", line_color="grey", line_width=1)
+                    fig_band.update_layout(
+                        template="plotly_dark", height=280,
+                        margin=dict(l=10, r=10, t=10, b=50),
+                        yaxis=dict(title="Win Rate (%)", range=[0, 115]),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_band, use_container_width=True)
+
+            if not class_df.empty:
+                with bl2:
+                    st.markdown("#### Win Rate by Asset Class")
+                    fig_cls = go.Figure(go.Bar(
+                        x=class_df["Asset Class"],
+                        y=class_df["Win Rate"] * 100,
+                        marker_color=[_pnl_colour(r - 0.5) for r in class_df["Win Rate"]],
+                        text=[f"{r:.0%}" for r in class_df["Win Rate"]],
+                        textposition="outside",
+                    ))
+                    fig_cls.add_hline(y=50, line_dash="dot", line_color="grey", line_width=1)
+                    fig_cls.update_layout(
+                        template="plotly_dark", height=280,
+                        margin=dict(l=10, r=10, t=10, b=80),
+                        yaxis=dict(title="Win Rate (%)", range=[0, 115]),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_cls, use_container_width=True)
+
+            st.divider()
+
+        # ── Weight evolution timeline ────────────────────────────────────────
+        history = get_weight_history()
+        if len(history) >= 2:
+            st.markdown("#### Weight Evolution")
+            hist_rows = []
+            for snap in history:
+                row = {"Trades": snap["n_trades"]}
+                for key, label in _MODULE_LABELS.items():
+                    row[label] = snap["weights"].get(key, base)
+                hist_rows.append(row)
+            hist_df = pd.DataFrame(hist_rows)
+
+            fig_hist = go.Figure()
+            _HIST_COLOURS = ["#60a5fa", "#34d399", "#f59e0b", "#f87171", "#a78bfa", "#94a3b8"]
+            for i, (key, label) in enumerate(_MODULE_LABELS.items()):
+                if label in hist_df.columns:
+                    fig_hist.add_trace(go.Scatter(
+                        x=hist_df["Trades"], y=hist_df[label] * 100,
+                        mode="lines+markers", name=label,
+                        line=dict(color=_HIST_COLOURS[i % len(_HIST_COLOURS)]),
+                    ))
+            fig_hist.add_hline(y=base * 100, line_dash="dot", line_color="grey",
+                               line_width=1, annotation_text="Equal base")
+            fig_hist.update_layout(
+                template="plotly_dark", height=300,
+                margin=dict(l=10, r=10, t=10, b=40),
+                xaxis=dict(title="Closed Trades"),
+                yaxis=dict(title="Weight (%)"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+            st.divider()
+
+        # ── Plain-English summary ────────────────────────────────────────────
+        st.markdown("#### Summary")
+        summary_lines = []
+        sorted_mods = sorted(
+            [(k, lw.get(k, base), wr.get(k)) for k in _MODULE_LABELS],
+            key=lambda x: x[1], reverse=True
+        )
+        top_k, top_w, top_wr = sorted_mods[0]
+        bot_k, bot_w, bot_wr = sorted_mods[-1]
+
+        top_label = _MODULE_LABELS[top_k]
+        bot_label = _MODULE_LABELS[bot_k]
+
+        if top_wr is not None and top_wr != 0.5:
+            summary_lines.append(
+                f"**{top_label}** has the highest accuracy "
+                f"({top_wr:.0%} win rate) and receives the most weight ({top_w:.1%})."
+            )
+        if bot_wr is not None and bot_wr != 0.5:
+            summary_lines.append(
+                f"**{bot_label}** has the lowest accuracy "
+                f"({bot_wr:.0%} win rate) and has been downweighted to {bot_w:.1%}."
+            )
+        summary_lines.append(
+            f"Weights blend 40% accuracy-derived with 60% regime-based at signal generation. "
+            f"Next recalculation after {trades_until_next} more closed trade(s)."
+        )
+        for line in summary_lines:
+            st.markdown(f"- {line}")
 
 
 # ---------------------------------------------------------------------------
