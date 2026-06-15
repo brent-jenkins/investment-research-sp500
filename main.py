@@ -1602,18 +1602,21 @@ def _initialise() -> None:
         except Exception as exc:
             logger.warning("Scheduler could not start: %s", exc)
 
-        # On first page load, if price data exists, automatically run analysis
-        # and generate signals so the dashboard is immediately ready after a
-        # deployment or service restart without any manual steps.
+        # On first page load, run analysis only if data exists and the last run
+        # was more than 60 minutes ago — avoids blocking page loads when the
+        # scheduler has already kept things current.
         if _has_price_data():
             try:
-                _cfg = _load_config()
-                _tickers = get_all_tickers(_cfg)
-                run_analysis(tickers=_tickers, config=_cfg)
-                generate_signals(tickers=_tickers, config=_cfg)
-                ts = datetime.utcnow().strftime("%H:%M UTC")
-                st.session_state["_startup_msg"] = ("ok", f"Analysis updated on startup — {ts}")
-                logger.info("Startup analysis complete.")
+                last_run = get_metadata("last_analysis_run")
+                stale = last_run is None or (datetime.utcnow() - last_run).total_seconds() > 3600
+                if stale:
+                    _cfg = _load_config()
+                    _tickers = get_all_tickers(_cfg)
+                    run_analysis(tickers=_tickers, config=_cfg)
+                    generate_signals(tickers=_tickers, config=_cfg)
+                    ts = datetime.utcnow().strftime("%H:%M UTC")
+                    st.session_state["_startup_msg"] = ("ok", f"Analysis updated on startup — {ts}")
+                    logger.info("Startup analysis complete.")
             except Exception as exc:
                 logger.warning("Startup analysis failed: %s", exc)
                 st.session_state["_startup_msg"] = ("err", f"Startup analysis failed: {exc}")
