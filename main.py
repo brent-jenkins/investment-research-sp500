@@ -1045,7 +1045,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             entry     = float(t.get("entry_price") or 0)
             direction = t.get("direction", "LONG")
             entry_dt  = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
-            days_held = int((pd.Timestamp.utcnow() - entry_dt).days) if entry_dt else None
+            days_held = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else None
 
             if live and entry:
                 mult       = 1 if direction == "LONG" else -1
@@ -2058,14 +2058,22 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     }
     macro_stress_active = "MACRO_STRESS" in active_overlays
 
-    long_picks = [
-        s for s in all_signals
-        if s.get("signal") in ("BUY", "STRONG_BUY") and (s.get("confluence_score") or 0) > 0
-    ][:3]
-    short_picks = [
-        s for s in reversed(all_signals)
-        if s.get("signal") in ("SELL", "STRONG_SELL") and (s.get("confluence_score") or 0) < 0
-    ][:3]
+    _BRIEF_MODULE_KEYS = [
+        "trend_score", "mean_reversion_score", "volatility_score",
+        "volume_score", "macro_score",
+    ]
+
+    def _brief_qualifies(s: dict, direction: int) -> bool:
+        score = s.get("confluence_score") or 0.0
+        if direction == 1 and score < 0.5:
+            return False
+        if direction == -1 and score > -0.5:
+            return False
+        agreeing = sum(1 for k in _BRIEF_MODULE_KEYS if (s.get(k) or 0) == direction)
+        return agreeing >= 3
+
+    long_picks  = [s for s in all_signals           if _brief_qualifies(s,  1)][:3]
+    short_picks = [s for s in reversed(all_signals) if _brief_qualifies(s, -1)][:3]
 
     def _brief_rationale(sig: dict, direction: int) -> str:
         _labels = {
