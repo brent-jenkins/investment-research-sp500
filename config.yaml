@@ -3,145 +3,193 @@ watchlist:
     - ticker: "^GSPC"
       name: "S&P 500"
       exchange: "NYSE"
+      tradeable: false
     - ticker: "^IXIC"
       name: "NASDAQ Composite"
       exchange: "NYSE"
+      tradeable: false
     - ticker: "^FTSE"
       name: "FTSE 100"
       exchange: "LSE"
+      tradeable: false
     - ticker: "^GDAXI"
       name: "DAX"
       exchange: "XETR"
+      tradeable: false
 
   sector_etfs:
     - ticker: "XLE"
       name: "Energy Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLF"
       name: "Financial Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLK"
       name: "Technology Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLV"
       name: "Health Care Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLI"
       name: "Industrial Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLP"
       name: "Consumer Staples Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLY"
       name: "Consumer Discretionary Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLU"
       name: "Utilities Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLRE"
       name: "Real Estate Select Sector"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "XLB"
       name: "Materials Select Sector"
       exchange: "NYSE"
+      tradeable: true
 
   energy:
     - ticker: "USO"
       name: "United States Oil Fund"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "BNO"
       name: "United States Brent Oil Fund"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "UNG"
       name: "United States Natural Gas Fund"
       exchange: "NYSE"
+      tradeable: true
 
   commodities:
     - ticker: "GLD"
       name: "SPDR Gold Shares"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "GDX"
       name: "VanEck Gold Miners ETF"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "SLV"
       name: "iShares Silver Trust"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "CORN"
       name: "Teucrium Corn Fund"
       exchange: "NYSE"
+      tradeable: false
     - ticker: "CPER"
       name: "United States Copper Index Fund"
       exchange: "NYSE"
+      tradeable: false
     - ticker: "PDBC"
       name: "Invesco Optimum Yield Diversified Commodity Strategy"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "DBA"
       name: "Invesco DB Agriculture Fund"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "WEAT"
       name: "Teucrium Wheat Fund"
       exchange: "NYSE"
+      tradeable: false
 
   bonds:
     - ticker: "TLT"
       name: "iShares 20+ Year Treasury Bond"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "IEF"
       name: "iShares 7-10 Year Treasury Bond"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "SHY"
       name: "iShares 1-3 Year Treasury Bond"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "TIP"
       name: "iShares TIPS Bond ETF"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "HYG"
       name: "iShares iBoxx High Yield Corporate Bond"
       exchange: "NYSE"
+      tradeable: true
 
   volatility:
     - ticker: "^VIX"
       name: "CBOE Volatility Index"
       exchange: "NYSE"
+      tradeable: false
 
   international:
     - ticker: "^N225"
       name: "Nikkei 225"
       exchange: "TSE"
+      tradeable: false
     - ticker: "^STOXX50E"
       name: "Euro Stoxx 50"
       exchange: "EUREX"
+      tradeable: false
     - ticker: "^HSI"
       name: "Hang Seng Index"
       exchange: "HKEX"
+      tradeable: false
     - ticker: "EEM"
       name: "iShares MSCI Emerging Markets ETF"
       exchange: "NYSE"
+      tradeable: true
 
   forex:
     - ticker: "UUP"
       name: "Invesco DB US Dollar Index Bullish Fund"
       exchange: "NYSE"
+      tradeable: true
     - ticker: "EURUSD=X"
       name: "EUR/USD"
       exchange: "FX"
+      tradeable: true
+      trading212_instrument: "EUR/USD"
     - ticker: "GBPUSD=X"
       name: "GBP/USD"
       exchange: "FX"
+      tradeable: true
+      trading212_instrument: "GBP/USD"
     - ticker: "USDJPY=X"
       name: "USD/JPY"
       exchange: "FX"
+      tradeable: true
+      trading212_instrument: "USD/JPY"
     - ticker: "AUDUSD=X"
       name: "AUD/USD"
       exchange: "FX"
+      tradeable: true
+      trading212_instrument: "AUD/USD"
 
   crypto:
     - ticker: "BTC-USD"
       name: "Bitcoin"
       exchange: "Crypto"
+      tradeable: true
+      trading212_instrument: "BTC/USD"
     - ticker: "ETH-USD"
       name: "Ethereum"
       exchange: "Crypto"
+      tradeable: true
+      trading212_instrument: "ETH/USD"
 
 data:
   # How many calendar days of history to fetch on initial load
@@ -194,6 +242,48 @@ macro:
   # Leave blank to skip yield curve scoring (VIX scoring still works without it)
   fred_api_key: ""
 
+  # FRED series pulled on each EOD scheduler run and stored in macro_indicators table.
+  # Each entry: label (display name), category (groups the UI), and optional thresholds.
+  # Remove or comment-out a series to stop pulling it; add a new series_id key to include it.
+  fred_series:
+    DFII10:
+      label: "10Y Real Yield (TIPS)"
+      category: "real_yields"
+    T10YIE:
+      label: "10Y Breakeven Inflation"
+      category: "real_yields"
+    BAMLH0A0HYM2:
+      label: "High Yield OAS"
+      category: "credit_spreads"
+      # Values in % (1.0 = 100 bps). Stress flags fire if current value exceeds threshold
+      # or rises more than the jump threshold within 30 days.
+      stress_threshold_pct: 5.0    # 500 bps
+      stress_30d_jump_pct:  1.0    # 100 bps
+    BAMLC0A0CM:
+      label: "Investment Grade OAS"
+      category: "credit_spreads"
+    M2SL:
+      label: "M2 Money Supply"
+      category: "liquidity"
+    DPCREDIT:
+      label: "Fed Discount Window"
+      category: "liquidity"
+    T10Y2Y:
+      label: "10Y-2Y Yield Spread"
+      category: "yield_curve"
+    T10Y3M:
+      label: "10Y-3M Yield Spread"
+      category: "yield_curve"
+    USALOLITONOSTSAM:
+      label: "OECD US Leading Indicator"
+      category: "leading_indicators"
+    DTWEXBGS:
+      label: "Trade Weighted Dollar (Broad)"
+      category: "dollar"
+    BOGMBASE:
+      label: "Monetary Base"
+      category: "liquidity"
+
 confluence:
   # Minimum number of signals that must agree for a BUY/SELL call
   min_signals_required: 3
@@ -224,9 +314,9 @@ notifications:
     enabled: false
     smtp_host: "smtp-relay.brevo.com"
     smtp_port: 587
-    smtp_user: ""          # Brevo account email or API login
-    smtp_password: ""      # Brevo SMTP key (not the account password)
-    from_address: ""       # Sender address shown in the email
+    smtp_user: "your-smtp-login@example.com"
+    smtp_password: ""
+    from_address: "hello@example.com"
     to_addresses:          # List of recipient addresses
-      - ""
+      - "you@example.com"
     alert_cooldown_hours: 8  # Minimum hours between auto-sent alert emails

@@ -94,6 +94,26 @@ def _build_watchlist(config: dict) -> dict[str, str]:
     return items
 
 
+def _build_tradeable_set(config: dict) -> set[str]:
+    """Return the set of tickers marked tradeable: true in config (default true if absent)."""
+    return {
+        entry["ticker"]
+        for group in config["watchlist"].values()
+        for entry in group
+        if entry.get("tradeable", True)
+    }
+
+
+def _build_t212_names(config: dict) -> dict[str, str]:
+    """Return {ticker: trading212_instrument} for assets where the T212 name differs."""
+    return {
+        entry["ticker"]: entry["trading212_instrument"]
+        for group in config["watchlist"].values()
+        for entry in group
+        if "trading212_instrument" in entry
+    }
+
+
 @st.cache_data(ttl=300)
 def _cached_latest_price(ticker: str) -> float | None:
     """Live price from yfinance, cached for 5 minutes to limit API calls."""
@@ -482,7 +502,7 @@ _SIGNAL_CSS: dict[str, str] = {
 _SCORE_SYMBOL: dict[int, str] = {1: "▲", 0: "●", -1: "▼"}
 
 
-def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
+def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str]) -> None:
     """Render the Signals page: regime card, generate button, ranked table."""
 
     st.markdown("## 📊 Market Signals")
@@ -860,6 +880,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
             "Volatility": _sym(r.get("volatility_score")),
             "Volume":     _sym(r.get("volume_score")),
             "Macro":      _sym(r.get("macro_score")),
+            "Type":       "" if ticker in tradeable_set else "Analysis only",
         })
 
     table_df = pd.DataFrame(records)
@@ -883,6 +904,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
         .map(_style_signal, subset=["Signal"])
         .map(_style_score,  subset=["Score"])
         .map(_style_module, subset=module_cols)
+        .map(lambda v: "color:#94a3b8;font-size:0.75rem" if v else "", subset=["Type"])
         .format({"Score": "{:+.3f}"})
     )
     row_height_px = 35
@@ -899,7 +921,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 # Trade Log page
 # ---------------------------------------------------------------------------
 
-def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
+def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
     st.markdown("## 📋 Trade Log")
 
     accounts = config.get("accounts", [])
@@ -931,11 +953,17 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
             unsafe_allow_html=True,
         )
 
-        ticker_keys = list(watchlist.keys())
+        ticker_keys = [t for t in watchlist.keys() if t in tradeable_set]
+
+        def _fmt_trade_ticker(t: str) -> str:
+            base = f"{t} — {watchlist[t]}"
+            t212 = t212_names.get(t)
+            return f"{base}  ·  T212: {t212}" if t212 else base
+
         sel_ticker  = st.selectbox(
             "Asset",
             ticker_keys,
-            format_func=lambda t: f"{t} — {watchlist[t]}",
+            format_func=_fmt_trade_ticker,
             key="log_ticker",
         )
 
@@ -1918,7 +1946,7 @@ def _render_trade_card(e: dict) -> None:
     )
 
 
-def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
+def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
     """Render the Daily Briefing: market overview, open trade monitor, opportunities."""
     st.markdown("## 📅 Daily Briefing")
 
@@ -2239,7 +2267,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("### 🎯 Today's Opportunities")
 
     open_tickers = {t["ticker"] for t in open_trades} if open_trades else set()
-    opps = build_opportunities(all_signals, open_tickers, active_overlays, watchlist)
+    tradeable_signals = [s for s in all_signals if s.get("ticker") in tradeable_set]
+    opps = build_opportunities(tradeable_signals, open_tickers, active_overlays, watchlist)
 
     if not opps:
         st.info("No strong signals outside current positions right now.")
@@ -2296,6 +2325,8 @@ def main() -> None:
 
     config = _load_config()
     watchlist = _build_watchlist(config)
+    tradeable_set = _build_tradeable_set(config)
+    t212_names    = _build_t212_names(config)
 
     # ---- Sidebar -------------------------------------------------------
     with st.sidebar:
@@ -2355,11 +2386,11 @@ def main() -> None:
     page_key = st.session_state.get("page", "briefing")
 
     if page_key == "briefing":
-        _render_briefing_page(config, watchlist)
+        _render_briefing_page(config, watchlist, tradeable_set, t212_names)
         return
 
     if page_key == "signals":
-        _render_signals_page(config, watchlist)
+        _render_signals_page(config, watchlist, tradeable_set)
         return
 
     if page_key == "status":
@@ -2371,7 +2402,7 @@ def main() -> None:
         return
 
     if page_key == "trade_log":
-        _render_trade_log_page(config, watchlist)
+        _render_trade_log_page(config, watchlist, tradeable_set, t212_names)
         return
 
     if page_key == "performance":
