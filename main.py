@@ -150,35 +150,127 @@ _CCY_PAIR_LOOKUP: "dict[tuple[str, str], tuple[str, bool]]" = {
 }
 
 
-@st.cache_data(ttl=300)
-def _cached_fx_rate(instrument_ccy: str, account_ccy: str) -> "float | None":
-    """Fetch the FX conversion rate: 1 account_ccy = ? instrument_ccy.
-
-    Returns None when the pair is unknown or the fetch fails.
-    Callers should show a manual-entry fallback on None.
-    """
-    if instrument_ccy == account_ccy:
-        return 1.0
-    pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
-    if pair_info is None:
-        return None
-    yf_ticker, invert = pair_info
-    try:
-        hist = yf.Ticker(yf_ticker).history(period="5d")
-        if hist.empty:
-            return None
-        close = float(hist["Close"].iloc[-1])
-        return (1.0 / close) if invert else close
-    except Exception:
-        return None
-
-
 def _fx_pair_label(instrument_ccy: str, account_ccy: str) -> str:
-    """Return the canonical pair name used for a currency combo, e.g. 'GBPUSD'."""
+    """Return the canonical pair name for a currency combo, e.g. 'GBPUSD'."""
     if instrument_ccy == account_ccy:
         return ""
     pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
     return pair_info[0].replace("=X", "") if pair_info else ""
+
+
+def _fetch_fx_live(yf_ticker: str) -> "float | None":
+    """Try four methods to get a live close price for *yf_ticker*. Returns None if all fail."""
+    # Method 1: fast_info — fastest, single HTTP call, no DataFrame
+    try:
+        price = yf.Ticker(yf_ticker).fast_info["last_price"]
+        if price and float(price) > 0:
+            return float(price)
+    except Exception:
+        pass
+
+    # Method 2: yf.download 1d (classic API)
+    try:
+        data = yf.download(yf_ticker, period="1d", progress=False, auto_adjust=True)
+        if not data.empty:
+            if hasattr(data.columns, "levels"):
+                data.columns = [col[0] for col in data.columns]
+            val = float(data["Close"].iloc[-1])
+            if val > 0:
+                return val
+    except Exception:
+        pass
+
+    # Method 3: Ticker.history 1d
+    try:
+        hist = yf.Ticker(yf_ticker).history(period="1d")
+        if not hist.empty:
+            val = float(hist["Close"].iloc[-1])
+            if val > 0:
+                return val
+    except Exception:
+        pass
+
+    # Method 4: Ticker.history 5d — picks up weekends/holidays
+    try:
+        hist = yf.Ticker(yf_ticker).history(period="5d")
+        if not hist.empty:
+            val = float(hist["Close"].iloc[-1])
+            if val > 0:
+                return val
+    except Exception:
+        pass
+
+    return None
+
+
+def _get_fx_db_fallback(pair_key: str) -> "tuple[float | None, str | None]":
+    """Read the last persisted rate from system_metadata. Returns (rate, timestamp_str)."""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                sa_text("SELECT value, updated_at FROM system_metadata WHERE key = :k"),
+                {"k": f"last_{pair_key}_rate"},
+            ).fetchone()
+        if row and row[0]:
+            ts = str(row[1])[:16].replace("T", " ") if row[1] else None
+            return float(row[0]), ts
+    except Exception:
+        pass
+    return None, None
+
+
+_FX_SESSION_TTL = 300  # seconds before session-state cache is considered stale
+
+
+def _get_fx_rate(instrument_ccy: str, account_ccy: str) -> "tuple[float | None, str]":
+    """Multi-level FX rate fetch. Returns (rate, source).
+
+    source values:
+      'session'       — in-memory session cache, still fresh (< 5 min)
+      'live'          — freshly fetched from yfinance and cached
+      'db:TIMESTAMP'  — DB fallback used because live fetch failed
+      'unavailable'   — all sources (live + DB) failed
+    """
+    if instrument_ccy == account_ccy:
+        return 1.0, "same_currency"
+
+    pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
+    if pair_info is None:
+        return None, "unsupported"
+
+    yf_ticker, invert = pair_info
+    pair_key   = yf_ticker.replace("=X", "").lower()   # e.g. "gbpusd"
+    sess_key   = f"_fx_{pair_key}"
+    sess_ts    = f"_fx_{pair_key}_ts"
+
+    # ── Level 1: session-state cache ──────────────────────────────────────
+    if sess_key in st.session_state:
+        age = (datetime.utcnow() - st.session_state[sess_ts]).total_seconds()
+        if age < _FX_SESSION_TTL:
+            return st.session_state[sess_key], "session"
+
+    # ── Level 2: live fetch (primary ticker) ──────────────────────────────
+    close = _fetch_fx_live(yf_ticker)
+
+    # ── Level 2b: alternative ticker (GBP=X instead of GBPUSD=X) ─────────
+    if close is None and yf_ticker.endswith("USD=X"):
+        alt_ticker = yf_ticker[:-len("USD=X")] + "=X"   # e.g. "GBP=X"
+        close = _fetch_fx_live(alt_ticker)
+
+    if close is not None and close > 0:
+        rate = (1.0 / close) if invert else close
+        st.session_state[sess_key] = rate
+        st.session_state[sess_ts]  = datetime.utcnow()
+        set_metadata(f"last_{pair_key}_rate", str(rate))
+        return rate, "live"
+
+    # ── Level 3: DB fallback ───────────────────────────────────────────────
+    db_rate, db_ts = _get_fx_db_fallback(pair_key)
+    if db_rate is not None:
+        return db_rate, f"db:{db_ts or 'unknown time'}"
+
+    return None, "unavailable"
 
 
 def _hex_rgba(hx: str, alpha: float) -> str:
@@ -1074,17 +1166,37 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         fx_rate_pair = ""
         if instr_ccy != account_ccy:
             fx_rate_pair = _fx_pair_label(instr_ccy, account_ccy)
-            _fetched = _cached_fx_rate(instr_ccy, account_ccy)
-            if _fetched is not None:
-                fx_rate = _fetched
-                _pair_display = f" ({fx_rate_pair})" if fx_rate_pair else ""
-                st.caption(
-                    f"1 {account_ccy} = {fx_rate:.4f} {instr_ccy}{_pair_display} — live from yfinance"
-                )
+            _pair_key    = fx_rate_pair.lower()  # e.g. "gbpusd"
+
+            # Refresh button must appear BEFORE _get_fx_rate so that clicking it
+            # clears session state before the fetch happens in the same rerun.
+            _fx_info_col, _fx_btn_col = st.columns([5, 1])
+            if _fx_btn_col.button("↻ Rate", key="log_fx_refresh", help="Force a live re-fetch"):
+                st.session_state.pop(f"_fx_{_pair_key}", None)
+                st.session_state.pop(f"_fx_{_pair_key}_ts", None)
+
+            _fetched_rate, _fx_source = _get_fx_rate(instr_ccy, account_ccy)
+
+            if _fetched_rate is not None:
+                fx_rate = _fetched_rate
+                if _fx_source in ("live", "session"):
+                    _src_label = "live" if _fx_source == "live" else "cached <5 min"
+                    _fx_info_col.caption(
+                        f"1 {account_ccy} = **{fx_rate:.4f}** {instr_ccy}"
+                        f" ({fx_rate_pair}) — {_src_label}"
+                    )
+                else:
+                    # DB fallback — still usable but flag it
+                    _db_ts = _fx_source.split(":", 1)[1] if ":" in _fx_source else "unknown"
+                    _fx_info_col.warning(
+                        f"Live rate unavailable — using last saved rate from {_db_ts} UTC: "
+                        f"1 {account_ccy} = {fx_rate:.4f} {instr_ccy} ({fx_rate_pair})"
+                    )
             else:
-                st.warning(
-                    f"FX rate unavailable for {account_ccy}/{instr_ccy} "
-                    f"({fx_rate_pair or 'unknown pair'}) — please enter manually."
+                # All sources failed — manual entry required
+                _fx_info_col.warning(
+                    f"FX rate unavailable for {fx_rate_pair} — all fetch methods failed. "
+                    f"Enter manually."
                 )
                 fx_rate = st.number_input(
                     f"FX Rate (1 {account_ccy} = ? {instr_ccy})",
@@ -1311,14 +1423,14 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         live_prices = {t["ticker"]: _cached_latest_price(t["ticker"])
                        for t in open_trades}
 
-        # Pre-fetch unique FX pairs needed (cached, so no extra API cost for same pair)
+        # Pre-fetch unique FX pairs (session state cache means no redundant API calls)
         _fx_cache: dict[tuple, float] = {}
         for t in open_trades:
             ic = t.get("currency") or "GBP"
             ac = t.get("account_currency") or "GBP"
             if ic != ac and (ic, ac) not in _fx_cache:
-                _fetched_fx = _cached_fx_rate(ic, ac)
-                _fx_cache[(ic, ac)] = _fetched_fx if _fetched_fx is not None else 1.0
+                _live_rate, _ = _get_fx_rate(ic, ac)
+                _fx_cache[(ic, ac)] = _live_rate if _live_rate is not None else 1.0
 
         rows = []
         for t in open_trades:
