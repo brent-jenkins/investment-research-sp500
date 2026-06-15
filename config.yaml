@@ -218,3 +218,15 @@ signals:
   adx_period: 14
   adx_trend_threshold: 25
   volume_avg_period: 20
+
+notifications:
+  email:
+    enabled: false
+    smtp_host: "smtp-relay.brevo.com"
+    smtp_port: 587
+    smtp_user: ""          # Brevo account email or API login
+    smtp_password: ""      # Brevo SMTP key (not the account password)
+    from_address: ""       # Sender address shown in the email
+    to_addresses:          # List of recipient addresses
+      - ""
+    alert_cooldown_hours: 8  # Minimum hours between auto-sent alert emails

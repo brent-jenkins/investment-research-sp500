@@ -45,6 +45,15 @@ from output.performance import (
     get_open_trades,
     log_trade,
 )
+from output.briefing import (
+    STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
+    STATUS_ICONS   as _BRIEF_STATUS_ICONS,
+    build_opportunities,
+    enrich_open_trade,
+    get_macro_context,
+    send_alert_email,
+    should_send_alert,
+)
 from output.signals import (
     accuracy_by_indicator,
     accuracy_by_regime,
@@ -88,6 +97,12 @@ def _build_watchlist(config: dict) -> dict[str, str]:
 def _cached_latest_price(ticker: str) -> float | None:
     """Live price from yfinance, cached for 5 minutes to limit API calls."""
     return get_latest_price(ticker)
+
+
+def _hex_rgba(hx: str, alpha: float) -> str:
+    """Convert a 6-digit hex colour string to a CSS rgba() value."""
+    h = hx.lstrip("#")
+    return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
 
 
 @st.cache_data(ttl=60)
@@ -481,11 +496,6 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 
     if has_overlays or has_catch_ups:
         st.markdown("### Active Intelligence")
-
-        def _hex_rgba(hx: str, alpha: float) -> str:
-            """Convert a 6-digit hex colour to an rgba() string."""
-            h = hx.lstrip("#")
-            return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
 
         # Regime overlay cards
         for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT"):
@@ -1841,6 +1851,284 @@ def _render_charts_landing(config: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Daily Briefing page
+# ---------------------------------------------------------------------------
+
+def _render_trade_card(e: dict) -> None:
+    """Render one enriched open trade as a styled HTML status card."""
+    status  = e.get("status", "ON TRACK")
+    colour  = _BRIEF_STATUS_COLOURS.get(status, "#6b7280")
+    icon    = _BRIEF_STATUS_ICONS.get(status, "")
+    bg      = _hex_rgba(colour, 0.08)
+
+    ticker    = html.escape(str(e.get("ticker",    "")))
+    direction = html.escape(str(e.get("direction", "LONG")))
+    days_held = int(e.get("days_held") or 0)
+    acct_name = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
+
+    unreal_pnl = e.get("unreal_pnl")
+    unreal_pct = e.get("unreal_pct")
+    pnl_str    = (
+        f"{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
+        if unreal_pnl is not None and unreal_pct is not None
+        else "—"
+    )
+    pnl_col = "#16a34a" if (unreal_pnl or 0) >= 0 else "#dc2626"
+
+    entry_sig = html.escape((e.get("entry_signal")   or "—").replace("_", " "))
+    curr_sig  = html.escape((e.get("current_signal") or "—").replace("_", " "))
+    e_score   = float(e.get("entry_score")   or 0)
+    c_score   = float(e.get("current_score") or 0)
+    delta     = c_score - e_score
+    delta_col = "#16a34a" if delta >= 0 else "#f59e0b"
+
+    stop_loss = e.get("stop_loss")
+    atr       = e.get("atr")
+    stop_html = ""
+    if stop_loss is not None:
+        sl_str = f"Stop: {stop_loss:,.4f}"
+        if atr is not None:
+            sl_str += f" (2×ATR {atr:.4f})"
+        stop_html = f"<span style='color:#94a3b8'>{html.escape(sl_str)}</span>"
+
+    st.markdown(
+        f"<div style='border-left:4px solid {colour};padding:12px 16px;"
+        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:10px'>"
+        # Header row
+        f"<div style='display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px'>"
+        f"<span style='background:{colour};color:#fff;padding:2px 9px;"
+        f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
+        f"{icon} {status}</span>"
+        f"<strong style='font-size:1rem'>{ticker}</strong>"
+        f"<span style='color:#94a3b8;font-size:0.85rem'>{direction} · {days_held}d held</span>"
+        f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_str}</span>"
+        f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
+        f"</div>"
+        # Detail row
+        f"<div style='display:flex;gap:24px;flex-wrap:wrap;font-size:0.82rem;color:#cbd5e1'>"
+        f"<span>Signal: {entry_sig} → <strong style='color:#f1f5f9'>{curr_sig}</strong></span>"
+        f"<span>Score: {e_score:+.3f} → {c_score:+.3f} "
+        f"<span style='color:{delta_col}'>(Δ {delta:+.3f})</span></span>"
+        f"{stop_html}"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_briefing_page(config: dict, watchlist: dict[str, str]) -> None:
+    """Render the Daily Briefing: market overview, open trade monitor, opportunities."""
+    st.markdown("## 📅 Daily Briefing")
+
+    last_analysis = get_metadata("last_analysis_run")
+    if last_analysis:
+        st.caption(
+            f"As of: {last_analysis.strftime('%Y-%m-%d %H:%M')} UTC · "
+            f"Updates run automatically at 07:00, 13:30 and 21:30 UTC"
+        )
+    else:
+        st.caption("No analysis run yet — updates run automatically on weekdays.")
+
+    # ── Section 1: Market Overview ──────────────────────────────────────────
+    st.markdown("### 🌍 Market Overview")
+
+    col_regime, col_macro = st.columns([3, 2])
+    with col_regime:
+        regime_result = detect_regime()
+        regime  = regime_result["regime"]
+        colour  = regime_result["colour"]
+        details = regime_result["details"]
+        price   = details.get("price")
+        sma_200 = details.get("sma_200")
+        adx     = details.get("adx")
+        price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
+        adx_str   = f"ADX {adx:.1f}" if adx else ""
+        st.markdown(
+            f'<div style="display:inline-flex;align-items:center;gap:12px;flex-wrap:wrap;'
+            f'background:{colour}18;border:1px solid {colour}44;'
+            f'padding:6px 14px;border-radius:20px;margin-bottom:4px">'
+            f'<span style="color:{colour};font-weight:700">⚡ {regime.replace("_", " ")}</span>'
+            f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>'
+            f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(regime_result["description"])
+
+    with col_macro:
+        ctx    = get_macro_context()
+        vix_v  = ctx.get("vix")
+        vix_col = (
+            "#dc2626" if vix_v and vix_v > 30 else
+            "#f59e0b" if vix_v and vix_v > 20 else
+            "#16a34a"
+        )
+        vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
+        ys  = ctx.get("yield_spread")
+        yr  = (ctx.get("yield_regime") or "—").lower()
+        ys_str = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
+        dp  = ctx.get("dollar_pct")
+        dt  = ctx.get("dollar_trend") or "—"
+        usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
+        st.markdown(
+            f"<div style='font-size:0.85rem;margin-top:10px'>"
+            f"<span style='color:{vix_col};font-weight:600'>{html.escape(vix_str)}</span>"
+            f" &nbsp;·&nbsp; {html.escape(ys_str)} &nbsp;·&nbsp; {html.escape(usd_str)}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Active overlays (compact)
+    overlay_raw     = get_metadata_str("active_overlays") or ""
+    active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
+    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT"):
+        if overlay_key not in active_overlays:
+            continue
+        meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
+        oc    = meta.get("colour", "#6b7280")
+        olabel = html.escape(meta.get("label", overlay_key.replace("_", " ")))
+        obody  = html.escape(meta.get("text", ""))
+        obg    = _hex_rgba(oc, 0.10)
+        st.markdown(
+            f"<div style='border-left:4px solid {oc};padding:8px 14px;"
+            f"background:{obg};border-radius:0 4px 4px 0;margin:6px 0'>"
+            f"<span style='background:{oc};color:#fff;padding:1px 7px;"
+            f"border-radius:3px;font-size:0.68rem;font-weight:800'>OVERLAY</span> "
+            f"<strong style='color:{oc}'>{olabel}</strong>"
+            f"<p style='color:#f1f5f9;font-size:0.82rem;line-height:1.5;margin:4px 0 0 0'>"
+            f"{obody}</p></div>",
+            unsafe_allow_html=True,
+        )
+
+    # Top 3 signals
+    all_signals = get_latest_signals(list(watchlist.keys()))
+    if all_signals:
+        st.markdown(
+            "<div style='margin-top:12px;margin-bottom:6px'><strong>Top 3 Signals Today</strong></div>",
+            unsafe_allow_html=True,
+        )
+        _SIG_C = {
+            "STRONG_BUY":  "#16a34a",
+            "BUY":         "#26a69a",
+            "NEUTRAL":     "#6b7280",
+            "SELL":        "#f59e0b",
+            "STRONG_SELL": "#ef5350",
+        }
+        top3 = all_signals[:3]
+        t3_cols = st.columns(3)
+        for i, sig in enumerate(top3):
+            s_key  = sig.get("signal", "NEUTRAL")
+            score  = sig.get("confluence_score", 0) or 0
+            sc     = _SIG_C.get(s_key, "#6b7280")
+            t3_cols[i].markdown(
+                f"<div style='background:{sc}22;border:1px solid {sc}44;"
+                f"padding:8px 12px;border-radius:6px;text-align:center'>"
+                f"<div style='font-weight:700;color:{sc}'>{html.escape(sig['ticker'])}</div>"
+                f"<div style='color:{sc};font-size:0.78rem'>{s_key.replace('_',' ')}</div>"
+                f"<div style='color:#cbd5e1;font-size:0.75rem'>{score:+.3f}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # Catch-up opportunities
+    catch_ups = get_active_opportunity_flags()
+    if catch_ups:
+        n = len(catch_ups)
+        st.markdown(
+            f"<div style='margin-top:10px'><strong>"
+            f"{n} catch-up opportunit{'y' if n == 1 else 'ies'} detected"
+            f"</strong></div>",
+            unsafe_allow_html=True,
+        )
+        for flag in catch_ups:
+            td = html.escape(flag.get("ticker", ""))
+            dd = html.escape(flag.get("description", ""))
+            sd = html.escape(flag.get("flag_source", ""))
+            z  = flag.get("z_score")
+            zs = f"z={z:.2f}" if z is not None else ""
+            st.caption(f"• **{td}** — {dd} *({sd} {zs})*")
+
+    st.divider()
+
+    # ── Section 2: Open Trade Monitor ──────────────────────────────────────
+    st.markdown("### 👀 Open Trade Monitor")
+
+    open_trades = get_open_trades()
+
+    if not open_trades:
+        st.info("No open trades. Log a trade on the **Trade Log** page.")
+    else:
+        tickers_needed = list({t["ticker"] for t in open_trades})
+        live_prices    = {t: _cached_latest_price(t) for t in tickers_needed}
+
+        enriched = [enrich_open_trade(t, live_prices.get(t["ticker"])) for t in open_trades]
+        enriched.sort(key=lambda x: x.get("status_priority", 0), reverse=True)
+
+        alerts = [e for e in enriched if e["status"] in ("EXIT SIGNAL", "STOP LOSS")]
+        if alerts and should_send_alert(config):
+            ok, msg = send_alert_email(alerts, config)
+            if ok:
+                st.toast(f"Alert email sent: {msg}", icon="📧")
+
+        for e in enriched:
+            _render_trade_card(e)
+
+        if alerts:
+            notif_enabled = config.get("notifications", {}).get("email", {}).get("enabled", False)
+            if notif_enabled:
+                if st.button("📧 Send Alert Email Now", key="brief_send_email", type="primary"):
+                    ok, msg = send_alert_email(alerts, config)
+                    st.success(msg) if ok else st.error(msg)
+            else:
+                n = len(alerts)
+                st.caption(
+                    f"💡 {n} position{'s require' if n > 1 else ' requires'} attention. "
+                    f"Enable email alerts in config.yaml to receive notifications."
+                )
+
+    st.divider()
+
+    # ── Section 3: Today's Opportunities ───────────────────────────────────
+    st.markdown("### 🎯 Today's Opportunities")
+
+    open_tickers = {t["ticker"] for t in open_trades} if open_trades else set()
+    opps = build_opportunities(all_signals, open_tickers, active_overlays, watchlist)
+
+    if not opps:
+        st.info("No strong signals outside current positions right now.")
+    else:
+        def _mod_str(o: dict) -> str:
+            def _s(v: int) -> str:
+                return "+" if v > 0 else ("-" if v < 0 else "·")
+            return (
+                f"T{_s(o['trend'])} MR{_s(o['mean_rev'])} "
+                f"V{_s(o['volatility'])} Vol{_s(o['volume'])} M{_s(o['macro'])}"
+            )
+
+        opp_rows = [
+            {
+                "Ticker":  o["ticker"],
+                "Name":    o["name"],
+                "Signal":  o["signal"].replace("_", " "),
+                "Score":   o["score"],
+                "Modules": _mod_str(o),
+                "Note":    o["overlay_note"] or "",
+            }
+            for o in opps
+        ]
+        opp_df = pd.DataFrame(opp_rows)
+
+        def _style_opp_sig(val: str) -> str:
+            if "STRONG BUY"  in val: return "color:#16a34a;font-weight:bold"
+            if "STRONG SELL" in val: return "color:#ef5350;font-weight:bold"
+            return ""
+
+        styler = opp_df.style.map(_style_opp_sig, subset=["Signal"]).format({"Score": "{:+.3f}"})
+        st.dataframe(styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(opp_rows))
+
+
 # Main UI
 # ---------------------------------------------------------------------------
 
@@ -1869,8 +2157,9 @@ def main() -> None:
         st.divider()
 
         # Page navigation
-        _PAGES = ["📊 Signals", "📈 Charts", "🔗 Relationships", "📋 Trade Log", "🏆 Performance", "🖥️ Status"]
+        _PAGES = ["📅 Daily Briefing", "📊 Signals", "📈 Charts", "🔗 Relationships", "📋 Trade Log", "🏆 Performance", "🖥️ Status"]
         _PAGE_KEYS = {
+            "📅 Daily Briefing": "briefing",
             "📊 Signals":       "signals",
             "📈 Charts":        "charts",
             "🔗 Relationships": "relationships",
@@ -1878,7 +2167,7 @@ def main() -> None:
             "🏆 Performance":   "performance",
             "🖥️ Status":        "status",
         }
-        current_key = st.session_state.get("page", "signals")
+        current_key = st.session_state.get("page", "briefing")
         default_idx = next(
             (i for i, k in enumerate(_PAGE_KEYS.values()) if k == current_key), 0
         )
@@ -1917,7 +2206,11 @@ def main() -> None:
 
 
     # ---- Main content --------------------------------------------------
-    page_key = st.session_state.get("page", "signals")
+    page_key = st.session_state.get("page", "briefing")
+
+    if page_key == "briefing":
+        _render_briefing_page(config, watchlist)
+        return
 
     if page_key == "signals":
         _render_signals_page(config, watchlist)
