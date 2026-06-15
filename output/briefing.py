@@ -1,6 +1,7 @@
 """Daily briefing: trade status computation, macro context, opportunities, email alerts."""
 
 import logging
+import os
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -48,7 +49,10 @@ _STATUS_PRIORITY: dict[str, int] = {
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
     with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    if pw := os.environ.get("SMTP_PASSWORD"):
+        cfg.setdefault("notifications", {}).setdefault("email", {})["smtp_password"] = pw
+    return cfg
 
 
 def get_macro_context() -> dict:

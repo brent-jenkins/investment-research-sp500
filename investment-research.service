@@ -21,6 +21,10 @@ StartLimitBurst=5
 # Environment
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=/root
+# Secrets — set real values in /etc/systemd/system/investment-research.service.d/secrets.conf
+# or override these lines directly after running setup.sh, then: systemctl daemon-reload && systemctl restart investment-research
+Environment=FRED_API_KEY=
+Environment=SMTP_PASSWORD=
 
 # Logging: send stdout/stderr to the systemd journal
 # View with: journalctl -u investment-research -f

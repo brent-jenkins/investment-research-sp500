@@ -42,10 +42,9 @@ database/*.db-wal
 .streamlit/config.toml
 .streamlit/secrets.toml
 
-# Server-specific config files — contain API keys / bcrypt hashes / server IP.
+# Server-specific config files — contain bcrypt hashes / server IP.
 # Edit these directly on the server; do not commit them.
 Caddyfile
-config.yaml
 get-pip.py
 
 # SSH private keys

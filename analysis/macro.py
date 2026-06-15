@@ -5,6 +5,7 @@ per-ticker analysis loops.
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -27,7 +28,10 @@ _MACRO_TICKERS = frozenset({"^VIX", "TLT", "IEF", "HYG"})
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
     with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    if key := os.environ.get("FRED_API_KEY"):
+        cfg.setdefault("macro", {})["fred_api_key"] = key
+    return cfg
 
 
 # ---------------------------------------------------------------------------

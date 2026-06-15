@@ -1,5 +1,6 @@
 """Investment Research Dashboard — Streamlit entry point."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -79,10 +80,15 @@ init_db()
 
 @st.cache_data(ttl=0)
 def _load_config() -> dict:
-    """Load config.yaml (cached for the session, invalidated on refresh)."""
+    """Load config.yaml, with secrets overridable via environment variables."""
     config_path = _ROOT / "config.yaml"
     with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    if key := os.environ.get("FRED_API_KEY"):
+        cfg.setdefault("macro", {})["fred_api_key"] = key
+    if pw := os.environ.get("SMTP_PASSWORD"):
+        cfg.setdefault("notifications", {}).setdefault("email", {})["smtp_password"] = pw
+    return cfg
 
 
 def _build_watchlist(config: dict) -> dict[str, str]:

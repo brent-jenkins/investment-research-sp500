@@ -239,7 +239,7 @@ accounts:
 
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html
-  # Leave blank to skip yield curve scoring (VIX scoring still works without it)
+  # Set via FRED_API_KEY env var (preferred) or leave blank to skip yield-curve scoring.
   fred_api_key: ""
 
   # FRED series pulled on each EOD scheduler run and stored in macro_indicators table.
@@ -315,7 +315,7 @@ notifications:
     smtp_host: "smtp-relay.brevo.com"
     smtp_port: 587
     smtp_user: "your-smtp-login@example.com"
-    smtp_password: ""
+    smtp_password: ""  # Set via SMTP_PASSWORD env var
     from_address: "hello@example.com"
     to_addresses:          # List of recipient addresses
       - "you@example.com"
