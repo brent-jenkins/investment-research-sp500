@@ -32,10 +32,11 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
                               ├── analysis/mean_reversion.py
                               ├── analysis/volatility.py
                               ├── analysis/volume.py
-                              └── analysis/macro.py  (FRED + VIX from DB)
+                              ├── analysis/macro.py  (FRED + VIX from DB)
+                              └── analysis/correlations.py:compute_all_pairs()
                                           │
                                           ▼
-                                   indicators table
+                              indicators table + correlations table
                                           │
                                           ▼
                               analysis/regime.py:detect_regime()
@@ -43,7 +44,7 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
                                           │
                                           ▼
                               analysis/confluence.py:generate_signals()
-                              (regime-weighted dot product per ticker)
+                              (regime-weighted dot product per ticker, 7 modules)
                                           │
                                           ▼
                                     signals table
@@ -51,9 +52,10 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has five pages toggled via a sidebar radio button (default: **Signals**):
+The app has six pages toggled via a sidebar radio button (default: **Signals**):
 - **Signals** — regime card, ranked table of all assets by confluence score, Generate Signals button
 - **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
+- **Relationships** — 30-day correlation matrix heatmap for all 14 tracked cross-asset tickers, pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), plain-English divergence narratives; "↻ Recompute Now" triggers `compute_all_pairs()` on demand
 - **Trade Log** — log new eToro trades (auto-populates current signal), open-position tracker with live prices and unrealised P&L, close-trade form
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
 - **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run)
@@ -85,10 +87,35 @@ Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the five a
 ### Confluence scoring
 
 `analysis/confluence.py:generate_signals()` calls `score_ticker()` for each asset, which:
-1. Calls all five `compute_*` functions fresh from stored price data
+1. Calls all seven `compute_*` functions fresh from stored price data
 2. Computes `weighted_score = Σ(module_score × regime_weight)` ∈ [-1, 1]
 3. Classifies as `STRONG_BUY` (≥0.6), `BUY` (≥0.3), `NEUTRAL`, `SELL` (≤-0.3), `STRONG_SELL` (≤-0.6)
 4. Upserts to the `signals` table keyed on `(ticker, today's date)`
+
+The seventh module is `compute_correlations(ticker, config)` from `analysis/correlations.py`. It finds all predefined pairs involving the ticker, checks if the current rolling correlation matches the expected direction (CONFIRMING/DIVERGING/NEUTRAL), and returns a score of -1/0/1. Most watchlist tickers appear in zero or one pair and receive score=0; tickers like `^GSPC`, `GLD`, and `^VIX` appear in multiple pairs and receive a blended score.
+
+### Cross-asset correlation module
+
+`analysis/correlations.py` defines a `RELATIONSHIP_MAP` of 10 predefined pairs with expected correlation direction (+1 positive, -1 inverse):
+
+| Pair | Expected | Rationale |
+|------|----------|-----------|
+| GLD vs UUP | inverse | Gold rises when dollar falls |
+| USO vs XLE | positive | Oil price leads energy stocks |
+| CPER vs ^GSPC | positive | Copper leads economic growth |
+| HYG vs ^GSPC | positive | Credit stress precedes equity stress |
+| ^VIX vs ^GSPC | inverse | Volatility spikes when market falls |
+| TLT vs ^GSPC | inverse | Flight to safety in risk-off |
+| GBPUSD=X vs ^FTSE | inverse | Strong pound hurts FTSE exporters |
+| EURUSD=X vs ^GSPC | positive | Dollar strength affects multinationals |
+| BTC-USD vs ^GSPC | positive | Risk-on correlation |
+| SLV vs GLD | positive | Silver follows gold with higher beta |
+
+Per pair, the module computes: 30-day rolling correlation, 90-day rolling correlation, historical mean/std of the 30d rolling series, z-score, and a CONFIRMING/DIVERGING/NEUTRAL status. DIVERGING requires both a sign mismatch (current vs expected) AND z-score ≥ 1.5. CONFIRMING requires a sign match AND z-score ≤ 1.0.
+
+`compute_all_pairs(config)` is called once at the end of `run_analysis()` (not per-ticker) and upserts results to the `correlations` table (`ticker_a, ticker_b, date` unique constraint).
+
+`build_correlation_matrix(window=30)` returns a square pandas DataFrame of pairwise correlations across all 14 tickers involved in any pair — used to render the Plotly heatmap on the Relationships page.
 
 The regime string is stored in both the `regime` column and the legacy `notes` column of the signals table. `get_latest_signals()` returns rows sorted by `confluence_score` descending.
 
@@ -212,9 +239,13 @@ systemctl reload caddy                 # apply Caddyfile changes without downtim
 
 1. Create `analysis/your_module.py` with a `compute_your_module(df, config) -> dict` returning `{"score": int, ...raw_values}`.
 2. Call it in `analysis/engine.py:analyse_ticker()` and merge its raw values into `indicator_values`.
-3. Call it in `analysis/confluence.py:generate_signal()` and include its score in the `scores` list.
-4. Add any new raw-value columns to the `Indicator` model in `data/database.py` and to the `new_columns` list in `_apply_migrations()`.
-5. Update `total_signal_modules` in `config.yaml`.
+3. Call it in `analysis/confluence.py:score_ticker()` and add its score to `module_scores`.
+4. Add `"your_module"` with a weight to every regime dict in `analysis/regime.py:REGIME_WEIGHTS` — weights must still sum to 1.0 per regime.
+5. Add `your_module_score` to the `Signal` model in `data/database.py`, to `_apply_migrations()`, and to the upsert in `confluence.py:_persist_signal()`.
+6. Add any new raw-value columns to the `Indicator` model and to `_apply_migrations()`.
+7. Update `total_signal_modules` in `config.yaml`.
+
+Note: `analysis/correlations.py` is an exception to the pattern — it operates on pairs of assets rather than a single ticker's DataFrame, so `compute_all_pairs()` is called once at the end of `run_analysis()` rather than inside `analyse_ticker()`, and `compute_correlations(ticker, config)` fetches its own data internally rather than accepting a pre-fetched `df`.
 
 ## Adding assets to the watchlist
 

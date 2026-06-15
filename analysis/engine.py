@@ -9,6 +9,7 @@ import pandas as pd
 import yaml
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from analysis.correlations import compute_all_pairs
 from analysis.macro import compute_macro
 from analysis.mean_reversion import compute_mean_reversion
 from analysis.trend import compute_trend
@@ -160,5 +161,12 @@ def run_analysis(
         results.append(result)
         if progress_callback:
             progress_callback(idx, total, ticker)
+
+    # Compute and persist all cross-asset pair correlations once per run
+    try:
+        logger.info("Computing cross-asset correlations…")
+        compute_all_pairs(config)
+    except Exception as exc:
+        logger.error("Correlation computation failed: %s", exc)
 
     return results

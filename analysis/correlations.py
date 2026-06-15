@@ -1,0 +1,418 @@
+"""Cross-asset correlation analysis: tracks relationship divergences between asset pairs."""
+
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+import yaml
+from sqlalchemy import text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from data.database import get_engine
+from data.ingestion import get_price_df
+
+logger = logging.getLogger(__name__)
+
+
+# Predefined cross-asset relationships with their expected correlation direction.
+# expected_sign: +1 = positive correlation expected, -1 = inverse correlation expected.
+RELATIONSHIP_MAP: list[dict] = [
+    {
+        "ticker_a": "GLD",
+        "ticker_b": "UUP",
+        "expected_sign": -1,
+        "label": "Gold vs Dollar",
+        "desc": "inverse — gold rises when dollar falls",
+        "diverge_template": "Gold and dollar moving together — safe-haven/dollar relationship has broken down",
+        "confirm_template": "Gold/dollar inverse relationship is intact",
+    },
+    {
+        "ticker_a": "USO",
+        "ticker_b": "XLE",
+        "expected_sign": 1,
+        "label": "Oil vs Energy Stocks",
+        "desc": "positive — oil price should lead energy stocks",
+        "diverge_template": "Oil rising but energy stocks lagging — potential catch-up opportunity in energy stocks",
+        "confirm_template": "Oil and energy stocks tracking together as expected",
+    },
+    {
+        "ticker_a": "CPER",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "Copper vs S&P 500",
+        "desc": "positive — copper leads economic growth expectations",
+        "diverge_template": "Copper and equities diverging — economic growth signal is mixed",
+        "confirm_template": "Copper confirming equity market growth signal",
+    },
+    {
+        "ticker_a": "HYG",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "High Yield Bonds vs S&P 500",
+        "desc": "positive — credit stress precedes equity stress",
+        "diverge_template": "Credit and equities diverging — credit market may be signalling stress ahead",
+        "confirm_template": "Credit market tracking equities — no stress signals from bonds",
+    },
+    {
+        "ticker_a": "^VIX",
+        "ticker_b": "^GSPC",
+        "expected_sign": -1,
+        "label": "VIX vs S&P 500",
+        "desc": "inverse — volatility spikes when the market falls",
+        "diverge_template": "VIX and equities moving in the same direction — unusual divergence in fear gauge",
+        "confirm_template": "VIX/equity inverse relationship is intact",
+    },
+    {
+        "ticker_a": "TLT",
+        "ticker_b": "^GSPC",
+        "expected_sign": -1,
+        "label": "Long Bonds vs S&P 500",
+        "desc": "varies by regime — flight to safety in risk-off environments",
+        "diverge_template": "Bonds and equities both rising — risk-on correlation, not a flight-to-safety signal",
+        "confirm_template": "Bond/equity relationship consistent with current risk regime",
+    },
+    {
+        "ticker_a": "GBPUSD=X",
+        "ticker_b": "^FTSE",
+        "expected_sign": -1,
+        "label": "GBP/USD vs FTSE 100",
+        "desc": "inverse — strong pound hurts FTSE exporters",
+        "diverge_template": "Pound and FTSE moving together — exporter/currency relationship has weakened",
+        "confirm_template": "GBP/FTSE inverse exporter-currency relationship is intact",
+    },
+    {
+        "ticker_a": "EURUSD=X",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "EUR/USD vs S&P 500",
+        "desc": "contextual — dollar strength affects S&P multinational earnings",
+        "diverge_template": "EUR/USD and S&P 500 diverging — dollar dynamics may be distorting earnings expectations",
+        "confirm_template": "EUR/USD and equities moving in tandem",
+    },
+    {
+        "ticker_a": "BTC-USD",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "Bitcoin vs S&P 500",
+        "desc": "positive in risk-on, decorrelates in stress",
+        "diverge_template": "Bitcoin and equities diverging — crypto-specific event or risk-appetite break",
+        "confirm_template": "Bitcoin tracking equities as expected in current risk environment",
+    },
+    {
+        "ticker_a": "SLV",
+        "ticker_b": "GLD",
+        "expected_sign": 1,
+        "label": "Silver vs Gold",
+        "desc": "positive — silver follows gold with higher beta",
+        "diverge_template": "Silver and gold diverging — industrial demand may be distorting the metals relationship",
+        "confirm_template": "Silver tracking gold as expected",
+    },
+]
+
+# All unique tickers referenced across the relationship map
+_ALL_PAIR_TICKERS: frozenset[str] = frozenset(
+    t for pair in RELATIONSHIP_MAP for t in (pair["ticker_a"], pair["ticker_b"])
+)
+
+
+def _load_config() -> dict:
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def _compute_pair(
+    ticker_a: str,
+    ticker_b: str,
+    expected_sign: int,
+    days: int = 365,
+) -> dict:
+    """Compute rolling correlation metrics for a single asset pair.
+
+    Args:
+        ticker_a:      First ticker symbol.
+        ticker_b:      Second ticker symbol.
+        expected_sign: +1 (positive relationship expected) or -1 (inverse).
+        days:          Calendar days of price history to fetch.
+
+    Returns:
+        Dict containing corr_30d, corr_90d, hist_mean, hist_std, z_score,
+        divergence (CONFIRMING/DIVERGING/NEUTRAL), and pair_score (-1/0/1).
+        All float fields are None when data is insufficient.
+    """
+    _empty = {
+        "corr_30d": None,
+        "corr_90d": None,
+        "hist_mean": None,
+        "hist_std": None,
+        "z_score": None,
+        "divergence": "NEUTRAL",
+        "pair_score": 0,
+    }
+
+    try:
+        df_a = get_price_df(ticker_a, days=days)
+        df_b = get_price_df(ticker_b, days=days)
+    except Exception as exc:
+        logger.warning("Data fetch failed for pair %s/%s: %s", ticker_a, ticker_b, exc)
+        return _empty
+
+    if df_a.empty or df_b.empty:
+        return _empty
+
+    try:
+        s_a = df_a.set_index("date")["close"].astype(float).rename(ticker_a)
+        s_b = df_b.set_index("date")["close"].astype(float).rename(ticker_b)
+        combined = pd.concat([s_a, s_b], axis=1, join="inner")
+    except Exception as exc:
+        logger.warning("Alignment failed for %s/%s: %s", ticker_a, ticker_b, exc)
+        return _empty
+
+    if len(combined) < 31:
+        return _empty
+
+    roll_30 = combined[ticker_a].rolling(30).corr(combined[ticker_b])
+    roll_90 = combined[ticker_a].rolling(90).corr(combined[ticker_b]) if len(combined) >= 90 else roll_30
+
+    corr_30d = float(roll_30.iloc[-1]) if not np.isnan(float(roll_30.iloc[-1])) else None
+    corr_90d = float(roll_90.iloc[-1]) if not np.isnan(float(roll_90.iloc[-1])) else None
+
+    if corr_30d is None:
+        return _empty
+
+    valid_30 = roll_30.dropna()
+    if len(valid_30) < 10:
+        return {**_empty, "corr_30d": corr_30d, "corr_90d": corr_90d}
+
+    hist_mean = float(valid_30.mean())
+    hist_std  = float(valid_30.std())
+    if hist_std < 0.001:
+        hist_std = 0.001
+
+    z_score = (corr_30d - hist_mean) / hist_std
+
+    # CONFIRMING: sign of current corr matches expected AND z-score close to norm
+    # DIVERGING:  sign contradicts expected AND z-score notably far from norm
+    expected_pos  = expected_sign > 0
+    current_pos   = corr_30d > 0
+    sign_mismatch = expected_pos != current_pos
+    abs_z         = abs(z_score)
+
+    if sign_mismatch and abs_z >= 1.5:
+        divergence = "DIVERGING"
+        pair_score = -1
+    elif not sign_mismatch and abs_z <= 1.0:
+        divergence = "CONFIRMING"
+        pair_score = 1
+    else:
+        divergence = "NEUTRAL"
+        pair_score = 0
+
+    return {
+        "corr_30d":  round(corr_30d, 4),
+        "corr_90d":  round(corr_90d, 4) if corr_90d is not None else None,
+        "hist_mean": round(hist_mean, 4),
+        "hist_std":  round(hist_std, 4),
+        "z_score":   round(z_score, 3),
+        "divergence": divergence,
+        "pair_score": pair_score,
+    }
+
+
+def compute_correlations(ticker: str, config: Optional[dict] = None) -> dict:
+    """Compute a cross-asset correlation score for a single ticker.
+
+    Finds all predefined pairs that involve *ticker*, computes current rolling
+    correlations, checks for divergence from historical norms, and aggregates
+    into a single score for use in confluence scoring.
+
+    Args:
+        ticker: The asset being scored.
+        config: Loaded config.yaml dict. Loaded from file if not provided.
+
+    Returns:
+        Dict with:
+        - ``score``             — -1 / 0 / 1 (for confluence weighting)
+        - ``pairs``             — list of per-pair detail dicts
+        - ``correlation_score`` — continuous average ∈ [-1, 1]
+    """
+    if config is None:
+        config = _load_config()
+
+    days      = config.get("data", {}).get("history_days", 365)
+    pairs_data: list[dict] = []
+
+    for rel in RELATIONSHIP_MAP:
+        if ticker not in (rel["ticker_a"], rel["ticker_b"]):
+            continue
+        result = _compute_pair(rel["ticker_a"], rel["ticker_b"], rel["expected_sign"], days)
+        pairs_data.append({**rel, **result})
+
+    if not pairs_data:
+        return {"score": 0, "pairs": [], "correlation_score": 0.0}
+
+    pair_scores = [p["pair_score"] for p in pairs_data]
+    avg   = sum(pair_scores) / len(pair_scores)
+    score = 1 if avg >= 0.5 else (-1 if avg <= -0.5 else 0)
+
+    return {
+        "score":             score,
+        "pairs":             pairs_data,
+        "correlation_score": round(avg, 3),
+    }
+
+
+def _persist_pair(
+    engine,
+    ticker_a: str,
+    ticker_b: str,
+    date: datetime,
+    result: dict,
+) -> None:
+    """Upsert one pair row into the correlations table."""
+    from data.database import CorrelationData  # late import avoids circular reference
+    stmt = sqlite_insert(CorrelationData).values(
+        ticker_a=ticker_a,
+        ticker_b=ticker_b,
+        date=date,
+        corr_30d=result["corr_30d"],
+        corr_90d=result["corr_90d"],
+        hist_mean=result["hist_mean"],
+        hist_std=result["hist_std"],
+        z_score=result["z_score"],
+        divergence=result["divergence"],
+        pair_score=result["pair_score"],
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["ticker_a", "ticker_b", "date"],
+        set_={
+            "corr_30d":   stmt.excluded.corr_30d,
+            "corr_90d":   stmt.excluded.corr_90d,
+            "hist_mean":  stmt.excluded.hist_mean,
+            "hist_std":   stmt.excluded.hist_std,
+            "z_score":    stmt.excluded.z_score,
+            "divergence": stmt.excluded.divergence,
+            "pair_score": stmt.excluded.pair_score,
+        },
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt)
+
+
+def compute_all_pairs(config: Optional[dict] = None) -> list[dict]:
+    """Compute correlation metrics for every pair in RELATIONSHIP_MAP and persist to DB.
+
+    Called once from the analysis engine rather than once per ticker, since
+    pair data is shared across multiple assets.
+
+    Args:
+        config: Loaded config.yaml dict. Loaded from file if not provided.
+
+    Returns:
+        List of pair result dicts (one entry per pair in RELATIONSHIP_MAP).
+    """
+    if config is None:
+        config = _load_config()
+
+    days  = config.get("data", {}).get("history_days", 365)
+    as_of = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    engine = get_engine()
+    results: list[dict] = []
+
+    for rel in RELATIONSHIP_MAP:
+        result = _compute_pair(rel["ticker_a"], rel["ticker_b"], rel["expected_sign"], days)
+        row    = {**rel, **result, "date": as_of}
+        results.append(row)
+
+        if result["corr_30d"] is not None:
+            try:
+                _persist_pair(engine, rel["ticker_a"], rel["ticker_b"], as_of, result)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist correlation %s/%s: %s",
+                    rel["ticker_a"], rel["ticker_b"], exc,
+                )
+
+    return results
+
+
+def get_stored_correlations() -> list[dict]:
+    """Return the most recent correlation row per pair from the database.
+
+    Falls back to None values (NEUTRAL) for any pair with no stored data yet.
+
+    Returns:
+        List of dicts merging static pair metadata with the latest computed values.
+    """
+    engine = get_engine()
+    results: list[dict] = []
+
+    _null_result = {
+        "corr_30d": None, "corr_90d": None,
+        "hist_mean": None, "hist_std": None,
+        "z_score": None, "divergence": "NEUTRAL",
+        "pair_score": 0, "date": None,
+    }
+
+    try:
+        with engine.connect() as conn:
+            for rel in RELATIONSHIP_MAP:
+                row = conn.execute(
+                    text(
+                        "SELECT corr_30d, corr_90d, hist_mean, hist_std, z_score, "
+                        "divergence, pair_score, date "
+                        "FROM correlations "
+                        "WHERE ticker_a = :a AND ticker_b = :b "
+                        "ORDER BY date DESC LIMIT 1"
+                    ),
+                    {"a": rel["ticker_a"], "b": rel["ticker_b"]},
+                ).mappings().first()
+                results.append({**rel, **(dict(row) if row else _null_result)})
+    except Exception as exc:
+        logger.warning("Could not read stored correlations: %s", exc)
+        return [{**rel, **_null_result} for rel in RELATIONSHIP_MAP]
+
+    return results
+
+
+def build_correlation_matrix(window: int = 30) -> tuple[pd.DataFrame, list[str]]:
+    """Compute a pairwise correlation matrix for all tickers in the relationship map.
+
+    Uses the last *window* trading days of close prices for each ticker that
+    has stored data.
+
+    Args:
+        window: Number of trading days to use for correlation calculation.
+
+    Returns:
+        Tuple of (corr_matrix_DataFrame, ticker_list).  The DataFrame is
+        square and indexed/columned by ticker symbol.  Returns an empty
+        DataFrame and empty list when insufficient data is available.
+    """
+    tickers = sorted(_ALL_PAIR_TICKERS)
+    series: dict[str, pd.Series] = {}
+
+    for ticker in tickers:
+        try:
+            df = get_price_df(ticker, days=max(window * 3, 180))
+            if df.empty:
+                continue
+            s = df.set_index("date")["close"].astype(float)
+            series[ticker] = s
+        except Exception:
+            pass
+
+    if len(series) < 2:
+        return pd.DataFrame(), []
+
+    combined = pd.concat(series.values(), axis=1, keys=series.keys(), join="inner")
+
+    if len(combined) < window:
+        corr_matrix = combined.corr()
+    else:
+        corr_matrix = combined.tail(window).corr()
+
+    return corr_matrix, list(corr_matrix.columns)

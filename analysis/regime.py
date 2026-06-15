@@ -41,42 +41,49 @@ REGIME_COLOURS: dict[str, str] = {
     Regime.UNKNOWN:         "#6b7280",   # grey
 }
 
-# Module weight profiles — must sum to 1.0 per regime
+# Module weight profiles — must sum to 1.0 per regime.
+# Correlation is a cross-asset confirming signal; it gets 0.10 across all regimes
+# with the savings taken from the dominant module(s) in each regime.
 REGIME_WEIGHTS: dict[str, dict[str, float]] = {
     Regime.TRENDING_BULL: {
-        "trend":          0.35,
+        "trend":          0.30,  # was 0.35
         "mean_reversion": 0.10,
         "volatility":     0.15,
-        "volume":         0.25,
+        "volume":         0.20,  # was 0.25
         "macro":          0.15,
+        "correlation":    0.10,
     },
     Regime.TRENDING_BEAR: {
-        "trend":          0.30,
+        "trend":          0.25,  # was 0.30
         "mean_reversion": 0.15,
-        "volatility":     0.25,
+        "volatility":     0.20,  # was 0.25
         "volume":         0.15,
         "macro":          0.15,
+        "correlation":    0.10,
     },
     Regime.RANGING_LOW_VOL: {
         "trend":          0.10,
-        "mean_reversion": 0.40,
+        "mean_reversion": 0.35,  # was 0.40
         "volatility":     0.15,
-        "volume":         0.20,
+        "volume":         0.15,  # was 0.20
         "macro":          0.15,
+        "correlation":    0.10,
     },
     Regime.HIGH_VOLATILITY: {
         "trend":          0.10,
         "mean_reversion": 0.15,
-        "volatility":     0.40,
+        "volatility":     0.35,  # was 0.40
         "volume":         0.15,
-        "macro":          0.20,
+        "macro":          0.15,  # was 0.20
+        "correlation":    0.10,
     },
     Regime.UNKNOWN: {
-        "trend":          0.20,
-        "mean_reversion": 0.20,
-        "volatility":     0.20,
-        "volume":         0.20,
-        "macro":          0.20,
+        "trend":          0.18,  # was 0.20
+        "mean_reversion": 0.18,
+        "volatility":     0.18,
+        "volume":         0.18,
+        "macro":          0.18,
+        "correlation":    0.10,
     },
 }
 

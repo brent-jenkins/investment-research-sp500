@@ -168,8 +168,8 @@ macro:
 confluence:
   # Minimum number of signals that must agree for a BUY/SELL call
   min_signals_required: 3
-  # Total number of signal modules (regime, trend, mean_reversion, volatility, volume, macro)
-  total_signal_modules: 6
+  # Total number of signal modules (regime, trend, mean_reversion, volatility, volume, macro, correlation)
+  total_signal_modules: 7
   # Score thresholds: score = agreeing_signals / total_signal_modules
   buy_threshold: 0.60
   sell_threshold: 0.60

@@ -9,6 +9,7 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from analysis.correlations import compute_correlations
 from analysis.macro import compute_macro
 from analysis.mean_reversion import compute_mean_reversion
 from analysis.regime import Regime, detect_regime
@@ -88,11 +89,12 @@ def score_ticker(
     """
     df = get_price_df(ticker, days=config["data"]["history_days"])
 
-    trend_res  = compute_trend(df, config)
-    mr_res     = compute_mean_reversion(df, config)
-    vol_res    = compute_volatility(df, config, vix_close=vix_close)
-    volume_res = compute_volume(df, config)
-    macro_res  = compute_macro(ticker, config)
+    trend_res   = compute_trend(df, config)
+    mr_res      = compute_mean_reversion(df, config)
+    vol_res     = compute_volatility(df, config, vix_close=vix_close)
+    volume_res  = compute_volume(df, config)
+    macro_res   = compute_macro(ticker, config)
+    corr_res    = compute_correlations(ticker, config)
 
     module_scores = {
         "trend":          trend_res["score"],
@@ -100,6 +102,7 @@ def score_ticker(
         "volatility":     vol_res["score"],
         "volume":         volume_res["score"],
         "macro":          macro_res["score"],
+        "correlation":    corr_res["score"],
     }
 
     weights        = regime_result["weights"]
@@ -116,6 +119,7 @@ def score_ticker(
         "volatility_score":     module_scores["volatility"],
         "volume_score":         module_scores["volume"],
         "macro_score":          module_scores["macro"],
+        "correlation_score":    module_scores["correlation"],
     }
 
 
@@ -131,6 +135,7 @@ def _persist_signal(result: dict, as_of: datetime) -> None:
         volatility_score=result["volatility_score"],
         volume_score=result["volume_score"],
         macro_score=result["macro_score"],
+        correlation_score=result["correlation_score"],
         confluence_score=result["confluence_score"],
         signal=result["signal"],
         strength=abs(result["confluence_score"]),
@@ -144,6 +149,7 @@ def _persist_signal(result: dict, as_of: datetime) -> None:
             "volatility_score":     stmt.excluded.volatility_score,
             "volume_score":         stmt.excluded.volume_score,
             "macro_score":          stmt.excluded.macro_score,
+            "correlation_score":    stmt.excluded.correlation_score,
             "confluence_score":     stmt.excluded.confluence_score,
             "signal":               stmt.excluded.signal,
             "strength":             stmt.excluded.strength,

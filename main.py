@@ -20,6 +20,7 @@ import streamlit as st
 import yaml
 
 from analysis.confluence import generate_signals, get_last_signal_timestamp, get_latest_signals
+from analysis.correlations import build_correlation_matrix, compute_all_pairs, get_stored_correlations
 from analysis.engine import run_analysis
 from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime
 from data.database import get_engine, get_metadata, init_db
@@ -1261,6 +1262,228 @@ def _initialise() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Relationships page
+# ---------------------------------------------------------------------------
+
+_DIV_COLOURS = {
+    "CONFIRMING": "#16a34a",
+    "DIVERGING":  "#ef5350",
+    "NEUTRAL":    "#6b7280",
+}
+_DIV_ICONS = {
+    "CONFIRMING": "✓",
+    "DIVERGING":  "⚠",
+    "NEUTRAL":    "●",
+}
+
+
+def _render_relationships_page(config: dict) -> None:
+    """Render the Relationships page: correlation heatmap, pair table, and divergence narrative."""
+    st.markdown("## 🔗 Cross-Asset Relationships")
+    st.caption(
+        "Tracks 10 predefined cross-asset pairs and flags when current correlations "
+        "diverge significantly from their historical norms."
+    )
+
+    # ── Refresh button ─────────────────────────────────────────────────────────
+    col_btn, col_ts = st.columns([1, 4])
+    if col_btn.button("↻ Recompute Now", type="primary"):
+        with st.spinner("Computing correlations…"):
+            try:
+                compute_all_pairs(config)
+                st.session_state["_corr_refresh_ts"] = datetime.utcnow()
+                st.success("Correlations updated.")
+            except Exception as exc:
+                st.error(f"Failed: {exc}")
+        st.rerun()
+
+    refresh_ts = st.session_state.get("_corr_refresh_ts")
+    if refresh_ts:
+        col_ts.caption(f"Last recomputed: {refresh_ts.strftime('%H:%M UTC')}")
+
+    st.divider()
+
+    # ── Correlation heatmap ───────────────────────────────────────────────────
+    st.markdown("### Correlation Matrix (30-day window)")
+    st.caption("Current rolling 30-day pairwise correlation for all tracked assets.")
+
+    with st.spinner("Building correlation matrix…"):
+        corr_df, tickers_in_matrix = build_correlation_matrix(window=30)
+
+    if corr_df.empty:
+        st.info("Insufficient price data to build the correlation matrix. Run a data refresh first.")
+    else:
+        # Round for display and build the heatmap
+        z_vals    = corr_df.values.tolist()
+        fig_heat  = go.Figure(
+            data=go.Heatmap(
+                z=z_vals,
+                x=tickers_in_matrix,
+                y=tickers_in_matrix,
+                colorscale=[
+                    [0.0,  "#ef5350"],   # -1 → red
+                    [0.5,  "#1f2937"],   # 0  → near-black (neutral)
+                    [1.0,  "#16a34a"],   # +1 → green
+                ],
+                zmin=-1,
+                zmax=1,
+                text=[[f"{v:.2f}" for v in row] for row in z_vals],
+                texttemplate="%{text}",
+                textfont={"size": 10},
+                hoverongaps=False,
+                hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{z:.3f}<extra></extra>",
+            )
+        )
+        fig_heat.update_layout(
+            template="plotly_dark",
+            height=500,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis=dict(side="bottom", tickangle=-45),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+    st.divider()
+
+    # ── Pair-level table ──────────────────────────────────────────────────────
+    st.markdown("### Tracked Pair Details")
+    st.caption(
+        "30d Corr: current 30-day rolling correlation · "
+        "90d Corr: 90-day rolling · "
+        "Norm: historical average · "
+        "Z: standard deviations from the historical norm · "
+        "Status: CONFIRMING / NEUTRAL / DIVERGING"
+    )
+
+    stored = get_stored_correlations()
+
+    if not any(p.get("corr_30d") is not None for p in stored):
+        st.info("No correlation data stored yet — click **↻ Recompute Now** or run analysis.")
+    else:
+        records = []
+        for p in stored:
+            corr_30 = p.get("corr_30d")
+            corr_90 = p.get("corr_90d")
+            hist_m  = p.get("hist_mean")
+            z       = p.get("z_score")
+            div     = p.get("divergence", "NEUTRAL")
+
+            records.append({
+                "Pair":       p["label"],
+                "30d Corr":   corr_30,
+                "90d Corr":   corr_90,
+                "Norm":       hist_m,
+                "Z-Score":    z,
+                "Status":     div,
+                "Score":      p.get("pair_score", 0),
+                "Expected":   "↑↑ Positive" if p["expected_sign"] > 0 else "↑↓ Inverse",
+            })
+
+        pair_df = pd.DataFrame(records)
+
+        def _style_status(val: str) -> str:
+            colours = {
+                "CONFIRMING": "background-color:#1a5c38;color:white;font-weight:600",
+                "DIVERGING":  "background-color:#7f1d1d;color:white;font-weight:600",
+                "NEUTRAL":    "color:#9ca3af",
+            }
+            return colours.get(val, "")
+
+        def _style_corr(val) -> str:
+            if not isinstance(val, float):
+                return ""
+            if val > 0.5:   return "color:#16a34a"
+            if val < -0.5:  return "color:#ef5350"
+            return ""
+
+        def _style_zscore(val) -> str:
+            if not isinstance(val, float):
+                return ""
+            if abs(val) > 2: return "color:#ef5350;font-weight:bold"
+            if abs(val) > 1: return "color:#f59e0b"
+            return ""
+
+        def _style_score(val) -> str:
+            if val == 1:  return "color:#16a34a;font-weight:bold"
+            if val == -1: return "color:#ef5350;font-weight:bold"
+            return ""
+
+        styler = (
+            pair_df.style
+            .map(_style_status, subset=["Status"])
+            .map(_style_corr,   subset=["30d Corr", "90d Corr", "Norm"])
+            .map(_style_zscore, subset=["Z-Score"])
+            .map(_style_score,  subset=["Score"])
+            .format({
+                "30d Corr": lambda v: f"{v:+.3f}" if isinstance(v, float) else "—",
+                "90d Corr": lambda v: f"{v:+.3f}" if isinstance(v, float) else "—",
+                "Norm":     lambda v: f"{v:+.3f}" if isinstance(v, float) else "—",
+                "Z-Score":  lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+                "Score":    lambda v: {1: "▲ +1", 0: "● 0", -1: "▼ -1"}.get(v, "—"),
+            })
+        )
+        st.dataframe(
+            styler,
+            use_container_width=True,
+            hide_index=True,
+            height=38 + 35 * len(records),
+        )
+
+    st.divider()
+
+    # ── Plain-English divergence narratives ───────────────────────────────────
+    st.markdown("### Notable Relationships")
+
+    if not stored or not any(p.get("corr_30d") is not None for p in stored):
+        st.info("No data yet. Run a data refresh and then recompute correlations.")
+        return
+
+    diverging = [p for p in stored if p.get("divergence") == "DIVERGING"]
+    confirming_notable = [
+        p for p in stored
+        if p.get("divergence") == "CONFIRMING"
+        and p.get("z_score") is not None
+        and abs(p["z_score"]) <= 0.5
+    ]
+
+    if diverging:
+        st.markdown("**Unusual / Diverging Pairs**")
+        for p in diverging:
+            z   = p.get("z_score")
+            c30 = p.get("corr_30d")
+            z_str  = f"Z={z:+.2f}" if z is not None else ""
+            c_str  = f"30d corr: {c30:+.3f}" if c30 is not None else ""
+            st.markdown(
+                f'<div style="border-left:3px solid #ef5350;background:#ef535018;'
+                f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
+                f'<span style="color:#ef5350;font-weight:700">⚠ {html.escape(p["label"])}</span>'
+                f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:10px">'
+                f'{html.escape(c_str)} · {html.escape(z_str)}</span><br>'
+                f'<span style="color:#d1d5db;font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.success("No significant divergences detected — all tracked relationships are within historical norms.")
+
+    if confirming_notable:
+        st.markdown("**Strongly Confirming Pairs**")
+        for p in confirming_notable:
+            c30   = p.get("corr_30d")
+            c_str = f"30d corr: {c30:+.3f}" if c30 is not None else ""
+            st.markdown(
+                f'<div style="border-left:3px solid #16a34a;background:#16a34a18;'
+                f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
+                f'<span style="color:#16a34a;font-weight:700">✓ {html.escape(p["label"])}</span>'
+                f'<span style="color:#9ca3af;font-size:0.8rem;margin-left:10px">'
+                f'{html.escape(c_str)}</span><br>'
+                f'<span style="color:#d1d5db;font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Charts landing (grouped asset cards)
 # ---------------------------------------------------------------------------
 
@@ -1331,13 +1554,14 @@ def main() -> None:
         st.divider()
 
         # Page navigation
-        _PAGES = ["📊 Signals", "📈 Charts", "📋 Trade Log", "🏆 Performance", "🖥️ Status"]
+        _PAGES = ["📊 Signals", "📈 Charts", "🔗 Relationships", "📋 Trade Log", "🏆 Performance", "🖥️ Status"]
         _PAGE_KEYS = {
-            "📊 Signals":     "signals",
-            "📈 Charts":      "charts",
-            "📋 Trade Log":   "trade_log",
-            "🏆 Performance": "performance",
-            "🖥️ Status":      "status",
+            "📊 Signals":       "signals",
+            "📈 Charts":        "charts",
+            "🔗 Relationships": "relationships",
+            "📋 Trade Log":     "trade_log",
+            "🏆 Performance":   "performance",
+            "🖥️ Status":        "status",
         }
         current_key = st.session_state.get("page", "signals")
         default_idx = next(
@@ -1382,6 +1606,10 @@ def main() -> None:
 
     if page_key == "status":
         _render_home_page(config, watchlist)
+        return
+
+    if page_key == "relationships":
+        _render_relationships_page(config)
         return
 
     if page_key == "trade_log":

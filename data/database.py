@@ -150,6 +150,7 @@ class Signal(Base):
     volatility_score = Column(Integer)
     volume_score = Column(Integer)
     macro_score = Column(Integer)
+    correlation_score = Column(Integer)
 
     # Aggregate
     confluence_score = Column(Float)      # weighted score ∈ [-1, +1]
@@ -235,6 +236,31 @@ class Performance(Base):
     )
 
 
+class CorrelationData(Base):
+    """Computed cross-asset pair correlations stored once per day."""
+
+    __tablename__ = "correlations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker_a = Column(String(20), nullable=False, index=True)
+    ticker_b = Column(String(20), nullable=False, index=True)
+    date = Column(DateTime, nullable=False, index=True)
+
+    corr_30d  = Column(Float)   # 30-day rolling correlation at latest date
+    corr_90d  = Column(Float)   # 90-day rolling correlation at latest date
+    hist_mean = Column(Float)   # historical mean of 30d rolling correlation
+    hist_std  = Column(Float)   # historical std  of 30d rolling correlation
+    z_score   = Column(Float)   # (corr_30d - hist_mean) / hist_std
+    divergence = Column(String(12))  # CONFIRMING / DIVERGING / NEUTRAL
+    pair_score = Column(Integer)     # -1 / 0 / 1
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker_a", "ticker_b", "date", name="uq_corr_pair_date"),
+    )
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -303,6 +329,7 @@ def _apply_migrations(engine) -> None:
         ("indicators", "yield_curve_regime",  "VARCHAR(10)"),
         ("indicators", "golden_cross",        "FLOAT"),
         ("signals",    "regime",              "VARCHAR(20)"),
+        ("signals",    "correlation_score",   "INTEGER"),
         ("trades",     "signal_type",         "VARCHAR(15)"),
         ("trades",     "confluence_score",    "FLOAT"),
         ("trades",     "regime",              "VARCHAR(20)"),
@@ -340,6 +367,7 @@ def init_db() -> None:
         Signal,
         Trade,
         Performance,
+        CorrelationData,
         SystemMetadata,
     )
     if not all(c.__tablename__ in Base.metadata.tables for c in _register):
