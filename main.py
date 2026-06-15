@@ -1253,9 +1253,11 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             entry       = float(t.get("entry_price") or 0)
             qty         = float(t.get("quantity") or 0)
             direction   = t.get("direction", "LONG")
+            leverage    = int(t.get("leverage") or 1)
             pos_val     = float(t.get("position_value") or 0)
             margin_req  = float(t.get("margin_required") or 0)
             o_rate      = float(t.get("overnight_rate") or 0)
+            spread      = float(t.get("spread_cost") or 0)
             instr_ccy   = t.get("currency") or "GBP"
             acct_ccy    = t.get("account_currency") or "GBP"
             fx          = _fx_cache.get((instr_ccy, acct_ccy), 1.0)
@@ -1263,19 +1265,34 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             days_held   = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else 0
             mult        = 1 if direction == "LONG" else -1
 
-            # P&L in instrument currency (e.g. USD for INDA)
-            pnl_instr = None
-            if live and entry and qty:
-                pnl_instr = (live - entry) * qty * mult
+            # Spread-adjusted effective close price.
+            # SHORT closes at ASK (buy back at higher price); LONG closes at BID (lower).
+            # spread_cost is stored in account currency (GBP); convert to instrument currency.
+            effective_live = None
+            if live is not None:
+                if spread > 0 and qty > 0:
+                    spread_adj = (spread * fx) / qty  # GBP spread → instrument ccy per unit
+                    effective_live = live + spread_adj if direction == "SHORT" else live - spread_adj
+                else:
+                    effective_live = live
 
-            # P&L in account currency (e.g. GBP)
+            # P&L in instrument currency using the effective close price
+            pnl_instr = None
+            if effective_live is not None and entry and qty:
+                pnl_instr = (effective_live - entry) * qty * mult
+
+            # P&L in account currency (GBP)
             pnl_acct = (pnl_instr / fx) if (pnl_instr is not None and fx > 0) else None
 
-            # Pos P&L %: return relative to position value
-            pos_pnl_pct = (pnl_acct / pos_val * 100) if (pnl_acct is not None and pos_val > 0) else None
+            # Position P&L %: percentage price move in your direction
+            # SHORT: (entry - effective_live) / entry × 100
+            # LONG:  (effective_live - entry) / entry × 100
+            pos_pnl_pct = None
+            if effective_live is not None and entry:
+                pos_pnl_pct = mult * (effective_live - entry) / entry * 100
 
-            # Margin P&L %: return relative to margin required (leveraged view)
-            margin_pnl_pct = (pnl_acct / margin_req * 100) if (pnl_acct is not None and margin_req > 0) else None
+            # Margin P&L %: Position P&L % × leverage (return on margin locked up)
+            margin_pnl_pct = (pos_pnl_pct * leverage) if pos_pnl_pct is not None else None
 
             # Accrued swap — always a cost (negative)
             daily_swap   = pos_val * o_rate / 100 if (pos_val > 0 and o_rate > 0) else 0.0
@@ -1293,7 +1310,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "Units":        qty if qty > 0 else None,
                 "Entry":        entry,
                 "Live":         live,
-                "P&L (raw)":    pnl_instr,    # in instrument currency (e.g. USD)
+                "P&L (raw)":    pnl_instr,    # in instrument currency, spread-adjusted
                 "P&L £":        pnl_acct,     # in account currency (GBP)
                 "Margin P&L %": margin_pnl_pct,
                 "Swap":         accrued_swap,  # negative — always a cost
@@ -1337,8 +1354,10 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         st.dataframe(styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(rows))
         st.caption(
-            "P&L is indicative — minor differences from Trading212 are expected "
-            "due to data source and FX rate timing. "
+            "**Live price is from the yfinance delayed feed — minor differences from "
+            "Trading212's live price are expected.** "
+            "P&L uses a spread-adjusted close price (SHORT: +spread/units, LONG: −spread/units). "
+            "Margin P&L % = position price move % × leverage. "
             "Ccy = instrument currency; P&L (raw) in instrument currency, P&L £ / Net P&L £ in GBP. "
             "Swap is accrued overnight cost (position value × rate × days)."
         )
