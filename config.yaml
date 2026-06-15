@@ -177,6 +177,18 @@ scheduler:
       label: "End of Day"
       type: "full"
 
+accounts:
+  - id: t212_practice
+    name: "Trading212 Practice"
+    type: PRACTICE
+    platform: Trading212
+    default: true
+  - id: t212_live
+    name: "Trading212 Live"
+    type: LIVE
+    platform: Trading212
+    default: false
+
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html
   # Leave blank to skip yield curve scoring (VIX scoring still works without it)

@@ -78,6 +78,9 @@ def log_trade(
     macro_score: int,
     entry_price: float,
     quantity: float,
+    account_id: str = "t212_practice",
+    account_name: str = "Trading212 Practice",
+    account_type: str = "PRACTICE",
     entry_date: Optional[datetime] = None,
     notes: str = "",
 ) -> int:
@@ -100,6 +103,9 @@ def log_trade(
             macro_score=macro_score,
             entry_price=entry_price,
             quantity=quantity,
+            account_id=account_id,
+            account_name=account_name,
+            account_type=account_type,
             entry_date=entry_date,
             is_open=True,
             notes=notes,
@@ -172,21 +178,26 @@ def close_trade(
 # Queries
 # ---------------------------------------------------------------------------
 
-def get_open_trades() -> list[dict]:
-    """Return all open trades ordered by entry date descending."""
+def get_open_trades(account_type: Optional[str] = None) -> list[dict]:
+    """Return open trades ordered by entry date descending, optionally filtered by account type."""
     engine = get_engine()
+    sql    = "SELECT * FROM trades WHERE is_open = 1"
+    params: dict = {}
+    if account_type:
+        sql += " AND account_type = :account_type"
+        params["account_type"] = account_type
+    sql += " ORDER BY entry_date DESC"
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM trades WHERE is_open = 1 ORDER BY entry_date DESC")
-        ).mappings().all()
+        rows = conn.execute(text(sql), params).mappings().all()
     return [dict(r) for r in rows]
 
 
 def get_closed_trades(
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
+    account_type: Optional[str] = None,
 ) -> list[dict]:
-    """Return closed trades, optionally filtered by exit date range."""
+    """Return closed trades, optionally filtered by exit date range and/or account type."""
     engine = get_engine()
     sql    = "SELECT * FROM trades WHERE is_open = 0"
     params: dict = {}
@@ -196,17 +207,24 @@ def get_closed_trades(
     if to_date:
         sql += " AND exit_date <= :to_date"
         params["to_date"] = to_date
+    if account_type:
+        sql += " AND account_type = :account_type"
+        params["account_type"] = account_type
     sql += " ORDER BY exit_date ASC"
     with engine.connect() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
     return [dict(r) for r in rows]
 
 
-def get_all_trades() -> list[dict]:
-    """Return every trade (open and closed) ordered by entry date descending."""
+def get_all_trades(account_type: Optional[str] = None) -> list[dict]:
+    """Return every trade (open and closed) ordered by entry date descending, optionally filtered by account type."""
     engine = get_engine()
+    sql    = "SELECT * FROM trades"
+    params: dict = {}
+    if account_type:
+        sql += " WHERE account_type = :account_type"
+        params["account_type"] = account_type
+    sql += " ORDER BY entry_date DESC"
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM trades ORDER BY entry_date DESC")
-        ).mappings().all()
+        rows = conn.execute(text(sql), params).mappings().all()
     return [dict(r) for r in rows]

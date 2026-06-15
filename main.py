@@ -45,6 +45,7 @@ from output.signals import (
     accuracy_by_signal_type,
     accuracy_summary,
     equity_curve,
+    signal_validation,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -816,8 +817,35 @@ def _render_signals_page(config: dict, watchlist: dict[str, str]) -> None:
 def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("## 📋 Trade Log")
 
+    accounts = config.get("accounts", [])
+
     # ---- Log New Trade -----------------------------------------------------
     with st.expander("➕ Log New Trade", expanded=True):
+        # Account selector (outside form so it can affect the badge display)
+        if accounts:
+            _acct_ids    = [a["id"] for a in accounts]
+            _acct_labels = {a["id"]: a["name"] for a in accounts}
+            _default_idx = next((i for i, a in enumerate(accounts) if a.get("default")), 0)
+            sel_acct_id  = st.selectbox(
+                "Account",
+                options=_acct_ids,
+                format_func=lambda x: _acct_labels[x],
+                index=_default_idx,
+                key="log_account_id",
+            )
+            sel_acct = next((a for a in accounts if a["id"] == sel_acct_id), accounts[0])
+        else:
+            sel_acct = {"id": "t212_practice", "name": "Trading212 Practice", "type": "PRACTICE"}
+
+        _acct_type_log   = sel_acct.get("type", "PRACTICE")
+        _badge_colour = "#6366f1" if _acct_type_log == "PRACTICE" else "#16a34a"
+        st.markdown(
+            f"<span style='background:{_badge_colour};color:#fff;padding:2px 10px;"
+            f"border-radius:4px;font-size:0.75rem;font-weight:bold;letter-spacing:0.05em'>"
+            f"{html.escape(_acct_type_log)}</span>",
+            unsafe_allow_html=True,
+        )
+
         ticker_keys = list(watchlist.keys())
         sel_ticker  = st.selectbox(
             "Asset",
@@ -828,9 +856,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
 
         sig = get_current_signal(sel_ticker)
         sc1, sc2, sc3 = st.columns(3)
-        sc1.metric("Signal",          (sig.get("signal") or "—").replace("_", " "))
+        sc1.metric("Signal",           (sig.get("signal") or "—").replace("_", " "))
         sc2.metric("Confluence Score", f"{sig.get('confluence_score', 0):+.3f}" if sig else "—")
-        sc3.metric("Regime",          (sig.get("regime") or "—").replace("_", " "))
+        sc3.metric("Regime",           (sig.get("regime") or "—").replace("_", " "))
 
         with st.form("log_trade_form", clear_on_submit=True):
             fc1, fc2, fc3 = st.columns(3)
@@ -857,16 +885,33 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
                         macro_score=int(sig.get("macro_score") or 0),
                         entry_price=entry_price,
                         quantity=quantity,
+                        account_id=sel_acct["id"],
+                        account_name=sel_acct["name"],
+                        account_type=sel_acct.get("type", "PRACTICE"),
                         notes=notes_text,
                     )
-                    st.success(f"Trade #{trade_id} logged for {sel_ticker}.")
+                    st.success(
+                        f"Trade #{trade_id} logged for {sel_ticker} "
+                        f"({html.escape(sel_acct['name'])})."
+                    )
                     st.rerun()
+
+    st.divider()
+
+    # ---- Account filter ----------------------------------------------------
+    _tl_filter = st.radio(
+        "Filter by account",
+        ["All", "Practice", "Live"],
+        horizontal=True,
+        key="trade_log_acct_filter",
+    )
+    _tl_acct_type = None if _tl_filter == "All" else _tl_filter.upper()
 
     st.divider()
 
     # ---- Open Trades -------------------------------------------------------
     st.markdown("### Open Trades")
-    open_trades = get_open_trades()
+    open_trades = get_open_trades(account_type=_tl_acct_type)
 
     if not open_trades:
         st.info("No open trades. Use the form above to log one.")
@@ -879,27 +924,27 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
             ticker    = t["ticker"]
             live      = live_prices.get(ticker)
             entry     = float(t.get("entry_price") or 0)
-            qty       = float(t.get("quantity") or 1)
             direction = t.get("direction", "LONG")
             entry_dt  = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
             days_held = int((pd.Timestamp.utcnow() - entry_dt).days) if entry_dt else None
 
             if live and entry:
-                mult      = 1 if direction == "LONG" else -1
+                mult       = 1 if direction == "LONG" else -1
                 unreal_pct = (live - entry) / entry * mult * 100
             else:
                 unreal_pct = None
 
             rows.append({
-                "ID":          t["id"],
-                "Ticker":      ticker,
-                "Signal":      (t.get("signal_type") or "—").replace("_", " "),
-                "Dir":         direction,
-                "Entry Date":  entry_dt.strftime("%Y-%m-%d") if entry_dt else "—",
-                "Entry Price": entry,
-                "Live Price":  live,
+                "ID":           t["id"],
+                "Type":         t.get("account_type") or "PRACTICE",
+                "Ticker":       ticker,
+                "Signal":       (t.get("signal_type") or "—").replace("_", " "),
+                "Dir":          direction,
+                "Entry Date":   entry_dt.strftime("%Y-%m-%d") if entry_dt else "—",
+                "Entry Price":  entry,
+                "Live Price":   live,
                 "Unreal P&L %": unreal_pct,
-                "Days Held":   days_held,
+                "Days Held":    days_held,
             })
 
         open_df = pd.DataFrame(rows)
@@ -911,9 +956,15 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
             if val < 0:  return "color:#dc2626;font-weight:bold"
             return ""
 
+        def _style_acct_badge(val):
+            if val == "LIVE":     return "color:#6ee7b7;font-weight:bold"
+            if val == "PRACTICE": return "color:#a5b4fc"
+            return ""
+
         styler = (
             open_df.style
-            .map(_style_unreal, subset=["Unreal P&L %"])
+            .map(_style_unreal,    subset=["Unreal P&L %"])
+            .map(_style_acct_badge, subset=["Type"])
             .format({
                 "Entry Price":  "{:,.4f}",
                 "Live Price":   lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
@@ -931,6 +982,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str]) -> None:
         trade_labels = {
             t["id"]: (
                 f"#{t['id']}  {t['ticker']}  "
+                f"[{t.get('account_type') or 'PRACTICE'}]  "
                 f"{(t.get('signal_type') or '').replace('_', ' ')}  "
                 f"@ {float(t.get('entry_price') or 0):,.4f}"
             )
@@ -975,6 +1027,17 @@ def _pnl_colour(val: float) -> str:
 def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("## 🏆 Performance")
 
+    # ---- Account filter ----------------------------------------------------
+    acct_filter = st.radio(
+        "Account",
+        ["All", "Practice", "Live"],
+        horizontal=True,
+        key="perf_acct_filter",
+    )
+    acct_type = None if acct_filter == "All" else acct_filter.upper()
+
+    st.divider()
+
     # ---- Date range filter -------------------------------------------------
     with st.expander("📅 Date range filter", expanded=False):
         fc1, fc2 = st.columns(2)
@@ -984,65 +1047,192 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
     from_dt = datetime(from_date.year, from_date.month, from_date.day) if from_date else None
     to_dt   = datetime(to_date.year,  to_date.month,  to_date.day, 23, 59, 59) if to_date else None
 
-    all_trades    = get_all_trades()
-    closed_trades = get_closed_trades(from_dt, to_dt)
+    all_trades    = get_all_trades(account_type=acct_type)
+    closed_trades = get_closed_trades(from_dt, to_dt, account_type=acct_type)
 
     # ---- Summary stats -----------------------------------------------------
-    summary = accuracy_summary(all_trades)
+    if acct_filter == "All":
+        p_all     = get_all_trades(account_type="PRACTICE")
+        l_all     = get_all_trades(account_type="LIVE")
+        p_summary = accuracy_summary(p_all)
+        l_summary = accuracy_summary(l_all)
 
-    if not summary:
-        st.info("No closed trades yet. Log and close trades on the **Trade Log** page.")
-        return
+        if not p_summary and not l_summary:
+            st.info("No closed trades yet. Log and close trades on the **Trade Log** page.")
+            return
 
-    s1, s2, s3, s4, s5 = st.columns(5)
-    s1.metric("Total Trades",  summary["total_trades"])
-    s2.metric("Win Rate",      f"{summary['win_rate']:.0%}")
-    s3.metric("Profit Factor", f"{summary['profit_factor']:.2f}" if summary["profit_factor"] != float("inf") else "∞")
-    s4.metric("Best Trade",    f"{summary['best_trade']:+.4f}",  delta=f"{summary['best_trade']:+.4f}")
-    s5.metric("Worst Trade",   f"{summary['worst_trade']:+.4f}", delta=f"{summary['worst_trade']:+.4f}")
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            st.markdown("#### Practice")
+            if p_summary:
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Trades",        p_summary["total_trades"])
+                a2.metric("Win Rate",      f"{p_summary['win_rate']:.0%}")
+                a3.metric("Profit Factor", f"{p_summary['profit_factor']:.2f}" if p_summary["profit_factor"] != float("inf") else "∞")
+                b1, b2 = st.columns(2)
+                b1.metric("Avg Win %",  f"{p_summary['avg_win_pct']:+.2f}%")
+                b2.metric("Avg Loss %", f"{p_summary['avg_loss_pct']:+.2f}%")
+            else:
+                st.caption("No practice trades closed yet.")
 
-    col_l, col_r = st.columns(2)
-    col_l.metric("Avg Win %",  f"{summary['avg_win_pct']:+.2f}%")
-    col_r.metric("Avg Loss %", f"{summary['avg_loss_pct']:+.2f}%")
+        with pc2:
+            st.markdown("#### Live")
+            if l_summary:
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Trades",        l_summary["total_trades"])
+                a2.metric("Win Rate",      f"{l_summary['win_rate']:.0%}")
+                a3.metric("Profit Factor", f"{l_summary['profit_factor']:.2f}" if l_summary["profit_factor"] != float("inf") else "∞")
+                b1, b2 = st.columns(2)
+                b1.metric("Avg Win %",  f"{l_summary['avg_win_pct']:+.2f}%")
+                b2.metric("Avg Loss %", f"{l_summary['avg_loss_pct']:+.2f}%")
+            else:
+                st.caption("No live trades closed yet.")
+    else:
+        summary = accuracy_summary(all_trades)
+        if not summary:
+            st.info(
+                f"No closed {acct_filter.lower()} trades yet. "
+                "Log and close trades on the **Trade Log** page."
+            )
+            return
+
+        s1, s2, s3, s4, s5 = st.columns(5)
+        s1.metric("Total Trades",  summary["total_trades"])
+        s2.metric("Win Rate",      f"{summary['win_rate']:.0%}")
+        s3.metric("Profit Factor", f"{summary['profit_factor']:.2f}" if summary["profit_factor"] != float("inf") else "∞")
+        s4.metric("Best Trade",    f"{summary['best_trade']:+.4f}",  delta=f"{summary['best_trade']:+.4f}")
+        s5.metric("Worst Trade",   f"{summary['worst_trade']:+.4f}", delta=f"{summary['worst_trade']:+.4f}")
+        col_l, col_r = st.columns(2)
+        col_l.metric("Avg Win %",  f"{summary['avg_win_pct']:+.2f}%")
+        col_r.metric("Avg Loss %", f"{summary['avg_loss_pct']:+.2f}%")
 
     st.divider()
 
     # ---- Equity curve ------------------------------------------------------
-    curve_df = equity_curve(closed_trades if closed_trades else all_trades)
+    st.markdown("### Equity Curve")
+    if acct_filter == "All":
+        p_closed = get_closed_trades(from_dt, to_dt, account_type="PRACTICE")
+        l_closed = get_closed_trades(from_dt, to_dt, account_type="LIVE")
+        p_curve  = equity_curve(p_closed)
+        l_curve  = equity_curve(l_closed)
 
-    if not curve_df.empty:
-        st.markdown("### Equity Curve")
-        final_pnl    = float(curve_df["cumulative_pnl"].iloc[-1])
-        curve_colour = _pnl_colour(final_pnl)
+        if not p_curve.empty or not l_curve.empty:
+            fig_curve = go.Figure()
+            fig_curve.add_hline(y=0, line_dash="dot", line_color="grey", line_width=1)
+            if not p_curve.empty:
+                fig_curve.add_trace(go.Scatter(
+                    x=p_curve["exit_date"],
+                    y=p_curve["cumulative_pnl"],
+                    name="Practice",
+                    mode="lines+markers",
+                    line=dict(color="#818cf8", width=2, dash="dash"),
+                    hovertemplate=(
+                        "<b>%{x|%Y-%m-%d}</b><br>"
+                        "Practice P&L: %{y:+.4f}<extra></extra>"
+                    ),
+                ))
+            if not l_curve.empty:
+                fig_curve.add_trace(go.Scatter(
+                    x=l_curve["exit_date"],
+                    y=l_curve["cumulative_pnl"],
+                    name="Live",
+                    mode="lines+markers",
+                    line=dict(color="#16a34a", width=2),
+                    hovertemplate=(
+                        "<b>%{x|%Y-%m-%d}</b><br>"
+                        "Live P&L: %{y:+.4f}<extra></extra>"
+                    ),
+                ))
+            fig_curve.update_layout(
+                template="plotly_dark",
+                height=320,
+                margin=dict(l=40, r=20, t=20, b=40),
+                xaxis_title="Exit Date",
+                yaxis_title="Cumulative P&L (pts)",
+                legend=dict(x=0.01, y=0.99),
+            )
+            st.plotly_chart(fig_curve, use_container_width=True)
+        else:
+            st.caption("No closed trades to plot yet.")
+    else:
+        curve_df = equity_curve(closed_trades if closed_trades else all_trades)
+        if not curve_df.empty:
+            final_pnl    = float(curve_df["cumulative_pnl"].iloc[-1])
+            curve_colour = _pnl_colour(final_pnl)
 
-        fig_curve = go.Figure()
-        fig_curve.add_hline(y=0, line_dash="dot", line_color="grey", line_width=1)
-        fig_curve.add_trace(go.Scatter(
-            x=curve_df["exit_date"],
-            y=curve_df["cumulative_pnl"],
-            mode="lines+markers",
-            line=dict(color=curve_colour, width=2),
-            fill="tozeroy",
-            fillcolor=f"rgba({'22,163,74' if final_pnl >= 0 else '220,38,38'},0.12)",
-            hovertemplate=(
-                "<b>%{x|%Y-%m-%d}</b><br>"
-                "Cumulative P&L: %{y:+.4f}<extra></extra>"
-            ),
-        ))
-        fig_curve.update_layout(
-            template="plotly_dark",
-            height=320,
-            margin=dict(l=40, r=20, t=20, b=40),
-            xaxis_title="Exit Date",
-            yaxis_title="Cumulative P&L (pts)",
-        )
-        st.plotly_chart(fig_curve, use_container_width=True)
+            fig_curve = go.Figure()
+            fig_curve.add_hline(y=0, line_dash="dot", line_color="grey", line_width=1)
+            fig_curve.add_trace(go.Scatter(
+                x=curve_df["exit_date"],
+                y=curve_df["cumulative_pnl"],
+                mode="lines+markers",
+                line=dict(color=curve_colour, width=2),
+                fill="tozeroy",
+                fillcolor=f"rgba({'22,163,74' if final_pnl >= 0 else '220,38,38'},0.12)",
+                hovertemplate=(
+                    "<b>%{x|%Y-%m-%d}</b><br>"
+                    "Cumulative P&L: %{y:+.4f}<extra></extra>"
+                ),
+            ))
+            fig_curve.update_layout(
+                template="plotly_dark",
+                height=320,
+                margin=dict(l=40, r=20, t=20, b=40),
+                xaxis_title="Exit Date",
+                yaxis_title="Cumulative P&L (pts)",
+            )
+            st.plotly_chart(fig_curve, use_container_width=True)
 
     st.divider()
 
+    # ---- Signal Validation (practice trades) --------------------------------
+    if acct_filter in ("All", "Practice"):
+        st.markdown("### Signal Validation")
+        st.caption(
+            "Measures how often confluence signals correctly predicted outcomes "
+            "in **practice** trades — use this to gauge readiness for live trading."
+        )
+
+        practice_for_val = get_all_trades(account_type="PRACTICE")
+        val = signal_validation(practice_for_val)
+        MIN = val["min_trades"]
+
+        if val["confidence_level"] == "insufficient_data":
+            needed = MIN - val["directional"]
+            st.info(
+                f"{val['directional']} / {MIN} directional practice trades completed — "
+                f"need {needed} more for a confidence reading."
+            )
+            if val["directional"] > 0:
+                st.progress(min(val["directional"] / MIN, 1.0))
+        else:
+            v1, v2, v3 = st.columns(3)
+            v1.metric("Directional Signals", val["directional"])
+            v2.metric("Correct Calls",        val["correct"])
+            v3.metric("Signal Accuracy",      f"{val['accuracy']:.0%}")
+
+            _conf_colours = {
+                "strong":   ("#16a34a", "Strong"),
+                "moderate": ("#d97706", "Moderate"),
+                "weak":     ("#dc2626", "Weak"),
+            }
+            card_colour, card_label = _conf_colours.get(
+                val["confidence_level"], ("#6b7280", "Unknown")
+            )
+            rec_text = html.escape(val["recommendation"] or "")
+            st.markdown(
+                f"<div style='border-left:4px solid {card_colour};padding:8px 16px;"
+                f"background:rgba(0,0,0,0.2);border-radius:0 4px 4px 0;margin-top:8px'>"
+                f"<strong style='color:{card_colour}'>Confidence: {card_label}</strong>"
+                f"<br><span style='color:#cbd5e1'>{rec_text}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+
     # ---- Win rate by signal type -------------------------------------------
-    sig_df  = accuracy_by_signal_type(closed_trades)
-    reg_df  = accuracy_by_regime(closed_trades)
+    sig_df = accuracy_by_signal_type(closed_trades)
+    reg_df = accuracy_by_regime(closed_trades)
 
     if not sig_df.empty or not reg_df.empty:
         ch1, ch2 = st.columns(2)
@@ -1050,9 +1240,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
         if not sig_df.empty:
             with ch1:
                 st.markdown("### Win Rate by Signal Type")
-                bar_colours = [
-                    _pnl_colour(r - 0.5) for r in sig_df["Win Rate"]
-                ]
+                bar_colours = [_pnl_colour(r - 0.5) for r in sig_df["Win Rate"]]
                 fig_sig = go.Figure(go.Bar(
                     x=sig_df["Signal"],
                     y=sig_df["Win Rate"] * 100,
@@ -1098,7 +1286,10 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
 
     if not ind_df.empty:
         st.markdown("### Indicator Accuracy")
-        st.caption("Hit rate = (bullish calls that were profitable + bearish calls that lost) / total directional calls")
+        st.caption(
+            "Hit rate = (bullish calls that were profitable + "
+            "bearish calls that lost) / total directional calls"
+        )
 
         def _style_hit(val):
             if val is None or not isinstance(val, float):
@@ -1120,19 +1311,23 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
     # ---- Closed trades table -----------------------------------------------
     if closed_trades:
         st.markdown("### Closed Trades")
+        show_acct_col = acct_filter == "All"
         ct_rows = []
         for t in reversed(closed_trades):     # most recent first
-            ct_rows.append({
-                "Ticker":    t.get("ticker", ""),
-                "Signal":    (t.get("signal_type") or "—").replace("_", " "),
-                "Dir":       t.get("direction", "LONG"),
-                "Entry":     float(t.get("entry_price") or 0),
-                "Exit":      float(t.get("exit_price")  or 0),
-                "P&L pts":   float(t.get("pnl")         or 0),
-                "P&L %":     float(t.get("pnl_pct")     or 0),
-                "Days":      t.get("holding_days"),
-                "Regime":    (t.get("regime") or "—").replace("_", " "),
-            })
+            row = {
+                "Ticker":  t.get("ticker", ""),
+                "Signal":  (t.get("signal_type") or "—").replace("_", " "),
+                "Dir":     t.get("direction", "LONG"),
+                "Entry":   float(t.get("entry_price") or 0),
+                "Exit":    float(t.get("exit_price")  or 0),
+                "P&L pts": float(t.get("pnl")         or 0),
+                "P&L %":   float(t.get("pnl_pct")     or 0),
+                "Days":    t.get("holding_days"),
+                "Regime":  (t.get("regime") or "—").replace("_", " "),
+            }
+            if show_acct_col:
+                row["Account"] = t.get("account_type") or "PRACTICE"
+            ct_rows.append(row)
 
         ct_df = pd.DataFrame(ct_rows)
 
@@ -1140,6 +1335,11 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
             if not isinstance(val, (int, float)):
                 return ""
             return f"color:{_pnl_colour(val)};font-weight:bold"
+
+        def _style_acct_col(val):
+            if val == "LIVE":     return "color:#6ee7b7;font-weight:bold"
+            if val == "PRACTICE": return "color:#a5b4fc"
+            return ""
 
         ct_styler = (
             ct_df.style
@@ -1151,6 +1351,8 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 "P&L %":   "{:+.2f}%",
             })
         )
+        if show_acct_col:
+            ct_styler = ct_styler.map(_style_acct_col, subset=["Account"])
         st.dataframe(ct_styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(ct_rows))
 

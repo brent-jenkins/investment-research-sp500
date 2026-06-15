@@ -161,6 +161,76 @@ def accuracy_by_indicator(trades: list[dict]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Signal validation (practice → live readiness)
+# ---------------------------------------------------------------------------
+
+def signal_validation(practice_trades: list[dict]) -> dict:
+    """Analyse how well confluence signals predicted outcomes in practice trades.
+
+    Args:
+        practice_trades: All practice trades (open and closed); the function
+                         filters to closed directional ones internally.
+
+    Returns:
+        Dict with accuracy stats and a confidence level + recommendation string.
+        ``confidence_level`` is one of: ``insufficient_data``, ``strong``,
+        ``moderate``, ``weak``.  ``accuracy`` is None when there is
+        insufficient data.
+    """
+    MIN_TRADES = 20
+    closed = _closed(practice_trades)
+    directional = [
+        t for t in closed
+        if t.get("signal_type") and t.get("signal_type") not in ("NEUTRAL", "")
+    ]
+
+    if not directional:
+        return {
+            "total_closed":     len(closed),
+            "directional":      0,
+            "correct":          0,
+            "accuracy":         None,
+            "confidence_level": "insufficient_data",
+            "recommendation":   None,
+            "min_trades":       MIN_TRADES,
+        }
+
+    correct  = [t for t in directional if float(t.get("pnl", 0)) > 0]
+    accuracy = len(correct) / len(directional)
+
+    if len(directional) < MIN_TRADES:
+        confidence_level = "insufficient_data"
+        recommendation   = None
+    elif accuracy >= 0.60:
+        confidence_level = "strong"
+        recommendation   = (
+            "Signal accuracy exceeds 60% across practice trades — "
+            "consider opening a live position."
+        )
+    elif accuracy >= 0.50:
+        confidence_level = "moderate"
+        recommendation   = (
+            "Accuracy is above 50% — continue building the practice track record "
+            "before committing live capital."
+        )
+    else:
+        confidence_level = "weak"
+        recommendation   = (
+            "Signals are underperforming vs random — review strategy before going live."
+        )
+
+    return {
+        "total_closed":     len(closed),
+        "directional":      len(directional),
+        "correct":          len(correct),
+        "accuracy":         accuracy,
+        "confidence_level": confidence_level,
+        "recommendation":   recommendation,
+        "min_trades":       MIN_TRADES,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Equity curve
 # ---------------------------------------------------------------------------
 

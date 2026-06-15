@@ -167,13 +167,18 @@ class Signal(Base):
 
 
 class Trade(Base):
-    """eToro trades logged manually after replicating confluence signals."""
+    """Trades logged manually after replicating confluence signals, across multiple accounts."""
 
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     ticker = Column(String(20), nullable=False, index=True)
     signal_id = Column(Integer, index=True)
+
+    # Account context
+    account_type = Column(String(10), default="PRACTICE")  # PRACTICE / LIVE
+    account_name = Column(String(64), default="")
+    account_id   = Column(String(32), default="")
 
     # Signal context at time of entry
     signal_type = Column(String(15))       # STRONG_BUY / BUY / SELL / STRONG_SELL
@@ -339,6 +344,9 @@ def _apply_migrations(engine) -> None:
         ("trades",     "volume_score",        "INTEGER"),
         ("trades",     "macro_score",         "INTEGER"),
         ("trades",     "holding_days",        "INTEGER"),
+        ("trades",     "account_type",        "VARCHAR(10)  DEFAULT 'PRACTICE'"),
+        ("trades",     "account_name",        "VARCHAR(64)  DEFAULT 'Trading212 Practice'"),
+        ("trades",     "account_id",          "VARCHAR(32)  DEFAULT 't212_practice'"),
     ]
     for table, column, col_type in new_columns:
         try:
