@@ -155,10 +155,27 @@ database:
   path: "database/investment_research.db"
 
 scheduler:
-  # Cron expression for daily data pull — 21:30 UTC = after NYSE close (16:00 ET)
-  hour: 21
-  minute: 30
   timezone: "UTC"
+  # Three daily runs on weekdays (Mon–Fri):
+  #   07:00 UTC  Pre-market  — analysis only (Asian session closed, European markets opening)
+  #   13:30 UTC  US open     — analysis only (catches overnight moves before US open)
+  #   21:30 UTC  End of day  — full data refresh + analysis (primary run, after NYSE close)
+  runs:
+    pre_market:
+      hour: 7
+      minute: 0
+      label: "Pre-Market"
+      type: "analysis_only"
+    us_open:
+      hour: 13
+      minute: 30
+      label: "US Open"
+      type: "analysis_only"
+    eod:
+      hour: 21
+      minute: 30
+      label: "End of Day"
+      type: "full"
 
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html

@@ -15,7 +15,15 @@ python -m streamlit run main.py
 
 First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls up to 10 years of OHLCV history per asset on the first load for each ticker; subsequent runs are incremental (only days since the last stored date). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
 
-After the first run, analysis and signals are automated: on every Streamlit startup the app re-runs analysis if price data exists, and the APScheduler job fires at **21:30 UTC on weekdays** to pull incremental prices and immediately run analysis + signals for the full watchlist. Manual clicks are only needed on the very first run.
+After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Three APScheduler jobs fire on weekdays:
+
+| Time (UTC) | Type | What it does |
+|---|---|---|
+| **07:00** | Analysis only | Runs full analysis pipeline on stored data (Asian closed, European opening) |
+| **13:30** | Analysis only | Runs full analysis pipeline on stored data (before US open) |
+| **21:30** | Full refresh | Pulls incremental prices for open exchanges, then runs full analysis |
+
+All three runs execute `run_analysis()` → `generate_signals()` → `compute_all_pairs()` and stamp `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
 
 The FRED API key for yield-curve data lives in `config.yaml` under `macro.fred_api_key`. Without it, VIX scoring still works; yield-curve scoring returns 0.
 
@@ -139,7 +147,7 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 `_render_home_page()` powers both the **Status** page and the Charts landing (shown when no asset is selected). It draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
 
-The **APScheduler post-refresh pipeline** in `data/scheduler.py` runs nightly at 21:30 UTC: `pull_incremental()` → stamp `last_refresh_run` → `run_analysis()` → `generate_signals()` → stamp `last_analysis_run`. Each step is wrapped in its own `try/except` so an analysis failure never prevents the timestamp from being written.
+**`data/scheduler.py`** registers three APScheduler jobs on weekdays. All three share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check) and stamps `last_full_refresh` after the data pull succeeds. Each step is in its own `try/except` so one failure never blocks the rest.
 
 ### Trade lifecycle
 

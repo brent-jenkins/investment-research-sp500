@@ -23,7 +23,7 @@ from analysis.confluence import generate_signals, get_last_signal_timestamp, get
 from analysis.correlations import build_correlation_matrix, compute_all_pairs, get_stored_correlations
 from analysis.engine import run_analysis
 from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime
-from data.database import get_engine, get_metadata, init_db
+from data.database import get_engine, get_metadata, init_db, set_metadata
 from data.ingestion import (
     get_all_tickers,
     get_price_df,
@@ -84,15 +84,25 @@ def _cached_latest_price(ticker: str) -> float | None:
 
 
 @st.cache_data(ttl=60)
-def _cached_last_refresh() -> "datetime | None":
-    """Last data refresh timestamp, cached for 60 s to avoid repeated DB reads."""
-    return get_metadata("last_refresh_run")
+def _cached_last_full_refresh() -> "datetime | None":
+    """Timestamp of the last successful data pull (EOD scheduled run or manual refresh).
+
+    Reads last_full_refresh first; falls back to last_refresh_run for backward
+    compat with databases written before the multi-run scheduler was deployed.
+    """
+    return get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
 
 
 @st.cache_data(ttl=60)
 def _cached_last_analysis() -> "datetime | None":
-    """Last analysis run timestamp, cached for 60 s to avoid repeated DB reads."""
+    """Last analysis run timestamp (any run type), cached for 60 s."""
     return get_metadata("last_analysis_run")
+
+
+@st.cache_data(ttl=60)
+def _cached_last_run_type() -> "str | None":
+    """Run type of the most recent scheduled job ('full' or 'analysis_only')."""
+    return get_metadata("last_run_type")  # type: ignore[return-value]
 
 
 def _has_price_data() -> bool:
@@ -170,13 +180,13 @@ def _age_display(ts: datetime | None) -> tuple[str, str]:
     return _ts.strftime("%Y-%m-%d %H:%M UTC"), age
 
 
-def _next_scheduled_run() -> datetime:
-    """Return the next 21:30 UTC weekday datetime (Mon–Fri)."""
+def _next_run_for_time(hour: int, minute: int) -> datetime:
+    """Return the next weekday datetime when the job at *hour*:*minute* UTC fires."""
     now = datetime.utcnow()
-    candidate = now.replace(hour=21, minute=30, second=0, microsecond=0)
-    if now >= candidate or now.weekday() >= 5:
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
         candidate += timedelta(days=1)
-    while candidate.weekday() >= 5:
+    while candidate.weekday() >= 5:   # skip Sat (5) and Sun (6)
         candidate += timedelta(days=1)
     return candidate
 
@@ -1161,25 +1171,23 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     # ── Collect all status data ───────────────────────────────────────────
     deploy_ts, deploy_msg      = _git_log_info()
     uptime                     = _service_uptime()
-    last_refresh               = _cached_last_refresh()
+    last_full_refresh          = _cached_last_full_refresh()
     last_analysis              = _cached_last_analysis()
-    next_run                   = _next_scheduled_run()
+    last_run_type              = _cached_last_run_type()
     db_size_str, db_level      = _db_size(config)
 
-    refresh_val,  refresh_sub  = _age_display(last_refresh)
+    refresh_val,  refresh_sub  = _age_display(last_full_refresh)
     analysis_val, analysis_sub = _age_display(last_analysis)
-    # Data refresh: amber after 2 days, red after 4 days (markets closed weekends
-    # so 2 days is the natural cadence; 4+ days indicates something is wrong).
-    refresh_level  = _age_level(last_refresh,  warn_hours=48.0, error_hours=96.0)
-    analysis_level = _age_level(last_analysis, warn_hours=48.0, error_hours=96.0)
+    # Full refresh: amber after 2 days, red after 4 (weekends break the daily cadence).
+    refresh_level  = _age_level(last_full_refresh, warn_hours=48.0, error_hours=96.0)
+    # Analysis: amber after 14h (should run 3× per weekday), red after 28h.
+    analysis_level = _age_level(last_analysis,     warn_hours=14.0, error_hours=28.0)
 
-    delta_secs = (next_run - datetime.utcnow()).total_seconds()
-    if delta_secs < 3600:
-        next_sub = f"in {int(delta_secs / 60)}m"
-    elif delta_secs < 86400:
-        next_sub = f"in {delta_secs / 3600:.1f}h"
-    else:
-        next_sub = f"in {delta_secs / 86400:.1f}d"
+    _RUN_TYPE_LABELS = {
+        "full":          "Full Refresh",
+        "analysis_only": "Analysis Only",
+    }
+    run_type_label = _RUN_TYPE_LABELS.get(last_run_type or "", "—")
 
     # ── Row 1: deployment / uptime / database ─────────────────────────────
     c1, c2, c3 = st.columns(3)
@@ -1189,12 +1197,43 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
-    # ── Row 2: data freshness / next run ──────────────────────────────────
+    # ── Row 2: data freshness / analysis freshness / last run type ────────
     c1, c2, c3 = st.columns(3)
-    _status_card(c1, "Last Data Refresh",  refresh_val,  refresh_sub,  refresh_level)
-    _status_card(c2, "Last Analysis Run",  analysis_val, analysis_sub, analysis_level)
-    _status_card(c3, "Next Scheduled Run",
-                 next_run.strftime("%a %Y-%m-%d %H:%M UTC"), next_sub, "info")
+    _status_card(c1, "Last Full Data Refresh",  refresh_val,  refresh_sub,  refresh_level)
+    _status_card(c2, "Last Analysis Update",    analysis_val, analysis_sub, analysis_level)
+    _status_card(c3, "Last Run Type",           run_type_label,
+                 "full = data pull + analysis" if last_run_type == "full"
+                 else ("analysis only — no data pull" if last_run_type == "analysis_only" else ""),
+                 "info" if last_run_type else "warn")
+
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+
+    # ── Row 3: upcoming scheduled runs ────────────────────────────────────
+    sched_runs = config.get("scheduler", {}).get("runs", {})
+    _RUN_DISPLAY = {
+        "pre_market": ("Pre-Market",  "07:00 UTC", "Analysis only — Asian session closed, European opening"),
+        "us_open":    ("US Open",     "13:30 UTC", "Analysis only — catches overnight moves"),
+        "eod":        ("End of Day",  "21:30 UTC", "Full refresh + analysis after NYSE close"),
+    }
+    run_cols = st.columns(len(_RUN_DISPLAY))
+    for col, (run_name, (label, time_str, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
+        run_cfg = sched_runs.get(run_name, {})
+        h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
+        nxt     = _next_run_for_time(h, m)
+        delta   = (nxt - datetime.utcnow()).total_seconds()
+        if delta < 3600:
+            until = f"in {int(delta / 60)}m"
+        elif delta < 86400:
+            until = f"in {delta / 3600:.1f}h"
+        else:
+            until = f"in {delta / 86400:.1f}d"
+        _status_card(
+            col,
+            f"{label} · {time_str}",
+            nxt.strftime("%a %H:%M UTC"),
+            f"{until} — {desc}",
+            "info",
+        )
 
     st.divider()
     mc1, mc2 = st.columns(2)
@@ -1580,19 +1619,23 @@ def main() -> None:
 
         st.divider()
 
-        # Last update timestamp — read from system_metadata so the time
-        # reflects when the refresh actually ran, not a midnight trading date.
-        last_ts = get_metadata("last_refresh_run")
-        if last_ts:
-            st.caption(f"Last data pull: {last_ts.strftime('%Y-%m-%d %H:%M')} UTC")
+        # Last data pull timestamp — prefer last_full_refresh (set by scheduler
+        # and manual refresh); fall back to last_refresh_run for older DBs.
+        last_pull_ts = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
+        if last_pull_ts:
+            st.caption(f"Last data pull: {last_pull_ts.strftime('%Y-%m-%d %H:%M')} UTC")
         else:
             st.caption("No data yet — click Refresh Data to load.")
 
-        # Refresh button
+        # Refresh button — manual full refresh (data pull + metadata stamp)
         if st.button("🔄 Refresh Data", use_container_width=True, type="primary"):
             with st.spinner("Pulling latest prices…"):
                 results = pull_incremental()
                 new_rows = sum(results.values())
+                try:
+                    set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+                except Exception:
+                    pass
             st.success(f"Fetched {new_rows} new rows across {len(results)} tickers.")
             st.rerun()
 

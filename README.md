@@ -81,7 +81,7 @@ journalctl -u investment-research -f   # live logs
 systemctl restart investment-research
 ```
 
-The APScheduler job fires at **21:30 UTC every weekday** (after NYSE close) to pull incremental price data, run analysis, and recompute cross-asset correlations. Exchanges are checked individually via `pandas_market_calendars`; assets on closed exchanges are skipped.
+Three APScheduler jobs fire on weekdays: **07:00 UTC** (analysis only, pre-market), **13:30 UTC** (analysis only, before US open), and **21:30 UTC** (full data pull + analysis, after NYSE close). Exchanges are checked individually via `pandas_market_calendars` for the data pull; assets on closed exchanges are skipped but still analysed from stored data.
 
 ### Deploying updates
 
