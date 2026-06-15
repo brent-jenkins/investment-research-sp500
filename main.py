@@ -1177,53 +1177,51 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
         l_summary = accuracy_summary(l_all)
 
         if not p_summary and not l_summary:
-            st.info("No closed trades yet. Log and close trades on the **Trade Log** page.")
-            return
+            st.info("No closed trades yet — close trades on the **Trade Log** page to see performance stats.")
+        else:
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                st.markdown("#### Practice")
+                if p_summary:
+                    a1, a2, a3 = st.columns(3)
+                    a1.metric("Trades",        p_summary["total_trades"])
+                    a2.metric("Win Rate",      f"{p_summary['win_rate']:.0%}")
+                    a3.metric("Profit Factor", f"{p_summary['profit_factor']:.2f}" if p_summary["profit_factor"] != float("inf") else "∞")
+                    b1, b2 = st.columns(2)
+                    b1.metric("Avg Win %",  f"{p_summary['avg_win_pct']:+.2f}%")
+                    b2.metric("Avg Loss %", f"{p_summary['avg_loss_pct']:+.2f}%")
+                else:
+                    st.caption("No practice trades closed yet.")
 
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            st.markdown("#### Practice")
-            if p_summary:
-                a1, a2, a3 = st.columns(3)
-                a1.metric("Trades",        p_summary["total_trades"])
-                a2.metric("Win Rate",      f"{p_summary['win_rate']:.0%}")
-                a3.metric("Profit Factor", f"{p_summary['profit_factor']:.2f}" if p_summary["profit_factor"] != float("inf") else "∞")
-                b1, b2 = st.columns(2)
-                b1.metric("Avg Win %",  f"{p_summary['avg_win_pct']:+.2f}%")
-                b2.metric("Avg Loss %", f"{p_summary['avg_loss_pct']:+.2f}%")
-            else:
-                st.caption("No practice trades closed yet.")
-
-        with pc2:
-            st.markdown("#### Live")
-            if l_summary:
-                a1, a2, a3 = st.columns(3)
-                a1.metric("Trades",        l_summary["total_trades"])
-                a2.metric("Win Rate",      f"{l_summary['win_rate']:.0%}")
-                a3.metric("Profit Factor", f"{l_summary['profit_factor']:.2f}" if l_summary["profit_factor"] != float("inf") else "∞")
-                b1, b2 = st.columns(2)
-                b1.metric("Avg Win %",  f"{l_summary['avg_win_pct']:+.2f}%")
-                b2.metric("Avg Loss %", f"{l_summary['avg_loss_pct']:+.2f}%")
-            else:
-                st.caption("No live trades closed yet.")
+            with pc2:
+                st.markdown("#### Live")
+                if l_summary:
+                    a1, a2, a3 = st.columns(3)
+                    a1.metric("Trades",        l_summary["total_trades"])
+                    a2.metric("Win Rate",      f"{l_summary['win_rate']:.0%}")
+                    a3.metric("Profit Factor", f"{l_summary['profit_factor']:.2f}" if l_summary["profit_factor"] != float("inf") else "∞")
+                    b1, b2 = st.columns(2)
+                    b1.metric("Avg Win %",  f"{l_summary['avg_win_pct']:+.2f}%")
+                    b2.metric("Avg Loss %", f"{l_summary['avg_loss_pct']:+.2f}%")
+                else:
+                    st.caption("No live trades closed yet.")
     else:
         summary = accuracy_summary(all_trades)
         if not summary:
             st.info(
-                f"No closed {acct_filter.lower()} trades yet. "
-                "Log and close trades on the **Trade Log** page."
+                f"No closed {acct_filter.lower()} trades yet — "
+                "close trades on the **Trade Log** page to see performance stats."
             )
-            return
-
-        s1, s2, s3, s4, s5 = st.columns(5)
-        s1.metric("Total Trades",  summary["total_trades"])
-        s2.metric("Win Rate",      f"{summary['win_rate']:.0%}")
-        s3.metric("Profit Factor", f"{summary['profit_factor']:.2f}" if summary["profit_factor"] != float("inf") else "∞")
-        s4.metric("Best Trade",    f"{summary['best_trade']:+.4f}",  delta=f"{summary['best_trade']:+.4f}")
-        s5.metric("Worst Trade",   f"{summary['worst_trade']:+.4f}", delta=f"{summary['worst_trade']:+.4f}")
-        col_l, col_r = st.columns(2)
-        col_l.metric("Avg Win %",  f"{summary['avg_win_pct']:+.2f}%")
-        col_r.metric("Avg Loss %", f"{summary['avg_loss_pct']:+.2f}%")
+        else:
+            s1, s2, s3, s4, s5 = st.columns(5)
+            s1.metric("Total Trades",  summary["total_trades"])
+            s2.metric("Win Rate",      f"{summary['win_rate']:.0%}")
+            s3.metric("Profit Factor", f"{summary['profit_factor']:.2f}" if summary["profit_factor"] != float("inf") else "∞")
+            s4.metric("Best Trade",    f"{summary['best_trade']:+.4f}",  delta=f"{summary['best_trade']:+.4f}")
+            s5.metric("Worst Trade",   f"{summary['worst_trade']:+.4f}", delta=f"{summary['worst_trade']:+.4f}")
+            col_l, col_r = st.columns(2)
+            col_l.metric("Avg Win %",  f"{summary['avg_win_pct']:+.2f}%")
+            col_r.metric("Avg Loss %", f"{summary['avg_loss_pct']:+.2f}%")
 
     st.divider()
 
