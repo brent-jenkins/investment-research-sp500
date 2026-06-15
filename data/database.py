@@ -198,6 +198,18 @@ class Trade(Base):
     exit_price = Column(Float)
     quantity = Column(Float)
 
+    # CFD / leverage details
+    currency = Column(String(3), default="GBP")          # instrument currency (e.g. USD for US ETFs)
+    account_currency = Column(String(3), default="GBP")  # account currency (e.g. GBP)
+    fx_rate_at_entry = Column(Float, default=1.0)        # instrument/account rate at entry (e.g. GBPUSD)
+    leverage = Column(Integer, default=1)
+    investment_amount = Column(Float)                     # cash invested in account currency
+    margin_required = Column(Float)                       # investment_amount / leverage
+    overnight_rate = Column(Float, default=0.0)           # daily swap as % of position value
+    position_value = Column(Float)                        # investment_amount × leverage
+    spread_cost = Column(Float)                           # opening spread cost in account currency
+    platform_instrument = Column(String(32))              # T212 instrument name if different from ticker
+
     # Outcome (populated on close)
     pnl = Column(Float)
     pnl_pct = Column(Float)
@@ -405,6 +417,16 @@ def _apply_migrations(engine) -> None:
         ("trades",     "account_type",        "VARCHAR(10)  DEFAULT 'PRACTICE'"),
         ("trades",     "account_name",        "VARCHAR(64)  DEFAULT 'Trading212 Practice'"),
         ("trades",     "account_id",          "VARCHAR(32)  DEFAULT 't212_practice'"),
+        ("trades",     "currency",            "VARCHAR(3)   DEFAULT 'GBP'"),
+        ("trades",     "account_currency",    "VARCHAR(3)   DEFAULT 'GBP'"),
+        ("trades",     "fx_rate_at_entry",    "FLOAT        DEFAULT 1.0"),
+        ("trades",     "leverage",            "INTEGER      DEFAULT 1"),
+        ("trades",     "investment_amount",   "FLOAT"),
+        ("trades",     "margin_required",     "FLOAT"),
+        ("trades",     "overnight_rate",      "FLOAT        DEFAULT 0.0"),
+        ("trades",     "position_value",      "FLOAT"),
+        ("trades",     "spread_cost",         "FLOAT"),
+        ("trades",     "platform_instrument", "VARCHAR(32)"),
     ]
     for table, column, col_type in new_columns:
         try:
@@ -413,6 +435,35 @@ def _apply_migrations(engine) -> None:
         except Exception:
             pass  # column already exists — each ALTER TABLE gets its own transaction
                   # so a duplicate-column error never poisons subsequent statements
+
+
+def _apply_data_fixes(engine) -> None:
+    """One-time idempotent data corrections applied after migrations.
+
+    Each fix is guarded by a condition that is False once the fix has already
+    been applied, so it is safe to call on every startup.
+    """
+    with engine.begin() as conn:
+        # Fix: correct the initial INDA SHORT trade logged with the wrong entry
+        # price (49.4200 from yfinance instead of the actual T212 price 49.25).
+        # Only updates rows where the old price is still present and leverage has
+        # not yet been set (leverage IS NULL or <= 1 from the column default).
+        conn.execute(text("""
+            UPDATE trades SET
+                entry_price       = 49.25,
+                direction         = 'SHORT',
+                currency          = 'USD',
+                account_currency  = 'GBP',
+                leverage          = 5,
+                investment_amount = 150.0,
+                margin_required   = 30.0,
+                position_value    = 750.0,
+                overnight_rate    = 0.0251,
+                platform_instrument = 'INDA'
+            WHERE ticker = 'INDA'
+              AND ABS(entry_price - 49.42) < 0.05
+              AND (leverage IS NULL OR leverage <= 1)
+        """))
 
 
 def init_db() -> None:
@@ -447,6 +498,7 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(engine)
     _apply_migrations(engine)
+    _apply_data_fixes(engine)
 
 
 def get_session() -> Session:

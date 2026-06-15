@@ -126,6 +126,28 @@ def _cached_latest_price(ticker: str) -> float | None:
     return get_latest_price(ticker)
 
 
+@st.cache_data(ttl=300)
+def _cached_fx_rate(instrument_ccy: str, account_ccy: str) -> float:
+    """Fetch the FX rate between instrument currency and account currency.
+
+    Returns 1.0 when currencies match or the fetch fails (safe fallback).
+    E.g. instrument=USD, account=GBP → fetches GBPUSD=X → returns ~1.27,
+    meaning 1 GBP = 1.27 USD, so to convert USD P&L to GBP divide by this rate.
+    """
+    if instrument_ccy == account_ccy:
+        return 1.0
+    pair = f"{account_ccy}{instrument_ccy}=X"
+    try:
+        data = yf.download(pair, period="2d", progress=False, auto_adjust=True)
+        if data.empty:
+            return 1.0
+        if hasattr(data.columns, "levels"):
+            data.columns = [col[0] for col in data.columns]
+        return float(data["Close"].iloc[-1])
+    except Exception:
+        return 1.0
+
+
 def _hex_rgba(hx: str, alpha: float) -> str:
     """Convert a 6-digit hex colour string to a CSS rgba() value."""
     h = hx.lstrip("#")
@@ -966,7 +988,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             t212 = t212_names.get(t)
             return f"{base}  ·  T212: {t212}" if t212 else base
 
-        sel_ticker  = st.selectbox(
+        sel_ticker = st.selectbox(
             "Asset",
             ticker_keys,
             format_func=_fmt_trade_ticker,
@@ -979,41 +1001,187 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         sc2.metric("Confluence Score", f"{sig.get('confluence_score', 0):+.3f}" if sig else "—")
         sc3.metric("Regime",           (sig.get("regime") or "—").replace("_", " "))
 
-        with st.form("log_trade_form", clear_on_submit=True):
-            fc1, fc2, fc3 = st.columns(3)
-            direction   = fc1.radio("Direction", ["LONG", "SHORT"], horizontal=True)
-            entry_price = fc2.number_input("Entry Price", min_value=0.0, step=0.01, format="%.4f")
-            quantity    = fc3.number_input("Quantity (units)", min_value=0.001, value=1.0, step=1.0, format="%.3f")
-            notes_text  = st.text_input("Notes (optional)")
-            submitted   = st.form_submit_button("Log Trade", type="primary")
+        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
-            if submitted:
-                if entry_price <= 0:
-                    st.error("Entry price must be greater than 0.")
-                else:
-                    trade_id = log_trade(
-                        ticker=sel_ticker,
-                        direction=direction,
-                        signal_type=sig.get("signal", ""),
-                        confluence_score=float(sig.get("confluence_score") or 0),
-                        regime=sig.get("regime", ""),
-                        trend_score=int(sig.get("trend_score") or 0),
-                        mean_reversion_score=int(sig.get("mean_reversion_score") or 0),
-                        volatility_score=int(sig.get("volatility_score") or 0),
-                        volume_score=int(sig.get("volume_score") or 0),
-                        macro_score=int(sig.get("macro_score") or 0),
-                        entry_price=entry_price,
-                        quantity=quantity,
-                        account_id=sel_acct["id"],
-                        account_name=sel_acct["name"],
-                        account_type=sel_acct.get("type", "PRACTICE"),
-                        notes=notes_text,
-                    )
-                    st.success(
-                        f"Trade #{trade_id} logged for {sel_ticker} "
-                        f"({html.escape(sel_acct['name'])})."
-                    )
-                    st.rerun()
+        # ── Trade inputs (no st.form — dynamic calculations need live rerenders) ──
+        _f1, _f2 = st.columns(2)
+        direction = _f1.radio("Direction", ["LONG", "SHORT"], horizontal=True, key="log_direction")
+
+        # Market price from yfinance shown for reference only — not used as default
+        _ref_price = _cached_latest_price(sel_ticker)
+        _ref_label = (
+            f"Current market price (yfinance): **{_ref_price:,.4f}**"
+            if _ref_price else "Current market price: unavailable"
+        )
+
+        entry_price = _f2.number_input(
+            "Entry Price",
+            min_value=0.0, value=0.0, step=0.01, format="%.4f",
+            key="log_entry_price",
+        )
+        st.caption(f"Enter the exact price shown in Trading212 at time of trade · {_ref_label}")
+
+        # Currency
+        _c1, _c2 = st.columns(2)
+        instr_ccy   = _c1.selectbox("Instrument Currency", ["GBP", "USD", "EUR"], key="log_instr_ccy")
+        account_ccy = _c2.selectbox("Account Currency",    ["GBP", "USD", "EUR"], key="log_acct_ccy")
+
+        fx_rate = 1.0
+        if instr_ccy != account_ccy:
+            fx_rate = _cached_fx_rate(instr_ccy, account_ccy)
+            st.caption(
+                f"FX rate at entry: 1 {account_ccy} = {fx_rate:.4f} {instr_ccy}  "
+                f"(live from yfinance — stored for reference)"
+            )
+
+        # Leverage + investment
+        _l1, _l2, _l3 = st.columns(3)
+        investment_amount = _l1.number_input(
+            f"Investment Amount ({account_ccy})",
+            min_value=0.0, value=0.0, step=10.0, format="%.2f",
+            key="log_investment",
+        )
+        leverage = _l2.number_input(
+            "Leverage", min_value=1, value=1, step=1,
+            key="log_leverage",
+        )
+        position_value   = investment_amount * leverage
+        margin_required  = investment_amount / leverage if leverage > 1 else investment_amount
+        _l3.markdown(
+            f"<div style='padding-top:28px;font-size:0.82rem;color:#94a3b8'>"
+            f"{account_ccy} {investment_amount:,.2f} × {leverage} = "
+            f"<strong style='color:#e2e8f0'>{account_ccy} {position_value:,.2f}</strong> position"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Overnight rate
+        _o1, _o2 = st.columns(2)
+        overnight_rate = _o1.number_input(
+            "Overnight Rate (%)",
+            min_value=0.0, value=0.0, step=0.0001, format="%.4f",
+            help="Daily swap as a percentage of position value (e.g. 0.0251)",
+            key="log_overnight_rate",
+        )
+        daily_swap    = position_value * overnight_rate / 100
+        monthly_swap  = daily_swap * 30
+        if overnight_rate > 0 and position_value > 0:
+            _o2.markdown(
+                f"<div style='padding-top:28px;font-size:0.82rem;color:#94a3b8'>"
+                f"{account_ccy} {position_value:,.2f} × {overnight_rate:.4f}% = "
+                f"<strong style='color:#f59e0b'>{account_ccy} {daily_swap:.2f}/night</strong>"
+                f" · ~{account_ccy} {monthly_swap:.2f} over 30 days"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Spread cost + platform instrument
+        _s1, _s2 = st.columns(2)
+        spread_cost          = _s1.number_input(
+            f"Spread Cost ({account_ccy})", min_value=0.0, value=0.0, step=0.01, format="%.4f",
+            key="log_spread_cost",
+        )
+        default_platform_instr = t212_names.get(sel_ticker, sel_ticker)
+        platform_instrument  = _s2.text_input(
+            "Platform Instrument (T212 name)",
+            value=default_platform_instr,
+            key="log_platform_instrument",
+        )
+
+        notes_text = st.text_input("Notes (optional)", key="log_notes")
+
+        # ── Investment summary box ─────────────────────────────────────────────
+        if investment_amount > 0 and entry_price > 0:
+            breakeven_pct = (spread_cost / position_value * 100) if position_value > 0 else 0.0
+            _ccy = account_ccy
+            st.markdown(
+                f"<div style='background:#1e293b;border:1px solid #334155;border-radius:6px;"
+                f"padding:14px 18px;margin:12px 0;font-family:monospace;font-size:0.82rem;line-height:2'>"
+                f"<div style='color:#94a3b8;margin-bottom:6px;font-family:sans-serif;"
+                f"font-size:0.75rem;letter-spacing:0.08em;text-transform:uppercase'>Trade Summary</div>"
+                f"<span style='color:#94a3b8'>Investment:      </span>"
+                f"<span style='color:#e2e8f0'>{_ccy} {investment_amount:>10,.2f}</span><br>"
+                f"<span style='color:#94a3b8'>Leverage:        </span>"
+                f"<span style='color:#e2e8f0'>1:{leverage:<9}</span><br>"
+                f"<span style='color:#94a3b8'>Position Value:  </span>"
+                f"<span style='color:#e2e8f0'>{_ccy} {position_value:>10,.2f}</span><br>"
+                f"<span style='color:#94a3b8'>Margin Required: </span>"
+                f"<span style='color:#e2e8f0'>{_ccy} {margin_required:>10,.2f}</span><br>"
+                + (
+                    f"<span style='color:#94a3b8'>Opening Spread:  </span>"
+                    f"<span style='color:#e2e8f0'>{_ccy} {spread_cost:>10,.4f}</span><br>"
+                    if spread_cost > 0 else ""
+                )
+                + (
+                    f"<span style='color:#94a3b8'>Daily Swap:      </span>"
+                    f"<span style='color:#f59e0b'>{_ccy} {daily_swap:>9.2f}/night</span><br>"
+                    f"<span style='color:#94a3b8'>30-day Swap Est: </span>"
+                    f"<span style='color:#f59e0b'>{_ccy} {monthly_swap:>10.2f}</span><br>"
+                    if overnight_rate > 0 else ""
+                )
+                + (
+                    f"<span style='color:#94a3b8'>Break-even move: </span>"
+                    f"<span style='color:#e2e8f0'>{breakeven_pct:.4f}%</span>"
+                    f"<span style='color:#6b7280;font-size:0.7rem'> (spread / position)</span><br>"
+                    if spread_cost > 0 and position_value > 0 else ""
+                )
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+            confirmed = st.checkbox(
+                "I confirm this matches what Trading212 shows",
+                key="log_confirmed",
+            )
+        else:
+            confirmed = True  # no summary needed if minimal inputs
+
+        # ── Submit ─────────────────────────────────────────────────────────────
+        _submit_disabled = (not confirmed) or (entry_price <= 0)
+        if st.button(
+            "Log Trade", type="primary",
+            disabled=_submit_disabled,
+            key="log_submit_btn",
+        ):
+            trade_id = log_trade(
+                ticker=sel_ticker,
+                direction=direction,
+                signal_type=sig.get("signal", ""),
+                confluence_score=float(sig.get("confluence_score") or 0),
+                regime=sig.get("regime", ""),
+                trend_score=int(sig.get("trend_score") or 0),
+                mean_reversion_score=int(sig.get("mean_reversion_score") or 0),
+                volatility_score=int(sig.get("volatility_score") or 0),
+                volume_score=int(sig.get("volume_score") or 0),
+                macro_score=int(sig.get("macro_score") or 0),
+                entry_price=entry_price,
+                quantity=float(investment_amount or 1),
+                account_id=sel_acct["id"],
+                account_name=sel_acct["name"],
+                account_type=sel_acct.get("type", "PRACTICE"),
+                notes=notes_text,
+                currency=instr_ccy,
+                account_currency=account_ccy,
+                fx_rate_at_entry=fx_rate,
+                leverage=int(leverage),
+                investment_amount=float(investment_amount),
+                margin_required=float(margin_required),
+                overnight_rate=float(overnight_rate),
+                position_value=float(position_value),
+                spread_cost=float(spread_cost) if spread_cost > 0 else None,
+                platform_instrument=platform_instrument if platform_instrument else None,
+            )
+            # Clear form state so widgets reset to defaults on next render
+            for _k in [
+                "log_entry_price", "log_direction", "log_instr_ccy", "log_acct_ccy",
+                "log_investment", "log_leverage", "log_overnight_rate", "log_spread_cost",
+                "log_platform_instrument", "log_notes", "log_confirmed",
+            ]:
+                st.session_state.pop(_k, None)
+            st.success(
+                f"Trade #{trade_id} logged for {sel_ticker} "
+                f"({html.escape(sel_acct['name'])})."
+            )
+            st.rerun()
 
     st.divider()
 
@@ -1040,40 +1208,66 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
         rows = []
         for t in open_trades:
-            ticker    = t["ticker"]
-            live      = live_prices.get(ticker)
-            entry     = float(t.get("entry_price") or 0)
-            direction = t.get("direction", "LONG")
-            entry_dt  = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
-            days_held = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else None
+            ticker         = t["ticker"]
+            live           = live_prices.get(ticker)
+            entry          = float(t.get("entry_price") or 0)
+            direction      = t.get("direction", "LONG")
+            leverage       = int(t.get("leverage") or 1)
+            pos_val        = float(t.get("position_value") or 0)
+            invest_amt     = float(t.get("investment_amount") or 0)
+            o_rate         = float(t.get("overnight_rate") or 0)
+            acct_ccy       = t.get("account_currency") or "GBP"
+            entry_dt       = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
+            days_held      = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else 0
+            mult           = 1 if direction == "LONG" else -1
 
+            # Raw price move %
+            pos_pnl_pct = None
             if live and entry:
-                mult       = 1 if direction == "LONG" else -1
-                unreal_pct = (live - entry) / entry * mult * 100
-            else:
-                unreal_pct = None
+                pos_pnl_pct = (live - entry) / entry * mult * 100
+
+            # Leveraged margin return %
+            margin_pnl_pct = (pos_pnl_pct * leverage) if (pos_pnl_pct is not None and leverage > 1) else pos_pnl_pct
+
+            # P&L in account currency using stored position_value (already in acct ccy)
+            pnl_acct = None
+            if pos_pnl_pct is not None and pos_val > 0:
+                pnl_acct = pos_val * pos_pnl_pct / 100
+
+            # Accrued swap cost
+            daily_swap    = pos_val * o_rate / 100 if pos_val > 0 and o_rate > 0 else 0.0
+            accrued_swap  = daily_swap * days_held
+
+            # Net P&L after swap
+            net_pnl = (pnl_acct - accrued_swap) if pnl_acct is not None else None
 
             rows.append({
                 "ID":           t["id"],
                 "Type":         t.get("account_type") or "PRACTICE",
                 "Ticker":       ticker,
-                "Signal":       (t.get("signal_type") or "—").replace("_", " "),
                 "Dir":          direction,
+                "Ccy":          acct_ccy,
                 "Entry Date":   entry_dt.strftime("%Y-%m-%d") if entry_dt else "—",
                 "Entry Price":  entry,
                 "Live Price":   live,
-                "Unreal P&L %": unreal_pct,
-                "Days Held":    days_held,
+                "Pos P&L %":    pos_pnl_pct,
+                "Margin P&L %": margin_pnl_pct,
+                "P&L":          pnl_acct,
+                "Swap":         accrued_swap if accrued_swap > 0 else None,
+                "Net P&L":      net_pnl,
+                "Days":         days_held,
             })
 
         open_df = pd.DataFrame(rows)
 
-        def _style_unreal(val):
-            if not isinstance(val, float):
-                return ""
-            if val > 0:  return "color:#16a34a;font-weight:bold"
-            if val < 0:  return "color:#dc2626;font-weight:bold"
-            return ""
+        _pct_cols  = ["Pos P&L %", "Margin P&L %"]
+        _val_cols  = ["P&L", "Net P&L"]
+        _swap_cols = ["Swap"]
+
+        def _style_signed(val):
+            if not isinstance(val, (int, float)): return ""
+            return ("color:#16a34a;font-weight:bold" if val > 0
+                    else "color:#dc2626;font-weight:bold" if val < 0 else "")
 
         def _style_acct_badge(val):
             if val == "LIVE":     return "color:#6ee7b7;font-weight:bold"
@@ -1082,14 +1276,19 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
         styler = (
             open_df.style
-            .map(_style_unreal,    subset=["Unreal P&L %"])
             .map(_style_acct_badge, subset=["Type"])
+            .map(_style_signed, subset=_pct_cols + _val_cols)
             .format({
                 "Entry Price":  "{:,.4f}",
                 "Live Price":   lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
-                "Unreal P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+                "Pos P&L %":    lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+                "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+                "P&L":          lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+                "Swap":         lambda v: f"{v:.2f}" if isinstance(v, float) else "—",
+                "Net P&L":      lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
             })
         )
+
         st.dataframe(styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(rows))
 

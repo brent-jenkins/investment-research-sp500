@@ -83,6 +83,17 @@ def log_trade(
     account_type: str = "PRACTICE",
     entry_date: Optional[datetime] = None,
     notes: str = "",
+    # CFD / leverage fields
+    currency: str = "GBP",
+    account_currency: str = "GBP",
+    fx_rate_at_entry: float = 1.0,
+    leverage: int = 1,
+    investment_amount: Optional[float] = None,
+    margin_required: Optional[float] = None,
+    overnight_rate: float = 0.0,
+    position_value: Optional[float] = None,
+    spread_cost: Optional[float] = None,
+    platform_instrument: Optional[str] = None,
 ) -> int:
     """Insert a new open trade and return its database id."""
     if entry_date is None:
@@ -109,6 +120,16 @@ def log_trade(
             entry_date=entry_date,
             is_open=True,
             notes=notes,
+            currency=currency,
+            account_currency=account_currency,
+            fx_rate_at_entry=fx_rate_at_entry,
+            leverage=leverage,
+            investment_amount=investment_amount,
+            margin_required=margin_required,
+            overnight_rate=overnight_rate,
+            position_value=position_value,
+            spread_cost=spread_cost,
+            platform_instrument=platform_instrument,
         )
         session.add(trade)
         session.flush()
@@ -138,10 +159,14 @@ def close_trade(
     if row is None:
         raise ValueError(f"Trade {trade_id} not found")
 
-    entry_price    = float(row["entry_price"] or 0)
-    direction      = row.get("direction") or "LONG"
-    quantity       = float(row["quantity"] or 1)
-    entry_date_raw = row["entry_date"]
+    entry_price       = float(row["entry_price"] or 0)
+    direction         = row.get("direction") or "LONG"
+    quantity          = float(row["quantity"] or 1)
+    leverage          = int(row.get("leverage") or 1)
+    position_value    = float(row.get("position_value") or 0)
+    investment_amount = float(row.get("investment_amount") or 0)
+    overnight_rate    = float(row.get("overnight_rate") or 0)
+    entry_date_raw    = row["entry_date"]
 
     if isinstance(entry_date_raw, str):
         entry_dt = datetime.fromisoformat(entry_date_raw)
@@ -151,9 +176,19 @@ def close_trade(
         entry_dt = datetime.utcnow()
 
     multiplier   = 1 if direction == "LONG" else -1
-    pnl          = round((exit_price - entry_price) * multiplier * quantity, 4)
-    pnl_pct      = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
     holding_days = max(0, (exit_date - entry_dt).days)
+
+    if leverage > 1 and position_value > 0 and entry_price > 0:
+        # CFD trade: P&L in account currency based on position value
+        price_move_pct = (exit_price - entry_price) / entry_price * multiplier
+        gross_pnl      = position_value * price_move_pct
+        swap_total     = holding_days * position_value * overnight_rate / 100
+        pnl            = round(gross_pnl - swap_total, 4)
+        base           = investment_amount if investment_amount > 0 else position_value
+        pnl_pct        = round(pnl / base * 100, 4) if base else 0.0
+    else:
+        pnl     = round((exit_price - entry_price) * multiplier * quantity, 4)
+        pnl_pct = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
 
     with engine.begin() as conn:
         conn.execute(
