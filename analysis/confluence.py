@@ -312,6 +312,21 @@ def score_ticker(
     }
 
     weights = _effective_weights(regime_result["weights"], config)
+
+    # When the correlation module has no data at all (no direct pairs, no
+    # usable proxy), redistribute its weight proportionally across the other
+    # five modules so untracked assets aren't penalised by an empty layer.
+    if corr_res.get("untracked", False):
+        corr_w = weights.get("correlation", 0.0)
+        if corr_w > 0:
+            other_sum = sum(w for k, w in weights.items() if k != "correlation")
+            if other_sum > 0:
+                scale = 1.0 / other_sum
+                weights = {
+                    k: round(w * scale, 6) if k != "correlation" else 0.0
+                    for k, w in weights.items()
+                }
+
     w_score = _weighted_score(module_scores, weights)
 
     # Apply regime overlays

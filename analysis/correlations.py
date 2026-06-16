@@ -436,11 +436,78 @@ _ALL_PAIR_TICKERS: frozenset[str] = frozenset(
     t for pair in RELATIONSHIP_MAP for t in (pair["ticker_a"], pair["ticker_b"])
 )
 
+# ---------------------------------------------------------------------------
+# Category proxy mapping
+# ---------------------------------------------------------------------------
+
+# Assets not directly in any RELATIONSHIP_MAP pair can inherit a correlation
+# signal from a closely related proxy ticker at 50% strength.  The proxy must
+# itself appear in RELATIONSHIP_MAP so that stored pair data exists in the
+# correlations table after compute_all_pairs() has run.
+#
+# Only consulted when the ticker has zero direct pairs — entries for tickers
+# already in RELATIONSHIP_MAP are harmless (the direct-pair path runs first).
+CATEGORY_PROXY: dict[str, str] = {
+    "SOXX": "^GSPC",   # semis follow market
+    "IGV":  "^GSPC",   # software follows market
+    "SKYY": "^GSPC",   # cloud follows market
+    "VNQ":  "TLT",     # REITs follow bonds
+    "AMLP": "USO",     # pipelines follow oil
+    "IBB":  "^GSPC",   # biotech follows market
+    "EWZ":  "EEM",     # Brazil follows EM
+    "EWJ":  "^N225",   # Japan ETF follows Nikkei
+    "EWG":  "^GDAXI",  # Germany ETF follows DAX
+    "FXI":  "^HSI",    # China ETF follows Hang Seng
+    "INDA": "EEM",     # India follows EM
+    "GDX":  "GLD",     # gold miners follow gold
+    "SLV":  "GLD",     # silver follows gold
+    "KRE":  "KBE",     # regional banks follow banks
+    "XLP":  "^GSPC",   # staples follow market
+    "XLU":  "TLT",     # utilities follow bonds
+    "XLRE": "TLT",     # real estate follows bonds
+}
+
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
+
+
+def _get_stored_correlation_score(proxy_ticker: str) -> Optional[int]:
+    """Return the most recent aggregated pair_score for proxy_ticker from the DB.
+
+    Reads all correlation rows for the most recent date where proxy_ticker
+    appears as either ticker_a or ticker_b, averages the pair_scores, and
+    maps to -1 / 0 / 1.  Returns None when no stored data is available.
+    """
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            date_row = conn.execute(
+                text(
+                    "SELECT MAX(date) AS max_date FROM correlations "
+                    "WHERE ticker_a = :t OR ticker_b = :t"
+                ),
+                {"t": proxy_ticker},
+            ).mappings().first()
+            if not date_row or date_row["max_date"] is None:
+                return None
+            rows = conn.execute(
+                text(
+                    "SELECT pair_score FROM correlations "
+                    "WHERE (ticker_a = :t OR ticker_b = :t) AND date = :d"
+                ),
+                {"t": proxy_ticker, "d": date_row["max_date"]},
+            ).mappings().all()
+        scores = [r["pair_score"] for r in rows if r.get("pair_score") is not None]
+        if not scores:
+            return None
+        avg = sum(scores) / len(scores)
+        return 1 if avg >= 0.5 else (-1 if avg <= -0.5 else 0)
+    except Exception as exc:
+        logger.warning("Proxy correlation lookup failed for %s: %s", proxy_ticker, exc)
+        return None
 
 
 def _compute_pair(
@@ -595,7 +662,28 @@ def compute_correlations(ticker: str, config: Optional[dict] = None) -> dict:
         pairs_data.append({**rel, **result})
 
     if not pairs_data:
-        return {"score": 0, "pairs": [], "correlation_score": 0.0}
+        # Try inheriting a directional signal from a category proxy ticker.
+        proxy = CATEGORY_PROXY.get(ticker)
+        if proxy is not None:
+            proxy_score = _get_stored_correlation_score(proxy)
+            if proxy_score is not None and proxy_score != 0:
+                # Apply at 50% weight — halves signal strength but preserves direction.
+                weighted = proxy_score * 0.5
+                return {
+                    "score":             weighted,
+                    "pairs":             [],
+                    "correlation_score": weighted,
+                    "proxy_ticker":      proxy,
+                    "untracked":         False,
+                }
+        # No direct pairs and no usable proxy — flag for weight redistribution.
+        return {
+            "score":             0,
+            "pairs":             [],
+            "correlation_score": 0.0,
+            "proxy_ticker":      proxy if proxy is not None else None,
+            "untracked":         True,
+        }
 
     pair_scores = [p["pair_score"] for p in pairs_data]
     avg   = sum(pair_scores) / len(pair_scores)
@@ -605,6 +693,8 @@ def compute_correlations(ticker: str, config: Optional[dict] = None) -> dict:
         "score":             score,
         "pairs":             pairs_data,
         "correlation_score": round(avg, 3),
+        "proxy_ticker":      None,
+        "untracked":         False,
     }
 
 
