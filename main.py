@@ -1948,9 +1948,13 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "% to TP":      pct_to_tp,    # positive = still has room to TP
                 "Live R:R":     live_rr,       # positive = in profit vs risk
                 "Progress":     progress,      # 0–100, where 0=SL, 100=TP
-                "P&L (raw)":    (f"{_quote_ccy_sym(ticker)}{pnl_instr:+.4f}"
-                                 if isinstance(pnl_instr, float) else "—"),
-                "P&L £":        pnl_acct,     # in account currency (GBP)
+                "P&L":          (
+                                    f"£{pnl_acct:+.2f} ({_quote_ccy_sym(ticker)}{pnl_instr:+.4f})"
+                                    if isinstance(pnl_acct, float) and isinstance(pnl_instr, float)
+                                    else f"£{pnl_acct:+.2f}" if isinstance(pnl_acct, float)
+                                    else f"{_quote_ccy_sym(ticker)}{pnl_instr:+.4f}" if isinstance(pnl_instr, float)
+                                    else "—"
+                                ),
                 "Margin P&L %": margin_pnl_pct,
                 "Swap":         accrued_swap,  # negative — always a cost
                 "FX Fee £":     fx_fee_cost,   # estimated: 0.50% of current P&L (negative = cost)
@@ -2001,15 +2005,14 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "% to SL":      lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
             "% to TP":      lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
             "Live R:R":     lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
-            "P&L (raw)":    lambda v: v if isinstance(v, str) else "—",
-            "P&L £":        lambda v: f"£{v:+.2f}" if isinstance(v, float) else "—",
+            "P&L":          lambda v: v if isinstance(v, str) else "—",
             "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
             "Swap":         lambda v: f"£{v:.2f}" if isinstance(v, float) else "—",
             "FX Fee £":     lambda v: f"£{v:.4f}" if isinstance(v, float) else "—",
             "Net P&L £":    lambda v: f"£{v:+.2f}" if isinstance(v, float) else "—",
         }
 
-        _styler_cols_base = ["P&L (raw)", "P&L £", "Margin P&L %", "Net P&L £", "Live R:R"]
+        _styler_cols_base = ["P&L", "Margin P&L %", "Net P&L £", "Live R:R"]
         _styler = (
             open_df.style
             .map(_style_acct_badge, subset=["Type"])
@@ -2042,7 +2045,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "Trading212's live price are expected.** "
             "P&L uses a spread-adjusted close price (SHORT: +spread/units, LONG: −spread/units). "
             "Margin P&L % = position price move % × leverage. "
-            "Ccy = instrument currency; P&L (raw) in instrument currency, P&L £ / Net P&L £ in GBP. "
+            "P&L = £ primary (GBP) with raw quote-currency in parentheses; Net P&L £ after swap and FX fee. "
             "Swap = accrued overnight cost (basis × rate × days). "
             "FX Fee £ = estimated 0.50% of current unrealised P&L. "
             "SL/TP = stored from trade plan; % to SL (red = price moving toward stop). "
@@ -3211,19 +3214,32 @@ def _render_trade_card(e: dict) -> None:
     days_held = int(e.get("days_held") or 0)
     acct_name = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
 
-    unreal_pnl       = e.get("unreal_pnl")
-    unreal_pct       = e.get("unreal_pct")
+    unreal_pnl        = e.get("unreal_pnl")
+    unreal_pnl_gbp    = e.get("unreal_pnl_gbp")
+    unreal_pct        = e.get("unreal_pct")
     price_unavailable = e.get("price_unavailable", e.get("live_price") is None)
+
     if price_unavailable:
-        pnl_str = "⚠ Price unavailable"
-        pnl_col = "#f59e0b"
+        pnl_html = html.escape("⚠ Price unavailable")
+        pnl_col  = "#f59e0b"
+    elif unreal_pnl_gbp is not None and unreal_pct is not None:
+        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
+        _raw_sym = _quote_ccy_sym(e.get("ticker") or "")
+        _raw_txt = (html.escape(f"{_raw_sym}{unreal_pnl:+.2f} raw")
+                    if unreal_pnl is not None else "")
+        pnl_html = (
+            html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
+            + (f"<br><span style='color:#6b7280;font-size:0.75rem;font-weight:400'>"
+               f"{_raw_txt}</span>"
+               if _raw_txt else "")
+        )
     elif unreal_pnl is not None and unreal_pct is not None:
         _card_sym = _quote_ccy_sym(e.get("ticker") or "")
-        pnl_str = f"{_card_sym}{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
-        pnl_col = "#16a34a" if unreal_pnl >= 0 else "#dc2626"
+        pnl_col  = "#16a34a" if unreal_pnl >= 0 else "#dc2626"
+        pnl_html = html.escape(f"{_card_sym}{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)")
     else:
-        pnl_str = "—"
-        pnl_col = "#6b7280"
+        pnl_html = "—"
+        pnl_col  = "#6b7280"
 
     entry_sig = html.escape((e.get("entry_signal")   or "—").replace("_", " "))
     curr_sig  = html.escape((e.get("current_signal") or "—").replace("_", " "))
@@ -3251,7 +3267,7 @@ def _render_trade_card(e: dict) -> None:
         f"{icon} {status}</span>"
         f"<strong style='font-size:1rem'>{ticker}</strong>"
         f"<span style='color:#64748b;font-size:0.85rem'>{direction} · {days_held}d held</span>"
-        f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_str}</span>"
+        f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
         f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
         f"</div>"
         # Detail row
@@ -3766,6 +3782,33 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
         enriched = [enrich_open_trade(t, live_prices.get(t["ticker"])) for t in open_trades]
         enriched.sort(key=lambda x: x.get("status_priority", 0), reverse=True)
+
+        # Compute GBP P&L for each card (primary display currency)
+        _brief_gbpusd = _cached_latest_price("GBPUSD=X")
+        _brief_usdjpy = _cached_latest_price("USDJPY=X")
+        for _e in enriched:
+            _upnl   = _e.get("unreal_pnl")
+            _etick  = _e.get("ticker", "")
+            _quote  = FOREX_QUOTE_CCY.get(_etick)
+            _e_ccy  = _e.get("currency") or "GBP"
+            _e_acct = _e.get("account_currency") or "GBP"
+            _e_fx   = float(_e.get("fx_rate_at_entry") or 1.0)
+            _pgbp   = None
+            try:
+                if _upnl is not None:
+                    if _quote == "JPY":
+                        if (_brief_usdjpy and _brief_gbpusd
+                                and _brief_usdjpy > 0 and _brief_gbpusd > 0):
+                            _pgbp = (_upnl / _brief_usdjpy) / _brief_gbpusd
+                    elif _quote == "GBP" or (_e_ccy == "GBP" and _e_acct == "GBP" and _quote is None):
+                        _pgbp = _upnl
+                    elif _brief_gbpusd and _brief_gbpusd > 0:
+                        _pgbp = _upnl / _brief_gbpusd
+                    elif _e_fx > 0:
+                        _pgbp = _upnl / _e_fx
+            except Exception:
+                pass
+            _e["unreal_pnl_gbp"] = _pgbp
 
         alerts = [e for e in enriched if e["status"] in ("EXIT SIGNAL", "STOP LOSS")]
         if alerts and should_send_alert(config):
