@@ -341,6 +341,20 @@ class SystemMetadata(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
+class SchemaMigration(Base):
+    """Tracks named data fixes that have already been applied.
+
+    Each row records a fix by a stable string name so _apply_data_fixes()
+    can skip it on every subsequent startup without re-evaluating the guard
+    condition or issuing the UPDATE at all.
+    """
+
+    __tablename__ = "schema_migrations"
+
+    migration_name = Column(String(120), primary_key=True)
+    applied_at = Column(DateTime, default=datetime.utcnow)
+
+
 def set_metadata(key: str, value: str) -> None:
     """Upsert a key-value pair in system_metadata, recording the current UTC time.
 
@@ -453,69 +467,106 @@ def _apply_migrations(engine) -> None:
                   # so a duplicate-column error never poisons subsequent statements
 
 
+def _migration_applied(engine, name: str) -> bool:
+    """Return True if *name* has already been recorded in schema_migrations."""
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT 1 FROM schema_migrations WHERE migration_name = :n"),
+                {"n": name},
+            ).first()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _record_migration(engine, name: str) -> None:
+    """Insert *name* into schema_migrations so it is skipped on future startups."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO schema_migrations "
+                    "(migration_name, applied_at) VALUES (:n, :t)"
+                ),
+                {"n": name, "t": datetime.utcnow()},
+            )
+    except Exception:
+        pass
+
+
 def _apply_data_fixes(engine) -> None:
     """One-time idempotent data corrections applied after migrations.
 
-    Each fix is guarded by a condition that is False once the fix has already
-    been applied, so it is safe to call on every startup.
+    Each fix is keyed by a stable name in schema_migrations.  Once recorded,
+    the fix is skipped entirely on subsequent startups.  A value-based guard
+    inside each UPDATE provides a safe fallback for DBs that predate the
+    schema_migrations table.
     """
-    with engine.begin() as conn:
-        # Fix: set all correct values for the initial INDA SHORT CFD trade.
-        # Guard: only runs while entry_price is not already 49.39 (within 0.001),
-        # so it is safe to call on every startup without overriding user edits.
-        conn.execute(text("""
-            UPDATE trades SET
-                entry_price         = 49.39,
-                quantity            = 4.077272,
-                direction           = 'SHORT',
-                currency            = 'USD',
-                account_currency    = 'GBP',
-                leverage            = 5,
-                investment_amount   = 150.0,
-                margin_required     = 29.96,
-                position_value      = 750.0,
-                overnight_rate      = 0.0251,
-                platform_instrument = 'INDA',
-                entry_date          = '2026-06-15 00:00:00'
-            WHERE ticker = 'INDA'
-              AND is_open = 1
-              AND ABS(COALESCE(entry_price, 0) - 49.39) > 0.001
-        """))
+    # --- fix_inda_entry_price ---
+    if not _migration_applied(engine, "fix_inda_entry_price"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE trades SET
+                        entry_price         = 49.39,
+                        quantity            = 4.077272,
+                        direction           = 'SHORT',
+                        currency            = 'USD',
+                        account_currency    = 'GBP',
+                        leverage            = 5,
+                        investment_amount   = 150.0,
+                        margin_required     = 29.96,
+                        position_value      = 750.0,
+                        overnight_rate      = 0.0251,
+                        platform_instrument = 'INDA',
+                        entry_date          = '2026-06-15 00:00:00'
+                    WHERE ticker = 'INDA'
+                      AND is_open = 1
+                      AND ABS(COALESCE(entry_price, 0) - 49.39) > 0.001
+                """))
+            _record_migration(engine, "fix_inda_entry_price")
+        except Exception:
+            pass
 
-    # Fix: set fx_fee_pct and correct remaining field errors for the four
-    # open trades.  Guard on (fx_fee_pct IS NULL OR fx_fee_pct < 0.1) so
-    # these only fire once — on the first startup after the column is added.
+    # --- batch: open-trade field corrections (fx_fee_pct + misc) ---
     _open_trade_fixes = [
-        # INDA — margin correction (30.0 → 29.96) + fx_fee
         (
+            "fix_INDA_fx_fee_pct",
             "INDA",
             "margin_required = 29.96, fx_fee_pct = 0.50",
         ),
-        # KBE — margin, leverage, overnight_rate, fx_fee
         (
+            "fix_KBE_fx_fee_pct",
             "KBE",
             "margin_required = 29.90, leverage = 5, overnight_rate = 0.0694, fx_fee_pct = 0.50",
         ),
-        # GBPUSD=X — margin, leverage, overnight_rate, fx_fee
         (
+            "fix_GBPUSD_fx_fee_pct",
             "GBPUSD=X",
             "margin_required = 5.00, leverage = 30, overnight_rate = 0.0, fx_fee_pct = 0.50",
         ),
-        # USDJPY=X — units, entry, margin, leverage, overnight_rate, fx_fee
         (
+            "fix_USDJPY_fx_fee_pct",
             "USDJPY=X",
             "quantity = 201.0075, entry_price = 160.221, margin_required = 4.99, "
             "leverage = 30, overnight_rate = 0.0, fx_fee_pct = 0.50",
         ),
     ]
-    for _ticker, _set_clause in _open_trade_fixes:
+    for _mig_name, _ticker, _set_clause in _open_trade_fixes:
+        if _migration_applied(engine, _mig_name):
+            continue
         try:
             with engine.begin() as conn:
-                conn.execute(text(
-                    f"UPDATE trades SET {_set_clause} "
-                    f"WHERE ticker = :t AND is_open = 1 "
-                    f"AND (fx_fee_pct IS NULL OR fx_fee_pct < 0.1)"
-                ), {"t": _ticker})
+                conn.execute(
+                    text(
+                        f"UPDATE trades SET {_set_clause} "  # noqa: S608
+                        f"WHERE ticker = :t AND is_open = 1 "
+                        f"AND (fx_fee_pct IS NULL OR fx_fee_pct < 0.1)"
+                    ),
+                    {"t": _ticker},
+                )
+            _record_migration(engine, _mig_name)
         except Exception:
             pass
 
@@ -617,6 +668,7 @@ def init_db() -> None:
         MacroIndicator,
         OpportunityFlag,
         SystemMetadata,
+        SchemaMigration,
     )
     if not all(c.__tablename__ in Base.metadata.tables for c in _register):
         raise RuntimeError(
