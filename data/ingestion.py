@@ -31,9 +31,12 @@ def get_all_tickers(config: Optional[dict] = None) -> list[str]:
     if config is None:
         config = _load_config()
     tickers: list[str] = []
-    for group in config["watchlist"].values():
-        for entry in group:
-            tickers.append(entry["ticker"])
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for asset in assets:
+            if isinstance(asset, dict) and "ticker" in asset:
+                tickers.append(asset["ticker"])
     return tickers
 
 

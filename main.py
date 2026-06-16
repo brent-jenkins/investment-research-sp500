@@ -105,30 +105,37 @@ def _load_config() -> dict:
 def _build_watchlist(config: dict) -> dict[str, str]:
     """Return an ordered dict of {ticker: display_name} for all watchlist assets."""
     items: dict[str, str] = {}
-    for group in config["watchlist"].values():
-        for entry in group:
-            items[entry["ticker"]] = entry["name"]
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for entry in assets:
+            if isinstance(entry, dict) and "ticker" in entry:
+                items[entry["ticker"]] = entry.get("name", entry["ticker"])
     return items
 
 
 def _build_tradeable_set(config: dict) -> set[str]:
     """Return the set of tickers marked tradeable: true in config (default true if absent)."""
-    return {
-        entry["ticker"]
-        for group in config["watchlist"].values()
-        for entry in group
-        if entry.get("tradeable", True)
-    }
+    result: set[str] = set()
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for entry in assets:
+            if isinstance(entry, dict) and "ticker" in entry and entry.get("tradeable", True):
+                result.add(entry["ticker"])
+    return result
 
 
 def _build_t212_names(config: dict) -> dict[str, str]:
     """Return {ticker: trading212_instrument} for assets where the T212 name differs."""
-    return {
-        entry["ticker"]: entry["trading212_instrument"]
-        for group in config["watchlist"].values()
-        for entry in group
-        if "trading212_instrument" in entry
-    }
+    result: dict[str, str] = {}
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for entry in assets:
+            if isinstance(entry, dict) and "ticker" in entry and "trading212_instrument" in entry:
+                result[entry["ticker"]] = entry["trading212_instrument"]
+    return result
 
 
 @st.cache_data(ttl=300)
@@ -2236,7 +2243,9 @@ def _render_learning_dashboard(config: dict) -> None:
         ticker_to_group = {
             entry["ticker"]: group_key
             for group_key, group_entries in config.get("watchlist", {}).items()
+            if isinstance(group_entries, list)
             for entry in group_entries
+            if isinstance(entry, dict) and "ticker" in entry
         }
         class_df = accuracy_by_asset_class(all_closed, ticker_to_group)
 
@@ -2967,8 +2976,9 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     _eq_bond_tickers: set[str] = {
         entry["ticker"]
         for gname, group in config.get("watchlist", {}).items()
+        if gname in _EQ_BOND_GROUPS and isinstance(group, list)
         for entry in group
-        if gname in _EQ_BOND_GROUPS
+        if isinstance(entry, dict) and "ticker" in entry
     }
     macro_stress_active = "MACRO_STRESS" in active_overlays
 

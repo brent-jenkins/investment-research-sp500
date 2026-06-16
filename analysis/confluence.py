@@ -44,9 +44,10 @@ def _equity_bond_tickers(config: dict) -> frozenset[str]:
     """Return the set of tickers belonging to equity index or bond watchlist groups."""
     result: set[str] = set()
     for group, entries in config.get("watchlist", {}).items():
-        if group in _EQUITY_BOND_GROUPS:
+        if group in _EQUITY_BOND_GROUPS and isinstance(entries, list):
             for e in entries:
-                result.add(e["ticker"])
+                if isinstance(e, dict) and "ticker" in e:
+                    result.add(e["ticker"])
     return frozenset(result)
 
 
@@ -54,9 +55,10 @@ def _equity_only_tickers(config: dict) -> frozenset[str]:
     """Return equity-only tickers (indices, sector ETFs, international) — bonds excluded."""
     result: set[str] = set()
     for group, entries in config.get("watchlist", {}).items():
-        if group in _EQUITY_ONLY_GROUPS:
+        if group in _EQUITY_ONLY_GROUPS and isinstance(entries, list):
             for e in entries:
-                result.add(e["ticker"])
+                if isinstance(e, dict) and "ticker" in e:
+                    result.add(e["ticker"])
     return frozenset(result)
 
 

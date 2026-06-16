@@ -470,6 +470,18 @@ def _apply_data_fixes(engine) -> None:
               AND ABS(COALESCE(entry_price, 0) - 49.39) > 0.001
         """))
 
+    # Remove stale tickers that are no longer in the watchlist from signals and
+    # indicators tables.  DELETE on non-existent rows is a no-op, so this is safe
+    # to run on every startup.
+    _STALE_TICKERS = ("PALL", "PPLT", "WOOD", "UGA", "VUSA.L", "ISF.L")
+    for ticker in _STALE_TICKERS:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM signals    WHERE ticker = :t"), {"t": ticker})
+                conn.execute(text("DELETE FROM indicators WHERE ticker = :t"), {"t": ticker})
+        except Exception:
+            pass
+
 
 def init_db() -> None:
     """Create all tables in the database if they do not already exist.

@@ -49,9 +49,12 @@ def _load_config() -> dict:
 def _build_ticker_exchange_map(config: dict) -> dict[str, str]:
     """Return {ticker: exchange_calendar_name} for every watchlist entry."""
     mapping: dict[str, str] = {}
-    for group in config["watchlist"].values():
-        for entry in group:
-            mapping[entry["ticker"]] = entry.get("exchange", "NYSE")
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for entry in assets:
+            if isinstance(entry, dict) and "ticker" in entry:
+                mapping[entry["ticker"]] = entry.get("exchange", "NYSE")
     return mapping
 
 
