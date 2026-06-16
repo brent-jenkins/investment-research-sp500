@@ -1262,16 +1262,11 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"<span style='color:#e2e8f0'>{_acct_ccy_ps} {_margin_ps:>9,.2f}</span>",
                 ]
             if sel_ticker in FOREX_QUOTE_CCY and _suggested_inv > 0:
-                _fx_fee_ps  = round(_suggested_inv * 0.005, 2)  # 0.50% default
-                _net_ps     = round(_suggested_inv - _fx_fee_ps, 2)
-                _ps_rows += [
-                    _divider_html,
-                    f"<span style='color:#94a3b8'>FX Fee (0.50%):         </span>"
-                    f"<span style='color:#ef5350'>−{_acct_ccy_ps} {_fx_fee_ps:>8,.2f}</span>",
-                    f"<span style='color:#94a3b8'>Net after fees:         </span>"
-                    f"<span style='color:{_sug_col};font-weight:700'>"
-                    f"{_acct_ccy_ps} {_net_ps:>9,.2f}</span>",
-                ]
+                _ps_rows.append(
+                    f"<span style='color:#94a3b8'>FX Conv. Fee:           </span>"
+                    f"<span style='color:#6b7280;font-size:0.78rem'>"
+                    f"0.50% of P&amp;L applied at close</span>"
+                )
             if _atr_ps is not None:
                 _stop_dist = 2 * _atr_ps
                 _ps_rows.append(
@@ -1563,12 +1558,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     if overnight_rate > 0 else ""
                 )
                 + (
-                    (lambda _fee: (
-                        f"<span style='color:#94a3b8'>FX Fee ({fx_fee_pct:.2f}%):   </span>"
-                        f"<span style='color:#ef5350'>−{_ccy} {_fee:>9.2f}</span><br>"
-                        f"<span style='color:#94a3b8'>Net after fees:  </span>"
-                        f"<span style='color:#e2e8f0'>{_ccy} {investment_amount - _fee:>9.2f}</span><br>"
-                    ))(round(investment_amount * fx_fee_pct / 100, 2))
+                    f"<span style='color:#94a3b8'>FX Conv. Fee:    </span>"
+                    f"<span style='color:#6b7280;font-size:0.78rem'>"
+                    f"0.50% of P&amp;L applied at close</span><br>"
                     if fx_fee_pct > 0 else ""
                 )
                 + _be_html
@@ -1741,15 +1733,16 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 # Margin P&L %: Position P&L % × leverage (return on margin locked up)
                 margin_pnl_pct = (pos_pnl_pct * leverage) if pos_pnl_pct is not None else None
 
-                # Accrued swap — always a cost (negative); use stored basis
+                # Accrued swap — always a cost (negative); use stored basis.
+                # Leveraged CFDs with 0% overnight rate show £0.00, not "—".
                 _swap_amt    = inv_amt if s_basis == "investment" else (margin_req if s_basis == "margin" else pos_val)
                 daily_swap   = _swap_amt * o_rate / 100 if (_swap_amt > 0 and o_rate > 0) else 0.0
-                accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else None
+                accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else (0.0 if leverage > 1 else None)
 
-                # One-time FX conversion fee deducted from net P&L
-                fx_fee_cost = -(inv_amt * fx_fee_pct / 100) if (fx_fee_pct > 0 and inv_amt > 0) else None
+                # FX conversion fee: estimated on current unrealised P&L (applied at close, not at open)
+                fx_fee_cost = -(abs(pnl_acct) * fx_fee_pct / 100) if (fx_fee_pct > 0 and pnl_acct is not None) else None
 
-                # Net P&L = price move + swap + fx fee (both costs are negative)
+                # Net P&L = price move + swap + estimated FX fee (both costs are negative)
                 if pnl_acct is not None:
                     net_pnl = pnl_acct
                     if accrued_swap is not None:
@@ -1774,6 +1767,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "P&L £":        pnl_acct,     # in account currency (GBP)
                 "Margin P&L %": margin_pnl_pct,
                 "Swap":         accrued_swap,  # negative — always a cost
+                "FX Fee £":     fx_fee_cost,   # estimated: 0.50% of current P&L (negative = cost)
                 "Net P&L £":    net_pnl,
                 "Days":         days_held,
             })
@@ -1798,7 +1792,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             open_df.style
             .map(_style_acct_badge, subset=["Type"])
             .map(_style_signed,     subset=["P&L (raw)", "P&L £", "Margin P&L %", "Net P&L £"])
-            .map(_style_swap,       subset=["Swap"])
+            .map(_style_swap,       subset=["Swap", "FX Fee £"])
             .format({
                 "Entry":        "{:,.4f}",
                 "Live":         lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
@@ -1807,6 +1801,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "P&L £":        lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
                 "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
                 "Swap":         lambda v: f"{v:.2f}" if isinstance(v, float) else "—",
+                "FX Fee £":     lambda v: f"{v:.4f}" if isinstance(v, float) else "—",
                 "Net P&L £":    lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
             })
         )
@@ -1819,7 +1814,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "P&L uses a spread-adjusted close price (SHORT: +spread/units, LONG: −spread/units). "
             "Margin P&L % = position price move % × leverage. "
             "Ccy = instrument currency; P&L (raw) in instrument currency, P&L £ / Net P&L £ in GBP. "
-            "Swap is accrued overnight cost (basis amount × rate × days); basis is stored per trade (investment/margin/position)."
+            "Swap = accrued overnight cost (basis × rate × days). "
+            "FX Fee £ = estimated 0.50% of current unrealised P&L (exact fee applied to realised P&L at close)."
         )
 
     st.divider()

@@ -213,9 +213,6 @@ def close_trade(
     multiplier   = 1 if direction == "LONG" else -1
     holding_days = max(0, (exit_date - entry_dt).days)
 
-    # One-time FX conversion fee (charged at entry; deducted from P&L on close).
-    fx_fee_cost = round(investment_amount * fx_fee_pct / 100, 4) if fx_fee_pct > 0 else 0.0
-
     if leverage > 1 and quantity > 0 and entry_price > 0:
         quote_ccy = FOREX_QUOTE_CCY.get(ticker)
         pnl_instr = (exit_price - entry_price) * quantity * multiplier
@@ -230,14 +227,19 @@ def close_trade(
             # Standard CFD: move is already in instrument currency; convert via entry FX rate.
             gross_pnl = round(pnl_instr / fx_rate_at_entry, 4)
 
-        swap_amt   = _swap_basis_amount(swap_basis, investment_amount, margin_required, position_value)
-        swap_total = round(holding_days * swap_amt * overnight_rate / 100, 4) if swap_amt > 0 else 0.0
-        pnl        = round(gross_pnl - swap_total - fx_fee_cost, 4)
-        base       = margin_required if margin_required > 0 else (investment_amount if investment_amount > 0 else position_value)
-        pnl_pct    = round(pnl / base * 100, 4) if base else 0.0
+        swap_amt       = _swap_basis_amount(swap_basis, investment_amount, margin_required, position_value)
+        swap_total     = round(holding_days * swap_amt * overnight_rate / 100, 4) if swap_amt > 0 else 0.0
+        pnl_before_fee = round(gross_pnl - swap_total, 4)
+        # FX conversion fee is applied to the actual realised P&L (not the trade value at open)
+        fx_fee_cost    = round(abs(pnl_before_fee) * fx_fee_pct / 100, 4) if fx_fee_pct > 0 else 0.0
+        pnl            = round(pnl_before_fee - fx_fee_cost, 4)
+        base           = margin_required if margin_required > 0 else (investment_amount if investment_amount > 0 else position_value)
+        pnl_pct        = round(pnl / base * 100, 4) if base else 0.0
     else:
-        pnl     = round((exit_price - entry_price) * multiplier * quantity - fx_fee_cost, 4)
-        pnl_pct = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
+        pnl_before_fee = round((exit_price - entry_price) * multiplier * quantity, 4)
+        fx_fee_cost    = round(abs(pnl_before_fee) * fx_fee_pct / 100, 4) if fx_fee_pct > 0 else 0.0
+        pnl            = round(pnl_before_fee - fx_fee_cost, 4)
+        pnl_pct        = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
 
     with engine.begin() as conn:
         conn.execute(
