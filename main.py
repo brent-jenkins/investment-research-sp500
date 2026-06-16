@@ -159,6 +159,8 @@ _CCY_PAIR_LOOKUP: "dict[tuple[str, str], tuple[str, bool]]" = {
     ("EUR", "USD"): ("EURUSD=X", True),    # fx_rate = 1/EURUSD ≈ 0.926; pnl_usd = pnl_eur / 0.926
 }
 
+_CCY_SYM: dict[str, str] = {"GBP": "£", "USD": "$", "JPY": "¥", "EUR": "€"}
+
 
 def _fx_pair_label(instrument_ccy: str, account_ccy: str) -> str:
     """Return the canonical pair name for a currency combo, e.g. 'GBPUSD'."""
@@ -1929,7 +1931,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "% to TP":      pct_to_tp,    # positive = still has room to TP
                 "Live R:R":     live_rr,       # positive = in profit vs risk
                 "Progress":     progress,      # 0–100, where 0=SL, 100=TP
-                "P&L (raw)":    pnl_instr,    # in instrument currency, spread-adjusted
+                "P&L (raw)":    (f"{_CCY_SYM.get(instr_ccy,'')}{pnl_instr:+.4f}"
+                                 if isinstance(pnl_instr, float) else "—"),
                 "P&L £":        pnl_acct,     # in account currency (GBP)
                 "Margin P&L %": margin_pnl_pct,
                 "Swap":         accrued_swap,  # negative — always a cost
@@ -1941,6 +1944,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         open_df = pd.DataFrame(rows)
 
         def _style_signed(val):
+            if isinstance(val, str):
+                # P&L (raw) is pre-formatted as e.g. "$+0.5300" or "¥-25.53"
+                s = val.lstrip("£$¥€")
+                if s.startswith("+"): return "color:#16a34a;font-weight:bold"
+                if s.startswith("-"): return "color:#dc2626;font-weight:bold"
+                return ""
             if not isinstance(val, (int, float)): return ""
             return ("color:#16a34a;font-weight:bold" if val > 0
                     else "color:#dc2626;font-weight:bold" if val < 0 else "")
@@ -1975,12 +1984,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "% to SL":      lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
             "% to TP":      lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
             "Live R:R":     lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
-            "P&L (raw)":    lambda v: f"{v:+.4f}" if isinstance(v, float) else "—",
-            "P&L £":        lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+            "P&L (raw)":    lambda v: v if isinstance(v, str) else "—",
+            "P&L £":        lambda v: f"£{v:+.2f}" if isinstance(v, float) else "—",
             "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
-            "Swap":         lambda v: f"{v:.2f}" if isinstance(v, float) else "—",
-            "FX Fee £":     lambda v: f"{v:.4f}" if isinstance(v, float) else "—",
-            "Net P&L £":    lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+            "Swap":         lambda v: f"£{v:.2f}" if isinstance(v, float) else "—",
+            "FX Fee £":     lambda v: f"£{v:.4f}" if isinstance(v, float) else "—",
+            "Net P&L £":    lambda v: f"£{v:+.2f}" if isinstance(v, float) else "—",
         }
 
         _styler_cols_base = ["P&L (raw)", "P&L £", "Margin P&L %", "Net P&L £", "Live R:R"]
@@ -3192,7 +3201,8 @@ def _render_trade_card(e: dict) -> None:
         pnl_str = "⚠ Price unavailable"
         pnl_col = "#f59e0b"
     elif unreal_pnl is not None and unreal_pct is not None:
-        pnl_str = f"{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
+        _card_sym = _CCY_SYM.get(e.get("currency") or "GBP", "")
+        pnl_str = f"{_card_sym}{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
         pnl_col = "#16a34a" if unreal_pnl >= 0 else "#dc2626"
     else:
         pnl_str = "—"
