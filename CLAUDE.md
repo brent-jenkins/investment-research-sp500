@@ -25,7 +25,7 @@ After the first run, analysis and signals are automated. On every Streamlit star
 
 All three runs execute `run_analysis()` → `generate_signals()` → `compute_all_pairs()` and stamp `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
 
-The FRED API key for yield-curve data lives in `config.yaml` under `macro.fred_api_key`. Without it, VIX scoring still works; yield-curve scoring returns 0.
+The FRED API key lives in `config.yaml` under `macro.fred_api_key`. Without it, all FRED-sourced scoring returns 0; VIX scoring (sourced from the local `^VIX` price data) still works. FRED series tracked: T10Y2Y, T10Y3M, DFII10 (real yields), T10YIE (breakeven inflation), BAMLH0A0HYM2 (HY OAS), BAMLC0A0CM (IG OAS), M2SL, DPCREDIT (discount window), BOGMBASE, USSLIND (Philly Fed Leading Index), PERMIT (housing permits), DTWEXBGS (trade-weighted dollar). Tickers that are themselves macro instruments (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0 to avoid self-referential scoring.
 
 ## Architecture
 
@@ -60,13 +60,14 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has six pages toggled via a sidebar radio button (default: **Signals**):
-- **Signals** — regime card, ranked table of all assets by confluence score, Generate Signals button
+The app has seven pages toggled via a sidebar radio button (default: **Daily Briefing**):
+- **Daily Briefing** — compact regime/overlay/catch-up/signal-counts header card; open trade monitor with live GBP P&L, health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS), and ATR-based stop loss; top opportunities filtered to tradeable assets
+- **Signals** — compact header block (overlays + catch-up strips + regime badge + signal distribution pills + timestamp, all in one bordered card); market intelligence plain-English summary; ranked table of all assets by confluence score with module symbols; Generate Signals button
 - **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
 - **Relationships** — 30-day correlation matrix heatmap for all 14 tracked cross-asset tickers, pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), plain-English divergence narratives; "↻ Recompute Now" triggers `compute_all_pairs()` on demand
-- **Trade Log** — log new eToro trades (auto-populates current signal), open-position tracker with live prices and unrealised P&L, close-trade form
+- **Trade Log** — log new CFD trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name); open-position tracker with live GBP P&L and per-trade edit expanders; close-trade form; position sizing guidance
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
-- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run)
+- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section; Send Test Email button
 
 ### Configuration
 
@@ -90,7 +91,28 @@ Each `compute_*` function in the analysis modules returns the **latest** scalar 
 4. ADX < 20, VIX < 15 → `RANGING_LOW_VOL`
 5. else → `UNKNOWN`
 
-Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the five analysis modules.
+Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the six analysis modules. Weights by regime:
+
+| Module | TRENDING_BULL | TRENDING_BEAR | RANGING_LOW_VOL | HIGH_VOLATILITY | UNKNOWN |
+|--------|:---:|:---:|:---:|:---:|:---:|
+| trend | 0.30 | 0.25 | 0.10 | 0.10 | 0.18 |
+| mean_reversion | 0.10 | 0.15 | 0.35 | 0.15 | 0.18 |
+| volatility | 0.15 | 0.20 | 0.15 | 0.35 | 0.18 |
+| volume | 0.20 | 0.15 | 0.15 | 0.15 | 0.18 |
+| macro | 0.15 | 0.15 | 0.15 | 0.15 | 0.18 |
+| correlation | 0.10 | 0.10 | 0.10 | 0.10 | 0.10 |
+
+### Regime overlays
+
+`analysis/regime.py:detect_overlays()` runs after each `compute_all_pairs()` call. It reads the latest correlation rows for three key pairs and fires an overlay when a pair is DIVERGING (sign mismatch + z-score ≥ 1.5). Results are written to `system_metadata` under the key `active_overlays` (comma-separated key names, or `"none"`):
+
+| Overlay key | Trigger pair | Meaning |
+|-------------|--------------|---------|
+| `MACRO_STRESS` | TLT / ^GSPC DIVERGING | Bonds and equities moving together — flight-to-safety relationship broken |
+| `VOL_REGIME_SHIFT` | ^VIX / ^GSPC DIVERGING | VIX and equities moving in the same direction — atypical fear gauge |
+| `CREDIT_STRESS` | HYG / ^GSPC DIVERGING | Credit and equities decoupling — credit stress may precede equity stress |
+
+Active overlays are displayed as compact inline strips on the Signals and Daily Briefing pages. `MACRO_STRESS` also suppresses buy confidence for equity/bond signals by showing a "Confidence −20%" badge on opportunity cards. `OVERLAY_DESCRIPTIONS` in `main.py` maps each key to its UI label, colour, and descriptive text.
 
 ### Confluence scoring
 
@@ -101,6 +123,18 @@ Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the five a
 4. Upserts to the `signals` table keyed on `(ticker, today's date)`
 
 The seventh module is `compute_correlations(ticker, config)` from `analysis/correlations.py`. It finds all predefined pairs involving the ticker, checks if the current rolling correlation matches the expected direction (CONFIRMING/DIVERGING/NEUTRAL), and returns a score of -1/0/1. Most watchlist tickers appear in zero or one pair and receive score=0; tickers like `^GSPC`, `GLD`, and `^VIX` appear in multiple pairs and receive a blended score.
+
+### Feedback learning
+
+`confluence.py:recalculate_learned_weights()` reads all closed trades and computes per-module win rates (direction matched profitable outcome). Win rates are normalised and clamped between `min_single_weight` (0.05) and `max_single_weight` (0.30) from config, then stored in `system_metadata` under `learned_weights` (JSON). When learned weights exist they override the static `REGIME_WEIGHTS` in `score_ticker()`. The correlation module is held at a neutral 0.5 win rate since its score is not stored on trades. A history of the last 20 snapshots is kept under `weight_history`. `maybe_update_weights()` is called at the end of each `generate_signals()` run and only triggers recalculation when the closed-trade count hits a new multiple of the configured boundary.
+
+### Tradeable vs analysis-only assets
+
+Each watchlist entry in `config.yaml` has a `tradeable: true/false` flag. `get_all_tickers()` returns all tickers regardless of this flag; the tradeable subset is derived at startup in `main.py` as `tradeable_set`. Assets with `tradeable: false` (e.g. ^GSPC, ^IXIC, CPER, CORN) are excluded from opportunity filtering on the Daily Briefing and from the Trade Log ticker list. The Signals page shows all assets but displays a "Tradeable" sub-count on every signal distribution type. The `brief_include_analysis` checkbox on the Daily Briefing allows temporarily including analysis-only assets in the opportunities list.
+
+### Trading212 instrument mapping
+
+Watchlist entries may carry `trading212_instrument: "XAG/USD"` when the T212 instrument name differs from the yfinance ticker. At startup, `main.py` builds a `t212_names: dict[str, str]` mapping `ticker → t212_name` from all watchlist entries that have this field. The Trade Log form uses `t212_names.get(ticker, "")` to pre-fill the Platform Instrument field.
 
 ### Cross-asset correlation module
 
@@ -153,15 +187,30 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 `output/performance.py` handles the full trade lifecycle:
 - `get_current_signal(ticker)` — reads the most recent signals row (uses `notes AS regime` since the `regime` column is written by the legacy path)
-- `log_trade(...)` — inserts an open trade via ORM session, captures signal context columns (signal_type, confluence_score, regime, five module scores) at entry time
-- `close_trade(trade_id, exit_price)` — raw SQL UPDATE; computes `pnl = (exit - entry) × multiplier × qty`, `pnl_pct`, and `holding_days`
+- `log_trade(...)` — inserts an open trade via ORM session, captures signal context columns (signal_type, confluence_score, regime, five module scores) at entry time, plus the full CFD context: leverage, investment_amount, position_value, margin_required, currency, account_currency, fx_rate_at_entry, fx_fee_pct, overnight_rate, swap_basis, spread_cost, platform_instrument, stop_loss_price, take_profit_price, risk_reward_ratio, planned_risk_gbp
+- `close_trade(trade_id, exit_price)` — raw SQL UPDATE; P&L is computed in quote currency then converted to GBP via fx_rate_at_entry, minus fx_fee_pct on position_value. For JPY-quoted pairs (USDJPY=X) a two-step conversion is used (pips → JPY → USD → GBP). Also records `pnl_pct` and `holding_days`
 - Live prices via `get_latest_price(ticker)` use a 5-day yfinance window; the UI wraps this with `@st.cache_data(ttl=300)` to limit API calls
+- `enrich_open_trade(trade, live_price)` in `output/briefing.py` augments each open trade with current signal, ATR-based stop loss (entry ± 2×ATR when no stored SL exists), unrealised GBP P&L, days held, live R:R, and a health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS). Status priority: STOP LOSS > EXIT SIGNAL > WEAKENING > ON TRACK. Trades are rendered on the Daily Briefing as compact HTML status cards sorted by urgency
+
+`FOREX_QUOTE_CCY` in `performance.py` maps forex CFD tickers to their quote currency (USD for GBP/USD, EUR/USD, AUD/USD; JPY for USD/JPY; etc.) so the P&L conversion chain is always correct.
 
 `output/signals.py` is pure-pandas analysis over a list[dict] of closed trades — no DB calls. Functions: `accuracy_summary`, `accuracy_by_signal_type`, `accuracy_by_regime`, `accuracy_by_indicator`, `equity_curve`.
 
-### Schema migrations
+### Schema migrations and startup fixes
 
 New columns are added to existing tables via `_apply_migrations()` in `data/database.py`. Each `ALTER TABLE` runs in its own `engine.begin()` block so a duplicate-column error never aborts subsequent statements. `init_db()` calls both `Base.metadata.create_all()` and `_apply_migrations()`. It is called **at module level in `main.py`** (immediately after logging setup, before any function definitions) to guarantee tables exist on fresh deployments, and again inside `_initialise()` on every page render (idempotent — fast when schema is current). Never wrap multiple `ALTER TABLE` calls in a single `engine.begin()`.
+
+`_apply_data_fixes(engine)` runs after migrations on every startup. Each fix is guarded by a value-based condition so it is safe to call repeatedly — it only fires when the target row still has the pre-fix value. Use this pattern for one-time corrections to existing trade rows.
+
+`_purge_unlisted_tickers(engine)` runs on every startup. It reads the current watchlist from config.yaml, then deletes rows for any ticker no longer present from `price_data`, `indicators`, `signals`, and `correlations`. For `correlations` it removes pairs where either `ticker_a` or `ticker_b` has been removed. This keeps the DB in sync when assets are removed from the watchlist without manual SQL.
+
+### Additional database tables
+
+Beyond the tables described above, `data/database.py` defines:
+
+- **`MacroIndicator`** (`series_id, date` unique) — stores FRED series values with `pct_change_30d` (≈ month-over-month), `z_score_2y` (value vs 2-year rolling mean/std), and a −1/0/+1 `score`. The macro module reads from this table to compute per-ticker macro scores without hitting the FRED API on every analysis run.
+- **`OpportunityFlag`** (`ticker, flag_type, date` unique) — records catch-up opportunities detected when a correlation pair is DIVERGING with z-score ≥ 1.5. Fields include `z_score`, `pair_corr_30d`, `price_at_flag`, and `return_5d`/`return_20d` (populated on later runs). `get_active_opportunity_flags()` returns flags from the most recent analysis date; they are displayed as compact strips in the Signals and Daily Briefing header blocks.
+- **`Performance`** (`ticker, date` unique) — rolling performance metrics: daily return, cumulative return, drawdown, max drawdown, Sharpe, Sortino, Calmar, win rate, avg win/loss, profit factor. Currently written by the analysis pipeline but not yet surfaced in a dedicated UI view beyond the closed-trade Performance page.
 
 ### yfinance MultiIndex handling
 
@@ -257,4 +306,6 @@ Note: `analysis/correlations.py` is an exception to the pattern — it operates 
 
 ## Adding assets to the watchlist
 
-Edit `config.yaml` under `watchlist:` — add a dict with `ticker` and `name` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has 69 assets across 18 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`, `volatility_complex`, `tech_subsectors`, `financial_subsectors`, `healthcare_subsectors`, `international_expanded`, `real_assets`, `fixed_income_expanded`, `commodities_expanded`, `crypto_expanded`. When adding a new group, also add its label to the `_GROUP_LABELS` dict in `main.py` so it appears on the Charts landing page. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.
+Edit `config.yaml` under `watchlist:` — add a dict with `ticker`, `name`, `exchange`, and `tradeable` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has approximately 67 assets across 19 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`, `volatility_complex`, `tech_subsectors`, `financial_subsectors`, `healthcare_subsectors`, `international_expanded`, `real_assets`, `fixed_income_expanded`, `commodities_expanded`, `crypto_expanded`, and any new groups added since. When adding a new group, also add its label to the `_GROUP_LABELS` dict in `main.py` so it appears on the Charts landing page. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.
+
+Optionally add `trading212_instrument: "XAG/USD"` when the T212 instrument name differs from the yfinance ticker — this pre-fills the Platform Instrument field in the Trade Log form.
