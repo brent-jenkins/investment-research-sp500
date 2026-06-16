@@ -29,13 +29,15 @@ def get_latest_price(ticker: str) -> Optional[float]:
 
     Caller should wrap with st.cache_data(ttl=300) in the UI layer.
     """
+    import math
     try:
         data = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
         if data.empty:
             return None
         if hasattr(data.columns, "levels"):
             data.columns = [col[0] for col in data.columns]
-        return float(data["Close"].iloc[-1])
+        price = float(data["Close"].iloc[-1])
+        return None if math.isnan(price) else price
     except Exception as exc:
         logger.warning("Live price fetch failed for %s: %s", ticker, exc)
         return None

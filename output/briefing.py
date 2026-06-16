@@ -164,12 +164,18 @@ def compute_trade_status(
 
 def enrich_open_trade(trade: dict, live_price: Optional[float]) -> dict:
     """Augment an open trade dict with current signal, stop loss, P&L, and status."""
+    import math
+
     ticker      = trade.get("ticker", "")
     direction   = trade.get("direction", "LONG")
     entry_price = float(trade.get("entry_price") or 0)
     quantity    = float(trade.get("quantity")    or 1)
     entry_signal = trade.get("signal_type") or "NEUTRAL"
     entry_score  = float(trade.get("confluence_score") or 0)
+
+    # Treat NaN live price the same as unavailable
+    if live_price is not None and math.isnan(live_price):
+        live_price = None
 
     # Days held
     entry_dt = trade.get("entry_date")
@@ -181,12 +187,19 @@ def enrich_open_trade(trade: dict, live_price: Optional[float]) -> dict:
     days_held = max(0, (datetime.utcnow() - entry_dt).days) if entry_dt else 0
 
     # Current signal from signals table
-    sig_row = get_current_signal(ticker)
-    current_signal = sig_row.get("signal") or "NEUTRAL"
-    current_score  = float(sig_row.get("confluence_score") or 0)
+    try:
+        sig_row = get_current_signal(ticker)
+        current_signal = sig_row.get("signal") or "NEUTRAL"
+        current_score  = float(sig_row.get("confluence_score") or 0)
+    except Exception:
+        current_signal = "NEUTRAL"
+        current_score  = 0.0
 
     # ATR-based stop loss: entry ± 2 × ATR
-    atr: Optional[float] = get_current_atr(ticker)
+    try:
+        atr: Optional[float] = get_current_atr(ticker)
+    except Exception:
+        atr = None
     stop_loss: Optional[float] = None
     if atr is not None and entry_price > 0:
         if direction == "LONG":
@@ -197,35 +210,43 @@ def enrich_open_trade(trade: dict, live_price: Optional[float]) -> dict:
     # Unrealised P&L
     unreal_pnl: Optional[float] = None
     unreal_pct: Optional[float] = None
-    if live_price is not None and entry_price > 0:
-        if direction == "LONG":
-            unreal_pnl = (live_price - entry_price) * quantity
-            unreal_pct = (live_price - entry_price) / entry_price * 100
-        else:
-            unreal_pnl = (entry_price - live_price) * quantity
-            unreal_pct = (entry_price - live_price) / entry_price * 100
-        unreal_pnl = round(unreal_pnl, 2)
-        unreal_pct = round(unreal_pct, 2)
+    try:
+        if live_price is not None and entry_price > 0:
+            if direction == "LONG":
+                unreal_pnl = (live_price - entry_price) * quantity
+                unreal_pct = (live_price - entry_price) / entry_price * 100
+            else:
+                unreal_pnl = (entry_price - live_price) * quantity
+                unreal_pct = (entry_price - live_price) / entry_price * 100
+            unreal_pnl = round(unreal_pnl, 2)
+            unreal_pct = round(unreal_pct, 2)
+    except Exception:
+        unreal_pnl = None
+        unreal_pct = None
 
-    status = compute_trade_status(
-        direction, entry_signal, current_signal,
-        entry_score, current_score, live_price, stop_loss,
-    )
+    try:
+        status = compute_trade_status(
+            direction, entry_signal, current_signal,
+            entry_score, current_score, live_price, stop_loss,
+        )
+    except Exception:
+        status = "ON TRACK"
 
     return {
         **trade,
-        "current_signal":  current_signal,
-        "current_score":   current_score,
-        "entry_signal":    entry_signal,
-        "entry_score":     entry_score,
-        "atr":             atr,
-        "stop_loss":       stop_loss,
-        "live_price":      live_price,
-        "unreal_pnl":      unreal_pnl,
-        "unreal_pct":      unreal_pct,
-        "days_held":       days_held,
-        "status":          status,
-        "status_priority": _STATUS_PRIORITY.get(status, 0),
+        "current_signal":     current_signal,
+        "current_score":      current_score,
+        "entry_signal":       entry_signal,
+        "entry_score":        entry_score,
+        "atr":                atr,
+        "stop_loss":          stop_loss,
+        "live_price":         live_price,
+        "price_unavailable":  live_price is None,
+        "unreal_pnl":         unreal_pnl,
+        "unreal_pct":         unreal_pct,
+        "days_held":          days_held,
+        "status":             status,
+        "status_priority":    _STATUS_PRIORITY.get(status, 0),
     }
 
 

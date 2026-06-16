@@ -1424,18 +1424,21 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                        for t in open_trades}
 
         # Pre-fetch unique FX pairs (session state cache means no redundant API calls)
-        _fx_cache: dict[tuple, float] = {}
+        _fx_cache: "dict[tuple, float | None]" = {}
         for t in open_trades:
             ic = t.get("currency") or "GBP"
             ac = t.get("account_currency") or "GBP"
             if ic != ac and (ic, ac) not in _fx_cache:
                 _live_rate, _ = _get_fx_rate(ic, ac)
-                _fx_cache[(ic, ac)] = _live_rate if _live_rate is not None else 1.0
+                _fx_cache[(ic, ac)] = _live_rate  # None if all fetch methods failed
 
+        import math as _math
         rows = []
         for t in open_trades:
             ticker      = t["ticker"]
-            live        = live_prices.get(ticker)
+            _raw_live   = live_prices.get(ticker)
+            # Treat NaN same as unavailable
+            live        = None if (_raw_live is not None and _math.isnan(_raw_live)) else _raw_live
             entry       = float(t.get("entry_price") or 0)
             qty         = float(t.get("quantity") or 0)
             direction   = t.get("direction", "LONG")
@@ -1448,47 +1451,54 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             spread      = float(t.get("spread_cost") or 0)
             instr_ccy   = t.get("currency") or "GBP"
             acct_ccy    = t.get("account_currency") or "GBP"
-            fx          = _fx_cache.get((instr_ccy, acct_ccy), 1.0)
+            # Use fx_rate_at_entry as fallback if live FX fetch failed
+            _live_fx    = _fx_cache.get((instr_ccy, acct_ccy))
+            _entry_fx   = t.get("fx_rate_at_entry")
+            fx          = (_live_fx if (_live_fx is not None and not _math.isnan(_live_fx))
+                           else (float(_entry_fx) if _entry_fx else 1.0))
             entry_dt    = pd.Timestamp(t["entry_date"]) if t.get("entry_date") else None
             days_held   = int((pd.Timestamp.now() - entry_dt).days) if entry_dt else 0
             mult        = 1 if direction == "LONG" else -1
 
-            # Spread-adjusted effective close price.
-            # SHORT closes at ASK (buy back at higher price); LONG closes at BID (lower).
-            # spread_cost is stored in account currency (GBP); convert to instrument currency.
-            effective_live = None
-            if live is not None:
-                if spread > 0 and qty > 0:
-                    spread_adj = (spread * fx) / qty  # GBP spread → instrument ccy per unit
-                    effective_live = live + spread_adj if direction == "SHORT" else live - spread_adj
-                else:
-                    effective_live = live
+            try:
+                # Spread-adjusted effective close price.
+                # SHORT closes at ASK (buy back at higher price); LONG closes at BID (lower).
+                # spread_cost is stored in account currency (GBP); convert to instrument currency.
+                effective_live = None
+                if live is not None:
+                    if spread > 0 and qty > 0:
+                        spread_adj = (spread * fx) / qty  # GBP spread → instrument ccy per unit
+                        effective_live = live + spread_adj if direction == "SHORT" else live - spread_adj
+                    else:
+                        effective_live = live
 
-            # P&L in instrument currency using the effective close price
-            pnl_instr = None
-            if effective_live is not None and entry and qty:
-                pnl_instr = (effective_live - entry) * qty * mult
+                # P&L in instrument currency using the effective close price
+                pnl_instr = None
+                if effective_live is not None and entry and qty:
+                    pnl_instr = (effective_live - entry) * qty * mult
 
-            # P&L in account currency (GBP)
-            pnl_acct = (pnl_instr / fx) if (pnl_instr is not None and fx > 0) else None
+                # P&L in account currency (GBP)
+                pnl_acct = (pnl_instr / fx) if (pnl_instr is not None and fx > 0) else None
 
-            # Position P&L %: percentage price move in your direction
-            # SHORT: (entry - effective_live) / entry × 100
-            # LONG:  (effective_live - entry) / entry × 100
-            pos_pnl_pct = None
-            if effective_live is not None and entry:
-                pos_pnl_pct = mult * (effective_live - entry) / entry * 100
+                # Position P&L %: percentage price move in your direction
+                # SHORT: (entry - effective_live) / entry × 100
+                # LONG:  (effective_live - entry) / entry × 100
+                pos_pnl_pct = None
+                if effective_live is not None and entry:
+                    pos_pnl_pct = mult * (effective_live - entry) / entry * 100
 
-            # Margin P&L %: Position P&L % × leverage (return on margin locked up)
-            margin_pnl_pct = (pos_pnl_pct * leverage) if pos_pnl_pct is not None else None
+                # Margin P&L %: Position P&L % × leverage (return on margin locked up)
+                margin_pnl_pct = (pos_pnl_pct * leverage) if pos_pnl_pct is not None else None
 
-            # Accrued swap — always a cost (negative); use stored basis
-            _swap_amt    = inv_amt if s_basis == "investment" else (margin_req if s_basis == "margin" else pos_val)
-            daily_swap   = _swap_amt * o_rate / 100 if (_swap_amt > 0 and o_rate > 0) else 0.0
-            accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else None
+                # Accrued swap — always a cost (negative); use stored basis
+                _swap_amt    = inv_amt if s_basis == "investment" else (margin_req if s_basis == "margin" else pos_val)
+                daily_swap   = _swap_amt * o_rate / 100 if (_swap_amt > 0 and o_rate > 0) else 0.0
+                accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else None
 
-            # Net P&L = price P&L + swap cost (swap is negative)
-            net_pnl = (pnl_acct + accrued_swap) if (pnl_acct is not None and accrued_swap is not None) else pnl_acct
+                # Net P&L = price P&L + swap cost (swap is negative)
+                net_pnl = (pnl_acct + accrued_swap) if (pnl_acct is not None and accrued_swap is not None) else pnl_acct
+            except Exception:
+                effective_live = pnl_instr = pnl_acct = pos_pnl_pct = margin_pnl_pct = accrued_swap = net_pnl = None
 
             rows.append({
                 "ID":           t["id"],
@@ -2609,14 +2619,18 @@ def _render_trade_card(e: dict) -> None:
     days_held = int(e.get("days_held") or 0)
     acct_name = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
 
-    unreal_pnl = e.get("unreal_pnl")
-    unreal_pct = e.get("unreal_pct")
-    pnl_str    = (
-        f"{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
-        if unreal_pnl is not None and unreal_pct is not None
-        else "—"
-    )
-    pnl_col = "#16a34a" if (unreal_pnl or 0) >= 0 else "#dc2626"
+    unreal_pnl       = e.get("unreal_pnl")
+    unreal_pct       = e.get("unreal_pct")
+    price_unavailable = e.get("price_unavailable", e.get("live_price") is None)
+    if price_unavailable:
+        pnl_str = "⚠ Price unavailable"
+        pnl_col = "#f59e0b"
+    elif unreal_pnl is not None and unreal_pct is not None:
+        pnl_str = f"{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
+        pnl_col = "#16a34a" if unreal_pnl >= 0 else "#dc2626"
+    else:
+        pnl_str = "—"
+        pnl_col = "#6b7280"
 
     entry_sig = html.escape((e.get("entry_signal")   or "—").replace("_", " "))
     curr_sig  = html.escape((e.get("current_signal") or "—").replace("_", " "))
