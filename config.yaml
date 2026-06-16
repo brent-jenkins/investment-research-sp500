@@ -17,6 +17,11 @@ watchlist:
       name: "DAX"
       exchange: "XETR"
       tradeable: false
+    - ticker: "VOO"
+      name: "Vanguard S&P 500 ETF"
+      exchange: "NYSE"
+      tradeable: true
+      trading212_instrument: "VOO"
 
   sector_etfs:
     - ticker: "XLE"
@@ -158,7 +163,7 @@ watchlist:
     - ticker: "UUP"
       name: "Invesco DB US Dollar Index Bullish Fund"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
     - ticker: "EURUSD=X"
       name: "EUR/USD"
       exchange: "FX"
@@ -304,17 +309,7 @@ watchlist:
       exchange: "Crypto"
       tradeable: true
 
-  uk_etfs:
-    - ticker: "VUSA.L"
-      name: "Vanguard S&P 500 UCITS ETF"
-      exchange: "LSE"
-      tradeable: true
-      trading212_instrument: "VUSA"
-    - ticker: "ISF.L"
-      name: "iShares Core FTSE 100 UCITS ETF"
-      exchange: "LSE"
-      tradeable: true
-      trading212_instrument: "ISF"
+  uk_etfs: []
 
 data:
   # How many calendar days of history to fetch on initial load for any asset
