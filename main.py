@@ -1679,7 +1679,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     _mark = " ★" if is_pref else ""
                     return (
                         f"<span style='color:{_col}'>{html.escape(label)}{html.escape(_mark)}: "
-                        f"{instr_ccy} {price:.4f} "
+                        f"{price:.4f} "
                         f"<span style='color:#6b7280'>({_dist:.4f} away)</span> → "
                         f"<span style='color:#16a34a'>+{account_ccy} {gbp:.2f}</span></span><br>"
                     )
@@ -1691,7 +1691,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;"
                     f"font-weight:600'>Trade Plan</div>"
                     f"<span style='color:#94a3b8'>Stop Loss ({html.escape(_sl_src)}): </span>"
-                    f"<span style='color:#ef5350;font-weight:bold'>{instr_ccy} {_eff_sl:.4f}</span>"
+                    f"<span style='color:#ef5350;font-weight:bold'>{_eff_sl:.4f}</span>"
                     f"<span style='color:#6b7280;font-size:0.76rem'> ({_sl_dist:.4f} away, "
                     f"{_sl_pct:.3f}%)</span><br>"
                     f"<span style='color:#f59e0b;font-size:0.76rem'>"
@@ -1717,14 +1717,14 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     + (
                         (lambda _ctp_dist=abs(custom_tp_price - entry_price),
                                 _ctp_gbp=investment_amount * (abs(custom_tp_price - entry_price) / entry_price) * leverage:
-                         f"<span style='color:#c084fc'>Custom TP ★: {instr_ccy} {custom_tp_price:.4f} "
+                         f"<span style='color:#c084fc'>Custom TP ★: {custom_tp_price:.4f} "
                          f"<span style='color:#6b7280'>({_ctp_dist:.4f} away)</span> → "
                          f"<span style='color:#16a34a'>+{account_ccy} {_ctp_gbp:.2f}</span></span><br>"
                         )()
                         if custom_tp_price > 0 else ""
                     )
                     + (
-                        f"<span style='color:#c084fc'>Pref TP ({preferred_rr:.1f}:1) ★: {instr_ccy} {_eff_tp:.4f} "
+                        f"<span style='color:#c084fc'>Pref TP ({preferred_rr:.1f}:1) ★: {_eff_tp:.4f} "
                         f"<span style='color:#6b7280'>({abs(_eff_tp - entry_price):.4f} away)</span> → "
                         f"<span style='color:#16a34a'>+{account_ccy} {_pref_tp_gbp:.2f}</span></span><br>"
                         if preferred_rr not in (1.0, 2.0, 3.0) and custom_tp_price == 0 else ""
