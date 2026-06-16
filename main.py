@@ -691,69 +691,11 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     st.markdown("## 📊 Market Signals")
 
     # ---- Opportunity flags & regime overlays (top of page) ----------------
-    catch_up_flags = get_active_opportunity_flags()
-    overlay_raw    = get_metadata_str("active_overlays") or ""
+    catch_up_flags  = get_active_opportunity_flags()
+    overlay_raw     = get_metadata_str("active_overlays") or ""
     active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
 
-    has_overlays  = bool(active_overlays)
-    has_catch_ups = bool(catch_up_flags)
-
-    if has_overlays or has_catch_ups:
-        st.markdown("### Active Intelligence")
-
-        # Regime overlay cards
-        for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
-            if overlay_key not in active_overlays:
-                continue
-            meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-            colour = meta.get("colour", "#6b7280")
-            label  = html.escape(meta.get("label", overlay_key.replace("_", " ")))
-            body   = html.escape(meta.get("text", ""))
-            bg     = _hex_rgba(colour, 0.10)
-            st.markdown(
-                f"<div style='border-left:4px solid {colour};padding:12px 18px;"
-                f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:10px'>"
-                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:6px'>"
-                f"<span style='background:{colour};color:#fff;padding:2px 9px;"
-                f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.06em'>"
-                f"REGIME OVERLAY</span>"
-                f"<strong style='color:{colour};font-size:0.95rem'>{label}</strong></div>"
-                f"<p style='font-size:0.875rem;line-height:1.55;margin:0'>{body}</p>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-        # Catch-up opportunity cards
-        _cu_colour = "#d97706"
-        _cu_bg     = _hex_rgba(_cu_colour, 0.10)
-        for flag in catch_up_flags:
-            ticker_disp = html.escape(flag.get("ticker", ""))
-            source_disp = html.escape(flag.get("flag_source", ""))
-            desc_disp   = html.escape(flag.get("description", ""))
-            z           = flag.get("z_score")
-            z_str       = f"z={z:.2f}" if z is not None else ""
-            corr        = flag.get("pair_corr_30d")
-            corr_str    = f" | 30d corr {corr:+.3f}" if corr is not None else ""
-            st.markdown(
-                f"<div style='border-left:4px solid {_cu_colour};padding:12px 18px;"
-                f"background:{_cu_bg};border-radius:0 6px 6px 0;margin-bottom:10px'>"
-                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:6px;"
-                f"flex-wrap:wrap'>"
-                f"<span style='background:{_cu_colour};color:#fff;padding:2px 9px;"
-                f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.06em'>"
-                f"CATCH-UP OPPORTUNITY</span>"
-                f"<strong style='color:#fbbf24;font-size:0.95rem'>{ticker_disp}</strong>"
-                f"<span style='color:#64748b;font-size:0.8rem'>{source_disp}</span>"
-                f"<span style='color:#64748b;font-size:0.8rem'>{z_str}{corr_str}</span>"
-                f"</div>"
-                f"<p style='font-size:0.875rem;line-height:1.55;margin:0'>{desc_disp}</p>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-        st.divider()
-
-    # ---- Regime pill (compact) ---------------------------------------------
+    # ---- Regime data -------------------------------------------------------
     regime_result = detect_regime()
     regime  = regime_result["regime"]
     colour  = regime_result["colour"]
@@ -768,18 +710,6 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     adx_str   = f"ADX {adx:.1f}" if adx else "—"
     vix_str   = f"VIX {vix:.1f}" if vix else "—"
 
-    st.markdown(
-        f'<div style="display:inline-flex;align-items:center;gap:16px;'
-        f'background:{colour}18;border:1px solid {colour}44;'
-        f'padding:6px 14px;border-radius:20px;margin-bottom:4px">'
-        f'<span style="color:{colour};font-weight:700">⚡ {regime.replace("_", " ")}</span>'
-        f'<span style="color:#6b7280;font-size:0.8rem">^GSPC {price_pct}</span>'
-        f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>'
-        f'<span style="color:#6b7280;font-size:0.8rem">{vix_str}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
     _REGIME_NOTES: dict[str, str] = {
         "TRENDING_BULL":   "Trend signals carry the most weight. Favour momentum and breakout plays — mean reversion signals are less reliable in a strong uptrend.",
         "TRENDING_BEAR":   "Trend signals carry the most weight. Favour short positions and breakdown plays — avoid buying dips unless confirmed by multiple modules.",
@@ -788,28 +718,14 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         "UNKNOWN":         "Regime is unclear — signals are weighted equally across all modules. Treat all calls with extra caution.",
     }
     note = _REGIME_NOTES.get(regime, "")
-    if note:
-        st.caption(note)
 
-    st.divider()
-
-    # ---- Last run timestamp ------------------------------------------------
-    last_ts = get_metadata("last_analysis_run") or get_last_signal_timestamp()
-    if last_ts:
-        st.caption(f"Signals last generated: {last_ts.strftime('%Y-%m-%d %H:%M')} UTC")
-    else:
-        st.caption("Signals not yet generated — updates run automatically at 21:30 UTC on weekdays.")
-
-    st.divider()
-
-    # ---- Ranked signals table ----------------------------------------------
+    # ---- Signal rows & counts ----------------------------------------------
     rows = get_latest_signals(list(watchlist.keys()))
 
     if not rows:
         st.info("No signals yet — signals are generated automatically after each data refresh.")
         return
 
-    # ---- Signal distribution -----------------------------------------------
     _DIST_CFG = [
         ("STRONG BUY",  "#16a34a"),
         ("BUY",         "#26a69a"),
@@ -817,7 +733,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         ("SELL",        "#f59e0b"),
         ("STRONG SELL", "#ef5350"),
     ]
-    counts = {lbl: 0 for lbl, _ in _DIST_CFG}
+    counts   = {lbl: 0 for lbl, _ in _DIST_CFG}
     t_counts = {lbl: 0 for lbl, _ in _DIST_CFG}
     for r in rows:
         lbl = (r.get("signal") or "NEUTRAL").replace("_", " ")
@@ -826,20 +742,77 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             if r.get("ticker") in tradeable_set:
                 t_counts[lbl] += 1
 
-    dist_cols = st.columns(5)
-    for col, (lbl, fg) in zip(dist_cols, _DIST_CFG):
-        col.markdown(
-            f'<div style="text-align:center;padding:10px 4px;border-radius:6px;'
-            f'background:{fg}22;border:1px solid {fg}55">'
-            f'<div style="color:{fg};font-weight:700;font-size:1.5rem">{counts[lbl]}</div>'
-            f'<div style="color:#6b7280;font-size:0.65rem;font-weight:600">'
-            f'{t_counts[lbl]} tradeable</div>'
-            f'<div style="color:#64748b;font-size:0.72rem;margin-top:2px">{lbl}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
+    # ---- Build compact header block ----------------------------------------
+    overlay_strips = ""
+    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
+        if overlay_key not in active_overlays:
+            continue
+        meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
+        _oc    = meta.get("colour", "#6b7280")
+        _label = html.escape(meta.get("label", overlay_key.replace("_", " ")))
+        _body  = html.escape(meta.get("text", ""))
+        overlay_strips += (
+            f"<div style='border-left:3px solid {_oc};padding:3px 10px;"
+            f"background:{_hex_rgba(_oc, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
+            f"<span style='background:{_oc};color:#fff;padding:0 5px;"
+            f"border-radius:2px;font-size:0.64rem;font-weight:800'>REGIME OVERLAY</span>"
+            f"<strong style='color:{_oc};font-size:0.8rem'> {_label}</strong>"
+            f"<span style='color:#94a3b8;font-size:0.78rem'> — {_body}</span></div>"
         )
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    _cu_colour = "#d97706"
+    catch_up_strips = ""
+    for flag in catch_up_flags:
+        _td  = html.escape(flag.get("ticker", ""))
+        _sd  = html.escape(flag.get("flag_source", ""))
+        _dd  = html.escape(flag.get("description", ""))
+        _z   = flag.get("z_score")
+        _zs  = f"z={_z:.2f}" if _z is not None else ""
+        _cr  = flag.get("pair_corr_30d")
+        _cs  = f" | 30d corr {_cr:+.3f}" if _cr is not None else ""
+        catch_up_strips += (
+            f"<div style='border-left:3px solid {_cu_colour};padding:3px 10px;"
+            f"background:{_hex_rgba(_cu_colour, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
+            f"<span style='background:{_cu_colour};color:#fff;padding:0 5px;"
+            f"border-radius:2px;font-size:0.64rem;font-weight:800'>CATCH-UP</span>"
+            f"<strong style='color:#fbbf24;font-size:0.8rem'> {_td}</strong>"
+            f"<span style='color:#64748b;font-size:0.78rem'> {_sd} {_zs}{_cs}</span>"
+            f"<span style='color:#94a3b8;font-size:0.78rem'> — {_dd}</span></div>"
+        )
+
+    intel_strips = overlay_strips + catch_up_strips
+
+    dist_pills = "".join(
+        f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
+        f"background:{fg}22;border:1px solid {fg}55;flex:1;min-width:72px'>"
+        f"<div style='color:{fg};font-weight:700;font-size:1.3rem'>{counts[lbl]}</div>"
+        f"<div style='color:#6b7280;font-size:0.62rem;font-weight:600'>{t_counts[lbl]} tradeable</div>"
+        f"<div style='color:#64748b;font-size:0.68rem;margin-top:1px'>{lbl}</div>"
+        f"</div>"
+        for lbl, fg in _DIST_CFG
+    )
+
+    last_ts = get_metadata("last_analysis_run") or get_last_signal_timestamp()
+    ts_str  = last_ts.strftime("%Y-%m-%d %H:%M UTC") if last_ts else "not yet generated"
+
+    st.markdown(
+        f"<div style='border:1px solid #334155;border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
+        + (f"<div style='margin-bottom:5px'>{intel_strips}</div>" if intel_strips else "")
+        + f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px'>"
+        + f"<span style='background:{colour};color:#fff;padding:2px 10px;border-radius:12px;"
+        + f"font-size:0.82rem;font-weight:700'>⚡ {regime.replace('_', ' ')}</span>"
+        + f"<span style='color:#6b7280;font-size:0.79rem'>^GSPC {html.escape(price_pct)}</span>"
+        + f"<span style='color:#6b7280;font-size:0.79rem'>{adx_str}</span>"
+        + f"<span style='color:#6b7280;font-size:0.79rem'>{vix_str}</span>"
+        + f"</div>"
+        + (f"<div style='font-size:0.82rem;color:#94a3b8;line-height:1.4;margin-bottom:6px'>"
+           f"{html.escape(note)}</div>" if note else "")
+        + f"<div style='display:flex;gap:5px;margin-bottom:5px'>{dist_pills}</div>"
+        + f"<div style='font-size:0.71rem;color:#475569'>Signals: {html.escape(ts_str)}"
+        + f" · updates at 07:00, 13:30 &amp; 21:30 UTC</div>"
+        + f"</div>",
+        unsafe_allow_html=True,
+    )
 
     # ---- Market intelligence -----------------------------------------------
     bullish_n   = counts["STRONG BUY"] + counts["BUY"]
@@ -3433,56 +3406,89 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     st.markdown("## 📅 Daily Briefing")
 
     last_analysis = get_metadata("last_analysis_run")
+    if last_analysis:
+        st.caption(
+            f"As of: {last_analysis.strftime('%Y-%m-%d %H:%M')} UTC · "
+            f"Updates run automatically at 07:00, 13:30 and 21:30 UTC"
+        )
+    else:
+        st.caption("No analysis run yet — updates run automatically on weekdays.")
 
-    # ── Section 1: Market Overview (compact single block) ───────────────────
-    regime_result = detect_regime()
-    regime  = regime_result["regime"]
-    colour  = regime_result["colour"]
-    details = regime_result["details"]
-    price   = details.get("price")
-    sma_200 = details.get("sma_200")
-    adx     = details.get("adx")
-    price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
-    adx_str   = f"ADX {adx:.1f}" if adx else ""
+    # ── Section 1: Market Overview ──────────────────────────────────────────
+    st.markdown("### 🌍 Market Overview")
 
-    ctx    = get_macro_context()
-    vix_v  = ctx.get("vix")
-    vix_col = (
-        "#dc2626" if vix_v and vix_v > 30 else
-        "#f59e0b" if vix_v and vix_v > 20 else
-        "#16a34a"
-    )
-    vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
-    ys  = ctx.get("yield_spread")
-    yr  = (ctx.get("yield_regime") or "—").lower()
-    ys_str = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
-    dp  = ctx.get("dollar_pct")
-    dt  = ctx.get("dollar_trend") or "—"
-    usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
+    col_regime, col_macro = st.columns([3, 2])
+    with col_regime:
+        regime_result = detect_regime()
+        regime  = regime_result["regime"]
+        colour  = regime_result["colour"]
+        details = regime_result["details"]
+        price   = details.get("price")
+        sma_200 = details.get("sma_200")
+        adx     = details.get("adx")
+        price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
+        adx_str   = f"ADX {adx:.1f}" if adx else ""
+        st.markdown(
+            f'<div style="display:inline-flex;align-items:center;gap:12px;flex-wrap:wrap;'
+            f'background:{colour}18;border:1px solid {colour}44;'
+            f'padding:6px 14px;border-radius:20px;margin-bottom:4px">'
+            f'<span style="color:{colour};font-weight:700">⚡ {regime.replace("_", " ")}</span>'
+            f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>'
+            f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(regime_result["description"])
 
+    with col_macro:
+        ctx    = get_macro_context()
+        vix_v  = ctx.get("vix")
+        vix_col = (
+            "#dc2626" if vix_v and vix_v > 30 else
+            "#f59e0b" if vix_v and vix_v > 20 else
+            "#16a34a"
+        )
+        vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
+        ys  = ctx.get("yield_spread")
+        yr  = (ctx.get("yield_regime") or "—").lower()
+        ys_str = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
+        dp  = ctx.get("dollar_pct")
+        dt  = ctx.get("dollar_trend") or "—"
+        usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
+        st.markdown(
+            f"<div style='font-size:0.85rem;margin-top:10px'>"
+            f"<span style='color:{vix_col};font-weight:600'>{html.escape(vix_str)}</span>"
+            f" &nbsp;·&nbsp; {html.escape(ys_str)} &nbsp;·&nbsp; {html.escape(usd_str)}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Active overlays (compact)
     overlay_raw     = get_metadata_str("active_overlays") or ""
     active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
-
-    overlay_html = ""
     for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
         if overlay_key not in active_overlays:
             continue
-        meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-        oc     = meta.get("colour", "#6b7280")
+        meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
+        oc    = meta.get("colour", "#6b7280")
         olabel = html.escape(meta.get("label", overlay_key.replace("_", " ")))
         obody  = html.escape(meta.get("text", ""))
-        overlay_html += (
-            f"<div style='border-left:3px solid {oc};padding:3px 10px;"
-            f"background:{_hex_rgba(oc, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
-            f"<span style='background:{oc};color:#fff;padding:0 5px;"
-            f"border-radius:2px;font-size:0.64rem;font-weight:800'>OVERLAY</span>"
-            f"<strong style='color:{oc};font-size:0.8rem'> {olabel}</strong>"
-            f"<span style='color:#94a3b8;font-size:0.78rem'> — {obody}</span></div>"
+        obg    = _hex_rgba(oc, 0.10)
+        st.markdown(
+            f"<div style='border-left:4px solid {oc};padding:8px 14px;"
+            f"background:{obg};border-radius:0 4px 4px 0;margin:6px 0'>"
+            f"<span style='background:{oc};color:#fff;padding:1px 7px;"
+            f"border-radius:3px;font-size:0.68rem;font-weight:800'>OVERLAY</span> "
+            f"<strong style='color:{oc}'>{olabel}</strong>"
+            f"<p style='font-size:0.82rem;line-height:1.5;margin:4px 0 0 0'>"
+            f"{obody}</p></div>",
+            unsafe_allow_html=True,
         )
 
-    # ── Signal distribution counts ──────────────────────────────────────────
+    # ── Top Long / Short Opportunities ─────────────────────────────────────
     all_signals = get_latest_signals(list(watchlist.keys()))
 
+    # Tickers in equity/bond groups trigger a confidence warning under MACRO_STRESS
     _EQ_BOND_GROUPS = {"indices", "sector_etfs", "bonds", "international"}
     _eq_bond_tickers: set[str] = {
         entry["ticker"]
@@ -3498,6 +3504,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         "volume_score", "macro_score",
     ]
 
+    # Signal distribution counts (all assets and tradeable-only)
     _SIG_ORDER  = ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"]
     _SIG_COLOUR = {
         "STRONG BUY": "#16a34a", "BUY": "#26a69a", "NEUTRAL": "#6b7280",
@@ -3516,44 +3523,21 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     _all_counts      = _count_signals(all_signals)
     _trd_counts      = _count_signals(_trd_signals_all)
 
-    def _counts_row(counts: dict, total: int, label: str) -> str:
+    def _counts_html(counts: dict, total: int, label: str) -> str:
         parts = " &nbsp;·&nbsp; ".join(
             f"<span style='color:{_SIG_COLOUR[lbl]};font-weight:700'>{counts[lbl]}</span>"
-            f"&thinsp;<span style='color:#64748b;font-size:0.72rem'>{lbl}</span>"
+            f"&nbsp;<span style='color:#64748b;font-size:0.75rem'>{lbl}</span>"
             for lbl in _SIG_ORDER
         )
         return (
-            f"<div style='line-height:1.5'>"
-            f"<span style='color:#94a3b8;font-size:0.75rem;min-width:110px;"
-            f"display:inline-block'>{label} ({total}):</span> {parts}</div>"
+            f"<div style='font-size:0.8rem;margin-bottom:2px'>"
+            f"<span style='color:#94a3b8;min-width:120px;display:inline-block'>{label} ({total}):</span>"
+            f" {parts}</div>"
         )
 
-    stats_parts: list[str] = []
-    if price_pct:
-        stats_parts.append(f"<span style='color:#6b7280;font-size:0.79rem'>{html.escape(price_pct)}</span>")
-    if adx_str:
-        stats_parts.append(f"<span style='color:#6b7280;font-size:0.79rem'>{adx_str}</span>")
-    stats_parts.append(f"<span style='color:{vix_col};font-size:0.79rem;font-weight:600'>{html.escape(vix_str)}</span>")
-    stats_parts.append(f"<span style='color:#94a3b8;font-size:0.79rem'>{html.escape(ys_str)}</span>")
-    stats_parts.append(f"<span style='color:#94a3b8;font-size:0.79rem'>{html.escape(usd_str)}</span>")
-    stats_html = " &nbsp;·&nbsp; ".join(stats_parts)
-
-    description = html.escape(regime_result.get("description", ""))
-    ts_str = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "not yet run"
-
     st.markdown(
-        f"<div style='border:1px solid #334155;border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
-        + (f"<div style='margin-bottom:5px'>{overlay_html}</div>" if overlay_html else "")
-        + f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px'>"
-        + f"<span style='background:{colour};color:#fff;padding:2px 10px;border-radius:12px;"
-        + f"font-size:0.82rem;font-weight:700'>⚡ {regime.replace('_', ' ')}</span>"
-        + f"&nbsp;{stats_html}</div>"
-        + f"<div style='font-size:0.82rem;color:#94a3b8;line-height:1.4;margin-bottom:5px'>{description}</div>"
-        + _counts_row(_all_counts, len(all_signals), "All assets")
-        + _counts_row(_trd_counts, len(_trd_signals_all), "Tradeable")
-        + f"<div style='font-size:0.71rem;color:#475569;margin-top:4px'>"
-        + f"Signals: {html.escape(ts_str)} · updates at 07:00, 13:30 &amp; 21:30 UTC</div>"
-        + f"</div>",
+        _counts_html(_all_counts, len(all_signals), "All assets")
+        + _counts_html(_trd_counts, len(_trd_signals_all), "Tradeable"),
         unsafe_allow_html=True,
     )
 
