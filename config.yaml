@@ -447,7 +447,7 @@ signals:
 
 notifications:
   email:
-    enabled: false
+    enabled: true
     smtp_host: "smtp-relay.brevo.com"
     smtp_port: 587
     smtp_user: "your-smtp-login@example.com"
