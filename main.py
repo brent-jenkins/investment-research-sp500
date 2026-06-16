@@ -2934,6 +2934,54 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     _status_card(cc3, "Missing entirely",  f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
                  ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
 
+    # ── Manual controls ───────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Manual Controls")
+    st.caption("Trigger the analysis pipeline immediately without waiting for the next scheduled run.")
+    _mc1, _mc2 = st.columns(2)
+
+    with _mc1:
+        if st.button("⚡ Run Analysis Now", use_container_width=True, type="primary",
+                     key="status_run_analysis"):
+            _cfg     = _load_config()
+            _tickers = get_all_tickers(_cfg)
+            with st.spinner("Running analysis pipeline…"):
+                try:
+                    run_analysis(tickers=_tickers, config=_cfg)
+                    generate_signals(tickers=_tickers, config=_cfg)
+                    st.success(
+                        f"Analysis complete — signals updated at "
+                        f"{datetime.utcnow().strftime('%H:%M UTC')}."
+                    )
+                    st.cache_data.clear()
+                except Exception as _exc:
+                    st.error(f"Analysis failed: {_exc}")
+
+    with _mc2:
+        if st.button("🔄 Refresh Data + Analysis", use_container_width=True,
+                     key="status_full_refresh"):
+            _cfg     = _load_config()
+            _tickers = get_all_tickers(_cfg)
+            with st.spinner("Pulling latest prices…"):
+                try:
+                    _results  = pull_incremental(tickers=_tickers)
+                    _new_rows = sum(_results.values())
+                    set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+                except Exception as _exc:
+                    st.error(f"Data pull failed: {_exc}")
+                    _new_rows = 0
+            with st.spinner("Running analysis pipeline…"):
+                try:
+                    run_analysis(tickers=_tickers, config=_cfg)
+                    generate_signals(tickers=_tickers, config=_cfg)
+                    st.success(
+                        f"Done — {_new_rows} new price rows · signals updated at "
+                        f"{datetime.utcnow().strftime('%H:%M UTC')}."
+                    )
+                    st.cache_data.clear()
+                except Exception as _exc:
+                    st.error(f"Analysis failed: {_exc}")
+
     # ── Email notification test ────────────────────────────────────────────
     notif_cfg = config.get("notifications", {}).get("email", {})
     st.divider()
