@@ -3433,89 +3433,56 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     st.markdown("## 📅 Daily Briefing")
 
     last_analysis = get_metadata("last_analysis_run")
-    if last_analysis:
-        st.caption(
-            f"As of: {last_analysis.strftime('%Y-%m-%d %H:%M')} UTC · "
-            f"Updates run automatically at 07:00, 13:30 and 21:30 UTC"
-        )
-    else:
-        st.caption("No analysis run yet — updates run automatically on weekdays.")
 
-    # ── Section 1: Market Overview ──────────────────────────────────────────
-    st.markdown("### 🌍 Market Overview")
+    # ── Section 1: Market Overview (compact single block) ───────────────────
+    regime_result = detect_regime()
+    regime  = regime_result["regime"]
+    colour  = regime_result["colour"]
+    details = regime_result["details"]
+    price   = details.get("price")
+    sma_200 = details.get("sma_200")
+    adx     = details.get("adx")
+    price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
+    adx_str   = f"ADX {adx:.1f}" if adx else ""
 
-    col_regime, col_macro = st.columns([3, 2])
-    with col_regime:
-        regime_result = detect_regime()
-        regime  = regime_result["regime"]
-        colour  = regime_result["colour"]
-        details = regime_result["details"]
-        price   = details.get("price")
-        sma_200 = details.get("sma_200")
-        adx     = details.get("adx")
-        price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
-        adx_str   = f"ADX {adx:.1f}" if adx else ""
-        st.markdown(
-            f'<div style="display:inline-flex;align-items:center;gap:12px;flex-wrap:wrap;'
-            f'background:{colour}18;border:1px solid {colour}44;'
-            f'padding:6px 14px;border-radius:20px;margin-bottom:4px">'
-            f'<span style="color:{colour};font-weight:700">⚡ {regime.replace("_", " ")}</span>'
-            f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>'
-            f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(regime_result["description"])
+    ctx    = get_macro_context()
+    vix_v  = ctx.get("vix")
+    vix_col = (
+        "#dc2626" if vix_v and vix_v > 30 else
+        "#f59e0b" if vix_v and vix_v > 20 else
+        "#16a34a"
+    )
+    vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
+    ys  = ctx.get("yield_spread")
+    yr  = (ctx.get("yield_regime") or "—").lower()
+    ys_str = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
+    dp  = ctx.get("dollar_pct")
+    dt  = ctx.get("dollar_trend") or "—"
+    usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
 
-    with col_macro:
-        ctx    = get_macro_context()
-        vix_v  = ctx.get("vix")
-        vix_col = (
-            "#dc2626" if vix_v and vix_v > 30 else
-            "#f59e0b" if vix_v and vix_v > 20 else
-            "#16a34a"
-        )
-        vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
-        ys  = ctx.get("yield_spread")
-        yr  = (ctx.get("yield_regime") or "—").lower()
-        ys_str = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
-        dp  = ctx.get("dollar_pct")
-        dt  = ctx.get("dollar_trend") or "—"
-        usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
-        st.markdown(
-            f"<div style='font-size:0.85rem;margin-top:10px'>"
-            f"<span style='color:{vix_col};font-weight:600'>{html.escape(vix_str)}</span>"
-            f" &nbsp;·&nbsp; {html.escape(ys_str)} &nbsp;·&nbsp; {html.escape(usd_str)}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # Active overlays (compact)
     overlay_raw     = get_metadata_str("active_overlays") or ""
     active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
+
+    overlay_html = ""
     for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
         if overlay_key not in active_overlays:
             continue
-        meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-        oc    = meta.get("colour", "#6b7280")
+        meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
+        oc     = meta.get("colour", "#6b7280")
         olabel = html.escape(meta.get("label", overlay_key.replace("_", " ")))
         obody  = html.escape(meta.get("text", ""))
-        obg    = _hex_rgba(oc, 0.10)
-        st.markdown(
-            f"<div style='border-left:4px solid {oc};padding:8px 14px;"
-            f"background:{obg};border-radius:0 4px 4px 0;margin:6px 0'>"
-            f"<span style='background:{oc};color:#fff;padding:1px 7px;"
-            f"border-radius:3px;font-size:0.68rem;font-weight:800'>OVERLAY</span> "
-            f"<strong style='color:{oc}'>{olabel}</strong>"
-            f"<p style='font-size:0.82rem;line-height:1.5;margin:4px 0 0 0'>"
-            f"{obody}</p></div>",
-            unsafe_allow_html=True,
+        overlay_html += (
+            f"<div style='border-left:3px solid {oc};padding:3px 10px;"
+            f"background:{_hex_rgba(oc, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
+            f"<span style='background:{oc};color:#fff;padding:0 5px;"
+            f"border-radius:2px;font-size:0.64rem;font-weight:800'>OVERLAY</span>"
+            f"<strong style='color:{oc};font-size:0.8rem'> {olabel}</strong>"
+            f"<span style='color:#94a3b8;font-size:0.78rem'> — {obody}</span></div>"
         )
 
-    # ── Top Long / Short Opportunities ─────────────────────────────────────
+    # ── Signal distribution counts ──────────────────────────────────────────
     all_signals = get_latest_signals(list(watchlist.keys()))
 
-    # Tickers in equity/bond groups trigger a confidence warning under MACRO_STRESS
     _EQ_BOND_GROUPS = {"indices", "sector_etfs", "bonds", "international"}
     _eq_bond_tickers: set[str] = {
         entry["ticker"]
@@ -3531,7 +3498,6 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         "volume_score", "macro_score",
     ]
 
-    # Signal distribution counts (all assets and tradeable-only)
     _SIG_ORDER  = ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"]
     _SIG_COLOUR = {
         "STRONG BUY": "#16a34a", "BUY": "#26a69a", "NEUTRAL": "#6b7280",
@@ -3550,21 +3516,44 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     _all_counts      = _count_signals(all_signals)
     _trd_counts      = _count_signals(_trd_signals_all)
 
-    def _counts_html(counts: dict, total: int, label: str) -> str:
+    def _counts_row(counts: dict, total: int, label: str) -> str:
         parts = " &nbsp;·&nbsp; ".join(
             f"<span style='color:{_SIG_COLOUR[lbl]};font-weight:700'>{counts[lbl]}</span>"
-            f"&nbsp;<span style='color:#64748b;font-size:0.75rem'>{lbl}</span>"
+            f"&thinsp;<span style='color:#64748b;font-size:0.72rem'>{lbl}</span>"
             for lbl in _SIG_ORDER
         )
         return (
-            f"<div style='font-size:0.8rem;margin-bottom:2px'>"
-            f"<span style='color:#94a3b8;min-width:120px;display:inline-block'>{label} ({total}):</span>"
-            f" {parts}</div>"
+            f"<div style='line-height:1.5'>"
+            f"<span style='color:#94a3b8;font-size:0.75rem;min-width:110px;"
+            f"display:inline-block'>{label} ({total}):</span> {parts}</div>"
         )
 
+    stats_parts: list[str] = []
+    if price_pct:
+        stats_parts.append(f"<span style='color:#6b7280;font-size:0.79rem'>{html.escape(price_pct)}</span>")
+    if adx_str:
+        stats_parts.append(f"<span style='color:#6b7280;font-size:0.79rem'>{adx_str}</span>")
+    stats_parts.append(f"<span style='color:{vix_col};font-size:0.79rem;font-weight:600'>{html.escape(vix_str)}</span>")
+    stats_parts.append(f"<span style='color:#94a3b8;font-size:0.79rem'>{html.escape(ys_str)}</span>")
+    stats_parts.append(f"<span style='color:#94a3b8;font-size:0.79rem'>{html.escape(usd_str)}</span>")
+    stats_html = " &nbsp;·&nbsp; ".join(stats_parts)
+
+    description = html.escape(regime_result.get("description", ""))
+    ts_str = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "not yet run"
+
     st.markdown(
-        _counts_html(_all_counts, len(all_signals), "All assets")
-        + _counts_html(_trd_counts, len(_trd_signals_all), "Tradeable"),
+        f"<div style='border:1px solid #334155;border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
+        + (f"<div style='margin-bottom:5px'>{overlay_html}</div>" if overlay_html else "")
+        + f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px'>"
+        + f"<span style='background:{colour};color:#fff;padding:2px 10px;border-radius:12px;"
+        + f"font-size:0.82rem;font-weight:700'>⚡ {regime.replace('_', ' ')}</span>"
+        + f"&nbsp;{stats_html}</div>"
+        + f"<div style='font-size:0.82rem;color:#94a3b8;line-height:1.4;margin-bottom:5px'>{description}</div>"
+        + _counts_row(_all_counts, len(all_signals), "All assets")
+        + _counts_row(_trd_counts, len(_trd_signals_all), "Tradeable")
+        + f"<div style='font-size:0.71rem;color:#475569;margin-top:4px'>"
+        + f"Signals: {html.escape(ts_str)} · updates at 07:00, 13:30 &amp; 21:30 UTC</div>"
+        + f"</div>",
         unsafe_allow_html=True,
     )
 
