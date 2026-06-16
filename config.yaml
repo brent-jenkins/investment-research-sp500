@@ -400,9 +400,12 @@ macro:
       label: "10Y-3M Yield Spread"
       category: "yield_curve"
     # USALOLITONOSTSAM (OECD US Leading Indicator) was removed — FRED returns no
-    # data for this series.  Replaced with USSLIND (Conference Board US Leading Index).
+    # data for this series.  Replaced with USSLIND (Philadelphia Fed Leading Index).
     USSLIND:
-      label: "US Leading Index (Conference Board)"
+      label: "US Leading Index (Philadelphia Fed)"
+      category: "leading_indicators"
+    PERMIT:
+      label: "Housing Permits (Total)"
       category: "leading_indicators"
     DTWEXBGS:
       label: "Trade Weighted Dollar (Broad)"

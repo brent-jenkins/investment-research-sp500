@@ -3047,6 +3047,56 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 unsafe_allow_html=True,
             )
 
+        # Row 3: Leading indicators (USSLIND, PERMIT)
+        usslind_val  = macro_dash.get("usslind")
+        usslind_pct  = macro_dash.get("usslind_pct1m")
+        usslind_sc   = macro_dash.get("usslind_score")
+        permit_val   = macro_dash.get("permit")
+        permit_pct   = macro_dash.get("permit_pct1m")
+        permit_sc    = macro_dash.get("permit_score")
+
+        if usslind_val is not None or permit_val is not None:
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            c7, c8, _ = st.columns(3)
+            with c7:
+                usslind_c = (
+                    "#16a34a" if usslind_sc == 1 else
+                    "#ef5350" if usslind_sc == -1 else "#f59e0b"
+                )
+                if usslind_val is not None:
+                    ar  = _TREND_ARROW.get("rising" if (usslind_pct or 0) > 0 else "falling" if (usslind_pct or 0) < 0 else "flat", "→")
+                    sub = f"MoM: {usslind_pct:+.2f}%" if usslind_pct is not None else "MoM: —"
+                    st.markdown(
+                        _metric_card(
+                            "Leading Index (Philly Fed)",
+                            f"{ar} {usslind_val:+.2f}%",
+                            sub + " · predicted 6m growth",
+                            usslind_c,
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(_metric_card("Leading Index (Philly Fed)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
+            with c8:
+                permit_c = (
+                    "#16a34a" if permit_sc == 1 else
+                    "#ef5350" if permit_sc == -1 else "#f59e0b"
+                )
+                if permit_val is not None:
+                    ar  = _TREND_ARROW.get("rising" if (permit_pct or 0) > 1.0 else "falling" if (permit_pct or 0) < -1.0 else "flat", "→")
+                    sub = f"MoM: {permit_pct:+.1f}%" if permit_pct is not None else "MoM: —"
+                    st.markdown(
+                        _metric_card(
+                            "Housing Permits (SAAR)",
+                            f"{ar} {permit_val:.0f}k units",
+                            sub + " · thousands, SA",
+                            permit_c,
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
+
     st.divider()
 
     # ── Section 3: Open Trade Monitor ──────────────────────────────────────
