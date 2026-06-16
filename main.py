@@ -3078,7 +3078,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             return f"{agreeing[0].capitalize()} and {agreeing[1]} align in the same direction."
         return f"{agreeing[0].capitalize()} is the primary driver of this signal."
 
-    def _opp_card(sig: dict, direction: int, fg: str, strong_fg: str) -> str:
+    def _opp_card(sig: dict, direction: int, fg: str, strong_fg: str, live_price=None) -> str:
         ticker    = sig.get("ticker", "")
         score     = sig.get("confluence_score") or 0.0
         signal    = sig.get("signal", "")
@@ -3102,6 +3102,16 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −20%</span>"
             )
 
+        if live_price is not None:
+            p = live_price
+            p_str = f"{p:.4f}" if p < 10 else (f"{p:,.2f}" if p < 100_000 else f"{p:,.0f}")
+            price_html = f"<span style='color:#64748b;font-size:0.78rem'>Last: {p_str}</span>"
+        else:
+            price_html = (
+                "<span style='color:#6b7280;font-size:0.72rem'>"
+                "⚠ Market closed · price unavailable</span>"
+            )
+
         return (
             f"<div style='background:{col}18;border-left:3px solid {col};"
             f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
@@ -3113,11 +3123,19 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:5px'>"
             f"<span style='color:{col};font-size:0.8rem;font-weight:{weight}'>{sig_label}</span>"
             f"<span style='color:{col};font-weight:700'>{score:+.3f}</span>"
+            f"{price_html}"
             f"</div>"
             f"<div style='color:#94a3b8;font-size:0.75rem;line-height:1.4'>"
             f"{html.escape(_brief_rationale(sig, direction))}</div>"
             f"</div>"
         )
+
+    # Pre-fetch live prices for all qualifying opportunity tickers (cached 5 min)
+    _opp_tickers = tuple(sorted({
+        s.get("ticker") for s in long_picks + short_picks if s.get("ticker")
+    }))
+    with st.spinner("Fetching live prices…"):
+        _opp_prices: dict = {t: _cached_latest_price(t) for t in _opp_tickers}
 
     st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
     lc, rc = st.columns(2)
@@ -3127,7 +3145,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         st.markdown(f"**🟢 Long Opportunities** ({n_long})" if n_long else "**🟢 Long Opportunities**")
         if long_picks:
             for sig in long_picks:
-                st.markdown(_opp_card(sig, 1, "#26a69a", "#16a34a"), unsafe_allow_html=True)
+                lp = _opp_prices.get(sig.get("ticker", ""))
+                st.markdown(_opp_card(sig, 1, "#26a69a", "#16a34a", live_price=lp), unsafe_allow_html=True)
         else:
             st.caption("No qualifying long signals today.")
 
@@ -3136,7 +3155,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         st.markdown(f"**🔴 Short Opportunities** ({n_short})" if n_short else "**🔴 Short Opportunities**")
         if short_picks:
             for sig in short_picks:
-                st.markdown(_opp_card(sig, -1, "#f59e0b", "#ef5350"), unsafe_allow_html=True)
+                lp = _opp_prices.get(sig.get("ticker", ""))
+                st.markdown(_opp_card(sig, -1, "#f59e0b", "#ef5350", live_price=lp), unsafe_allow_html=True)
         else:
             st.caption("No qualifying short signals today.")
 
