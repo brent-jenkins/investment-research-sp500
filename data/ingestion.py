@@ -224,64 +224,75 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     rate_limit = config["data"]["rate_limit_seconds"]
     max_retries = config["data"]["max_retries"]
 
-    session = get_session()
     results: dict[str, int] = {}
 
-    try:
-        for ticker in tickers:
-            if _is_ticker_unavailable(ticker):
-                logger.info("Ticker %s marked unavailable, skipping.", ticker)
-                results[ticker] = 0
-                continue
+    for ticker in tickers:
+        if _is_ticker_unavailable(ticker):
+            logger.info("Ticker %s marked unavailable, skipping.", ticker)
+            results[ticker] = 0
+            continue
 
+        # Open a short-lived session just for the history check, then close it
+        # immediately so no read transaction is held when _upsert_price_rows()
+        # opens its own write connection via engine.begin().
+        session = get_session()
+        try:
             has_history = (
                 session.query(PriceData.date)
                 .filter(PriceData.ticker == ticker)
                 .first()
             ) is not None
+        finally:
+            session.close()
 
-            if has_history:
-                # Rolling 10-day window: yfinance returns whatever trading days
-                # are available, skipping holidays and weekends automatically.
-                logger.info("Fetching %s (period=10d)…", ticker)
-                df = _fetch_ticker(
-                    ticker, period="10d",
-                    max_retries=max_retries, rate_limit=rate_limit,
+        if has_history:
+            # Rolling 10-day window: yfinance returns whatever trading days
+            # are available, skipping holidays and weekends automatically.
+            logger.info("Fetching %s (period=10d)…", ticker)
+            df = _fetch_ticker(
+                ticker, period="10d",
+                max_retries=max_retries, rate_limit=rate_limit,
+            )
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [col[0] for col in df.columns]
+                logger.debug(
+                    "  %s: df.shape=%s, columns=%s", ticker, df.shape, list(df.columns)
                 )
-                if df is not None and not df.empty:
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = [col[0] for col in df.columns]
-                    count = _upsert_price_rows(df, ticker)
-                    results[ticker] = count
-                else:
-                    # Empty is normal when the exchange was closed for all 10 days
-                    # (e.g. extended holiday); do NOT mark unavailable.
-                    results[ticker] = 0
-                    logger.info(
-                        "  No new data for %s in last 10d — market may be closed.", ticker
-                    )
+                count = _upsert_price_rows(df, ticker)
+                results[ticker] = count
+                logger.info("  %s: upserted %d rows.", ticker, count)
             else:
-                # First-time download: fetch full history.
-                start = datetime.utcnow() - timedelta(days=config["data"]["history_days"])
-                end   = datetime.utcnow()
-                logger.info("Fetching %s (full history from %s)…", ticker, start.date())
-                df = _fetch_ticker(
-                    ticker, start=start, end=end,
-                    max_retries=max_retries, rate_limit=rate_limit,
+                # Empty is normal when the exchange was closed for all 10 days
+                # (e.g. extended holiday); do NOT mark unavailable.
+                results[ticker] = 0
+                logger.info(
+                    "  No new data for %s in last 10d — market may be closed.", ticker
                 )
-                if df is not None and not df.empty:
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = [col[0] for col in df.columns]
-                    count = _upsert_price_rows(df, ticker)
-                    results[ticker] = count
-                else:
-                    results[ticker] = 0
-                    logger.warning(
-                        "  No data for %s after all retries — marking unavailable.", ticker
-                    )
-                    _mark_ticker_unavailable(ticker)
-    finally:
-        session.close()
+        else:
+            # First-time download: fetch full history.
+            start = datetime.utcnow() - timedelta(days=config["data"]["history_days"])
+            end   = datetime.utcnow()
+            logger.info("Fetching %s (full history from %s)…", ticker, start.date())
+            df = _fetch_ticker(
+                ticker, start=start, end=end,
+                max_retries=max_retries, rate_limit=rate_limit,
+            )
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [col[0] for col in df.columns]
+                logger.debug(
+                    "  %s: df.shape=%s, columns=%s", ticker, df.shape, list(df.columns)
+                )
+                count = _upsert_price_rows(df, ticker)
+                results[ticker] = count
+                logger.info("  %s: upserted %d rows.", ticker, count)
+            else:
+                results[ticker] = 0
+                logger.warning(
+                    "  No data for %s after all retries — marking unavailable.", ticker
+                )
+                _mark_ticker_unavailable(ticker)
 
     try:
         set_metadata("last_refresh_run", datetime.utcnow().isoformat())
