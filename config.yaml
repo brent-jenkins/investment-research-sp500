@@ -317,8 +317,11 @@ watchlist:
       trading212_instrument: "ISF"
 
 data:
-  # How many calendar days of history to fetch on initial load
-  history_days: 365
+  # How many calendar days of history to fetch on initial load for any asset
+  # that has no existing data in the database.  3650 = ~10 years; yfinance
+  # returns from the asset's listing date if this precedes it, so newer ETFs
+  # are handled gracefully.
+  history_days: 3650
   # Seconds to wait between yfinance requests to avoid throttling
   rate_limit_seconds: 2.5
   # Retry attempts on failed fetch

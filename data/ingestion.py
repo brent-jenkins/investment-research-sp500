@@ -15,10 +15,8 @@ from data.database import PriceData, get_engine, get_metadata_str, get_session, 
 
 logger = logging.getLogger(__name__)
 
-# How far back to go on the initial (full) history download.
-# yfinance returns data from the asset's inception date when this start date
-# precedes the listing, so newer ETFs are handled gracefully without errors.
-_INITIAL_HISTORY_DAYS = 3652  # 10 years, accounting for leap years
+# Initial history window is read from config.yaml (data.history_days).
+# Defined there so it can be changed without a code deploy.
 
 
 def _load_config() -> dict:
@@ -138,15 +136,14 @@ def pull_history(
 ) -> dict[str, int]:
     """Fetch full price history for all (or specified) tickers and store in DB.
 
-    Downloads up to 10 years of daily OHLCV data per ticker.  If an asset was
-    listed less than 10 years ago (e.g. a newer ETF), yfinance returns whatever
-    history is available from the listing date — no error is raised for the
-    missing period.
+    Downloads daily OHLCV data going back data.history_days calendar days
+    (default 3650, ~10 years).  If an asset was listed more recently, yfinance
+    returns whatever is available from the listing date — no error is raised.
 
     Args:
         tickers: List of ticker symbols. Defaults to the full watchlist.
-        days:    Number of calendar days of history to fetch.
-                 Defaults to _INITIAL_HISTORY_DAYS (10 years).
+        days:    Override for calendar days of history to fetch.
+                 Defaults to config.yaml data.history_days.
 
     Returns:
         Dict mapping ticker -> number of rows written.
@@ -157,7 +154,7 @@ def pull_history(
     if tickers is None:
         tickers = get_all_tickers(config)
     if days is None:
-        days = _INITIAL_HISTORY_DAYS
+        days = config["data"]["history_days"]
 
     rate_limit = config["data"]["rate_limit_seconds"]
     max_retries = config["data"]["max_retries"]
@@ -230,10 +227,10 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
             if latest:
                 start = latest[0] + timedelta(days=1)
             else:
-                # No stored data — download the full 10-year history for this
-                # ticker.  yfinance returns from the asset's inception date if
-                # the start date precedes the listing, so newer ETFs are fine.
-                start = datetime.utcnow() - timedelta(days=_INITIAL_HISTORY_DAYS)
+                # No stored data — download full history per config.
+                # yfinance returns from the asset's inception date if the start
+                # date precedes the listing, so newer ETFs are handled fine.
+                start = datetime.utcnow() - timedelta(days=config["data"]["history_days"])
 
             end = datetime.utcnow()
             if start >= end:
