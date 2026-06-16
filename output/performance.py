@@ -179,6 +179,28 @@ def log_trade(
         session.close()
 
 
+def update_trade_plan(
+    trade_id: int,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    risk_reward_ratio: Optional[float] = None,
+) -> None:
+    """Update the trade-plan fields on an existing open trade."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE trades SET "
+                "stop_loss_price = :sl, "
+                "take_profit_price = :tp, "
+                "risk_reward_ratio = :rr "
+                "WHERE id = :id"
+            ),
+            {"sl": stop_loss_price, "tp": take_profit_price,
+             "rr": risk_reward_ratio, "id": trade_id},
+        )
+
+
 def close_trade(
     trade_id: int,
     exit_price: float,

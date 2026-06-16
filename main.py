@@ -53,6 +53,7 @@ from output.performance import (
     get_latest_price,
     get_open_trades,
     log_trade,
+    update_trade_plan,
 )
 from analysis.macro import get_macro_dashboard
 from output.briefing import (
@@ -2052,6 +2053,47 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "Live R:R = current gain / planned risk (positive = in profit vs risk taken). "
             "SL→TP progress bar: 0% = at stop loss, 100% = at take profit."
         )
+
+        # ---- Per-trade edit expanders ----------------------------------------
+        st.markdown("**Edit trade plan:**")
+        for _t in open_trades:
+            _tid  = _t["id"]
+            _ttk  = _t.get("ticker", "")
+            _tdir = _t.get("direction", "LONG")
+            _cur_sl = _t.get("stop_loss_price")
+            _cur_tp = _t.get("take_profit_price")
+            _cur_rr = _t.get("risk_reward_ratio")
+            _lbl = f"✏ #{_tid}  {_ttk}  {_tdir}"
+            with st.expander(_lbl, expanded=False):
+                with st.form(f"edit_trade_plan_{_tid}"):
+                    _ec1, _ec2, _ec3 = st.columns(3)
+                    _new_sl = _ec1.number_input(
+                        "Stop Loss Price",
+                        value=float(_cur_sl) if _cur_sl is not None else 0.0,
+                        min_value=0.0, step=0.0001, format="%.4f",
+                        key=f"ep_sl_{_tid}",
+                    )
+                    _new_tp = _ec2.number_input(
+                        "Take Profit Price",
+                        value=float(_cur_tp) if _cur_tp is not None else 0.0,
+                        min_value=0.0, step=0.0001, format="%.4f",
+                        key=f"ep_tp_{_tid}",
+                    )
+                    _new_rr = _ec3.number_input(
+                        "R:R Ratio",
+                        value=float(_cur_rr) if _cur_rr is not None else 2.0,
+                        min_value=0.5, step=0.5,
+                        key=f"ep_rr_{_tid}",
+                    )
+                    if st.form_submit_button("Save", type="primary"):
+                        update_trade_plan(
+                            _tid,
+                            stop_loss_price=_new_sl if _new_sl > 0 else None,
+                            take_profit_price=_new_tp if _new_tp > 0 else None,
+                            risk_reward_ratio=_new_rr,
+                        )
+                        st.success(f"Trade #{_tid} plan updated.")
+                        st.rerun()
 
     st.divider()
 
