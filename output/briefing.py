@@ -385,3 +385,70 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
     except Exception as exc:
         logger.error("Failed to send alert email: %s", exc)
         return False, f"Email send failed: {exc}"
+
+
+def send_test_email(
+    config: dict,
+    regime: str,
+    last_analysis: "datetime | None",
+    open_trade_count: int,
+) -> "tuple[bool, str]":
+    """Send a test notification email to verify SMTP delivery.
+
+    Subject is always 'Investment Research — Test Notification'.
+    Body includes sender, recipient, current regime, last analysis time,
+    and open trade count so the recipient can confirm end-to-end delivery.
+    Returns (success, human-readable message).
+    """
+    notif = config.get("notifications", {}).get("email", {})
+    if not notif.get("enabled"):
+        return False, "Email notifications not enabled in config.yaml"
+
+    smtp_host  = notif.get("smtp_host",     "smtp-relay.brevo.com")
+    smtp_port  = int(notif.get("smtp_port", 587))
+    smtp_user  = notif.get("smtp_user",     "")
+    smtp_pass  = notif.get("smtp_password", "")
+    from_addr  = notif.get("from_address")  or smtp_user
+    to_addrs   = notif.get("to_addresses")  or []
+
+    if not to_addrs:
+        return False, "No recipient addresses configured in notifications.email.to_addresses"
+
+    now = datetime.utcnow()
+    subject = "Investment Research — Test Notification"
+
+    last_run_str = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "—"
+
+    lines = [
+        "Investment Research Dashboard — Test Notification",
+        f"Sent:      {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        f"From:      {from_addr}",
+        f"To:        {', '.join(to_addrs)}",
+        f"Via:       {smtp_host}:{smtp_port}",
+        "",
+        "CURRENT SYSTEM STATUS",
+        "=" * 45,
+        f"Regime:        {regime.replace('_', ' ')}",
+        f"Last analysis: {last_run_str}",
+        f"Open trades:   {open_trade_count}",
+        "",
+        "---",
+        "If you received this, email delivery is working correctly.",
+        "To disable alerts: set notifications.email.enabled: false in config.yaml",
+    ]
+
+    msg = MIMEText("\n".join(lines), "plain")
+    msg["Subject"] = subject
+    msg["From"]    = from_addr
+    msg["To"]      = ", ".join(to_addrs)
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(from_addr, to_addrs, msg.as_string())
+        return True, f"Test email sent to {', '.join(to_addrs)}"
+    except Exception as exc:
+        logger.error("Failed to send test email: %s", exc)
+        return False, f"Email send failed: {exc}"
