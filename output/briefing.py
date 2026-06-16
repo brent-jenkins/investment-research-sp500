@@ -395,14 +395,14 @@ def send_test_email(
 ) -> "tuple[bool, str]":
     """Send a test notification email to verify SMTP delivery.
 
+    Bypasses the enabled flag — the purpose is to verify delivery works
+    before committing to enabling live alerts.
     Subject is always 'Investment Research — Test Notification'.
     Body includes sender, recipient, current regime, last analysis time,
     and open trade count so the recipient can confirm end-to-end delivery.
     Returns (success, human-readable message).
     """
     notif = config.get("notifications", {}).get("email", {})
-    if not notif.get("enabled"):
-        return False, "Email notifications not enabled in config.yaml"
 
     smtp_host  = notif.get("smtp_host",     "smtp-relay.brevo.com")
     smtp_port  = int(notif.get("smtp_port", 587))

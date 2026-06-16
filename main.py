@@ -2429,22 +2429,26 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     # ── Email notification test ────────────────────────────────────────────
     notif_cfg = config.get("notifications", {}).get("email", {})
-    if notif_cfg.get("enabled"):
-        st.divider()
-        st.markdown("### Email Notifications")
-        _from  = notif_cfg.get("from_address") or notif_cfg.get("smtp_user", "—")
-        _to    = ", ".join(notif_cfg.get("to_addresses") or []) or "—"
-        _relay = f"{notif_cfg.get('smtp_host', 'smtp-relay.brevo.com')}:{notif_cfg.get('smtp_port', 587)}"
-        st.caption(f"From: **{_from}** · To: **{_to}** · Via: {_relay}")
-        if st.button("📧 Send Test Email", key="status_send_test_email"):
-            _regime_str  = detect_regime().get("regime", "UNKNOWN")
-            _open_count  = len(get_open_trades())
-            with st.spinner("Sending…"):
-                _ok, _msg = send_test_email(config, _regime_str, last_analysis, _open_count)
-            if _ok:
-                st.success(_msg)
-            else:
-                st.error(_msg)
+    st.divider()
+    st.markdown("### Email Notifications")
+    _from    = notif_cfg.get("from_address") or notif_cfg.get("smtp_user", "—")
+    _to      = ", ".join(notif_cfg.get("to_addresses") or []) or "—"
+    _relay   = f"{notif_cfg.get('smtp_host', 'smtp-relay.brevo.com')}:{notif_cfg.get('smtp_port', 587)}"
+    _enabled = notif_cfg.get("enabled", False)
+    st.caption(
+        f"From: **{_from}** · To: **{_to}** · Via: {_relay} · "
+        f"Alerts: {'**enabled**' if _enabled else 'disabled'}"
+    )
+    if st.button("📧 Send Test Email", key="status_send_test_email"):
+        _regime_str = detect_regime().get("regime", "UNKNOWN")
+        _open_count = len(get_open_trades())
+        with st.spinner("Sending…"):
+            _ok, _msg = send_test_email(config, _regime_str, last_analysis, _open_count)
+        if _ok:
+            st.success(_msg)
+        else:
+            st.error(_msg)
+    st.caption("Sends a real email to confirm SMTP delivery is working. Check your inbox after clicking.")
 
 
 # ---------------------------------------------------------------------------
