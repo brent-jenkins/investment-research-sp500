@@ -911,8 +911,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         agreeing = sum(1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction)
         return agreeing >= 3
 
-    long_picks  = [r for r in rows           if _qualifies(r,  1)][:3]
-    short_picks = [r for r in reversed(rows) if _qualifies(r, -1)][:3]
+    long_picks  = [r for r in rows           if _qualifies(r,  1) and r.get("ticker") in tradeable_set][:3]
+    short_picks = [r for r in reversed(rows) if _qualifies(r, -1) and r.get("ticker") in tradeable_set][:3]
 
     lc, sc = st.columns(2)
 
@@ -1017,14 +1017,30 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
 
     # ---- Full rankings table -----------------------------------------------
     st.markdown("### Asset Rankings")
-    st.caption("▲ bullish  ●  neutral  ▼ bearish")
+
+    _col_cap, _col_tog = st.columns([3, 2])
+    _col_cap.caption("▲ bullish  ●  neutral  ▼ bearish")
+    _sig_filter = _col_tog.radio(
+        "Show",
+        ["Tradeable Only", "Show All"],
+        horizontal=True,
+        key="signals_filter",
+        index=0,
+        label_visibility="collapsed",
+    )
+    _show_all_assets = _sig_filter == "Show All"
 
     def _sym(val) -> str:
         return _SCORE_SYMBOL.get(int(val) if val is not None else 0, "●")
 
+    n_tradeable_rows = sum(1 for r in rows if r.get("ticker") in tradeable_set)
+    n_analysis_rows  = len(rows) - n_tradeable_rows
+
     records = []
     for r in rows:
         ticker = r.get("ticker", "")
+        if not _show_all_assets and ticker not in tradeable_set:
+            continue
         records.append({
             "Ticker":     ticker,
             "Name":       watchlist.get(ticker, ticker),
@@ -1035,7 +1051,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             "Volatility": _sym(r.get("volatility_score")),
             "Volume":     _sym(r.get("volume_score")),
             "Macro":      _sym(r.get("macro_score")),
-            "Type":       "" if ticker in tradeable_set else "Analysis only",
+            "Type":       "Tradeable" if ticker in tradeable_set else "Analysis only",
         })
 
     table_df = pd.DataFrame(records)
@@ -1059,7 +1075,11 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         .map(_style_signal, subset=["Signal"])
         .map(_style_score,  subset=["Score"])
         .map(_style_module, subset=module_cols)
-        .map(lambda v: "color:#94a3b8;font-size:0.75rem" if v else "", subset=["Type"])
+        .map(lambda v: (
+            "color:#16a34a;font-size:0.75rem;font-weight:600" if v == "Tradeable"
+            else "color:#6b7280;font-size:0.75rem" if v == "Analysis only"
+            else ""
+        ), subset=["Type"])
         .format({"Score": "{:+.3f}"})
     )
     row_height_px = 35
@@ -1070,6 +1090,13 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         hide_index=True,
         height=header_px + row_height_px * len(records),
     )
+    if _show_all_assets:
+        st.caption(f"Showing all {len(rows)} assets ({n_analysis_rows} analysis-only)")
+    else:
+        st.caption(
+            f"Showing {n_tradeable_rows} tradeable assets"
+            + (f" · {n_analysis_rows} analysis-only hidden" if n_analysis_rows else "")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1108,7 +1135,15 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             unsafe_allow_html=True,
         )
 
-        ticker_keys = [t for t in watchlist.keys() if t in tradeable_set]
+        _log_show_all = st.checkbox(
+            "Show all assets (including analysis-only)",
+            value=False,
+            key="log_show_all_tickers",
+        )
+        ticker_keys = (
+            list(watchlist.keys()) if _log_show_all
+            else [t for t in watchlist.keys() if t in tradeable_set]
+        )
 
         def _fmt_trade_ticker(t: str) -> str:
             base = f"{t} — {watchlist[t]}"
@@ -2951,8 +2986,16 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         agreeing = sum(1 for k in _BRIEF_MODULE_KEYS if (s.get(k) or 0) == direction)
         return agreeing >= 3
 
-    long_picks  = [s for s in all_signals           if _brief_qualifies(s,  1)][:3]
-    short_picks = [s for s in reversed(all_signals) if _brief_qualifies(s, -1)][:3]
+    _include_analysis = st.checkbox(
+        "Include analysis-only assets in opportunities",
+        value=False,
+        key="brief_include_analysis",
+    )
+    _picks_pool = all_signals if _include_analysis else [
+        s for s in all_signals if s.get("ticker") in tradeable_set
+    ]
+    long_picks  = [s for s in _picks_pool           if _brief_qualifies(s,  1)][:3]
+    short_picks = [s for s in reversed(_picks_pool) if _brief_qualifies(s, -1)][:3]
 
     def _brief_rationale(sig: dict, direction: int) -> str:
         _labels = {
