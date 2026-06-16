@@ -59,6 +59,7 @@ from output.briefing import (
     STATUS_ICONS   as _BRIEF_STATUS_ICONS,
     build_opportunities,
     enrich_open_trade,
+    get_current_atr,
     get_macro_context,
     send_alert_email,
     send_test_email,
@@ -1127,11 +1128,153 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         sc2.metric("Confluence Score", f"{sig.get('confluence_score', 0):+.3f}" if sig else "—")
         sc3.metric("Regime",           (sig.get("regime") or "—").replace("_", " "))
 
+        # ── Position sizing guidance ──────────────────────────────────────────
+        # Fetch live price here (reused below for the yfinance reference warning)
+        _ref_price = _cached_latest_price(sel_ticker)
+
+        _overlay_raw_ps  = get_metadata_str("active_overlays") or ""
+        _active_ovs_ps   = {k for k in _overlay_raw_ps.split(",") if k and k != "none"}
+        _macro_stress_ps = "MACRO_STRESS" in _active_ovs_ps
+
+        _acct_ccy_ps  = sel_acct.get("currency", "GBP")
+        _acct_balance = float(
+            sel_acct.get("practice_balance", 0) if _acct_type_log == "PRACTICE"
+            else sel_acct.get("live_balance", 0)
+        )
+        _max_pos_pct  = float(sel_acct.get("max_position_pct", 0.05))
+        _signal_raw   = sig.get("signal") or "NEUTRAL"
+        _score_val    = float(sig.get("confluence_score") or 0)
+        _atr_ps       = get_current_atr(sel_ticker)
+
+        # Signal scaling by confluence score
+        if abs(_score_val) >= 0.6:
+            _sig_scale = 1.00
+            _sig_label = f"{_signal_raw.replace('_', ' ')} ×1.00"
+        elif abs(_score_val) >= 0.3:
+            _sig_scale = 0.60
+            _sig_label = f"{_signal_raw.replace('_', ' ')} ×0.60"
+        else:
+            _sig_scale = 0.00
+            _sig_label = "NEUTRAL ×0.00 — no position suggested"
+
+        _overlay_factor = 0.80 if _macro_stress_ps else 1.00
+        _base_size      = _acct_balance * _max_pos_pct if _acct_balance > 0 else 0.0
+        _suggested_inv  = round(_base_size * _sig_scale * _overlay_factor, 2)
+
+        # Pre-fill investment field when ticker or account changes
+        _size_ctx_key = f"{sel_ticker}|{sel_acct_id}"
+        if st.session_state.get("_log_size_ctx") != _size_ctx_key:
+            st.session_state["_log_size_ctx"] = _size_ctx_key
+            if _suggested_inv > 0:
+                st.session_state["log_investment"] = _suggested_inv
+
+        if _acct_balance > 0:
+            _sess_lev = int(st.session_state.get("log_leverage", 1))
+
+            # Build card lines
+            _ps_rows: list[str] = [
+                f"<span style='color:#94a3b8'>Account Balance:        </span>"
+                f"<span style='color:#e2e8f0'>{_acct_ccy_ps} {_acct_balance:>10,.2f}</span>",
+
+                f"<span style='color:#94a3b8'>Max Position ({_max_pos_pct*100:.0f}%):     </span>"
+                f"<span style='color:#e2e8f0'>{_acct_ccy_ps} {_base_size:>10,.2f}</span>",
+
+                f"<span style='color:#94a3b8'>Signal Scaling:         </span>"
+                f"<span style='color:{'#16a34a' if _sig_scale==1.0 else '#f59e0b' if _sig_scale>0 else '#ef5350'}'>"
+                f"{html.escape(_sig_label)}</span>",
+            ]
+            if _macro_stress_ps:
+                _ps_rows.append(
+                    f"<span style='color:#94a3b8'>Overlay (MACRO_STRESS): </span>"
+                    f"<span style='color:#f59e0b'>×0.80 (−20%)</span>"
+                )
+            _divider_html = "<span style='color:#1e3a5f'>──────────────────────────────────</span>"
+            _ps_rows.append(_divider_html)
+
+            _sug_col = "#16a34a" if _suggested_inv > 0 else "#6b7280"
+            _ps_rows.append(
+                f"<span style='color:#94a3b8'>Suggested Investment:   </span>"
+                f"<span style='color:{_sug_col};font-weight:700'>"
+                f"{_acct_ccy_ps} {_suggested_inv:>9,.2f}</span>"
+            )
+            if _sess_lev > 1 and _suggested_inv > 0:
+                _pos_val_ps = _suggested_inv * _sess_lev
+                _margin_ps  = _suggested_inv
+                _ps_rows += [
+                    f"<span style='color:#94a3b8'>Position Value (1:{_sess_lev}):    </span>"
+                    f"<span style='color:#e2e8f0'>{_acct_ccy_ps} {_pos_val_ps:>9,.2f}</span>",
+
+                    f"<span style='color:#94a3b8'>Suggested Margin:       </span>"
+                    f"<span style='color:#e2e8f0'>{_acct_ccy_ps} {_margin_ps:>9,.2f}</span>",
+                ]
+            if _atr_ps is not None:
+                _stop_dist = 2 * _atr_ps
+                _ps_rows.append(
+                    f"<span style='color:#94a3b8'>ATR Stop Distance:      </span>"
+                    f"<span style='color:#e2e8f0'>{_stop_dist:.4f} (2×ATR {_atr_ps:.4f})</span>"
+                )
+                if _ref_price and _ref_price > 0 and _suggested_inv > 0:
+                    _risk_pct_ps = (_stop_dist / _ref_price) * _sess_lev * 100
+                    _ps_rows.append(
+                        f"<span style='color:#94a3b8'>Est. Risk % (vs invest): </span>"
+                        f"<span style='color:#f59e0b'>~{_risk_pct_ps:.1f}%</span>"
+                        f"<span style='color:#475569;font-size:0.78rem'>"
+                        f" (2×ATR/price × leverage, uses yfinance ref)</span>"
+                    )
+
+            st.markdown(
+                f"<div style='background:#0a1628;border:1px solid #1e3a5f;border-radius:6px;"
+                f"padding:14px 18px;margin:10px 0 4px;font-family:monospace;"
+                f"font-size:0.82rem;line-height:2'>"
+                f"<div style='color:#60a5fa;margin-bottom:4px;font-family:sans-serif;"
+                f"font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;"
+                f"font-weight:600'>Suggested Position Size</div>"
+                + "".join(f"{r}<br>" for r in _ps_rows)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+            with st.expander("💡 Why this size?"):
+                _why: list[str] = [
+                    f"Based on your {_acct_ccy_ps} {_acct_balance:,.0f} "
+                    f"{'practice' if _acct_type_log == 'PRACTICE' else 'live'} balance, "
+                    f"maximum {_max_pos_pct*100:.0f}% per trade = "
+                    f"{_acct_ccy_ps} {_base_size:,.0f}.",
+                ]
+                if _sig_scale == 1.0:
+                    _why.append(
+                        f"{_signal_raw.replace('_', ' ')} signal uses full allocation (×1.00)."
+                    )
+                elif _sig_scale == 0.6:
+                    _why.append(
+                        f"{_signal_raw.replace('_', ' ')} signal uses 60% allocation (×0.60)."
+                    )
+                else:
+                    _why.append("NEUTRAL signal — no position suggested (allocation ×0.00).")
+                if _macro_stress_ps:
+                    _why.append(
+                        f"MACRO_STRESS overlay is active — allocation reduced by 20%, "
+                        f"giving {_acct_ccy_ps} {_suggested_inv:,.0f} suggested."
+                    )
+                elif _suggested_inv > 0:
+                    _why.append(f"No active overlays — full signal allocation applies.")
+                if _atr_ps is not None:
+                    _why.append(
+                        f"The ATR-based stop sits {2*_atr_ps:.4f} away from entry (2×ATR). "
+                        f"In Trading212, set your stop loss at entry price ± {2*_atr_ps:.4f}."
+                    )
+                st.markdown(" ".join(_why))
+
+            if _acct_type_log == "LIVE":
+                st.warning(
+                    "**This is a live account — real money.** "
+                    "Review all inputs carefully before confirming."
+                )
+
         st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
         # ── Trade inputs (no st.form — dynamic calculations need live rerenders) ──
         # Market price from yfinance shown for reference only — never used as default
-        _ref_price = _cached_latest_price(sel_ticker)
         _ref_note  = (
             f"yfinance reference: **{_ref_price:,.4f}**"
             if _ref_price else "yfinance reference: unavailable"

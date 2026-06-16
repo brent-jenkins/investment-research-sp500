@@ -355,12 +355,18 @@ accounts:
     name: "Trading212 Practice"
     type: PRACTICE
     platform: Trading212
+    currency: GBP
     default: true
+    practice_balance: 5000
+    max_position_pct: 0.05   # 5% max per trade
   - id: t212_live
     name: "Trading212 Live"
     type: LIVE
     platform: Trading212
+    currency: GBP
     default: false
+    live_balance: 0          # set to your actual live balance
+    max_position_pct: 0.03   # 3% max per trade (tighter for real money)
 
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html
