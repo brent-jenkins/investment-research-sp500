@@ -3293,54 +3293,77 @@ def _render_trade_card(e: dict) -> None:
     days_held = int(e.get("days_held") or 0)
     acct_name = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
 
-    unreal_pnl        = e.get("unreal_pnl")
+    # ── P&L — GBP only, no raw secondary ─────────────────────────────────────
     unreal_pnl_gbp    = e.get("unreal_pnl_gbp")
     unreal_pct        = e.get("unreal_pct")
     price_unavailable = e.get("price_unavailable", e.get("live_price") is None)
 
     if price_unavailable:
-        pnl_html = html.escape("⚠ Price unavailable")
+        pnl_html = "⚠ Price unavailable"
         pnl_col  = "#f59e0b"
     elif unreal_pnl_gbp is not None and unreal_pct is not None:
         pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
-        _raw_sym = _quote_ccy_sym(e.get("ticker") or "")
-        _raw_txt = (html.escape(f"{_raw_sym}{unreal_pnl:+.2f} raw")
-                    if unreal_pnl is not None else "")
-        pnl_html = (
-            html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
-            + (f"<br><span style='color:#6b7280;font-size:0.75rem;font-weight:400'>"
-               f"{_raw_txt}</span>"
-               if _raw_txt else "")
+        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
+    elif e.get("unreal_pnl") is not None and unreal_pct is not None:
+        _upnl    = e["unreal_pnl"]
+        pnl_col  = "#16a34a" if _upnl >= 0 else "#dc2626"
+        pnl_html = html.escape(
+            f"{_quote_ccy_sym(e.get('ticker') or '')}{_upnl:+.2f} ({unreal_pct:+.2f}%)"
         )
-    elif unreal_pnl is not None and unreal_pct is not None:
-        _card_sym = _quote_ccy_sym(e.get("ticker") or "")
-        pnl_col  = "#16a34a" if unreal_pnl >= 0 else "#dc2626"
-        pnl_html = html.escape(f"{_card_sym}{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)")
     else:
         pnl_html = "—"
         pnl_col  = "#6b7280"
 
+    # ── Signal / score — delta only when non-zero ─────────────────────────────
     entry_sig = html.escape((e.get("entry_signal")   or "—").replace("_", " "))
     curr_sig  = html.escape((e.get("current_signal") or "—").replace("_", " "))
     e_score   = float(e.get("entry_score")   or 0)
     c_score   = float(e.get("current_score") or 0)
     delta     = c_score - e_score
-    delta_col = "#16a34a" if delta >= 0 else "#f59e0b"
 
-    stop_loss = e.get("stop_loss")
-    atr       = e.get("atr")
-    stop_html = ""
-    if stop_loss is not None:
-        sl_str = f"Stop: {stop_loss:,.4f}"
-        if atr is not None:
-            sl_str += f" (2×ATR {atr:.4f})"
-        stop_html = f"<span style='color:#64748b'>{html.escape(sl_str)}</span>"
+    score_str = html.escape(f"Score: {e_score:+.3f} → {c_score:+.3f}")
+    if abs(delta) >= 0.001:
+        delta_col  = "#16a34a" if delta >= 0 else "#f59e0b"
+        score_html = (
+            f"{score_str}"
+            f" <span style='color:{delta_col}'>{html.escape(f'(Δ {delta:+.3f})')}</span>"
+        )
+    else:
+        score_html = score_str
+
+    # ── SL / TP / live R:R ────────────────────────────────────────────────────
+    # Prefer the stored trade-plan SL over the ATR-computed one
+    _stored_sl = e.get("stop_loss_price")
+    _atr_sl    = e.get("stop_loss")
+    sl_price   = (float(_stored_sl) if _stored_sl is not None
+                  else float(_atr_sl) if _atr_sl is not None else None)
+    tp_price   = float(e["take_profit_price"]) if e.get("take_profit_price") is not None else None
+
+    live_price  = e.get("live_price")
+    entry_price = float(e.get("entry_price") or 0)
+    _mult       = 1 if e.get("direction", "LONG") == "LONG" else -1
+    live_rr     = None
+    if sl_price is not None and live_price is not None and entry_price > 0:
+        sl_risk = abs(entry_price - sl_price)
+        if sl_risk > 0:
+            live_rr = _mult * (live_price - entry_price) / sl_risk
+
+    # ── Build compact dot-separated detail row ────────────────────────────────
+    detail_parts = [
+        f"Signal: {entry_sig} → <strong>{curr_sig}</strong>",
+        score_html,
+    ]
+    if sl_price is not None:
+        detail_parts.append(html.escape(f"SL: {sl_price:,.4f}"))
+    if tp_price is not None:
+        detail_parts.append(html.escape(f"TP: {tp_price:,.4f}"))
+    if live_rr is not None:
+        detail_parts.append(html.escape(f"R:R: {live_rr:+.2f}"))
 
     st.markdown(
-        f"<div style='border-left:4px solid {colour};padding:12px 16px;"
-        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:10px'>"
-        # Header row
-        f"<div style='display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px'>"
+        f"<div style='border-left:4px solid {colour};padding:10px 16px;"
+        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:8px'>"
+        f"<div style='display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px'>"
         f"<span style='background:{colour};color:#fff;padding:2px 9px;"
         f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
@@ -3349,12 +3372,8 @@ def _render_trade_card(e: dict) -> None:
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
         f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
         f"</div>"
-        # Detail row
-        f"<div style='display:flex;gap:24px;flex-wrap:wrap;font-size:0.82rem'>"
-        f"<span>Signal: {entry_sig} → <strong>{curr_sig}</strong></span>"
-        f"<span>Score: {e_score:+.3f} → {c_score:+.3f} "
-        f"<span style='color:{delta_col}'>(Δ {delta:+.3f})</span></span>"
-        f"{stop_html}"
+        f"<div style='font-size:0.82rem;color:#94a3b8'>"
+        f"{' · '.join(detail_parts)}"
         f"</div>"
         f"</div>",
         unsafe_allow_html=True,
