@@ -92,6 +92,7 @@ watchlist:
       name: "iShares Silver Trust"
       exchange: "NYSE"
       tradeable: true
+      trading212_instrument: "XAG/USD"
     - ticker: "CORN"
       name: "Teucrium Corn Fund"
       exchange: "NYSE"
