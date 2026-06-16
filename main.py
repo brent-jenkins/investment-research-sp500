@@ -1504,6 +1504,28 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
         notes_text = st.text_input("Notes (optional)", key="log_notes")
 
+        # ── Trade Plan inputs ─────────────────────────────────────────────────
+        _tp_c1, _tp_c2, _tp_c3 = st.columns(3)
+        preferred_rr = _tp_c1.number_input(
+            "Preferred R:R ratio",
+            min_value=0.5, value=float(st.session_state.get("log_preferred_rr", 2.0)),
+            step=0.5, format="%.1f",
+            help="The R:R ratio used to set your take-profit target (e.g. 2.0 = 2:1).",
+            key="log_preferred_rr",
+        )
+        custom_sl_price = _tp_c2.number_input(
+            "Custom Stop Loss (0 = ATR)",
+            min_value=0.0, value=0.0, step=0.0001, format="%.4f",
+            help="Override the ATR-based stop loss with a specific price level.",
+            key="log_custom_sl",
+        )
+        custom_tp_price = _tp_c3.number_input(
+            "Custom Take Profit (0 = R:R calc)",
+            min_value=0.0, value=0.0, step=0.0001, format="%.4f",
+            help="Override the R:R-based take profit with a specific price level.",
+            key="log_custom_tp",
+        )
+
         # ── Investment summary box ─────────────────────────────────────────────
         if investment_amount > 0 and entry_price > 0:
             _ccy = account_ccy
@@ -1567,12 +1589,106 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 + f"</div>",
                 unsafe_allow_html=True,
             )
+
+            # ── Trade Plan card ────────────────────────────────────────────────
+            # Compute effective stop loss
+            _tp_atr = _atr_ps  # already fetched above
+            if custom_sl_price > 0:
+                _eff_sl = custom_sl_price
+                _sl_dist = abs(entry_price - custom_sl_price)
+            elif _tp_atr is not None:
+                _sl_dist = 2 * _tp_atr
+                _eff_sl = round(
+                    entry_price - _sl_dist if direction == "LONG"
+                    else entry_price + _sl_dist, 6
+                )
+            else:
+                _eff_sl = None
+                _sl_dist = None
+
+            if _eff_sl is not None and _sl_dist is not None and _sl_dist > 0:
+                _sl_pct      = _sl_dist / entry_price * 100
+                _gbp_risk    = investment_amount * (_sl_pct / 100) * leverage
+
+                # Three standard TP targets
+                _mult_dir = 1 if direction == "LONG" else -1
+                _tp1 = round(entry_price + _mult_dir * _sl_dist * 1, 6)
+                _tp2 = round(entry_price + _mult_dir * _sl_dist * 2, 6)
+                _tp3 = round(entry_price + _mult_dir * _sl_dist * 3, 6)
+
+                # Preferred R:R target (stored)
+                _eff_tp = (
+                    custom_tp_price if custom_tp_price > 0
+                    else round(entry_price + _mult_dir * _sl_dist * preferred_rr, 6)
+                )
+
+                _tp1_gbp = _gbp_risk * 1
+                _tp2_gbp = _gbp_risk * 2
+                _tp3_gbp = _gbp_risk * 3
+                _pref_tp_gbp = _gbp_risk * preferred_rr
+
+                _sl_src = "custom" if custom_sl_price > 0 else "2×ATR"
+                _tp_src = "custom" if custom_tp_price > 0 else f"{preferred_rr:.1f}:1 R:R"
+
+                # Highlight the preferred R:R row
+                def _tp_row(label: str, price: float, gbp: float, is_pref: bool) -> str:
+                    _dist = abs(price - entry_price)
+                    _col  = "#16a34a" if is_pref else "#94a3b8"
+                    _mark = " ★" if is_pref else ""
+                    return (
+                        f"<span style='color:{_col}'>{html.escape(label)}{html.escape(_mark)}: "
+                        f"{instr_ccy} {price:.4f} "
+                        f"<span style='color:#6b7280'>({_dist:.4f} away)</span> → "
+                        f"<span style='color:#16a34a'>+{account_ccy} {gbp:.2f}</span></span><br>"
+                    )
+
+                st.markdown(
+                    f"<div style='background:#0a1628;border:1px solid #1e3a5f;border-radius:6px;"
+                    f"padding:14px 18px;margin:8px 0;font-family:monospace;font-size:0.82rem;line-height:2'>"
+                    f"<div style='color:#60a5fa;margin-bottom:4px;font-family:sans-serif;"
+                    f"font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;"
+                    f"font-weight:600'>Trade Plan</div>"
+                    f"<span style='color:#94a3b8'>Stop Loss ({html.escape(_sl_src)}): </span>"
+                    f"<span style='color:#ef5350;font-weight:bold'>{instr_ccy} {_eff_sl:.4f}</span>"
+                    f"<span style='color:#6b7280;font-size:0.76rem'> ({_sl_dist:.4f} away, "
+                    f"{_sl_pct:.3f}%)</span>"
+                    f"<span style='color:#f59e0b;font-size:0.76rem'> → ~{account_ccy} {_gbp_risk:.2f} risk</span><br>"
+                    f"<span style='color:#475569'>──────────────────────────────────────</span><br>"
+                    + _tp_row("TP1 (1:1)", _tp1, _tp1_gbp, preferred_rr == 1.0 and custom_tp_price == 0)
+                    + _tp_row("TP2 (2:1)", _tp2, _tp2_gbp, preferred_rr == 2.0 and custom_tp_price == 0)
+                    + _tp_row("TP3 (3:1)", _tp3, _tp3_gbp, preferred_rr == 3.0 and custom_tp_price == 0)
+                    + (
+                        (lambda _ctp_dist=abs(custom_tp_price - entry_price),
+                                _ctp_gbp=investment_amount * (abs(custom_tp_price - entry_price) / entry_price) * leverage:
+                         f"<span style='color:#c084fc'>Custom TP ★: {instr_ccy} {custom_tp_price:.4f} "
+                         f"<span style='color:#6b7280'>({_ctp_dist:.4f} away)</span> → "
+                         f"<span style='color:#16a34a'>+{account_ccy} {_ctp_gbp:.2f}</span></span><br>"
+                        )()
+                        if custom_tp_price > 0 else ""
+                    )
+                    + (
+                        f"<span style='color:#c084fc'>Pref TP ({preferred_rr:.1f}:1) ★: {instr_ccy} {_eff_tp:.4f} "
+                        f"<span style='color:#6b7280'>({abs(_eff_tp - entry_price):.4f} away)</span> → "
+                        f"<span style='color:#16a34a'>+{account_ccy} {_pref_tp_gbp:.2f}</span></span><br>"
+                        if preferred_rr not in (1.0, 2.0, 3.0) and custom_tp_price == 0 else ""
+                    )
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                _eff_sl   = None
+                _eff_tp   = None
+                _gbp_risk = None
+
             confirmed = st.checkbox(
                 "I confirm this matches what Trading212 shows",
                 key="log_confirmed",
             )
         else:
             confirmed = True  # no summary needed if minimal inputs
+            _eff_sl   = None
+            _eff_tp   = None
+            _gbp_risk = None
 
         # ── Submit ─────────────────────────────────────────────────────────────
         _submit_disabled = (not confirmed) or (entry_price <= 0)
@@ -1611,6 +1727,10 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 spread_cost=float(spread_cost) if spread_cost > 0 else None,
                 fx_fee_pct=float(fx_fee_pct),
                 platform_instrument=platform_instrument if platform_instrument else None,
+                stop_loss_price=_eff_sl,
+                take_profit_price=_eff_tp,
+                risk_reward_ratio=float(preferred_rr) if _eff_sl is not None else None,
+                planned_risk_gbp=_gbp_risk,
             )
             # Clear form state so widgets reset to defaults on next render
             for _k in [
@@ -1618,6 +1738,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "log_investment", "log_leverage", "log_overnight_rate", "log_swap_basis",
                 "log_spread_cost", "log_fx_fee_pct", "log_platform_instrument", "log_notes",
                 "log_confirmed", "log_fx_rate_manual", "_log_fx_fee_ticker",
+                "log_preferred_rr", "log_custom_sl", "log_custom_tp",
             ]:
                 st.session_state.pop(_k, None)
             st.success(
@@ -1754,6 +1875,45 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             except Exception:
                 effective_live = pnl_instr = pnl_acct = pos_pnl_pct = margin_pnl_pct = accrued_swap = fx_fee_cost = net_pnl = None
 
+            # SL / TP from stored trade plan
+            _stored_sl = t.get("stop_loss_price")
+            _stored_tp = t.get("take_profit_price")
+            sl_price   = float(_stored_sl) if _stored_sl is not None else None
+            tp_price   = float(_stored_tp) if _stored_tp is not None else None
+
+            # Distance to SL and TP from current live price
+            dist_to_sl  = None
+            pct_to_sl   = None
+            dist_to_tp  = None
+            pct_to_tp   = None
+            live_rr     = None
+            progress    = None
+
+            try:
+                if live is not None and entry > 0:
+                    if sl_price is not None:
+                        # Distance is directional: positive = moving toward SL (bad)
+                        dist_to_sl = mult * (sl_price - live)   # negative = away from SL
+                        pct_to_sl  = dist_to_sl / entry * 100
+                        # Current R:R = how much gained relative to risk taken
+                        sl_risk = abs(entry - sl_price)
+                        if sl_risk > 0:
+                            live_rr = mult * (live - entry) / sl_risk
+
+                    if tp_price is not None:
+                        dist_to_tp = mult * (tp_price - live)   # positive = still has room
+                        pct_to_tp  = dist_to_tp / entry * 100
+
+                    if sl_price is not None and tp_price is not None:
+                        total_range = abs(tp_price - sl_price)
+                        if total_range > 0:
+                            if direction == "LONG":
+                                progress = max(0.0, min(100.0, (live - sl_price) / total_range * 100))
+                            else:
+                                progress = max(0.0, min(100.0, (sl_price - live) / total_range * 100))
+            except Exception:
+                pass
+
             rows.append({
                 "ID":           t["id"],
                 "Type":         t.get("account_type") or "PRACTICE",
@@ -1763,6 +1923,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "Units":        qty if qty > 0 else None,
                 "Entry":        entry,
                 "Live":         live,
+                "SL":           sl_price,
+                "TP":           tp_price,
+                "% to SL":      pct_to_sl,    # positive = price moving toward SL
+                "% to TP":      pct_to_tp,    # positive = still has room to TP
+                "Live R:R":     live_rr,       # positive = in profit vs risk
+                "Progress":     progress,      # 0–100, where 0=SL, 100=TP
                 "P&L (raw)":    pnl_instr,    # in instrument currency, spread-adjusted
                 "P&L £":        pnl_acct,     # in account currency (GBP)
                 "Margin P&L %": margin_pnl_pct,
@@ -1788,26 +1954,63 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             if val == "PRACTICE": return "color:#a5b4fc"
             return ""
 
-        styler = (
+        def _style_pct_to_sl(val):
+            if not isinstance(val, (int, float)): return ""
+            # Positive = moving toward SL (bad); negative = moving away from SL (good)
+            return "color:#dc2626;font-weight:bold" if val > 0 else "color:#16a34a"
+
+        def _style_pct_to_tp(val):
+            if not isinstance(val, (int, float)): return ""
+            # Positive = still has room to reach TP (good); negative = overshot TP
+            return "color:#16a34a;font-weight:bold" if val > 0 else "color:#a78bfa"
+
+        _has_sl_tp = any(r.get("SL") is not None or r.get("TP") is not None for r in rows)
+
+        _fmt: dict = {
+            "Entry":        "{:,.4f}",
+            "Live":         lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
+            "Units":        lambda v: f"{v:.6f}" if isinstance(v, float) else "—",
+            "SL":           lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
+            "TP":           lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
+            "% to SL":      lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+            "% to TP":      lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+            "Live R:R":     lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+            "P&L (raw)":    lambda v: f"{v:+.4f}" if isinstance(v, float) else "—",
+            "P&L £":        lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+            "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+            "Swap":         lambda v: f"{v:.2f}" if isinstance(v, float) else "—",
+            "FX Fee £":     lambda v: f"{v:.4f}" if isinstance(v, float) else "—",
+            "Net P&L £":    lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+        }
+
+        _styler_cols_base = ["P&L (raw)", "P&L £", "Margin P&L %", "Net P&L £", "Live R:R"]
+        _styler = (
             open_df.style
             .map(_style_acct_badge, subset=["Type"])
-            .map(_style_signed,     subset=["P&L (raw)", "P&L £", "Margin P&L %", "Net P&L £"])
+            .map(_style_signed,     subset=_styler_cols_base)
             .map(_style_swap,       subset=["Swap", "FX Fee £"])
-            .format({
-                "Entry":        "{:,.4f}",
-                "Live":         lambda v: f"{v:,.4f}" if isinstance(v, float) else "—",
-                "Units":        lambda v: f"{v:.6f}" if isinstance(v, float) else "—",
-                "P&L (raw)":    lambda v: f"{v:+.4f}" if isinstance(v, float) else "—",
-                "P&L £":        lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
-                "Margin P&L %": lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
-                "Swap":         lambda v: f"{v:.2f}" if isinstance(v, float) else "—",
-                "FX Fee £":     lambda v: f"{v:.4f}" if isinstance(v, float) else "—",
-                "Net P&L £":    lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
-            })
         )
+        if _has_sl_tp:
+            _styler = (
+                _styler
+                .map(_style_pct_to_sl, subset=["% to SL"])
+                .map(_style_pct_to_tp, subset=["% to TP"])
+            )
+        _styler = _styler.format(_fmt)
 
-        st.dataframe(styler, use_container_width=True, hide_index=True,
-                     height=38 + 35 * len(rows))
+        _col_cfg = {}
+        if _has_sl_tp:
+            _col_cfg["Progress"] = st.column_config.ProgressColumn(
+                "SL→TP",
+                help="Position between Stop Loss (0%) and Take Profit (100%).",
+                min_value=0,
+                max_value=100,
+                format="%.0f%%",
+            )
+
+        st.dataframe(_styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(rows),
+                     column_config=_col_cfg if _col_cfg else None)
         st.caption(
             "**Live price is from the yfinance delayed feed — minor differences from "
             "Trading212's live price are expected.** "
@@ -1815,7 +2018,10 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "Margin P&L % = position price move % × leverage. "
             "Ccy = instrument currency; P&L (raw) in instrument currency, P&L £ / Net P&L £ in GBP. "
             "Swap = accrued overnight cost (basis × rate × days). "
-            "FX Fee £ = estimated 0.50% of current unrealised P&L (exact fee applied to realised P&L at close)."
+            "FX Fee £ = estimated 0.50% of current unrealised P&L. "
+            "SL/TP = stored from trade plan; % to SL (red = price moving toward stop). "
+            "Live R:R = current gain / planned risk (positive = in profit vs risk taken). "
+            "SL→TP progress bar: 0% = at stop loss, 100% = at take profit."
         )
 
     st.divider()
@@ -2200,6 +2406,84 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
             ct_styler = ct_styler.map(_style_acct_col, subset=["Account"])
         st.dataframe(ct_styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(ct_rows))
+
+    # ---- R:R Analysis -------------------------------------------------------
+    _rr_trades = [
+        t for t in closed_trades
+        if t.get("planned_risk_gbp") and float(t["planned_risk_gbp"]) > 0
+        and t.get("risk_reward_ratio") and t.get("pnl") is not None
+    ]
+    if _rr_trades:
+        st.divider()
+        st.markdown("### R:R Analysis")
+        st.caption(
+            "Planned R:R is the target set at entry. Actual R:R = realised P&L ÷ planned GBP risk. "
+            "Outcome tells you whether the trade hit, missed, or beat the plan."
+        )
+
+        _rr_rows = []
+        for _t in reversed(_rr_trades):
+            _planned_rr   = float(_t["risk_reward_ratio"])
+            _planned_risk = float(_t["planned_risk_gbp"])
+            _pnl          = float(_t["pnl"])
+            _actual_rr    = _pnl / _planned_risk
+
+            if _pnl > 0 and _actual_rr >= _planned_rr:
+                _outcome = "✅ Hit plan"
+            elif _pnl > 0 and _actual_rr < _planned_rr:
+                _outcome = "⚠ Won but short of plan"
+            elif _pnl < 0:
+                _outcome = "❌ Loss"
+            else:
+                _outcome = "— Flat"
+
+            _rr_rows.append({
+                "Ticker":       _t.get("ticker", ""),
+                "Dir":          _t.get("direction", ""),
+                "Planned R:R":  _planned_rr,
+                "Planned Risk": _planned_risk,
+                "P&L £":        _pnl,
+                "Actual R:R":   _actual_rr,
+                "Outcome":      _outcome,
+            })
+
+        _rr_df = pd.DataFrame(_rr_rows)
+
+        def _style_rr_actual(val):
+            if not isinstance(val, (int, float)): return ""
+            return "color:#16a34a;font-weight:bold" if val >= 0 else "color:#dc2626;font-weight:bold"
+
+        def _style_rr_outcome(val):
+            if "Hit plan"  in str(val): return "color:#16a34a;font-weight:bold"
+            if "short of"  in str(val): return "color:#f59e0b"
+            if "Loss"      in str(val): return "color:#dc2626;font-weight:bold"
+            return ""
+
+        _rr_styler = (
+            _rr_df.style
+            .map(_style_rr_actual,  subset=["Actual R:R", "P&L £"])
+            .map(_style_rr_outcome, subset=["Outcome"])
+            .format({
+                "Planned R:R":  "{:.1f}:1",
+                "Planned Risk": "£{:.2f}",
+                "P&L £":        lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
+                "Actual R:R":   lambda v: f"{v:+.2f}:1" if isinstance(v, float) else "—",
+            })
+        )
+        st.dataframe(_rr_styler, use_container_width=True, hide_index=True,
+                     height=38 + 35 * len(_rr_rows))
+
+        # Summary stats
+        _avg_planned = sum(float(t["risk_reward_ratio"]) for t in _rr_trades) / len(_rr_trades)
+        _avg_actual  = sum(float(t["pnl"]) / float(t["planned_risk_gbp"]) for t in _rr_trades) / len(_rr_trades)
+        _hit_count   = sum(
+            1 for t in _rr_trades
+            if float(t["pnl"]) > 0 and float(t["pnl"]) / float(t["planned_risk_gbp"]) >= float(t["risk_reward_ratio"])
+        )
+        _rr_s1, _rr_s2, _rr_s3 = st.columns(3)
+        _rr_s1.metric("Avg Planned R:R",  f"{_avg_planned:.2f}:1")
+        _rr_s2.metric("Avg Actual R:R",   f"{_avg_actual:+.2f}:1", delta=f"{_avg_actual - _avg_planned:+.2f}")
+        _rr_s3.metric("Hit Plan Rate",     f"{_hit_count}/{len(_rr_trades)} ({_hit_count/len(_rr_trades):.0%})")
 
     # ---- System Learning ---------------------------------------------------
     _render_learning_dashboard(config)
@@ -3498,17 +3782,54 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 f"V{_s(o['volatility'])} Vol{_s(o['volume'])} M{_s(o['macro'])}"
             )
 
-        opp_rows = [
-            {
-                "Ticker":  o["ticker"],
+        # Fetch ATR and live price for each opportunity to compute SL/TP suggestions
+        _opp_atr_cache: dict[str, float | None] = {}
+        _opp_px_cache:  dict[str, float | None] = {}
+        for _o in opps:
+            _tk = _o["ticker"]
+            if _tk not in _opp_atr_cache:
+                _opp_atr_cache[_tk] = get_current_atr(_tk)
+            if _tk not in _opp_px_cache:
+                _opp_px_cache[_tk] = _cached_latest_price(_tk)
+
+        opp_rows = []
+        for o in opps:
+            _otk   = o["ticker"]
+            _oatr  = _opp_atr_cache.get(_otk)
+            _opx   = _opp_px_cache.get(_otk)
+            _is_buy = o["signal"] == "STRONG_BUY"
+            _omult  = 1 if _is_buy else -1
+
+            _osl_str = "—"
+            _otp1_str = "—"
+            _otp2_str = "—"
+            _orisk_str = "—"
+
+            if _oatr is not None and _opx is not None and _opx > 0:
+                _osl_dist = 2 * _oatr
+                _osl_px   = _opx - _omult * _osl_dist
+                _otp1_px  = _opx + _omult * _osl_dist
+                _otp2_px  = _opx + _omult * _osl_dist * 2
+                _osl_str  = f"{_osl_px:.4f}"
+                _otp1_str = f"{_otp1_px:.4f}"
+                _otp2_str = f"{_otp2_px:.4f}"
+                # Risk example assumes £150 @ leverage from config default (show plain %)
+                _osl_pct  = _osl_dist / _opx * 100
+                _orisk_str = f"{_osl_pct:.2f}%/1×lev"
+
+            opp_rows.append({
+                "Ticker":  _otk,
                 "Name":    o["name"],
                 "Signal":  o["signal"].replace("_", " "),
                 "Score":   o["score"],
                 "Modules": _mod_str(o),
+                "Sug. SL": _osl_str,
+                "TP1 (1:1)": _otp1_str,
+                "TP2 (2:1)": _otp2_str,
+                "Risk/lev": _orisk_str,
                 "Note":    o["overlay_note"] or "",
-            }
-            for o in opps
-        ]
+            })
+
         opp_df = pd.DataFrame(opp_rows)
 
         def _style_opp_sig(val: str) -> str:
@@ -3519,6 +3840,12 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         styler = opp_df.style.map(_style_opp_sig, subset=["Signal"]).format({"Score": "{:+.3f}"})
         st.dataframe(styler, use_container_width=True, hide_index=True,
                      height=38 + 35 * len(opp_rows))
+        st.caption(
+            "Sug. SL = entry ± 2×ATR based on yfinance reference price. "
+            "TP1/TP2 = 1:1 and 2:1 R:R targets. "
+            "Risk/lev = SL distance as % of price per unit of leverage — "
+            "multiply by investment × leverage for GBP risk estimate."
+        )
 
 
 # Main UI

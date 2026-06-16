@@ -213,6 +213,12 @@ class Trade(Base):
     fx_fee_pct = Column(Float, default=0.0)              # T212 currency conversion fee % (0.50 for forex)
     platform_instrument = Column(String(32))              # T212 instrument name if different from ticker
 
+    # Trade plan (set at entry, used for risk management)
+    stop_loss_price = Column(Float)       # planned stop loss price
+    take_profit_price = Column(Float)     # planned take profit price (preferred R:R target)
+    risk_reward_ratio = Column(Float)     # preferred R:R at entry (e.g. 2.0)
+    planned_risk_gbp = Column(Float)      # estimated GBP risk if SL is hit
+
     # Outcome (populated on close)
     pnl = Column(Float)
     pnl_pct = Column(Float)
@@ -433,6 +439,10 @@ def _apply_migrations(engine) -> None:
         ("trades",     "spread_cost",         "FLOAT"),
         ("trades",     "fx_fee_pct",          "FLOAT        DEFAULT 0.0"),
         ("trades",     "platform_instrument", "VARCHAR(32)"),
+        ("trades",     "stop_loss_price",     "FLOAT"),
+        ("trades",     "take_profit_price",   "FLOAT"),
+        ("trades",     "risk_reward_ratio",   "FLOAT"),
+        ("trades",     "planned_risk_gbp",    "FLOAT"),
     ]
     for table, column, col_type in new_columns:
         try:

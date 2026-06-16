@@ -121,6 +121,11 @@ def log_trade(
     spread_cost: Optional[float] = None,
     fx_fee_pct: float = 0.0,
     platform_instrument: Optional[str] = None,
+    # Trade plan fields
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    risk_reward_ratio: Optional[float] = None,
+    planned_risk_gbp: Optional[float] = None,
 ) -> int:
     """Insert a new open trade and return its database id."""
     if entry_date is None:
@@ -160,6 +165,10 @@ def log_trade(
             spread_cost=spread_cost,
             fx_fee_pct=fx_fee_pct,
             platform_instrument=platform_instrument,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            risk_reward_ratio=risk_reward_ratio,
+            planned_risk_gbp=planned_risk_gbp,
         )
         session.add(trade)
         session.flush()

@@ -116,8 +116,29 @@ def accuracy_by_regime(trades: list[dict]) -> pd.DataFrame:
     )
 
 
+def _price_rose(t: dict) -> bool:
+    """Return True if the asset price rose during the trade.
+
+    Uses exit_price − entry_price directly (no fee contamination).
+    Falls back to sign(pnl) × direction when prices are unavailable.
+    """
+    entry = float(t.get("entry_price") or 0)
+    exit_ = float(t.get("exit_price")  or 0)
+    if entry > 0 and exit_ > 0:
+        return exit_ > entry
+    # Fallback: pnl sign is inverted for SHORT trades
+    mult = 1 if t.get("direction", "LONG") == "LONG" else -1
+    return float(t.get("pnl") or 0) * mult > 0
+
+
 def accuracy_by_indicator(trades: list[dict]) -> pd.DataFrame:
-    """Per-module hit rate: how often each indicator's directional call was correct."""
+    """Per-module hit rate: how often each indicator's directional call was correct.
+
+    Correct means the indicator predicted the actual price direction, independent
+    of trade direction or profitability:
+      - Bullish correct: indicator score > 0 AND price rose (exit > entry)
+      - Bearish correct: indicator score < 0 AND price fell (exit < entry)
+    """
     closed = _closed(trades)
     if not closed:
         return pd.DataFrame()
@@ -141,8 +162,9 @@ def accuracy_by_indicator(trades: list[dict]) -> pd.DataFrame:
         bearish = [t for t in relevant if int(t.get(score_col, 0)) < 0]
         neutral = [t for t in relevant if int(t.get(score_col, 0)) == 0]
 
-        b_correct = [t for t in bullish if float(t.get("pnl", 0)) > 0]
-        s_correct = [t for t in bearish if float(t.get("pnl", 0)) < 0]
+        # Correct = indicator called the actual price direction, not the trade outcome
+        b_correct = [t for t in bullish if _price_rose(t)]
+        s_correct = [t for t in bearish if not _price_rose(t)]
 
         total   = len(bullish) + len(bearish)
         correct = len(b_correct) + len(s_correct)
