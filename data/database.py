@@ -210,6 +210,7 @@ class Trade(Base):
     swap_basis = Column(String(16), default="investment") # 'investment', 'margin', or 'position'
     position_value = Column(Float)                        # investment_amount × leverage
     spread_cost = Column(Float)                           # opening spread cost in account currency
+    fx_fee_pct = Column(Float, default=0.0)              # T212 currency conversion fee % (0.50 for forex)
     platform_instrument = Column(String(32))              # T212 instrument name if different from ticker
 
     # Outcome (populated on close)
@@ -430,6 +431,7 @@ def _apply_migrations(engine) -> None:
         ("trades",     "swap_basis",          "VARCHAR(16)  DEFAULT 'investment'"),
         ("trades",     "position_value",      "FLOAT"),
         ("trades",     "spread_cost",         "FLOAT"),
+        ("trades",     "fx_fee_pct",          "FLOAT        DEFAULT 0.0"),
         ("trades",     "platform_instrument", "VARCHAR(32)"),
     ]
     for table, column, col_type in new_columns:
@@ -460,7 +462,7 @@ def _apply_data_fixes(engine) -> None:
                 account_currency    = 'GBP',
                 leverage            = 5,
                 investment_amount   = 150.0,
-                margin_required     = 30.0,
+                margin_required     = 29.96,
                 position_value      = 750.0,
                 overnight_rate      = 0.0251,
                 platform_instrument = 'INDA',
@@ -469,6 +471,44 @@ def _apply_data_fixes(engine) -> None:
               AND is_open = 1
               AND ABS(COALESCE(entry_price, 0) - 49.39) > 0.001
         """))
+
+    # Fix: set fx_fee_pct and correct remaining field errors for the four
+    # open trades.  Guard on (fx_fee_pct IS NULL OR fx_fee_pct < 0.1) so
+    # these only fire once — on the first startup after the column is added.
+    _open_trade_fixes = [
+        # INDA — margin correction (30.0 → 29.96) + fx_fee
+        (
+            "INDA",
+            "margin_required = 29.96, fx_fee_pct = 0.50",
+        ),
+        # KBE — margin, leverage, overnight_rate, fx_fee
+        (
+            "KBE",
+            "margin_required = 29.90, leverage = 5, overnight_rate = 0.0694, fx_fee_pct = 0.50",
+        ),
+        # GBPUSD=X — margin, leverage, overnight_rate, fx_fee
+        (
+            "GBPUSD=X",
+            "margin_required = 5.00, leverage = 30, overnight_rate = 0.0, fx_fee_pct = 0.50",
+        ),
+        # USDJPY=X — units, entry, margin, leverage, overnight_rate, fx_fee
+        (
+            "USDJPY=X",
+            "quantity = 201.0075, entry_price = 160.221, margin_required = 4.99, "
+            "leverage = 30, overnight_rate = 0.0, fx_fee_pct = 0.50",
+        ),
+    ]
+    for _ticker, _set_clause in _open_trade_fixes:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    f"UPDATE trades SET {_set_clause} "
+                    f"WHERE ticker = :t AND is_open = 1 "
+                    f"AND (fx_fee_pct IS NULL OR fx_fee_pct < 0.1)"
+                ), {"t": _ticker})
+        except Exception:
+            pass
+
 
 def _purge_unlisted_tickers(engine) -> None:
     """Delete rows for tickers no longer present in config.yaml watchlist.

@@ -45,6 +45,7 @@ from data.ingestion import (
 )
 from data.scheduler import start_scheduler
 from output.performance import (
+    FOREX_QUOTE_CCY,
     close_trade,
     get_all_trades,
     get_closed_trades,
@@ -1260,6 +1261,17 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"<span style='color:#94a3b8'>Suggested Margin:       </span>"
                     f"<span style='color:#e2e8f0'>{_acct_ccy_ps} {_margin_ps:>9,.2f}</span>",
                 ]
+            if sel_ticker in FOREX_QUOTE_CCY and _suggested_inv > 0:
+                _fx_fee_ps  = round(_suggested_inv * 0.005, 2)  # 0.50% default
+                _net_ps     = round(_suggested_inv - _fx_fee_ps, 2)
+                _ps_rows += [
+                    _divider_html,
+                    f"<span style='color:#94a3b8'>FX Fee (0.50%):         </span>"
+                    f"<span style='color:#ef5350'>−{_acct_ccy_ps} {_fx_fee_ps:>8,.2f}</span>",
+                    f"<span style='color:#94a3b8'>Net after fees:         </span>"
+                    f"<span style='color:{_sug_col};font-weight:700'>"
+                    f"{_acct_ccy_ps} {_net_ps:>9,.2f}</span>",
+                ]
             if _atr_ps is not None:
                 _stop_dist = 2 * _atr_ps
                 _ps_rows.append(
@@ -1480,6 +1492,21 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             key="log_platform_instrument",
         )
 
+        # FX conversion fee — auto-filled to 0.50% for forex pairs, 0% otherwise.
+        _fx_fee_default = 0.50 if sel_ticker in FOREX_QUOTE_CCY else 0.0
+        _fx_fee_key     = f"log_fx_fee_pct_{sel_ticker}"  # reset when ticker changes
+        if st.session_state.get("_log_fx_fee_ticker") != sel_ticker:
+            st.session_state["_log_fx_fee_ticker"] = sel_ticker
+            st.session_state["log_fx_fee_pct"]     = _fx_fee_default
+        fx_fee_pct = st.number_input(
+            "FX Conversion Fee (%)",
+            min_value=0.0, max_value=5.0,
+            value=float(st.session_state.get("log_fx_fee_pct", _fx_fee_default)),
+            step=0.01, format="%.2f",
+            help="T212 charges 0.50% on currency conversion for forex and cross-currency CFDs.",
+            key="log_fx_fee_pct",
+        )
+
         notes_text = st.text_input("Notes (optional)", key="log_notes")
 
         # ── Investment summary box ─────────────────────────────────────────────
@@ -1535,6 +1562,15 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"<span style='color:#f59e0b'>{_ccy} {monthly_swap:>10.2f}</span><br>"
                     if overnight_rate > 0 else ""
                 )
+                + (
+                    (lambda _fee: (
+                        f"<span style='color:#94a3b8'>FX Fee ({fx_fee_pct:.2f}%):   </span>"
+                        f"<span style='color:#ef5350'>−{_ccy} {_fee:>9.2f}</span><br>"
+                        f"<span style='color:#94a3b8'>Net after fees:  </span>"
+                        f"<span style='color:#e2e8f0'>{_ccy} {investment_amount - _fee:>9.2f}</span><br>"
+                    ))(round(investment_amount * fx_fee_pct / 100, 2))
+                    if fx_fee_pct > 0 else ""
+                )
                 + _be_html
                 + f"</div>",
                 unsafe_allow_html=True,
@@ -1581,14 +1617,15 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 swap_basis=swap_basis,
                 position_value=float(position_value),
                 spread_cost=float(spread_cost) if spread_cost > 0 else None,
+                fx_fee_pct=float(fx_fee_pct),
                 platform_instrument=platform_instrument if platform_instrument else None,
             )
             # Clear form state so widgets reset to defaults on next render
             for _k in [
                 "log_entry_price", "log_units", "log_direction", "log_instr_ccy", "log_acct_ccy",
                 "log_investment", "log_leverage", "log_overnight_rate", "log_swap_basis",
-                "log_spread_cost", "log_platform_instrument", "log_notes", "log_confirmed",
-                "log_fx_rate_manual",
+                "log_spread_cost", "log_fx_fee_pct", "log_platform_instrument", "log_notes",
+                "log_confirmed", "log_fx_rate_manual", "_log_fx_fee_ticker",
             ]:
                 st.session_state.pop(_k, None)
             st.success(
@@ -1629,6 +1666,11 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 _live_rate, _ = _get_fx_rate(ic, ac)
                 _fx_cache[(ic, ac)] = _live_rate  # None if all fetch methods failed
 
+        # Pre-fetch live GBPUSD and USDJPY for JPY-pair two-step conversion.
+        _has_jpy_trades = any(FOREX_QUOTE_CCY.get(t["ticker"]) == "JPY" for t in open_trades)
+        _live_gbpusd_monitor = _cached_latest_price("GBPUSD=X")
+        _live_usdjpy_monitor  = _cached_latest_price("USDJPY=X") if _has_jpy_trades else None
+
         import math as _math
         rows = []
         for t in open_trades:
@@ -1646,6 +1688,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             o_rate      = float(t.get("overnight_rate") or 0)
             s_basis     = t.get("swap_basis") or "investment"
             spread      = float(t.get("spread_cost") or 0)
+            fx_fee_pct  = float(t.get("fx_fee_pct") or 0.0)
             instr_ccy   = t.get("currency") or "GBP"
             acct_ccy    = t.get("account_currency") or "GBP"
             # Use fx_rate_at_entry as fallback if live FX fetch failed
@@ -1669,13 +1712,24 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     else:
                         effective_live = live
 
-                # P&L in instrument currency using the effective close price
+                # P&L in the instrument's quote currency using the effective close price
                 pnl_instr = None
                 if effective_live is not None and entry and qty:
                     pnl_instr = (effective_live - entry) * qty * mult
 
-                # P&L in account currency (GBP)
-                pnl_acct = (pnl_instr / fx) if (pnl_instr is not None and fx > 0) else None
+                # P&L in account currency (GBP).
+                # JPY-quoted pairs (USDJPY etc.) need a two-step conversion:
+                #   JPY → USD (divide by live USDJPY rate)
+                #   USD → GBP (divide by live GBPUSD rate)
+                _quote_ccy = FOREX_QUOTE_CCY.get(ticker)
+                if _quote_ccy == "JPY" and pnl_instr is not None:
+                    if (_live_usdjpy_monitor and _live_gbpusd_monitor
+                            and _live_usdjpy_monitor > 0 and _live_gbpusd_monitor > 0):
+                        pnl_acct = (pnl_instr / _live_usdjpy_monitor) / _live_gbpusd_monitor
+                    else:
+                        pnl_acct = None  # rates unavailable; can't convert
+                else:
+                    pnl_acct = (pnl_instr / fx) if (pnl_instr is not None and fx > 0) else None
 
                 # Position P&L %: percentage price move in your direction
                 # SHORT: (entry - effective_live) / entry × 100
@@ -1692,10 +1746,20 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 daily_swap   = _swap_amt * o_rate / 100 if (_swap_amt > 0 and o_rate > 0) else 0.0
                 accrued_swap = -(daily_swap * days_held) if daily_swap > 0 else None
 
-                # Net P&L = price P&L + swap cost (swap is negative)
-                net_pnl = (pnl_acct + accrued_swap) if (pnl_acct is not None and accrued_swap is not None) else pnl_acct
+                # One-time FX conversion fee deducted from net P&L
+                fx_fee_cost = -(inv_amt * fx_fee_pct / 100) if (fx_fee_pct > 0 and inv_amt > 0) else None
+
+                # Net P&L = price move + swap + fx fee (both costs are negative)
+                if pnl_acct is not None:
+                    net_pnl = pnl_acct
+                    if accrued_swap is not None:
+                        net_pnl += accrued_swap
+                    if fx_fee_cost is not None:
+                        net_pnl += fx_fee_cost
+                else:
+                    net_pnl = None
             except Exception:
-                effective_live = pnl_instr = pnl_acct = pos_pnl_pct = margin_pnl_pct = accrued_swap = net_pnl = None
+                effective_live = pnl_instr = pnl_acct = pos_pnl_pct = margin_pnl_pct = accrued_swap = fx_fee_cost = net_pnl = None
 
             rows.append({
                 "ID":           t["id"],

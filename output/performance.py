@@ -13,6 +13,19 @@ from data.database import Trade, get_engine, get_session
 
 logger = logging.getLogger(__name__)
 
+# Quote currency for forex CFD instruments.
+# "JPY" pairs need a two-step P&L conversion: price move → JPY → USD → GBP.
+# All other entries have USD as quote currency: move → USD → GBP.
+FOREX_QUOTE_CCY: dict[str, str] = {
+    "GBPUSD=X": "USD",
+    "EURUSD=X": "USD",
+    "AUDUSD=X": "USD",
+    "USDJPY=X": "JPY",
+    "USDCHF=X": "CHF",
+    "USDCAD=X": "CAD",
+    "EURGBP=X": "GBP",
+}
+
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -106,6 +119,7 @@ def log_trade(
     swap_basis: str = "investment",
     position_value: Optional[float] = None,
     spread_cost: Optional[float] = None,
+    fx_fee_pct: float = 0.0,
     platform_instrument: Optional[str] = None,
 ) -> int:
     """Insert a new open trade and return its database id."""
@@ -144,6 +158,7 @@ def log_trade(
             swap_basis=swap_basis,
             position_value=position_value,
             spread_cost=spread_cost,
+            fx_fee_pct=fx_fee_pct,
             platform_instrument=platform_instrument,
         )
         session.add(trade)
@@ -174,6 +189,7 @@ def close_trade(
     if row is None:
         raise ValueError(f"Trade {trade_id} not found")
 
+    ticker            = row.get("ticker", "")
     entry_price       = float(row["entry_price"] or 0)
     direction         = row.get("direction") or "LONG"
     quantity          = float(row["quantity"] or 1)
@@ -184,6 +200,7 @@ def close_trade(
     overnight_rate    = float(row.get("overnight_rate") or 0)
     swap_basis        = row.get("swap_basis") or "investment"
     fx_rate_at_entry  = float(row.get("fx_rate_at_entry") or 1.0)
+    fx_fee_pct        = float(row.get("fx_fee_pct") or 0.0)
     entry_date_raw    = row["entry_date"]
 
     if isinstance(entry_date_raw, str):
@@ -196,17 +213,30 @@ def close_trade(
     multiplier   = 1 if direction == "LONG" else -1
     holding_days = max(0, (exit_date - entry_dt).days)
 
+    # One-time FX conversion fee (charged at entry; deducted from P&L on close).
+    fx_fee_cost = round(investment_amount * fx_fee_pct / 100, 4) if fx_fee_pct > 0 else 0.0
+
     if leverage > 1 and quantity > 0 and entry_price > 0:
-        # CFD: P&L in instrument currency → convert to account currency via entry FX rate
-        pnl_instr  = (exit_price - entry_price) * quantity * multiplier
-        gross_pnl  = round(pnl_instr / fx_rate_at_entry, 4)
+        quote_ccy = FOREX_QUOTE_CCY.get(ticker)
+        pnl_instr = (exit_price - entry_price) * quantity * multiplier
+
+        if quote_ccy == "JPY":
+            # USDJPY and similar: move is in JPY.  exit_price IS the USDJPY rate,
+            # so dividing by it converts JPY → USD; then divide by GBPUSD → GBP.
+            live_gbpusd = get_latest_price("GBPUSD=X") or 1.0
+            pnl_usd   = pnl_instr / exit_price if exit_price > 0 else 0.0
+            gross_pnl = round(pnl_usd / live_gbpusd, 4)
+        else:
+            # Standard CFD: move is already in instrument currency; convert via entry FX rate.
+            gross_pnl = round(pnl_instr / fx_rate_at_entry, 4)
+
         swap_amt   = _swap_basis_amount(swap_basis, investment_amount, margin_required, position_value)
         swap_total = round(holding_days * swap_amt * overnight_rate / 100, 4) if swap_amt > 0 else 0.0
-        pnl        = round(gross_pnl - swap_total, 4)
+        pnl        = round(gross_pnl - swap_total - fx_fee_cost, 4)
         base       = margin_required if margin_required > 0 else (investment_amount if investment_amount > 0 else position_value)
         pnl_pct    = round(pnl / base * 100, 4) if base else 0.0
     else:
-        pnl     = round((exit_price - entry_price) * multiplier * quantity, 4)
+        pnl     = round((exit_price - entry_price) * multiplier * quantity - fx_fee_cost, 4)
         pnl_pct = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
 
     with engine.begin() as conn:
