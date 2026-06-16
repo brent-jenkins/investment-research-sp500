@@ -136,7 +136,7 @@ def _eod_job() -> None:
     # exchange calendar.  yfinance handles data availability internally, so these
     # are never silently skipped on local bank holidays.
     _ALWAYS_PULL: frozenset[str] = frozenset({
-        "^FTSE", "^GDAXI", "^N225", "^STOXX50E",
+        "^FTSE", "^GDAXI", "^HSI", "^N225", "^STOXX50E",
     })
 
     # Determine which exchanges have sessions today (UTC date avoids timezone drift
