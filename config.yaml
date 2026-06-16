@@ -357,6 +357,7 @@ accounts:
     default: true
     practice_balance: 5000
     max_position_pct: 0.05   # 5% max per trade
+    max_risk_pct: 0.02        # 2% of balance max risk per trade (used for position-size suggestion)
   - id: t212_live
     name: "Trading212 Live"
     type: LIVE
@@ -365,6 +366,7 @@ accounts:
     default: false
     live_balance: 0          # set to your actual live balance
     max_position_pct: 0.03   # 3% max per trade (tighter for real money)
+    max_risk_pct: 0.02        # 2% of balance max risk per trade
 
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html

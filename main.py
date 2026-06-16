@@ -1216,6 +1216,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             else sel_acct.get("live_balance", 0)
         )
         _max_pos_pct  = float(sel_acct.get("max_position_pct", 0.05))
+        _max_risk_pct = float(sel_acct.get("max_risk_pct", 0.02))
         _signal_raw   = sig.get("signal") or "NEUTRAL"
         _score_val    = float(sig.get("confluence_score") or 0)
         _atr_ps       = get_current_atr(sel_ticker)
@@ -1551,17 +1552,18 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             _ccy = account_ccy
 
             # Break-even price: spread cost converted to instrument currency, divided by units
+            _be_move_pct = None   # captured here so Trade Plan card can reference it
             _be_html = ""
             if spread_cost > 0 and units > 0 and fx_rate > 0:
                 spread_in_instr = spread_cost * fx_rate  # GBP → instrument ccy
                 be_delta        = spread_in_instr / units
                 be_price        = (entry_price - be_delta) if direction == "SHORT" else (entry_price + be_delta)
-                be_move_pct     = be_delta / entry_price * 100
+                _be_move_pct    = be_delta / entry_price * 100
                 _be_html = (
                     f"<span style='color:#94a3b8'>Break-even price:</span>"
                     f"<span style='color:#e2e8f0'> {instr_ccy} {be_price:>9.4f}</span>"
                     f"<span style='color:#6b7280;font-size:0.72rem'>"
-                    f" ({direction}: needs {be_move_pct:.4f}% move)</span><br>"
+                    f" ({direction}: needs {_be_move_pct:.4f}% move)</span><br>"
                 )
 
             st.markdown(
@@ -1630,6 +1632,26 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 _sl_pct      = _sl_dist / entry_price * 100
                 _gbp_risk    = investment_amount * (_sl_pct / 100) * leverage
 
+                # Risk context
+                _risk_pct_of_invest = (_gbp_risk / investment_amount * 100) if investment_amount > 0 else 0.0
+                _high_risk          = _risk_pct_of_invest > 20
+
+                # Risk-adjusted position sizing (2% rule)
+                _pos_suggest_html = ""
+                if _acct_balance > 0 and leverage > 0:
+                    _max_risk_gbp       = _acct_balance * _max_risk_pct
+                    _suggested_raw      = _max_risk_gbp / (_sl_pct / 100 * leverage)
+                    _max_pos_gbp        = _acct_balance * _max_pos_pct
+                    _suggested_invest   = min(_suggested_raw, _max_pos_gbp)
+                    _suggested_sl_risk  = _suggested_invest * (_sl_pct / 100) * leverage
+                    _cap_reason         = " (position cap)" if _suggested_raw > _max_pos_gbp else ""
+                    _pos_suggest_html   = (
+                        f"<span style='color:#60a5fa;font-size:0.76rem'>"
+                        f"Risk-adjusted size: {account_ccy} {_suggested_invest:.0f}{html.escape(_cap_reason)}"
+                        f" (limits loss to {account_ccy} {_suggested_sl_risk:.2f} at stop)"
+                        f"</span><br>"
+                    )
+
                 # Three standard TP targets
                 _mult_dir = 1 if direction == "LONG" else -1
                 _tp1 = round(entry_price + _mult_dir * _sl_dist * 1, 6)
@@ -1671,9 +1693,24 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"<span style='color:#94a3b8'>Stop Loss ({html.escape(_sl_src)}): </span>"
                     f"<span style='color:#ef5350;font-weight:bold'>{instr_ccy} {_eff_sl:.4f}</span>"
                     f"<span style='color:#6b7280;font-size:0.76rem'> ({_sl_dist:.4f} away, "
-                    f"{_sl_pct:.3f}%)</span>"
-                    f"<span style='color:#f59e0b;font-size:0.76rem'> → ~{account_ccy} {_gbp_risk:.2f} risk</span><br>"
-                    f"<span style='color:#475569'>──────────────────────────────────────</span><br>"
+                    f"{_sl_pct:.3f}%)</span><br>"
+                    f"<span style='color:#f59e0b;font-size:0.76rem'>"
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;→ ~{account_ccy} {_gbp_risk:.2f} risk"
+                    f" ({_risk_pct_of_invest:.1f}% of {account_ccy} {investment_amount:.0f})</span><br>"
+                    + (
+                        f"<span style='color:#f59e0b;font-size:0.76rem'>"
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;⚠ High risk — consider reducing position size or tightening stop loss"
+                        f"</span><br>"
+                        if _high_risk else ""
+                    )
+                    + (
+                        f"<span style='color:#475569;font-size:0.76rem'>"
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;Break-even: {_be_move_pct:.4f}% price move needed (spread cost)"
+                        f"</span><br>"
+                        if _be_move_pct is not None else ""
+                    )
+                    + _pos_suggest_html
+                    + f"<span style='color:#475569'>──────────────────────────────────────</span><br>"
                     + _tp_row("TP1 (1:1)", _tp1, _tp1_gbp, preferred_rr == 1.0 and custom_tp_price == 0)
                     + _tp_row("TP2 (2:1)", _tp2, _tp2_gbp, preferred_rr == 2.0 and custom_tp_price == 0)
                     + _tp_row("TP3 (3:1)", _tp3, _tp3_gbp, preferred_rr == 3.0 and custom_tp_price == 0)
