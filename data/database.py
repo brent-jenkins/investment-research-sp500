@@ -470,17 +470,79 @@ def _apply_data_fixes(engine) -> None:
               AND ABS(COALESCE(entry_price, 0) - 49.39) > 0.001
         """))
 
-    # Remove stale tickers that are no longer in the watchlist from signals and
-    # indicators tables.  DELETE on non-existent rows is a no-op, so this is safe
-    # to run on every startup.
-    _STALE_TICKERS = ("PALL", "PPLT", "WOOD", "UGA", "VUSA.L", "ISF.L")
-    for ticker in _STALE_TICKERS:
+def _purge_unlisted_tickers(engine) -> None:
+    """Delete rows for tickers no longer present in config.yaml watchlist.
+
+    Reads the current watchlist to build the allowed set, then removes any
+    row from price_data, indicators, signals, and correlations whose ticker
+    is not in that set.  Runs on every startup; DELETE on absent rows is a
+    no-op so this is always safe.
+
+    Correlations pairs are pruned when EITHER ticker_a or ticker_b has been
+    removed from the watchlist.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        config = _load_config()
+    except Exception as exc:
+        logger.warning("_purge_unlisted_tickers: could not load config — skipping. %s", exc)
+        return
+
+    allowed: set[str] = set()
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for entry in assets:
+            if isinstance(entry, dict) and "ticker" in entry:
+                allowed.add(entry["ticker"])
+
+    if not allowed:
+        logger.warning("_purge_unlisted_tickers: watchlist is empty — skipping to avoid data loss.")
+        return
+
+    tables = ("price_data", "indicators", "signals")
+    for table in tables:
         try:
+            with engine.connect() as conn:
+                result = conn.execute(
+                    text(f"SELECT DISTINCT ticker FROM {table}")  # noqa: S608
+                )
+                stale = [row[0] for row in result if row[0] not in allowed]
+            for ticker in stale:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(f"DELETE FROM {table} WHERE ticker = :t"),  # noqa: S608
+                        {"t": ticker},
+                    )
+                logger.info("Purged %s from %s (no longer in watchlist).", ticker, table)
+        except Exception as exc:
+            logger.warning("_purge_unlisted_tickers: error cleaning %s: %s", table, exc)
+
+    # Correlations table uses ticker_a / ticker_b columns.
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT DISTINCT ticker_a, ticker_b FROM correlations")
+            )
+            stale_pairs = [
+                (a, b) for a, b in result
+                if a not in allowed or b not in allowed
+            ]
+        for ticker_a, ticker_b in stale_pairs:
             with engine.begin() as conn:
-                conn.execute(text("DELETE FROM signals    WHERE ticker = :t"), {"t": ticker})
-                conn.execute(text("DELETE FROM indicators WHERE ticker = :t"), {"t": ticker})
-        except Exception:
-            pass
+                conn.execute(
+                    text(
+                        "DELETE FROM correlations WHERE ticker_a = :a AND ticker_b = :b"
+                    ),
+                    {"a": ticker_a, "b": ticker_b},
+                )
+            logger.info(
+                "Purged correlation pair (%s, %s) from correlations.", ticker_a, ticker_b
+            )
+    except Exception as exc:
+        logger.warning("_purge_unlisted_tickers: error cleaning correlations: %s", exc)
 
 
 def init_db() -> None:
@@ -516,6 +578,7 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _apply_migrations(engine)
     _apply_data_fixes(engine)
+    _purge_unlisted_tickers(engine)
 
 
 def get_session() -> Session:
