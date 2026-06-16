@@ -797,10 +797,13 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         ("STRONG SELL", "#ef5350"),
     ]
     counts = {lbl: 0 for lbl, _ in _DIST_CFG}
+    t_counts = {lbl: 0 for lbl, _ in _DIST_CFG}
     for r in rows:
         lbl = (r.get("signal") or "NEUTRAL").replace("_", " ")
         if lbl in counts:
             counts[lbl] += 1
+            if r.get("ticker") in tradeable_set:
+                t_counts[lbl] += 1
 
     dist_cols = st.columns(5)
     for col, (lbl, fg) in zip(dist_cols, _DIST_CFG):
@@ -808,6 +811,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f'<div style="text-align:center;padding:10px 4px;border-radius:6px;'
             f'background:{fg}22;border:1px solid {fg}55">'
             f'<div style="color:{fg};font-weight:700;font-size:1.5rem">{counts[lbl]}</div>'
+            f'<div style="color:#6b7280;font-size:0.65rem;font-weight:600">'
+            f'{t_counts[lbl]} tradeable</div>'
             f'<div style="color:#64748b;font-size:0.72rem;margin-top:2px">{lbl}</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -816,9 +821,12 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ---- Market intelligence -----------------------------------------------
-    bullish_n = counts["STRONG BUY"] + counts["BUY"]
-    bearish_n = counts["SELL"] + counts["STRONG SELL"]
-    total_n   = sum(counts.values())
+    bullish_n   = counts["STRONG BUY"] + counts["BUY"]
+    bearish_n   = counts["SELL"] + counts["STRONG SELL"]
+    total_n     = sum(counts.values())
+    t_bullish_n = t_counts["STRONG BUY"] + t_counts["BUY"]
+    t_bearish_n = t_counts["SELL"] + t_counts["STRONG SELL"]
+    t_total_n   = sum(t_counts.values())
     _intel: list[str] = []
 
     if total_n > 0:
@@ -826,27 +834,30 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         bear_pct = bearish_n / total_n
         if bull_pct >= 0.6:
             _intel.append(
-                f"{bullish_n} of {total_n} assets show buy signals — broad bullish breadth "
-                f"supports adding long exposure on short-term pullbacks."
+                f"{bullish_n} of {total_n} assets show buy signals ({t_bullish_n} tradeable) — "
+                f"broad bullish breadth supports adding long exposure on short-term pullbacks."
             )
         elif bear_pct >= 0.6:
             _intel.append(
-                f"{bearish_n} of {total_n} assets show sell signals — broad bearish breadth "
-                f"suggests reducing longs and favouring cash or short positions."
+                f"{bearish_n} of {total_n} assets show sell signals ({t_bearish_n} tradeable) — "
+                f"broad bearish breadth suggests reducing longs and favouring cash or short positions."
             )
         elif bull_pct > bear_pct:
             _intel.append(
-                f"Signals lean bullish ({bullish_n} buys vs {bearish_n} sells across {total_n} assets) "
+                f"Signals lean bullish ({bullish_n} buys vs {bearish_n} sells across {total_n} assets, "
+                f"{t_bullish_n} tradeable opportunities) "
                 f"— selective long exposure is favoured, though broad momentum is not overwhelming."
             )
         elif bear_pct > bull_pct:
             _intel.append(
-                f"Signals lean bearish ({bearish_n} sells vs {bullish_n} buys from {total_n} assets) "
+                f"Signals lean bearish ({bearish_n} sells vs {bullish_n} buys from {total_n} assets, "
+                f"{t_bearish_n} tradeable) "
                 f"— consider lightening longs and waiting for clearer confirmation before new entries."
             )
         else:
             _intel.append(
-                f"Signals are evenly split ({bullish_n} buys, {bearish_n} sells across {total_n} assets) "
+                f"Signals are evenly split ({bullish_n} buys, {bearish_n} sells across {total_n} assets, "
+                f"{t_bullish_n} tradeable buys) "
                 f"— the market lacks a clear directional bias; patience or range-bound strategies are preferred."
             )
 
@@ -2987,12 +2998,57 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         "volume_score", "macro_score",
     ]
 
+    # Signal distribution counts (all assets and tradeable-only)
+    _SIG_ORDER  = ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"]
+    _SIG_COLOUR = {
+        "STRONG BUY": "#16a34a", "BUY": "#26a69a", "NEUTRAL": "#6b7280",
+        "SELL": "#f59e0b", "STRONG SELL": "#ef5350",
+    }
+
+    def _count_signals(signals_list: list) -> dict:
+        c = dict.fromkeys(_SIG_ORDER, 0)
+        for s in signals_list:
+            lbl = (s.get("signal") or "NEUTRAL").replace("_", " ")
+            if lbl in c:
+                c[lbl] += 1
+        return c
+
+    _trd_signals_all = [s for s in all_signals if s.get("ticker") in tradeable_set]
+    _all_counts      = _count_signals(all_signals)
+    _trd_counts      = _count_signals(_trd_signals_all)
+
+    def _counts_html(counts: dict, total: int, label: str) -> str:
+        parts = " &nbsp;·&nbsp; ".join(
+            f"<span style='color:{_SIG_COLOUR[lbl]};font-weight:700'>{counts[lbl]}</span>"
+            f"&nbsp;<span style='color:#64748b;font-size:0.75rem'>{lbl}</span>"
+            for lbl in _SIG_ORDER
+        )
+        return (
+            f"<div style='font-size:0.8rem;margin-bottom:2px'>"
+            f"<span style='color:#94a3b8;min-width:120px;display:inline-block'>{label} ({total}):</span>"
+            f" {parts}</div>"
+        )
+
+    st.markdown(
+        _counts_html(_all_counts, len(all_signals), "All assets")
+        + _counts_html(_trd_counts, len(_trd_signals_all), "Tradeable"),
+        unsafe_allow_html=True,
+    )
+
     def _brief_qualifies(s: dict, direction: int) -> bool:
-        score = s.get("confluence_score") or 0.0
-        if direction == 1 and score < 0.5:
-            return False
-        if direction == -1 and score > -0.5:
-            return False
+        score  = s.get("confluence_score") or 0.0
+        signal = (s.get("signal") or "").upper()
+        if direction == 1:
+            if score < 0.5:
+                return False
+            # STRONG BUY (≥ 0.6) always qualifies; BUY needs multi-module agreement
+            if "STRONG" in signal:
+                return True
+        else:
+            if score > -0.5:
+                return False
+            if "STRONG" in signal:
+                return True
         agreeing = sum(1 for k in _BRIEF_MODULE_KEYS if (s.get(k) or 0) == direction)
         return agreeing >= 3
 
@@ -3001,11 +3057,9 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         value=False,
         key="brief_include_analysis",
     )
-    _picks_pool = all_signals if _include_analysis else [
-        s for s in all_signals if s.get("ticker") in tradeable_set
-    ]
-    long_picks  = [s for s in _picks_pool           if _brief_qualifies(s,  1)][:3]
-    short_picks = [s for s in reversed(_picks_pool) if _brief_qualifies(s, -1)][:3]
+    _picks_pool = all_signals if _include_analysis else _trd_signals_all
+    long_picks  = [s for s in _picks_pool           if _brief_qualifies(s,  1)]
+    short_picks = [s for s in reversed(_picks_pool) if _brief_qualifies(s, -1)]
 
     def _brief_rationale(sig: dict, direction: int) -> str:
         _labels = {
@@ -3069,20 +3123,29 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     lc, rc = st.columns(2)
 
     with lc:
-        st.markdown("**🟢 Top Long Opportunities**")
+        n_long = len(long_picks)
+        st.markdown(f"**🟢 Long Opportunities** ({n_long})" if n_long else "**🟢 Long Opportunities**")
         if long_picks:
             for sig in long_picks:
                 st.markdown(_opp_card(sig, 1, "#26a69a", "#16a34a"), unsafe_allow_html=True)
         else:
-            st.caption("No long signals today.")
+            st.caption("No qualifying long signals today.")
 
     with rc:
-        st.markdown("**🔴 Top Short Opportunities**")
+        n_short = len(short_picks)
+        st.markdown(f"**🔴 Short Opportunities** ({n_short})" if n_short else "**🔴 Short Opportunities**")
         if short_picks:
             for sig in short_picks:
                 st.markdown(_opp_card(sig, -1, "#f59e0b", "#ef5350"), unsafe_allow_html=True)
         else:
-            st.caption("No short signals today.")
+            st.caption("No qualifying short signals today.")
+
+    _filter_note = (
+        "Showing tradeable assets only · Toggle above to include analysis-only assets"
+        if not _include_analysis
+        else "Showing all assets including analysis-only"
+    )
+    st.caption(_filter_note)
 
     # Catch-up opportunities
     catch_ups = get_active_opportunity_flags()
