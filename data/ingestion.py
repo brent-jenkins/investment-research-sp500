@@ -57,26 +57,32 @@ def _mark_ticker_unavailable(ticker: str) -> None:
 
 def _fetch_ticker(
     ticker: str,
-    start: datetime,
-    end: datetime,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    period: Optional[str] = None,
     max_retries: int = 3,
     rate_limit: float = 1.5,
 ) -> Optional[pd.DataFrame]:
     """Download OHLCV history for a single ticker with retry logic.
+
+    Pass either *period* (e.g. "10d") or *start*/*end* dates.  *period* takes
+    precedence and delegates date arithmetic to yfinance, which skips holidays
+    and gaps automatically.
 
     Returns a DataFrame with columns [Open, High, Low, Close, Adj Close, Volume]
     or None if all attempts fail.
     """
     for attempt in range(1, max_retries + 1):
         try:
-            df = yf.download(
-                ticker,
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
+            kwargs: dict = dict(auto_adjust=False, progress=False, threads=False)
+            if period:
+                kwargs["period"] = period
+            elif start is not None and end is not None:
+                kwargs["start"] = start.strftime("%Y-%m-%d")
+                kwargs["end"]   = end.strftime("%Y-%m-%d")
+            else:
+                raise ValueError("Provide either 'period' or both 'start' and 'end'.")
+            df = yf.download(ticker, **kwargs)
             if df.empty:
                 logger.warning("No data returned for %s (attempt %d)", ticker, attempt)
             else:
@@ -84,7 +90,7 @@ def _fetch_ticker(
                 return df
         except Exception as exc:
             logger.error("Error fetching %s (attempt %d): %s", ticker, attempt, exc)
-            time.sleep(rate_limit * attempt)  # back-off on consecutive failures
+            time.sleep(rate_limit * attempt)
 
     return None
 
@@ -196,10 +202,18 @@ def pull_history(
 
 
 def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
-    """Fetch only missing data since the last stored date for each ticker.
+    """Backfill recent price data for each ticker using a rolling 10-day window.
 
-    Useful for the daily scheduled refresh — avoids re-downloading history
-    that is already in the database.
+    For tickers that already have stored data, yfinance is called with
+    period='10d' rather than a calculated start date.  This approach:
+      - Handles bank-holiday gaps transparently (yfinance skips non-trading days)
+      - Avoids the risk of marking a ticker unavailable just because today's
+        session hasn't closed yet or a holiday left a one-day gap
+      - Is idempotent: rows already in the DB are silently overwritten via upsert
+
+    Tickers with no stored data at all fall back to a full-history download
+    (as in pull_history) and ARE marked unavailable if the fetch fails, since
+    that indicates the ticker itself is broken rather than a calendar gap.
     """
     init_db()
     config = _load_config()
@@ -220,38 +234,52 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
                 results[ticker] = 0
                 continue
 
-            # Find the most recent stored date for this ticker
-            latest = (
+            has_history = (
                 session.query(PriceData.date)
                 .filter(PriceData.ticker == ticker)
-                .order_by(PriceData.date.desc())
                 .first()
-            )
-            if latest:
-                start = latest[0] + timedelta(days=1)
+            ) is not None
+
+            if has_history:
+                # Rolling 10-day window: yfinance returns whatever trading days
+                # are available, skipping holidays and weekends automatically.
+                logger.info("Fetching %s (period=10d)…", ticker)
+                df = _fetch_ticker(
+                    ticker, period="10d",
+                    max_retries=max_retries, rate_limit=rate_limit,
+                )
+                if df is not None and not df.empty:
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [col[0] for col in df.columns]
+                    count = _upsert_price_rows(df, ticker)
+                    results[ticker] = count
+                else:
+                    # Empty is normal when the exchange was closed for all 10 days
+                    # (e.g. extended holiday); do NOT mark unavailable.
+                    results[ticker] = 0
+                    logger.info(
+                        "  No new data for %s in last 10d — market may be closed.", ticker
+                    )
             else:
-                # No stored data — download full history per config.
-                # yfinance returns from the asset's inception date if the start
-                # date precedes the listing, so newer ETFs are handled fine.
+                # First-time download: fetch full history.
                 start = datetime.utcnow() - timedelta(days=config["data"]["history_days"])
-
-            end = datetime.utcnow()
-            if start >= end:
-                logger.info("  %s is up-to-date, skipping.", ticker)
-                results[ticker] = 0
-                continue
-
-            logger.info("Fetching %s from %s…", ticker, start.date())
-            df = _fetch_ticker(ticker, start, end, max_retries=max_retries, rate_limit=rate_limit)
-            if df is not None and not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [col[0] for col in df.columns]
-                count = _upsert_price_rows(df, ticker)
-                results[ticker] = count
-            else:
-                results[ticker] = 0
-                logger.warning("  No data for %s after all retries — marking unavailable.", ticker)
-                _mark_ticker_unavailable(ticker)
+                end   = datetime.utcnow()
+                logger.info("Fetching %s (full history from %s)…", ticker, start.date())
+                df = _fetch_ticker(
+                    ticker, start=start, end=end,
+                    max_retries=max_retries, rate_limit=rate_limit,
+                )
+                if df is not None and not df.empty:
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [col[0] for col in df.columns]
+                    count = _upsert_price_rows(df, ticker)
+                    results[ticker] = count
+                else:
+                    results[ticker] = 0
+                    logger.warning(
+                        "  No data for %s after all retries — marking unavailable.", ticker
+                    )
+                    _mark_ticker_unavailable(ticker)
     finally:
         session.close()
 

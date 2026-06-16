@@ -132,6 +132,13 @@ def _eod_job() -> None:
     config = _load_config()
     ticker_exchange = _build_ticker_exchange_map(config)
 
+    # International index tickers are always pulled regardless of their local
+    # exchange calendar.  yfinance handles data availability internally, so these
+    # are never silently skipped on local bank holidays.
+    _ALWAYS_PULL: frozenset[str] = frozenset({
+        "^FTSE", "^GDAXI", "^N225", "^STOXX50E",
+    })
+
     # Determine which exchanges have sessions today (UTC date avoids timezone drift
     # at the midnight boundary; 21:30 UTC is safely within the same calendar day).
     today_utc: date = datetime.now(timezone.utc).date()
@@ -144,7 +151,7 @@ def _eod_job() -> None:
     open_tickers:    list[str] = []
     skipped_tickers: list[str] = []
     for ticker, exchange in ticker_exchange.items():
-        if open_exchanges[exchange]:
+        if ticker in _ALWAYS_PULL or open_exchanges[exchange]:
             open_tickers.append(ticker)
         else:
             logger.info("Skipping %s — %s closed today (%s).", ticker, exchange, today_utc)
