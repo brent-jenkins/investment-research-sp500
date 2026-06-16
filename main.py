@@ -579,7 +579,7 @@ def _render_indicator_panel(ticker: str) -> None:
 
     with st.expander("Technical Indicators", expanded=True):
         if row is None:
-            st.info("No indicator data yet — analysis runs automatically after each data refresh.")
+            st.info("Price data loaded — indicators will be calculated at the next analysis run.")
             return
 
         date_str = row.get("date")
@@ -3433,16 +3433,24 @@ def main() -> None:
         else:
             st.caption("No data yet — click Refresh Data to load.")
 
-        # Refresh button — manual full refresh (data pull + metadata stamp)
+        # Refresh button — manual full refresh (data pull + analysis pipeline)
         if st.button("🔄 Refresh Data", use_container_width=True, type="primary"):
+            _cfg     = _load_config()
+            _tickers = get_all_tickers(_cfg)
             with st.spinner("Pulling latest prices…"):
-                results = pull_incremental()
+                results  = pull_incremental(tickers=_tickers)
                 new_rows = sum(results.values())
                 try:
                     set_metadata("last_full_refresh", datetime.utcnow().isoformat())
                 except Exception:
                     pass
-            st.success(f"Fetched {new_rows} new rows across {len(results)} tickers.")
+            with st.spinner("Running analysis pipeline…"):
+                try:
+                    run_analysis(tickers=_tickers, config=_cfg)
+                    generate_signals(tickers=_tickers, config=_cfg)
+                except Exception as _exc:
+                    st.warning(f"Analysis completed with errors: {_exc}")
+            st.success(f"Fetched {new_rows} new rows · Analysis and signals updated.")
             st.rerun()
 
 
