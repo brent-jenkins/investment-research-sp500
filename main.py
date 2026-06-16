@@ -162,6 +162,23 @@ _CCY_PAIR_LOOKUP: "dict[tuple[str, str], tuple[str, bool]]" = {
 _CCY_SYM: dict[str, str] = {"GBP": "£", "USD": "$", "JPY": "¥", "EUR": "€"}
 
 
+def _quote_ccy_sym(ticker: str) -> str:
+    """Return the currency symbol for the QUOTE currency of *ticker*'s price.
+
+    The raw P&L from a price move is always in the quote currency:
+      GBPUSD=X  → USD ($)   USDJPY=X → JPY (¥)   EURGBP=X → GBP (£)
+      US ETFs   → USD ($)   LSE .L   → GBP (£)
+    """
+    # FOREX_QUOTE_CCY has explicit mappings for all tracked pairs (covers EURGBP=X → GBP, etc.)
+    if ticker in FOREX_QUOTE_CCY:
+        return _CCY_SYM.get(FOREX_QUOTE_CCY[ticker], "$")
+    # Pattern fallbacks for anything not in the explicit dict
+    if ticker.endswith("JPY=X"): return "¥"
+    if ticker.endswith("=X"):    return "$"   # most forex pairs quoted in USD
+    if ticker.endswith(".L"):    return "£"
+    return "$"                                # default: US-listed instruments
+
+
 def _fx_pair_label(instrument_ccy: str, account_ccy: str) -> str:
     """Return the canonical pair name for a currency combo, e.g. 'GBPUSD'."""
     if instrument_ccy == account_ccy:
@@ -1931,7 +1948,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 "% to TP":      pct_to_tp,    # positive = still has room to TP
                 "Live R:R":     live_rr,       # positive = in profit vs risk
                 "Progress":     progress,      # 0–100, where 0=SL, 100=TP
-                "P&L (raw)":    (f"{_CCY_SYM.get(instr_ccy,'')}{pnl_instr:+.4f}"
+                "P&L (raw)":    (f"{_quote_ccy_sym(ticker)}{pnl_instr:+.4f}"
                                  if isinstance(pnl_instr, float) else "—"),
                 "P&L £":        pnl_acct,     # in account currency (GBP)
                 "Margin P&L %": margin_pnl_pct,
@@ -3201,7 +3218,7 @@ def _render_trade_card(e: dict) -> None:
         pnl_str = "⚠ Price unavailable"
         pnl_col = "#f59e0b"
     elif unreal_pnl is not None and unreal_pct is not None:
-        _card_sym = _CCY_SYM.get(e.get("currency") or "GBP", "")
+        _card_sym = _quote_ccy_sym(e.get("ticker") or "")
         pnl_str = f"{_card_sym}{unreal_pnl:+.2f} ({unreal_pct:+.2f}%)"
         pnl_col = "#16a34a" if unreal_pnl >= 0 else "#dc2626"
     else:
