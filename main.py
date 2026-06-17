@@ -812,6 +812,21 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         unsafe_allow_html=True,
     )
 
+    # ---- Generate Signals button (top of page, right of header) -----------
+    _gs_col, _ = st.columns([2, 5])
+    with _gs_col:
+        if st.button("⚡ Generate Signals", key="signals_gen_btn", use_container_width=True):
+            with st.spinner("Regenerating signals…"):
+                try:
+                    _tickers = get_all_tickers(config)
+                    run_analysis(tickers=_tickers, config=config)
+                    generate_signals(tickers=_tickers, config=config)
+                    st.cache_data.clear()
+                    st.toast("Signals updated.", icon="✅")
+                    st.rerun()
+                except Exception as _exc:
+                    st.error(f"Signal generation failed: {_exc}")
+
     # ---- Market intelligence -----------------------------------------------
     bullish_n   = counts["STRONG BUY"] + counts["BUY"]
     bearish_n   = counts["SELL"] + counts["STRONG SELL"]
@@ -2062,8 +2077,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             "SL→TP progress bar: 0% = at stop loss, 100% = at take profit."
         )
 
-        # ---- Per-trade edit expanders ----------------------------------------
-        st.markdown("**Edit trade plan:**")
+        # ---- Per-trade manage expanders (edit plan + close) -----------------
+        st.markdown("**Manage positions:**")
         for _t in open_trades:
             _tid  = _t["id"]
             _ttk  = _t.get("ticker", "")
@@ -2071,8 +2086,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             _cur_sl = _t.get("stop_loss_price")
             _cur_tp = _t.get("take_profit_price")
             _cur_rr = _t.get("risk_reward_ratio")
-            _lbl = f"✏ #{_tid}  {_ttk}  {_tdir}"
-            with st.expander(_lbl, expanded=False):
+
+            with st.expander(f"✏ #{_tid}  {_ttk}  {_tdir}", expanded=False):
                 with st.form(f"edit_trade_plan_{_tid}"):
                     _ec1, _ec2, _ec3 = st.columns(3)
                     _new_sl = _ec1.number_input(
@@ -2093,7 +2108,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                         min_value=0.5, step=0.5,
                         key=f"ep_rr_{_tid}",
                     )
-                    if st.form_submit_button("Save", type="primary"):
+                    if st.form_submit_button("Save plan", type="primary"):
                         update_trade_plan(
                             _tid,
                             stop_loss_price=_new_sl if _new_sl > 0 else None,
@@ -2103,45 +2118,29 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                         st.success(f"Trade #{_tid} plan updated.")
                         st.rerun()
 
-    st.divider()
-
-    # ---- Close a Trade -----------------------------------------------------
-    if open_trades:
-        st.markdown("### Close a Trade")
-        trade_labels = {
-            t["id"]: (
-                f"#{t['id']}  {t['ticker']}  "
-                f"[{t.get('account_type') or 'PRACTICE'}]  "
-                f"{(t.get('signal_type') or '').replace('_', ' ')}  "
-                f"@ {float(t.get('entry_price') or 0):,.4f}"
-            )
-            for t in open_trades
-        }
-        with st.form("close_trade_form"):
-            selected_id = st.selectbox(
-                "Select trade to close",
-                options=list(trade_labels.keys()),
-                format_func=lambda x: trade_labels[x],
-            )
-            exit_price = st.number_input("Exit Price", min_value=0.0, step=0.01, format="%.4f")
-            close_btn  = st.form_submit_button("Close Trade", type="primary")
-
-            if close_btn:
-                if exit_price <= 0:
-                    st.error("Exit price must be greater than 0.")
-                else:
-                    result = close_trade(selected_id, exit_price)
-                    pnl    = result["pnl"]
-                    icon   = "🟢" if pnl >= 0 else "🔴"
-                    st.success(
-                        f"{icon} Closed {result['ticker']} — "
-                        f"P&L: {pnl:+.4f} pts  ({result['pnl_pct']:+.2f}%)  "
-                        f"over {result['holding_days']} day(s)."
+            with st.expander(f"🔴 Close #{_tid}  {_ttk}  {_tdir}", expanded=False):
+                with st.form(f"close_trade_{_tid}"):
+                    _exit_px = st.number_input(
+                        "Exit Price",
+                        min_value=0.0, step=0.0001, format="%.4f",
+                        key=f"close_exit_{_tid}",
                     )
-                    updated = maybe_update_weights(_load_config())
-                    if updated:
-                        st.info("System Learning: indicator weights recalculated from trade history.")
-                    st.rerun()
+                    if st.form_submit_button("Close Trade", type="primary"):
+                        if _exit_px <= 0:
+                            st.error("Exit price must be greater than 0.")
+                        else:
+                            _result = close_trade(_tid, _exit_px)
+                            _pnl    = _result["pnl"]
+                            _icon   = "🟢" if _pnl >= 0 else "🔴"
+                            st.success(
+                                f"{_icon} Closed {_result['ticker']} — "
+                                f"P&L: {_pnl:+.4f} pts  ({_result['pnl_pct']:+.2f}%)  "
+                                f"over {_result['holding_days']} day(s)."
+                            )
+                            _updated = maybe_update_weights(_load_config())
+                            if _updated:
+                                st.info("System Learning: indicator weights recalculated from trade history.")
+                            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -3154,14 +3153,30 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 st.error(_msg)
         st.caption("Confirms SMTP delivery is working.")
     with _btn_col2:
-        if st.button("📊 Send Weekly Summary Now", key="status_send_weekly"):
-            with st.spinner("Gathering data and sending…"):
-                _ok, _msg = send_weekly_summary_email(config)
-            if _ok:
-                st.success(_msg)
-            else:
-                st.error(_msg)
-        st.caption("Sends the full weekly summary immediately — useful for testing.")
+        if not st.session_state.get("_weekly_summary_confirm"):
+            if st.button("📊 Send Weekly Summary Now", key="status_send_weekly"):
+                st.session_state["_weekly_summary_confirm"] = True
+                st.rerun()
+            st.caption("Sends the full weekly summary immediately — useful for testing.")
+        else:
+            notif_to = ", ".join(
+                config.get("notifications", {}).get("email", {}).get("to_addresses") or []
+            ) or "configured recipients"
+            st.warning(f"This will send the weekly summary email to **{notif_to}** now.")
+            _wc1, _wc2 = st.columns(2)
+            with _wc1:
+                if st.button("✅ Confirm Send", type="primary", key="status_weekly_confirm_yes"):
+                    st.session_state["_weekly_summary_confirm"] = False
+                    with st.spinner("Gathering data and sending…"):
+                        _ok, _msg = send_weekly_summary_email(config)
+                    if _ok:
+                        st.success(_msg)
+                    else:
+                        st.error(_msg)
+            with _wc2:
+                if st.button("Cancel", key="status_weekly_cancel"):
+                    st.session_state["_weekly_summary_confirm"] = False
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -3441,8 +3456,54 @@ _GROUP_LABELS = {
 
 def _render_charts_landing(config: dict) -> None:
     """Grouped asset cards shown on Charts before any ticker is selected."""
+    from sqlalchemy import text as sa_text
+    from data.database import get_engine
+
     st.markdown("## 📈 Charts")
     st.caption("Select an asset to view its price chart and indicators.")
+
+    # Build signal lookup for badges
+    _all_tickers_cl = [
+        e["ticker"]
+        for g in config.get("watchlist", {}).values()
+        if isinstance(g, list)
+        for e in g
+        if isinstance(e, dict) and "ticker" in e
+    ]
+    _sig_rows_cl = get_latest_signals(_all_tickers_cl)
+    _sig_map_cl: dict[str, str] = {
+        r["ticker"]: (r.get("signal") or "NEUTRAL") for r in _sig_rows_cl
+    }
+
+    # Fetch last two closes per ticker in one query for 1-day change
+    _chg_map_cl: dict[str, float] = {}
+    try:
+        with get_engine().connect() as _conn_cl:
+            _price_rows_cl = _conn_cl.execute(sa_text(
+                "WITH ranked AS ("
+                "  SELECT ticker, close,"
+                "         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn"
+                "  FROM price_data"
+                ") SELECT ticker, close, rn FROM ranked WHERE rn <= 2"
+            )).mappings().all()
+        _lat_cl: dict[str, float] = {}
+        _prv_cl: dict[str, float] = {}
+        for _row_cl in _price_rows_cl:
+            _tk_cl, _cl_cl, _rn_cl = _row_cl["ticker"], _row_cl["close"], _row_cl["rn"]
+            if _rn_cl == 1:
+                _lat_cl[_tk_cl] = _cl_cl
+            else:
+                _prv_cl[_tk_cl] = _cl_cl
+        for _tk_cl in _lat_cl:
+            if _tk_cl in _prv_cl and _prv_cl[_tk_cl] > 0:
+                _chg_map_cl[_tk_cl] = (_lat_cl[_tk_cl] - _prv_cl[_tk_cl]) / _prv_cl[_tk_cl] * 100
+    except Exception:
+        pass
+
+    _SIG_CARD_ICONS = {
+        "STRONG_BUY": "▲▲", "BUY": "▲", "NEUTRAL": "●",
+        "SELL": "▼", "STRONG_SELL": "▼▼",
+    }
 
     for group_key, group_label in _GROUP_LABELS.items():
         group = config["watchlist"].get(group_key, [])
@@ -3451,11 +3512,15 @@ def _render_charts_landing(config: dict) -> None:
         st.markdown(f"#### {group_label}")
         cols = st.columns(4)
         for i, entry in enumerate(group):
-            ticker = entry["ticker"]
-            name   = entry["name"]
+            ticker  = entry["ticker"]
+            name    = entry["name"]
+            _signal = _sig_map_cl.get(ticker, "NEUTRAL")
+            _sym    = _SIG_CARD_ICONS.get(_signal, "●")
+            _chg    = _chg_map_cl.get(ticker)
+            _chg_str = f"  {_chg:+.2f}%" if _chg is not None else ""
             with cols[i % 4]:
                 if st.button(
-                    f"**{ticker}**  \n{name}",
+                    f"**{ticker}**  \n{name}  \n{_sym}{_chg_str}",
                     key=f"cl_{ticker}",
                     use_container_width=True,
                 ):
@@ -4128,7 +4193,30 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     opps = build_opportunities(tradeable_signals, open_tickers, active_overlays, watchlist)
 
     if not opps:
-        st.info("No strong signals outside current positions right now.")
+        _buy_threshold = float(
+            config.get("confluence", {}).get("buy_threshold", 0.55)
+        )
+        _near_miss = sum(
+            1 for s in tradeable_signals
+            if s.get("ticker") not in open_tickers
+            and 0.35 <= abs(s.get("confluence_score") or 0.0) < _buy_threshold
+        )
+        _overlay_labels = [
+            OVERLAY_DESCRIPTIONS.get(k, {}).get("label", k.replace("_", " "))
+            for k in active_overlays
+        ]
+        _why_parts = [f"Regime: **{regime.replace('_', ' ')}**"]
+        if _overlay_labels:
+            _why_parts.append(f"Active overlay{'s' if len(_overlay_labels) > 1 else ''}: **{', '.join(_overlay_labels)}**")
+        if _near_miss > 0:
+            _why_parts.append(
+                f"**{_near_miss}** signal{'s' if _near_miss > 1 else ''} within 0.35–{_buy_threshold:.2f} "
+                f"(below STRONG threshold)"
+            )
+        st.info(
+            "No strong signals outside current positions right now.  \n"
+            + " · ".join(_why_parts)
+        )
     else:
         def _mod_str(o: dict) -> str:
             def _s(v: int) -> str:
