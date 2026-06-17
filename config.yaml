@@ -73,8 +73,7 @@ watchlist:
     - ticker: "BNO"
       name: "United States Brent Oil Fund"
       exchange: "NYSE"
-      tradeable: true
-      trading212_instrument: "BCOUSD"
+      tradeable: false
     - ticker: "UNG"
       name: "United States Natural Gas Fund"
       exchange: "NYSE"
@@ -429,8 +428,8 @@ confluence:
   # Total number of signal modules (regime, trend, mean_reversion, volatility, volume, macro, correlation)
   total_signal_modules: 7
   # Score thresholds: score = agreeing_signals / total_signal_modules
-  buy_threshold: 0.60
-  sell_threshold: 0.60
+  buy_threshold: 0.55
+  sell_threshold: 0.55
 
 signals:
   # Lookback periods (trading days) used across analysis modules
