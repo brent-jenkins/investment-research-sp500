@@ -1055,6 +1055,20 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     )
     _show_all_assets = _sig_filter == "Show All"
 
+    with st.expander("Module key — what each column means"):
+        st.markdown(
+            "| Column | What it measures | ▲ Bullish | ▼ Bearish |\n"
+            "|---|---|---|---|\n"
+            "| **Trend** | Moving averages (SMA 20/50/200) + ADX | Price above SMAs with confirmed momentum | Price below SMAs, downtrend confirmed |\n"
+            "| **Mean Rev** | RSI (14) + Bollinger Bands | Oversold — bounce expected | Overbought — pullback expected |\n"
+            "| **Volatility** | ATR + VIX levels | Low/stable volatility — favourable entry conditions | Elevated volatility — widen stops, reduce size |\n"
+            "| **Volume** | Volume vs 20-day average | Above-average volume confirms the price move | Below-average — the move lacks conviction |\n"
+            "| **Macro** | FRED series (yield curve, credit spreads, VIX) | Macro backdrop supportive | Macro headwinds present |\n\n"
+            "**Score** = regime-weighted average of all modules (−1 to +1). "
+            "In a trending market, Trend carries more weight; in a ranging market, Mean Rev carries more weight. "
+            "STRONG BUY ≥ 0.55 · BUY ≥ 0.30 · SELL ≤ −0.30 · STRONG SELL ≤ −0.55."
+        )
+
     def _sym(val) -> str:
         return _SCORE_SYMBOL.get(int(val) if val is not None else 0, "●")
 
@@ -3240,52 +3254,65 @@ _DIV_ICONS = {
 
 
 def _render_relationships_page(config: dict) -> None:
-    """Render the Relationships page: correlation heatmap, pair table, and divergence narrative."""
+    """Render the Relationships page: divergence narratives, pair table, correlation heatmap."""
     from analysis.correlations import RELATIONSHIP_MAP as _REL_MAP
     _corr_ts  = get_metadata("last_analysis_run")
     _ts_str   = _corr_ts.strftime("%Y-%m-%d %H:%M UTC") if _corr_ts else "pending"
     _n_pairs  = len(_REL_MAP)
     st.caption(f"🔗 **Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; Last computed: {_ts_str} &nbsp;·&nbsp; Updates: 07:00 / 13:30 / 21:30 UTC")
 
-    # ── Correlation heatmap ───────────────────────────────────────────────────
-    st.markdown("### Correlation Matrix (30-day window)")
-    st.caption("Current rolling 30-day pairwise correlation for all tracked assets.")
+    stored = get_stored_correlations()
+    _has_data = bool(stored) and any(p.get("corr_30d") is not None for p in stored)
 
-    with st.spinner("Building correlation matrix…"):
-        corr_df, tickers_in_matrix = build_correlation_matrix(window=30)
+    # ── Plain-English divergence narratives (most actionable — shown first) ───
+    st.markdown("### Notable Relationships")
 
-    if corr_df.empty:
-        st.info("Insufficient price data to build the correlation matrix — data refreshes automatically at 21:30 UTC.")
+    if not _has_data:
+        st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
     else:
-        # Round for display and build the heatmap
-        z_vals    = corr_df.values.tolist()
-        fig_heat  = go.Figure(
-            data=go.Heatmap(
-                z=z_vals,
-                x=tickers_in_matrix,
-                y=tickers_in_matrix,
-                colorscale=[
-                    [0.0,  "#ef5350"],   # -1 → red
-                    [0.5,  "#1f2937"],   # 0  → near-black (neutral)
-                    [1.0,  "#16a34a"],   # +1 → green
-                ],
-                zmin=-1,
-                zmax=1,
-                text=[[f"{v:.2f}" for v in row] for row in z_vals],
-                texttemplate="%{text}",
-                textfont={"size": 10},
-                hoverongaps=False,
-                hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{z:.3f}<extra></extra>",
-            )
-        )
-        fig_heat.update_layout(
-            template="plotly_dark",
-            height=500,
-            margin=dict(l=10, r=10, t=30, b=10),
-            xaxis=dict(side="bottom", tickangle=-45),
-            yaxis=dict(autorange="reversed"),
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
+        diverging = [p for p in stored if p.get("divergence") == "DIVERGING"]
+        confirming_notable = [
+            p for p in stored
+            if p.get("divergence") == "CONFIRMING"
+            and p.get("z_score") is not None
+            and abs(p["z_score"]) <= 0.5
+        ]
+
+        if diverging:
+            st.markdown("**Unusual / Diverging Pairs**")
+            for p in diverging:
+                z   = p.get("z_score")
+                c30 = p.get("corr_30d")
+                z_str  = f"Z={z:+.2f}" if z is not None else ""
+                c_str  = f"30d corr: {c30:+.3f}" if c30 is not None else ""
+                st.markdown(
+                    f'<div style="border-left:3px solid #ef5350;background:#ef535018;'
+                    f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
+                    f'<span style="color:#ef5350;font-weight:700">⚠ {html.escape(p["label"])}</span>'
+                    f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
+                    f'{html.escape(c_str)} · {html.escape(z_str)}</span><br>'
+                    f'<span style="font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.success("No significant divergences detected — all tracked relationships are within historical norms.")
+
+        if confirming_notable:
+            st.markdown("**Strongly Confirming Pairs**")
+            for p in confirming_notable:
+                c30   = p.get("corr_30d")
+                c_str = f"30d corr: {c30:+.3f}" if c30 is not None else ""
+                st.markdown(
+                    f'<div style="border-left:3px solid #16a34a;background:#16a34a18;'
+                    f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
+                    f'<span style="color:#16a34a;font-weight:700">✓ {html.escape(p["label"])}</span>'
+                    f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
+                    f'{html.escape(c_str)}</span><br>'
+                    f'<span style="font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
     st.divider()
 
@@ -3299,9 +3326,7 @@ def _render_relationships_page(config: dict) -> None:
         "Status: CONFIRMING / NEUTRAL / DIVERGING"
     )
 
-    stored = get_stored_correlations()
-
-    if not any(p.get("corr_30d") is not None for p in stored):
+    if not _has_data:
         st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
     else:
         records = []
@@ -3375,56 +3400,44 @@ def _render_relationships_page(config: dict) -> None:
 
     st.divider()
 
-    # ── Plain-English divergence narratives ───────────────────────────────────
-    st.markdown("### Notable Relationships")
+    # ── Correlation heatmap (detail view — at the bottom) ─────────────────────
+    st.markdown("### Correlation Matrix (30-day window)")
+    st.caption(f"Rolling 30-day pairwise correlation for all tracked assets · as of {_ts_str}")
 
-    if not stored or not any(p.get("corr_30d") is not None for p in stored):
-        st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
-        return
+    with st.spinner("Building correlation matrix…"):
+        corr_df, tickers_in_matrix = build_correlation_matrix(window=30)
 
-    diverging = [p for p in stored if p.get("divergence") == "DIVERGING"]
-    confirming_notable = [
-        p for p in stored
-        if p.get("divergence") == "CONFIRMING"
-        and p.get("z_score") is not None
-        and abs(p["z_score"]) <= 0.5
-    ]
-
-    if diverging:
-        st.markdown("**Unusual / Diverging Pairs**")
-        for p in diverging:
-            z   = p.get("z_score")
-            c30 = p.get("corr_30d")
-            z_str  = f"Z={z:+.2f}" if z is not None else ""
-            c_str  = f"30d corr: {c30:+.3f}" if c30 is not None else ""
-            st.markdown(
-                f'<div style="border-left:3px solid #ef5350;background:#ef535018;'
-                f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
-                f'<span style="color:#ef5350;font-weight:700">⚠ {html.escape(p["label"])}</span>'
-                f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
-                f'{html.escape(c_str)} · {html.escape(z_str)}</span><br>'
-                f'<span style="font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+    if corr_df.empty:
+        st.info("Insufficient price data to build the correlation matrix — data refreshes automatically at 21:30 UTC.")
     else:
-        st.success("No significant divergences detected — all tracked relationships are within historical norms.")
-
-    if confirming_notable:
-        st.markdown("**Strongly Confirming Pairs**")
-        for p in confirming_notable:
-            c30   = p.get("corr_30d")
-            c_str = f"30d corr: {c30:+.3f}" if c30 is not None else ""
-            st.markdown(
-                f'<div style="border-left:3px solid #16a34a;background:#16a34a18;'
-                f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
-                f'<span style="color:#16a34a;font-weight:700">✓ {html.escape(p["label"])}</span>'
-                f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
-                f'{html.escape(c_str)}</span><br>'
-                f'<span style="font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
+        z_vals    = corr_df.values.tolist()
+        fig_heat  = go.Figure(
+            data=go.Heatmap(
+                z=z_vals,
+                x=tickers_in_matrix,
+                y=tickers_in_matrix,
+                colorscale=[
+                    [0.0,  "#ef5350"],
+                    [0.5,  "#1f2937"],
+                    [1.0,  "#16a34a"],
+                ],
+                zmin=-1,
+                zmax=1,
+                text=[[f"{v:.2f}" for v in row] for row in z_vals],
+                texttemplate="%{text}",
+                textfont={"size": 10},
+                hoverongaps=False,
+                hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{z:.3f}<extra></extra>",
             )
+        )
+        fig_heat.update_layout(
+            template="plotly_dark",
+            height=500,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis=dict(side="bottom", tickangle=-45),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
