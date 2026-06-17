@@ -105,10 +105,15 @@ RELATIONSHIP_MAP: list[dict] = [
         "ticker_a": "SLV",
         "ticker_b": "GLD",
         "expected_sign": 1,
-        "label": "Silver vs Gold",
-        "desc": "positive — silver follows gold with higher beta",
-        "diverge_template": "Silver and gold diverging — industrial demand may be distorting the metals relationship",
-        "confirm_template": "Silver tracking gold as expected",
+        "label": "Silver vs Gold (risk-appetite ratio)",
+        "desc": "positive — silver follows gold with higher beta; silver outperformance signals risk-on (industrial > safe-haven demand)",
+        "diverge_template": (
+            "Silver and gold diverging — the metals relationship has broken down; "
+            "if silver is outperforming, industrial/risk-on demand is dominant; "
+            "if gold is outperforming, safe-haven demand is dominant and the silver/gold "
+            "ratio is contracting (risk-off signal)"
+        ),
+        "confirm_template": "Silver tracking gold — metals co-moving normally; no divergent risk-appetite signal",
     },
     # ── New pairs added to expand macro coverage ─────────────────────────────
     {
@@ -343,6 +348,56 @@ RELATIONSHIP_MAP: list[dict] = [
             "emerging market bond prices as expected"
         ),
     },
+    # ── Macro series legs (T10Y2Y and DFII10 are FRED series, not price tickers) ──
+    {
+        "ticker_a": "KBE",
+        "ticker_b": "T10Y2Y",
+        "expected_sign": 1,
+        "label": "Bank Stocks vs Yield Curve",
+        "desc": "positive — banks expand net interest margins when the yield curve steepens (10Y−2Y spread widens)",
+        "diverge_template": (
+            "Bank stocks and yield curve steepness moving in opposite directions — NIM benefit "
+            "is not flowing through to bank valuations; credit quality concerns, loan-loss "
+            "provisions, or market anticipation of a curve reversal may be overriding the "
+            "rate tailwind"
+        ),
+        "confirm_template": (
+            "Bank stocks tracking yield curve steepness — net interest margin outlook is "
+            "driving bank valuations normally"
+        ),
+    },
+    {
+        "ticker_a": "GLD",
+        "ticker_b": "DFII10",
+        "expected_sign": -1,
+        "label": "Gold vs Real Yields",
+        "desc": "inverse — gold rallies when real yields fall; rising real yields raise the opportunity cost of holding non-yielding gold",
+        "diverge_template": (
+            "Gold and real yields moving in the same direction — the real-yield/gold relationship "
+            "has broken down; gold may be driven by geopolitical safe-haven demand, central bank "
+            "buying, or currency debasement rather than rate dynamics alone"
+        ),
+        "confirm_template": (
+            "Gold inversely tracking real yields — rate opportunity cost is the primary driver "
+            "of gold demand as expected"
+        ),
+    },
+    {
+        "ticker_a": "INDA",
+        "ticker_b": "UUP",
+        "expected_sign": -1,
+        "label": "India Equities vs Dollar",
+        "desc": "inverse — strong dollar raises USD-denominated import costs for India and weakens the rupee",
+        "diverge_template": (
+            "Indian equities and the dollar moving together — dollar strength is not suppressing "
+            "INDA as expected; possible domestic growth tailwind, falling oil prices (India is a "
+            "large oil importer), or RBI intervention offsetting the currency headwind"
+        ),
+        "confirm_template": (
+            "India equities inversely tracking the dollar — USD strength/weakness is flowing "
+            "through to Indian equity prices via the INR channel"
+        ),
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -429,11 +484,32 @@ CATCH_UP_MAP: dict[tuple[str, str], dict] = {
             "revisions respond to sustained oil prices."
         ),
     },
+    ("INDA", "UUP"): {
+        "lead": "UUP",
+        "lag":  "INDA",
+        "direction": "inverse",         # UUP falls (dollar weakens) → INDA should rise
+        "min_lead_move": 0.02,
+        "description": (
+            "The dollar (UUP) has weakened but Indian equities (INDA) haven't responded yet. "
+            "Dollar weakness historically boosts Indian assets via INR appreciation, lower "
+            "import costs, and a reduced USD-denominated debt burden — catch-up in INDA "
+            "may follow as the currency tailwind feeds through to equity valuations."
+        ),
+    },
 }
 
-# All unique tickers referenced across the relationship map
+# FRED macro series IDs used as one leg in a pair.  These are sourced from
+# macro_indicators, not price_data, and must be excluded from the price-based
+# correlation matrix and _ALL_PAIR_TICKERS.
+_FRED_PAIR_SERIES: frozenset[str] = frozenset({"T10Y2Y", "DFII10"})
+
+# All unique price-data tickers referenced across the relationship map.
+# FRED series legs are excluded — they are not in the price_data table.
 _ALL_PAIR_TICKERS: frozenset[str] = frozenset(
-    t for pair in RELATIONSHIP_MAP for t in (pair["ticker_a"], pair["ticker_b"])
+    t
+    for pair in RELATIONSHIP_MAP
+    for t in (pair["ticker_a"], pair["ticker_b"])
+    if t not in _FRED_PAIR_SERIES
 )
 
 # ---------------------------------------------------------------------------
@@ -510,6 +586,40 @@ def _get_stored_correlation_score(proxy_ticker: str) -> Optional[int]:
         return None
 
 
+def _get_macro_changes(series_id: str, days: int = 365) -> pd.Series:
+    """Read a FRED macro series from macro_indicators and return as a named change Series.
+
+    Uses first difference rather than pct_change because yield/spread series (T10Y2Y,
+    DFII10) can pass through zero, making pct_change undefined or misleading.
+    The resulting series is compatible with rolling().corr() against a price return series.
+
+    Returns an empty Series when the series has no data yet.
+    """
+    engine = get_engine()
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT date, value FROM macro_indicators "
+                    "WHERE series_id = :sid AND date >= :cutoff AND value IS NOT NULL "
+                    "ORDER BY date"
+                ),
+                {"sid": series_id, "cutoff": cutoff},
+            ).mappings().all()
+    except Exception as exc:
+        logger.warning("Macro series read failed for %s: %s", series_id, exc)
+        return pd.Series(dtype=float, name=series_id)
+
+    if not rows:
+        return pd.Series(dtype=float, name=series_id)
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    df["date"] = pd.to_datetime(df["date"])
+    s = df.set_index("date")["value"].astype(float).dropna()
+    return s.diff().dropna().rename(series_id)
+
+
 def _compute_pair(
     ticker_a: str,
     ticker_b: str,
@@ -541,17 +651,9 @@ def _compute_pair(
         "return_30d_b": None,
     }
 
-    try:
-        df_a = get_price_df(ticker_a, days=days)
-        df_b = get_price_df(ticker_b, days=days)
-    except Exception as exc:
-        logger.warning("Data fetch failed for pair %s/%s: %s", ticker_a, ticker_b, exc)
-        return _empty
-
-    if df_a.empty or df_b.empty:
-        return _empty
-
     # Compute 30-day returns on raw close prices (for catch-up opportunity detection).
+    # Not applicable for FRED series legs — returns None for those, which suppresses
+    # catch-up flag detection without breaking the correlation calculation.
     def _recent_return(df: pd.DataFrame, window: int = 30) -> Optional[float]:
         try:
             close = df.set_index("date")["close"].astype(float).sort_index().dropna()
@@ -562,21 +664,38 @@ def _compute_pair(
         except Exception:
             return None
 
-    return_30d_a = _recent_return(df_a)
-    return_30d_b = _recent_return(df_b)
-
     try:
-        # Use daily returns rather than raw price levels.  Price levels are
-        # non-stationary: two trending series can show high correlation within
-        # any 30-day window purely because of shared autocorrelation, producing
-        # a hist_std so inflated that meaningful divergences collapse to near-zero
-        # z-scores.  Return correlations are stationary and measure the actual
-        # day-to-day co-movement relationship.
-        s_a = df_a.set_index("date")["close"].astype(float).pct_change().rename(ticker_a)
-        s_b = df_b.set_index("date")["close"].astype(float).pct_change().rename(ticker_b)
+        # Fetch a return-like Series for each leg.
+        # Price tickers:   pct_change() of close price (stationary daily returns)
+        # FRED macro legs: diff() of the series value (e.g. bp changes for T10Y2Y)
+        #   — diff() is used instead of pct_change() because yield/spread series
+        #     can pass through zero, making pct_change undefined or misleading.
+        if ticker_a in _FRED_PAIR_SERIES:
+            s_a = _get_macro_changes(ticker_a, days=days)
+            return_30d_a = None
+        else:
+            df_a = get_price_df(ticker_a, days=days)
+            if df_a.empty:
+                return _empty
+            return_30d_a = _recent_return(df_a)
+            s_a = df_a.set_index("date")["close"].astype(float).pct_change().rename(ticker_a)
+
+        if ticker_b in _FRED_PAIR_SERIES:
+            s_b = _get_macro_changes(ticker_b, days=days)
+            return_30d_b = None
+        else:
+            df_b = get_price_df(ticker_b, days=days)
+            if df_b.empty:
+                return _empty
+            return_30d_b = _recent_return(df_b)
+            s_b = df_b.set_index("date")["close"].astype(float).pct_change().rename(ticker_b)
+
+        if s_a.empty or s_b.empty:
+            return _empty
+
         combined = pd.concat([s_a, s_b], axis=1, join="inner").dropna()
     except Exception as exc:
-        logger.warning("Alignment failed for %s/%s: %s", ticker_a, ticker_b, exc)
+        logger.warning("Data fetch failed for pair %s/%s: %s", ticker_a, ticker_b, exc)
         return _empty
 
     if len(combined) < 31:
