@@ -1,10 +1,12 @@
 """APScheduler-based scheduled jobs: three daily runs with per-exchange holiday awareness.
 
 Run schedule (weekdays only, UTC):
-  07:00  Pre-market  — analysis only, no data pull
-  13:30  US open     — analysis only, no data pull
-  21:30  End of day  — full data refresh then analysis (primary run)
-  14–21  Hourly      — open-trade health check; email alert on STOP LOSS / EXIT SIGNAL
+  07:00  Pre-market  — pull fresh data for exchanges that just closed (Asian markets),
+                       then run analysis; open virtual trades for those tickers
+  13:30  US open     — analysis only, no data pull, no virtual trade opens
+  21:30  End of day  — full data refresh then analysis (all exchanges); opens for all
+  00-21,23  Hourly   — open-trade health check; email alert on STOP LOSS / EXIT SIGNAL
+                       only fires for trades whose home exchange is currently in session
 
 All three analysis runs execute the complete analysis pipeline:
   run_analysis()       → indicators table
@@ -41,6 +43,16 @@ RUN_ANALYSIS_ONLY = "analysis_only"
 
 _scheduler: BackgroundScheduler | None = None
 
+# pandas_market_calendars does not recognise all exchange shorthands used in
+# config.yaml.  Map the config name → the registered calendar name.
+_CALENDAR_ALIASES: dict[str, str] = {
+    "TSE": "JPX",   # Tokyo Stock Exchange → Japan Exchange Group
+}
+
+
+def _resolve_calendar(name: str) -> str:
+    return _CALENDAR_ALIASES.get(name, name)
+
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -63,14 +75,15 @@ def _build_ticker_exchange_map(config: dict) -> dict[str, str]:
 def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
     """Return True if *calendar_name* has a trading session on *check_date*.
 
-    Crypto markets trade 24/7 and are never skipped.
+    Crypto and FX markets are treated as always open on weekdays.
     Fails open (returns True) on any calendar lookup error so assets are
     never silently skipped due to a misconfigured calendar name.
     """
-    if calendar_name == "Crypto":
+    if calendar_name in ("Crypto", "FX"):
         return True
+    name = _resolve_calendar(calendar_name)
     try:
-        cal = mcal.get_calendar(calendar_name)
+        cal = mcal.get_calendar(name)
         schedule = cal.schedule(
             start_date=check_date.isoformat(),
             end_date=check_date.isoformat(),
@@ -84,7 +97,82 @@ def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
         return True
 
 
-def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
+def _get_calendar_session(
+    calendar_name: str, check_date: date
+) -> tuple[datetime, datetime] | None:
+    """Return (open_utc, close_utc) for the exchange on check_date, or None if closed.
+
+    Crypto and FX are treated as open 24 h — returns None (callers handle the
+    special case by treating None as 'always eligible').
+    """
+    if calendar_name in ("Crypto", "FX"):
+        return None  # always open; caller treats None as unconditionally eligible
+    name = _resolve_calendar(calendar_name)
+    try:
+        cal = mcal.get_calendar(name)
+        schedule = cal.schedule(
+            start_date=check_date.isoformat(),
+            end_date=check_date.isoformat(),
+        )
+        if schedule.empty:
+            return None
+        row = schedule.iloc[0]
+        open_dt  = row["market_open"].to_pydatetime()
+        close_dt = row["market_close"].to_pydatetime()
+        # Ensure UTC-aware
+        if open_dt.tzinfo is None:
+            open_dt  = open_dt.replace(tzinfo=timezone.utc)
+        if close_dt.tzinfo is None:
+            close_dt = close_dt.replace(tzinfo=timezone.utc)
+        return open_dt, close_dt
+    except Exception as exc:
+        logger.warning("Session lookup failed for %s on %s: %s", calendar_name, check_date, exc)
+        return None
+
+
+def _is_exchange_in_session(calendar_name: str, now_utc: datetime) -> bool:
+    """Return True if *now_utc* falls within the exchange's active trading session.
+
+    Crypto and FX markets are always considered in-session on weekdays.
+    Fails open (returns True) on lookup errors.
+    """
+    if calendar_name in ("Crypto", "FX"):
+        return True
+    session = _get_calendar_session(calendar_name, now_utc.date())
+    if session is None:
+        return False  # market closed today
+    open_dt, close_dt = session
+    return open_dt <= now_utc <= close_dt
+
+
+def _exchanges_closed_before(
+    exchanges: set[str], cutoff_utc: datetime
+) -> set[str]:
+    """Return exchanges whose session ENDED today before *cutoff_utc*.
+
+    Used by the pre-market (07:00 UTC) run to identify which exchanges just
+    closed and therefore have fresh end-of-day data ready to pull.
+    Crypto and FX are excluded (they never 'close').
+    """
+    closed: set[str] = set()
+    check_date = cutoff_utc.date()
+    for exch in exchanges:
+        if exch in ("Crypto", "FX"):
+            continue
+        session = _get_calendar_session(exch, check_date)
+        if session is None:
+            continue  # market was closed all day — nothing to pull
+        _, close_dt = session
+        if close_dt < cutoff_utc:
+            closed.add(exch)
+    return closed
+
+
+def _process_virtual_trades(
+    config: dict,
+    run_type: str = RUN_FULL,
+    eligible_exchanges: set[str] | None = None,
+) -> None:
     """Auto-open/close virtual positions based on current signals.
 
     Called at the end of every analysis pipeline run.  Has no effect unless
@@ -92,20 +180,16 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
 
     Close conditions (checked on every run):
       - Current price has crossed the stored stop_loss_price, or
-      - Signal has reversed direction (LONG when signal is SELL/STRONG_SELL, or vice-versa).
+      - Signal has reversed direction.
 
-    Open conditions (EOD run only, exchange must have a session today):
-      - run_type == RUN_FULL (EOD job — price data was freshly pulled this run),
-      - The ticker's exchange had a trading session today,
+    Open conditions:
+      - Either run_type == RUN_FULL (EOD job with fresh data for all exchanges),
+        OR eligible_exchanges is explicitly provided (pre-market partial pull),
+      - The ticker's exchange is in eligible_exchanges (or tradeable_open_today
+        when eligible_exchanges is None and run_type == RUN_FULL),
       - Signal is STRONG_BUY or STRONG_SELL (or BUY/SELL if entry_signal: "BUY"),
-      - Ticker is tradeable,
-      - No existing open virtual position for that ticker,
+      - Ticker is tradeable with no existing virtual position,
       - Total open virtual positions < max_open_positions.
-
-    Restricting opens to the EOD full run ensures entry prices reflect the
-    session's closing price and that the relevant market actually traded today.
-    The 07:00 and 13:30 analysis-only runs use stale price data and should
-    never open new positions.
     """
     vt = config.get("virtual_trading", {})
     if not vt.get("enabled", False):
@@ -131,19 +215,36 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
     if not tradeable:
         return
 
-    # Pre-compute which tradeable tickers had an exchange session today.
-    # Used to gate new position openings (EOD run only).
-    today_utc = datetime.now(timezone.utc).date()
     ticker_exchange = _build_ticker_exchange_map(config)
-    exchange_open_today: dict[str, bool] = {}
-    for ticker in tradeable:
-        exch = ticker_exchange.get(ticker, "NYSE")
-        if exch not in exchange_open_today:
-            exchange_open_today[exch] = _is_exchange_open(exch, today_utc)
-    tradeable_open_today: set[str] = {
-        t for t in tradeable
-        if exchange_open_today.get(ticker_exchange.get(t, "NYSE"), True)
-    }
+    today_utc = datetime.now(timezone.utc).date()
+
+    # Determine which tickers are eligible to have new virtual positions opened.
+    # Priority: explicit eligible_exchanges > run_type check > skip
+    if eligible_exchanges is not None:
+        # Pre-market or partial run: only open for the specified exchanges
+        can_open: set[str] = {
+            t for t in tradeable
+            if ticker_exchange.get(t, "NYSE") in eligible_exchanges
+            or ticker_exchange.get(t, "NYSE") in ("Crypto", "FX")
+        }
+    elif run_type == RUN_FULL:
+        # EOD run: open for all tradeable tickers whose exchange had a session today
+        exchange_open_today: dict[str, bool] = {}
+        for ticker in tradeable:
+            exch = ticker_exchange.get(ticker, "NYSE")
+            if exch not in exchange_open_today:
+                exchange_open_today[exch] = _is_exchange_open(exch, today_utc)
+        can_open = {
+            t for t in tradeable
+            if exchange_open_today.get(ticker_exchange.get(t, "NYSE"), True)
+        }
+    else:
+        # Analysis-only run with no explicit eligible exchanges: skip opens
+        logger.info(
+            "Virtual trading: skipping open phase on analysis-only run "
+            "(run_type=%s) — new positions require fresh price data.", run_type,
+        )
+        can_open = set()
 
     eng = get_engine()
     now = datetime.utcnow()
@@ -180,14 +281,14 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
             ) latest ON i.ticker = latest.ticker AND i.date = latest.md
         """)).mappings().all()
 
-    open_trades   = [dict(r) for r in open_rows]
+    open_trades    = [dict(r) for r in open_rows]
     open_by_ticker = {t["ticker"]: t for t in open_trades}
-    signals       = {r["ticker"]: dict(r) for r in sig_rows if r["ticker"] in tradeable}
-    prices        = {r["ticker"]: float(r["close"]) for r in price_rows if r["close"] is not None}
-    atrs          = {r["ticker"]: float(r["atr"]) for r in atr_rows if r["atr"] is not None}
+    signals        = {r["ticker"]: dict(r) for r in sig_rows if r["ticker"] in tradeable}
+    prices         = {r["ticker"]: float(r["close"]) for r in price_rows if r["close"] is not None}
+    atrs           = {r["ticker"]: float(r["atr"])   for r in atr_rows   if r["atr"]   is not None}
 
-    # ── Close phase ───────────────────────────────────────────────────────────
-    to_close: list[tuple[int, float, str]] = []  # (trade_id, exit_price, reason)
+    # ── Close phase (runs on every call regardless of run_type / eligible_exchanges) ──
+    to_close: list[tuple] = []
     for ticker, trade in list(open_by_ticker.items()):
         live_price = prices.get(ticker)
         if live_price is None:
@@ -198,18 +299,14 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
         sl_price    = trade.get("stop_loss_price")
         trade_id    = trade["id"]
 
-        # Fall back to ATR-based stop if none stored
         if sl_price is None and entry_price and ticker in atrs:
-            if direction == "LONG":
-                sl_price = entry_price - atr_mult * atrs[ticker]
-            else:
-                sl_price = entry_price + atr_mult * atrs[ticker]
+            sl_price = (entry_price - atr_mult * atrs[ticker] if direction == "LONG"
+                        else entry_price + atr_mult * atrs[ticker])
 
         stop_hit = (
             (direction == "LONG"  and sl_price is not None and live_price <= sl_price) or
             (direction == "SHORT" and sl_price is not None and live_price >= sl_price)
         )
-
         sig_now = signals.get(ticker, {}).get("signal", "NEUTRAL")
         signal_reversal = (
             (direction == "LONG"  and sig_now in ("SELL", "STRONG_SELL")) or
@@ -259,15 +356,7 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
     # ── Open phase ────────────────────────────────────────────────────────────
     open_count = len(open_by_ticker)
 
-    # New positions are only opened in the EOD full run (fresh price data) and
-    # only for tickers whose exchange had a session today.  The 07:00 and 13:30
-    # analysis-only runs use stale price data from a closed market — entering
-    # there would not be achievable at the recorded price in the real world.
-    if run_type != RUN_FULL:
-        logger.info(
-            "Virtual trading: skipping open phase on analysis-only run "
-            "(run_type=%s) — new positions require the EOD run.", run_type,
-        )
+    if not can_open:
         logger.info(
             "Virtual trading: closed %d, opened 0, total open %d/%d.",
             len(to_close), open_count, max_positions,
@@ -290,9 +379,8 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
             break
         if ticker in open_by_ticker:
             continue
-        # Only enter if this ticker's exchange was open today
-        if ticker not in tradeable_open_today:
-            logger.debug("Virtual trading: skipping %s — exchange closed today.", ticker)
+        if ticker not in can_open:
+            logger.debug("Virtual trading: skipping %s — exchange not in eligible set.", ticker)
             continue
         sig_type = sig.get("signal", "NEUTRAL")
         if sig_type not in entry_signal_set:
@@ -301,9 +389,9 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
         if not live_price:
             continue
 
-        direction  = "LONG" if sig_type in ("STRONG_BUY", "BUY") else "SHORT"
-        atr        = atrs.get(ticker)
-        sl_price   = None
+        direction = "LONG" if sig_type in ("STRONG_BUY", "BUY") else "SHORT"
+        atr       = atrs.get(ticker)
+        sl_price  = None
         if atr:
             sl_price = (live_price - atr_mult * atr if direction == "LONG"
                         else live_price + atr_mult * atr)
@@ -355,16 +443,17 @@ def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
     )
 
 
-def _run_analysis_pipeline(config: dict, all_tickers: list[str], run_type: str) -> None:
+def _run_analysis_pipeline(
+    config: dict,
+    all_tickers: list[str],
+    run_type: str,
+    eligible_exchanges: set[str] | None = None,
+) -> None:
     """Execute the full analysis pipeline and stamp metadata.
 
-    Runs for all watchlist tickers regardless of which exchanges are open —
-    stored price data is always analysed, even if no new rows were fetched.
-
-    Steps:
-      1. run_analysis()       → indicators + correlations tables
-      2. generate_signals()   → signals table; also stamps last_analysis_run
-      3. set last_run_type
+    eligible_exchanges: when provided, only those exchanges are eligible for
+    virtual trade openings (used by the pre-market run for Asian markets).
+    When None the standard run_type logic applies inside _process_virtual_trades.
     """
     try:
         run_analysis(tickers=all_tickers, config=config)
@@ -376,14 +465,13 @@ def _run_analysis_pipeline(config: dict, all_tickers: list[str], run_type: str) 
     except Exception as exc:
         logger.error("generate_signals failed: %s", exc, exc_info=True)
 
-    # generate_signals() already stamps last_analysis_run; record run type separately.
     try:
         set_metadata("last_run_type", run_type)
     except Exception as exc:
         logger.warning("Could not stamp last_run_type: %s", exc)
 
     try:
-        _process_virtual_trades(config, run_type)
+        _process_virtual_trades(config, run_type, eligible_exchanges)
     except Exception as exc:
         logger.error("Virtual trading automation failed: %s", exc, exc_info=True)
 
@@ -391,14 +479,59 @@ def _run_analysis_pipeline(config: dict, all_tickers: list[str], run_type: str) 
 
 
 def _pre_market_job() -> None:
-    """07:00 UTC — analysis only using most recently stored price data."""
+    """07:00 UTC — pull fresh data for exchanges that just closed, then run analysis.
+
+    Asian markets (JPX/Tokyo ~06:30, HKEX ~08:00) close before this run fires.
+    For any exchange whose session ended before 07:30 UTC today, we pull
+    incremental price data and allow virtual trade openings for those tickers.
+    The 13:30 and 21:30 runs handle European and US markets respectively.
+    """
     logger.info("Scheduled pre-market analysis starting (07:00 UTC)…")
     config = _load_config()
-    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
+    ticker_exchange = _build_ticker_exchange_map(config)
+
+    now_utc = datetime.now(timezone.utc)
+    # Allow a 30-min grace window — catches exchanges that close at/around run time
+    cutoff_utc = now_utc
+
+    unique_exchanges = set(ticker_exchange.values())
+    recently_closed = _exchanges_closed_before(unique_exchanges, cutoff_utc)
+
+    if recently_closed:
+        closed_tickers = [t for t, e in ticker_exchange.items() if e in recently_closed]
+        logger.info(
+            "Pre-market: exchanges closed before %s UTC — %s (%d tickers). Pulling fresh data.",
+            now_utc.strftime("%H:%M"), recently_closed, len(closed_tickers),
+        )
+        try:
+            results = pull_incremental(tickers=closed_tickers)
+            logger.info(
+                "Pre-market data pull complete — %d new rows.", sum(results.values())
+            )
+        except Exception as exc:
+            logger.error("Pre-market incremental pull failed: %s", exc, exc_info=True)
+            recently_closed = set()  # don't open virtual trades if pull failed
+
+    if recently_closed:
+        logger.info(
+            "Pre-market: opening virtual trades for recently-closed exchanges: %s",
+            recently_closed,
+        )
+
+    _run_analysis_pipeline(
+        config,
+        get_all_tickers(config),
+        run_type=RUN_ANALYSIS_ONLY,
+        eligible_exchanges=recently_closed if recently_closed else None,
+    )
 
 
 def _us_open_job() -> None:
-    """13:30 UTC — analysis only using most recently stored price data."""
+    """13:30 UTC — analysis only using most recently stored price data.
+
+    European markets are mid-session; US is about to open.  No data pull and
+    no virtual trade openings — both require a complete session close.
+    """
     logger.info("Scheduled US-open analysis starting (13:30 UTC)…")
     config = _load_config()
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
@@ -410,15 +543,10 @@ def _eod_job() -> None:
     config = _load_config()
     ticker_exchange = _build_ticker_exchange_map(config)
 
-    # International index tickers are always pulled regardless of their local
-    # exchange calendar.  yfinance handles data availability internally, so these
-    # are never silently skipped on local bank holidays.
     _ALWAYS_PULL: frozenset[str] = frozenset({
         "^FTSE", "^GDAXI", "^HSI", "^N225", "^STOXX50E",
     })
 
-    # Determine which exchanges have sessions today (UTC date avoids timezone drift
-    # at the midnight boundary; 21:30 UTC is safely within the same calendar day).
     today_utc: date = datetime.now(timezone.utc).date()
     unique_exchanges = set(ticker_exchange.values())
     open_exchanges: dict[str, bool] = {
@@ -437,7 +565,6 @@ def _eod_job() -> None:
 
     if not open_tickers:
         logger.info("All markets closed today (%s) — skipping data pull.", today_utc)
-        # Still run analysis so scores stay current from yesterday's data.
         _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
         return
 
@@ -449,40 +576,40 @@ def _eod_job() -> None:
     total_rows = sum(results.values())
     logger.info("Data pull complete — %d new rows across %d assets.", total_rows, len(open_tickers))
 
-    # Stamp last_full_refresh immediately after a successful data pull.
     try:
         set_metadata("last_full_refresh", datetime.utcnow().isoformat())
     except Exception as exc:
         logger.warning("Could not stamp last_full_refresh: %s", exc)
 
-    # Fetch FRED macro indicators once per EOD run (not per-ticker).
-    # Must run before analysis so compute_macro() reads fresh scores from DB.
     try:
         logger.info("Fetching FRED macro indicators…")
         fetch_and_store_macro_indicators(config)
     except Exception as exc:
         logger.error("FRED macro indicator fetch failed: %s", exc, exc_info=True)
 
-    # Analyse all tickers (including those whose exchange was closed — their
-    # stored history is still valid and their scores should remain up to date).
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
 
 
 def _trade_alert_job() -> None:
-    """Hourly (14:00–21:00 UTC, weekdays) — check open trade health and send alerts.
+    """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — check open trade health and send alerts.
 
-    Fetches a live price for every open trade, enriches it with current signal
-    and stop-loss status, then emails an alert when any trade reaches STOP LOSS
-    or EXIT SIGNAL.  Deduplicates per trade: the same status for the same trade
-    only triggers one email until the status changes.
+    Fetches a live price for every open trade whose home exchange is currently
+    in session, enriches it with current signal and stop-loss status, then emails
+    an alert when any trade reaches STOP LOSS or EXIT SIGNAL.  Deduplicates per
+    trade: the same status for the same trade only triggers one email until the
+    status changes.
 
-    The global alert_cooldown_hours setting in config.yaml still applies — if an
-    alert was sent very recently it is deferred until the cooldown elapses.
+    Per-exchange session filtering ensures that:
+      - UK/EU trades are only checked during LSE/XETR hours (08:00–16:30 UTC)
+      - Asian trades are checked during JPX/HKEX hours (00:00–08:00 UTC)
+      - US trades are checked during NYSE hours (14:30–21:00 UTC)
+      - Crypto/FX trades are always checked
+
+    The global alert_cooldown_hours setting in config.yaml still applies.
     """
     logger.info("Trade alert check starting…")
     config = _load_config()
 
-    # Lazy imports to avoid circular dependencies at module load time.
     from output.performance import get_latest_price, get_open_trades  # noqa: PLC0415
     from output.briefing import (  # noqa: PLC0415
         enrich_open_trade,
@@ -495,12 +622,26 @@ def _trade_alert_job() -> None:
         logger.info("Trade alert check: no open trades.")
         return
 
+    now_utc = datetime.now(timezone.utc)
+    ticker_exchange = _build_ticker_exchange_map(config)
+
     _ALERT_STATUSES: frozenset[str] = frozenset({"STOP LOSS", "EXIT SIGNAL"})
     pending: list[dict] = []
+    skipped_closed_exchange = 0
 
     for trade in trades:
         ticker   = trade.get("ticker", "")
         trade_id = trade.get("id")
+
+        # Only alert on trades where the asset's home exchange is currently in session.
+        exchange = ticker_exchange.get(ticker, "NYSE")
+        if not _is_exchange_in_session(exchange, now_utc):
+            skipped_closed_exchange += 1
+            logger.debug(
+                "Trade alert: skipping %s — %s not in session at %s UTC.",
+                ticker, exchange, now_utc.strftime("%H:%M"),
+            )
+            continue
 
         try:
             live_price = get_latest_price(ticker)
@@ -518,7 +659,6 @@ def _trade_alert_job() -> None:
         if status not in _ALERT_STATUSES:
             continue
 
-        # Only alert when the status is new (differs from what we last alerted for).
         meta_key = f"trade_alert_status:{trade_id}"
         if get_metadata_str(meta_key) == status:
             logger.info(
@@ -528,6 +668,12 @@ def _trade_alert_job() -> None:
             continue
 
         pending.append(enriched)
+
+    if skipped_closed_exchange:
+        logger.info(
+            "Trade alert check: %d trade(s) skipped — exchange not in session.",
+            skipped_closed_exchange,
+        )
 
     if not pending:
         logger.info(
@@ -571,7 +717,7 @@ def start_scheduler() -> BackgroundScheduler:
     if _scheduler is not None and _scheduler.running:
         return _scheduler
 
-    config   = _load_config()
+    config    = _load_config()
     sched_cfg = config["scheduler"]
     tz        = sched_cfg["timezone"]
 
@@ -604,13 +750,15 @@ def start_scheduler() -> BackgroundScheduler:
             run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz,
         )
 
-    # Hourly trade alert check during US market hours (14:00–21:00 UTC, weekdays).
-    # Fires on the hour; 14:00 catches the open (US market opens 14:30 UTC) and
-    # 21:00 catches the close (US market closes 21:00 UTC).
+    # Hourly trade alert check across all major market sessions (weekdays only).
+    # Hour range covers: Asian (00-08 UTC), European (08-17 UTC), US (14-21 UTC),
+    # plus 23:00 UTC for Sydney/Auckland pre-market.
+    # The job itself filters per-trade by exchange session, so only relevant alerts
+    # fire at each hour — no spurious alerts outside market hours.
     _scheduler.add_job(
         _trade_alert_job,
         trigger=CronTrigger(
-            hour="14-21",
+            hour="0-21,23",
             minute=0,
             day_of_week="mon-fri",
             timezone=tz,
@@ -618,9 +766,11 @@ def start_scheduler() -> BackgroundScheduler:
         id="trade_alert_check",
         replace_existing=True,
     )
-    logger.info("Scheduled trade alert check hourly 14:00–21:00 %s on weekdays.", tz)
+    logger.info(
+        "Scheduled trade alert check hourly 00:00–21:00 + 23:00 %s on weekdays "
+        "(filtered per-trade by home exchange session).", tz,
+    )
 
-    # Weekly summary email — every Sunday at 10:00 UTC.
     _scheduler.add_job(
         _weekly_summary_job,
         trigger=CronTrigger(

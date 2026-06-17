@@ -19,10 +19,10 @@ After the first run, analysis and signals are automated. On every Streamlit star
 
 | Schedule | Type | What it does |
 |---|---|---|
-| **Mon–Fri 07:00** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` (Asian closed, European opening) |
-| **Mon–Fri 13:30** | Analysis only | Same — before US open |
-| **Mon–Fri 21:30** | Full refresh | `pull_incremental()` for open exchanges, FRED macro fetch, then full analysis pipeline |
-| **Mon–Fri 14:00–21:00 (hourly)** | Trade alerts | Fetches live prices for all open trades; emails alert on STOP LOSS / EXIT SIGNAL with per-trade deduplication |
+| **Mon–Fri 07:00** | Asian EOD | `pull_incremental()` for exchanges closed before 07:00 UTC (e.g. JPX/Tokyo ~06:30), then full analysis pipeline; opens virtual trades for those tickers only |
+| **Mon–Fri 13:30** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` — no data pull, no virtual trade opens (EU mid-session, US about to open) |
+| **Mon–Fri 21:30** | Full refresh | `pull_incremental()` for all open exchanges, FRED macro fetch, then full analysis pipeline; opens virtual trades for all eligible tickers |
+| **Mon–Fri 00:00–21:00 + 23:00 (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS / EXIT SIGNAL — filtered per-trade by home exchange session (only alerts when the asset's market is open) |
 | **Sunday 10:00** | Weekly summary | Sends the weekly performance summary email (regime, signals, open trades, P&L, accuracy, macro, diverging pairs) |
 
 All three analysis runs execute `run_analysis()` → `generate_signals()` → `compute_all_pairs()` → `_process_virtual_trades()` and stamp `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
@@ -180,13 +180,13 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 **`data/scheduler.py`** registers five APScheduler jobs. All three analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → `_process_virtual_trades()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check) and stamps `last_full_refresh`. Each step is in its own `try/except` so one failure never blocks the rest.
 
-`_trade_alert_job()` runs hourly 14:00–21:00 UTC on weekdays. It fetches live prices for every open non-virtual trade, calls `enrich_open_trade()` to get the current health status, and emails an alert when a trade reaches STOP LOSS or EXIT SIGNAL. Deduplication: the last-alerted status per trade is stored in `system_metadata` under `trade_alert_status:{trade_id}` — the same status only triggers one email until it changes. The global `alert_cooldown_hours` setting prevents email storms.
+`_trade_alert_job()` runs hourly 00:00–21:00 + 23:00 UTC on weekdays (covering all major market sessions). For each open trade it first checks whether the trade's home exchange is currently in session via `_is_exchange_in_session(exchange, now_utc)` — trades on closed exchanges are skipped so alerts only fire when the market is actually open. For in-session trades it fetches a live price, calls `enrich_open_trade()` to get the current health status, and emails an alert when a trade reaches STOP LOSS or EXIT SIGNAL. Deduplication: the last-alerted status per trade is stored in `system_metadata` under `trade_alert_status:{trade_id}` — the same status only triggers one email until it changes. The global `alert_cooldown_hours` setting prevents email storms.
 
 `_weekly_summary_job()` runs every Sunday at 10:00 UTC. It calls `output/briefing.py:send_weekly_summary_email(config)` which gathers all data from the DB (no external API calls) and sends an HTML email with plain-text fallback covering regime/overlays, signal snapshot, 7-day signal performance, open trades, closed trades P&L, accuracy progress, macro pulse, diverging pairs, and virtual portfolio status. Can be triggered on demand via the "Send Weekly Summary Now" button on the Status page. Controlled independently via `notifications.weekly_summary.enabled`.
 
-`_process_virtual_trades(config)` is called at the end of every `_run_analysis_pipeline()` call. It reads open virtual positions and latest signals from the DB, then:
-- **Close phase**: closes any virtual position where the current price has crossed the stored stop_loss_price, or the signal has reversed direction.
-- **Open phase**: opens new virtual positions for STRONG_BUY/STRONG_SELL signals on tradeable tickers, subject to `max_open_positions`. All virtual trades use `account_type = 'VIRTUAL'` in the existing `trades` table — no separate table.
+`_process_virtual_trades(config, run_type, eligible_exchanges=None)` is called at the end of every `_run_analysis_pipeline()` call. It reads open virtual positions and latest signals from the DB, then:
+- **Close phase**: closes any virtual position where the current price has crossed the stored stop_loss_price, or the signal has reversed direction. Runs on every call regardless of run_type.
+- **Open phase**: opens new virtual positions for STRONG_BUY/STRONG_SELL signals on tradeable tickers, subject to `max_open_positions`. New position eligibility: when `eligible_exchanges` is provided (pre-market Asian run), only tickers in those exchanges can open; when `None` and `run_type == RUN_FULL` (EOD run), all tickers on exchanges that had a session today are eligible; otherwise (analysis-only runs) no new positions are opened. All virtual trades use `account_type = 'VIRTUAL'` in the existing `trades` table — no separate table.
 
 ### Trade lifecycle
 

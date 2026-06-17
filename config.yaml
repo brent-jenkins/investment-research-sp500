@@ -145,7 +145,7 @@ watchlist:
   international:
     - ticker: "^N225"
       name: "Nikkei 225"
-      exchange: "TSE"
+      exchange: "JPX"
       tradeable: false
     - ticker: "^STOXX50E"
       name: "Euro Stoxx 50"
@@ -250,7 +250,7 @@ watchlist:
       tradeable: true
     - ticker: "EWJ"
       name: "iShares MSCI Japan ETF"
-      exchange: "TSE"
+      exchange: "NYSE"
       tradeable: true
     - ticker: "EWG"
       name: "iShares MSCI Germany ETF"
