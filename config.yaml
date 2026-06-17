@@ -464,7 +464,7 @@ notifications:
 
 backtest:
   # Exit conditions for trade simulation
-  max_holding_days: 60           # close position after this many days regardless of signal
+  max_holding_days: 30           # close position after this many days regardless of signal
   atr_stop_multiplier: 2.0       # stop loss = entry ± N × ATR (matches live system)
 
   # Walk-forward validation window settings

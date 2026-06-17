@@ -641,8 +641,9 @@ def _trade_alert_job() -> None:
         logger.info("Trade alert check: no open trades.")
         return
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc        = datetime.now(timezone.utc)
     ticker_exchange = _build_ticker_exchange_map(config)
+    _max_hold_days = int(config.get("backtest", {}).get("max_holding_days", 30))
 
     _ALERT_STATUSES: frozenset[str] = frozenset({"STOP LOSS", "EXIT SIGNAL"})
     pending: list[dict] = []
@@ -669,7 +670,7 @@ def _trade_alert_job() -> None:
             live_price = None
 
         try:
-            enriched = enrich_open_trade(trade, live_price)
+            enriched = enrich_open_trade(trade, live_price, _max_hold_days)
         except Exception as exc:
             logger.warning("enrich_open_trade failed for %s: %s", ticker, exc)
             continue

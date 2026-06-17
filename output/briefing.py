@@ -304,7 +304,11 @@ def compute_trade_status(
     return "ON TRACK"
 
 
-def enrich_open_trade(trade: dict, live_price: Optional[float]) -> dict:
+def enrich_open_trade(
+    trade: dict,
+    live_price: Optional[float],
+    max_holding_days: int = 30,
+) -> dict:
     """Augment an open trade dict with current signal, stop loss, P&L, and status."""
     import math
 
@@ -319,14 +323,16 @@ def enrich_open_trade(trade: dict, live_price: Optional[float]) -> dict:
     if live_price is not None and math.isnan(live_price):
         live_price = None
 
-    # Days held
+    # Days held / remaining
     entry_dt = trade.get("entry_date")
     if isinstance(entry_dt, str):
         try:
             entry_dt = datetime.fromisoformat(entry_dt)
         except Exception:
             entry_dt = None
-    days_held = max(0, (datetime.utcnow() - entry_dt).days) if entry_dt else 0
+    days_held      = max(0, (datetime.utcnow() - entry_dt).days) if entry_dt else 0
+    days_remaining = max(0, max_holding_days - days_held)
+    near_max_hold  = 0 < days_remaining <= 7
 
     # Current signal from signals table
     try:
@@ -387,6 +393,9 @@ def enrich_open_trade(trade: dict, live_price: Optional[float]) -> dict:
         "unreal_pnl":         unreal_pnl,
         "unreal_pct":         unreal_pct,
         "days_held":          days_held,
+        "days_remaining":     days_remaining,
+        "near_max_hold":      near_max_hold,
+        "max_holding_days":   max_holding_days,
         "status":             status,
         "status_priority":    _STATUS_PRIORITY.get(status, 0),
     }
@@ -454,6 +463,19 @@ def _build_alert_html(alerts: list[dict]) -> str:
         pc      = _pnl_color(up or 0)
         delta   = c_sc - e_sc
 
+        days_held_a    = int(a.get("days_held") or 0)
+        days_rem_a     = a.get("days_remaining")
+        max_hold_a     = int(a.get("max_holding_days") or 30)
+        near_max_a     = bool(a.get("near_max_hold"))
+        hold_color_a   = "#f59e0b" if near_max_a else "#1e293b"
+        hold_note_a    = f" &nbsp;({days_rem_a}d remaining)" if days_rem_a is not None else ""
+        hold_row = (
+            f'<tr><td style="color:#64748b;font-size:13px;padding:3px 6px">Held</td>'
+            f'<td colspan="3" style="font-size:13px;font-weight:{"700" if near_max_a else "600"};'
+            f'color:{hold_color_a};padding:3px 6px">'
+            f'{days_held_a} / {max_hold_a} days{hold_note_a}</td></tr>'
+        )
+
         sl_row = ""
         if sl is not None:
             atr_note = f" (entry &plusmn; 2&times;ATR {atr:.4f})" if atr else ""
@@ -497,6 +519,7 @@ def _build_alert_html(alerts: list[dict]) -> str:
             f'Score: {e_sc:+.3f} &rarr; {c_sc:+.3f} &nbsp;(&Delta; {delta:+.3f})'
             f'</span></td>'
             f'</tr>'
+            f'{hold_row}'
             f'{sl_row}'
             f'</table></td></tr></table>'
         )
@@ -1325,7 +1348,8 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
     )
 
     # ── Open Trades ───────────────────────────────────────────────────
-    open_trades = data["open_trades"]
+    open_trades   = data["open_trades"]
+    _max_hold_wk  = int(config.get("backtest", {}).get("max_holding_days", 30))
     if open_trades:
         tr_rows = []
         for t in open_trades:
@@ -1341,6 +1365,16 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
                 entry_str = entry_dt.strftime("%d %b") if entry_dt else "?"
             except Exception:
                 hold_days, entry_str = 0, "?"
+            days_rem  = max(0, _max_hold_wk - hold_days)
+            near_max  = 0 < days_rem <= 7
+            hold_col  = "#f59e0b" if near_max else "#64748b"
+            hold_cell = (
+                f'<span style="color:{hold_col};font-weight:{"700" if near_max else "400"}">'
+                f'{hold_days}d</span>'
+                f'<span style="color:#94a3b8;font-size:11px"> / {_max_hold_wk}d</span>'
+                + (f' <span style="color:#f59e0b;font-size:11px">({days_rem}d left)</span>'
+                   if near_max else "")
+            )
             curr_p = curr_prices.get(ticker)
             if curr_p and ep:
                 ret = (curr_p - ep) / ep * 100 if direction == "LONG" else (ep - curr_p) / ep * 100
@@ -1354,11 +1388,14 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
             tr_rows.append([
                 _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569"),
                 f"<strong>{ticker}</strong>{acct_note}",
-                f"{entry_str} ({hold_days}d)",
+                f"{entry_str}",
+                hold_cell,
                 _sig_badge_h(sig_type) if sig_type in _SIG_STYLES_H else sig_type,
                 pnl_cell,
             ])
-        open_html = _table_h(["Dir", "Ticker", "Entry", "Signal at entry", "Price &Delta;"], tr_rows)
+        open_html = _table_h(
+            ["Dir", "Ticker", "Entry", "Hold", "Signal at entry", "Price &Delta;"], tr_rows
+        )
         open_html += (
             '<p style="margin:8px 0 0;font-size:12px;color:#94a3b8">'
             'Price change only — excludes FX conversion and leverage.</p>'

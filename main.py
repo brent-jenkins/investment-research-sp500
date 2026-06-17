@@ -3541,10 +3541,12 @@ def _render_trade_card(e: dict) -> None:
     icon    = _BRIEF_STATUS_ICONS.get(status, "")
     bg      = _hex_rgba(colour, 0.08)
 
-    ticker    = html.escape(str(e.get("ticker",    "")))
-    direction = html.escape(str(e.get("direction", "LONG")))
-    days_held = int(e.get("days_held") or 0)
-    acct_name = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
+    ticker         = html.escape(str(e.get("ticker",    "")))
+    direction      = html.escape(str(e.get("direction", "LONG")))
+    days_held      = int(e.get("days_held") or 0)
+    days_remaining = int(e.get("days_remaining") or 0)
+    near_max_hold  = bool(e.get("near_max_hold"))
+    acct_name      = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
 
     # ── P&L — GBP only, no raw secondary ─────────────────────────────────────
     unreal_pnl_gbp    = e.get("unreal_pnl_gbp")
@@ -3612,6 +3614,10 @@ def _render_trade_card(e: dict) -> None:
         detail_parts.append(html.escape(f"TP: {tp_price:,.4f}"))
     if live_rr is not None:
         detail_parts.append(html.escape(f"R:R: {live_rr:+.2f}"))
+    if near_max_hold:
+        detail_parts.append(
+            f"<span style='color:#f59e0b;font-weight:700'>⏱ {days_remaining}d left</span>"
+        )
 
     st.markdown(
         f"<div style='border-left:4px solid {colour};padding:10px 16px;"
@@ -4131,7 +4137,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         tickers_needed = list({t["ticker"] for t in open_trades})
         live_prices    = {t: _cached_latest_price(t) for t in tickers_needed}
 
-        enriched = [enrich_open_trade(t, live_prices.get(t["ticker"])) for t in open_trades]
+        _max_hold_days = int(config.get("backtest", {}).get("max_holding_days", 30))
+        enriched = [enrich_open_trade(t, live_prices.get(t["ticker"]), _max_hold_days) for t in open_trades]
         enriched.sort(key=lambda x: x.get("status_priority", 0), reverse=True)
 
         # Compute GBP P&L for each card (primary display currency)
