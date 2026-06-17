@@ -121,20 +121,25 @@ def _upsert_price_rows(df: pd.DataFrame, ticker: str) -> int:
     if not rows:
         return 0
 
-    stmt = sqlite_insert(PriceData).values(rows)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["ticker", "date"],
-        set_={
-            "open": stmt.excluded.open,
-            "high": stmt.excluded.high,
-            "low": stmt.excluded.low,
-            "close": stmt.excluded.close,
-            "adj_close": stmt.excluded.adj_close,
-            "volume": stmt.excluded.volume,
-        },
-    )
+    # SQLite limits SQL variables to 999 per statement; each row has 8 columns,
+    # so cap each batch at 100 rows (800 variables) to stay safely under the limit.
+    _BATCH = 100
     with engine.begin() as conn:
-        conn.execute(stmt)
+        for i in range(0, len(rows), _BATCH):
+            chunk = rows[i : i + _BATCH]
+            stmt = sqlite_insert(PriceData).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["ticker", "date"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "adj_close": stmt.excluded.adj_close,
+                    "volume": stmt.excluded.volume,
+                },
+            )
+            conn.execute(stmt)
 
     return len(rows)
 
