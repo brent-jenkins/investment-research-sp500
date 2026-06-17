@@ -73,7 +73,8 @@ watchlist:
     - ticker: "BNO"
       name: "United States Brent Oil Fund"
       exchange: "NYSE"
-      tradeable: false
+      tradeable: true
+      trading212_instrument: "BCOUSD"
     - ticker: "UNG"
       name: "United States Natural Gas Fund"
       exchange: "NYSE"
@@ -206,7 +207,8 @@ watchlist:
     - ticker: "VIXY"
       name: "ProShares VIX Short-Term Futures"
       exchange: "NYSE"
-      tradeable: false
+      tradeable: true
+      trading212_instrument: "VXX"
     - ticker: "^VVIX"
       name: "CBOE VVIX Index"
       exchange: "NYSE"
