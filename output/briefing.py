@@ -555,15 +555,15 @@ def _gather_weekly_data(config: dict) -> dict:
 
         # Diverging correlation pairs
         div_rows = conn.execute(text("""
-            SELECT c.ticker_a, c.ticker_b, c.status_30d, c.z_score_30d,
-                   c.corr_30d, c.expected_direction
+            SELECT c.ticker_a, c.ticker_b, c.divergence, c.z_score,
+                   c.corr_30d, c.pair_score
             FROM correlations c
             INNER JOIN (
                 SELECT ticker_a, ticker_b, MAX(date) AS md
                 FROM correlations GROUP BY ticker_a, ticker_b
             ) l ON c.ticker_a = l.ticker_a AND c.ticker_b = l.ticker_b AND c.date = l.md
-            WHERE c.status_30d = 'DIVERGING'
-            ORDER BY ABS(c.z_score_30d) DESC
+            WHERE c.divergence = 'DIVERGING'
+            ORDER BY ABS(c.z_score) DESC
         """)).mappings().all()
 
         # Active catch-up opportunity flags
@@ -868,8 +868,8 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     if div:
         L.append("  Diverging cross-asset relationships (worth monitoring):")
         for p in div[:6]:
-            z    = float(p.get("z_score_30d") or 0)
-            exp  = "positive" if int(p.get("expected_direction") or 1) == 1 else "inverse"
+            z    = float(p.get("z_score") or 0)
+            exp  = "positive" if int(p.get("pair_score") or 1) == 1 else "inverse"
             L.append(
                 f"    {p['ticker_a']:<10} / {p['ticker_b']:<10}  "
                 f"expected {exp}, currently diverging  (z={z:+.1f})"

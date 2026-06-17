@@ -13,19 +13,26 @@ pip install -r requirements.txt
 python -m streamlit run main.py
 ```
 
-First-run sequence: **Refresh Data** → **Run Analysis** → **Generate Signals**. Refresh pulls up to 10 years of OHLCV history per asset on the first load for each ticker; subsequent runs are incremental (only days since the last stored date). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
+First-run sequence: **Run Analysis** → **Generate Signals**. On the very first run with no data in the database, click Run Analysis on the Signals page; subsequent runs are fully automatic. Refresh pulls up to 10 years of OHLCV history per asset on the first load for each ticker; subsequent runs are incremental (only days since the last stored date). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
 
-After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Three APScheduler jobs fire on weekdays:
+After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Five APScheduler jobs fire automatically:
 
-| Time (UTC) | Type | What it does |
+| Schedule | Type | What it does |
 |---|---|---|
-| **07:00** | Analysis only | Runs full analysis pipeline on stored data (Asian closed, European opening) |
-| **13:30** | Analysis only | Runs full analysis pipeline on stored data (before US open) |
-| **21:30** | Full refresh | Pulls incremental prices for open exchanges, then runs full analysis |
+| **Mon–Fri 07:00** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` (Asian closed, European opening) |
+| **Mon–Fri 13:30** | Analysis only | Same — before US open |
+| **Mon–Fri 21:30** | Full refresh | `pull_incremental()` for open exchanges, FRED macro fetch, then full analysis pipeline |
+| **Mon–Fri 14:00–21:00 (hourly)** | Trade alerts | Fetches live prices for all open trades; emails alert on STOP LOSS / EXIT SIGNAL with per-trade deduplication |
+| **Sunday 10:00** | Weekly summary | Sends the weekly performance summary email (regime, signals, open trades, P&L, accuracy, macro, diverging pairs) |
 
-All three runs execute `run_analysis()` → `generate_signals()` → `compute_all_pairs()` and stamp `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
+All three analysis runs execute `run_analysis()` → `generate_signals()` → `compute_all_pairs()` → `_process_virtual_trades()` and stamp `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
 
 The FRED API key lives in `config.yaml` under `macro.fred_api_key`. Without it, all FRED-sourced scoring returns 0; VIX scoring (sourced from the local `^VIX` price data) still works. FRED series tracked: T10Y2Y, T10Y3M, DFII10 (real yields), T10YIE (breakeven inflation), BAMLH0A0HYM2 (HY OAS), BAMLC0A0CM (IG OAS), M2SL, DPCREDIT (discount window), BOGMBASE, USSLIND (Philly Fed Leading Index), PERMIT (housing permits), DTWEXBGS (trade-weighted dollar). Tickers that are themselves macro instruments (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0 to avoid self-referential scoring.
+
+Key config sections added since initial release:
+- `notifications.weekly_summary.enabled` — controls the Sunday 10:00 UTC weekly summary email independently of `notifications.email.enabled`.
+- `backtest.max_holding_days`, `backtest.atr_stop_multiplier`, `backtest.walk_forward_months`, `backtest.walk_forward_step` — configure the backtesting engine.
+- `virtual_trading.enabled`, `portfolio_size_gbp`, `position_pct`, `max_open_positions`, `entry_signal` — control automated virtual trading. `entry_signal: "STRONG_BUY"` limits entries to STRONG_BUY/STRONG_SELL; `"BUY"` also accepts BUY/SELL.
 
 ## Architecture
 
@@ -60,14 +67,15 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has seven pages toggled via a sidebar radio button (default: **Daily Briefing**):
+The app has eight pages toggled via a sidebar radio button (default: **Daily Briefing**). The sidebar shows Last Refresh and Last Analysis timestamps (no manual Refresh Data button — data is pulled automatically by the scheduler):
 - **Daily Briefing** — compact regime/overlay/catch-up/signal-counts header card; open trade monitor with live GBP P&L, health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS), and ATR-based stop loss; top opportunities filtered to tradeable assets
 - **Signals** — compact header block (overlays + catch-up strips + regime badge + signal distribution pills + timestamp, all in one bordered card); market intelligence plain-English summary; ranked table of all assets by confluence score with module symbols; Generate Signals button
 - **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
-- **Relationships** — 30-day correlation matrix heatmap for all 14 tracked cross-asset tickers, pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), plain-English divergence narratives; "↻ Recompute Now" triggers `compute_all_pairs()` on demand
+- **Relationships** — 30-day correlation matrix heatmap for all 14 tracked cross-asset tickers, pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), plain-English divergence narratives; shows last-computed timestamp (correlations recompute automatically — no manual button)
 - **Trade Log** — log new CFD trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name); open-position tracker with live GBP P&L and per-trade edit expanders; close-trade form; position sizing guidance
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
-- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section; Send Test Email button
+- **Backtest** — 6-tab page: Run & Overview (date range presets, ticker scope, equity curve, metrics, trade table), Period Analysis (COVID Crash / 2022 Bear / 2023–24 Recovery + per-regime breakdown), Module Attribution (win rate when each module agreed vs disagreed with trade direction), Signal Decay (holding period histogram, exit reason distribution, avg hold by regime), Walk-Forward (rolling 6-month windows), Virtual Trading (open/closed virtual positions)
+- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section; Send Test Email button and Send Weekly Summary Now button side by side
 
 ### Configuration
 
@@ -181,7 +189,15 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 `_render_home_page()` powers both the **Status** page and the Charts landing (shown when no asset is selected). It draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
 
-**`data/scheduler.py`** registers three APScheduler jobs on weekdays. All three share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check) and stamps `last_full_refresh` after the data pull succeeds. Each step is in its own `try/except` so one failure never blocks the rest.
+**`data/scheduler.py`** registers five APScheduler jobs. All three analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → `_process_virtual_trades()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check) and stamps `last_full_refresh`. Each step is in its own `try/except` so one failure never blocks the rest.
+
+`_trade_alert_job()` runs hourly 14:00–21:00 UTC on weekdays. It fetches live prices for every open non-virtual trade, calls `enrich_open_trade()` to get the current health status, and emails an alert when a trade reaches STOP LOSS or EXIT SIGNAL. Deduplication: the last-alerted status per trade is stored in `system_metadata` under `trade_alert_status:{trade_id}` — the same status only triggers one email until it changes. The global `alert_cooldown_hours` setting prevents email storms.
+
+`_weekly_summary_job()` runs every Sunday at 10:00 UTC. It calls `output/briefing.py:send_weekly_summary_email(config)` which gathers all data from the DB (no external API calls) and sends a structured plain-text summary. Can be triggered on demand via the "Send Weekly Summary Now" button on the Status page. Controlled independently via `notifications.weekly_summary.enabled`.
+
+`_process_virtual_trades(config)` is called at the end of every `_run_analysis_pipeline()` call. It reads open virtual positions and latest signals from the DB, then:
+- **Close phase**: closes any virtual position where the current price has crossed the stored stop_loss_price, or the signal has reversed direction.
+- **Open phase**: opens new virtual positions for STRONG_BUY/STRONG_SELL signals on tradeable tickers, subject to `max_open_positions`. All virtual trades use `account_type = 'VIRTUAL'` in the existing `trades` table — no separate table.
 
 ### Trade lifecycle
 
@@ -211,6 +227,41 @@ Beyond the tables described above, `data/database.py` defines:
 - **`MacroIndicator`** (`series_id, date` unique) — stores FRED series values with `pct_change_30d` (≈ month-over-month), `z_score_2y` (value vs 2-year rolling mean/std), and a −1/0/+1 `score`. The macro module reads from this table to compute per-ticker macro scores without hitting the FRED API on every analysis run.
 - **`OpportunityFlag`** (`ticker, flag_type, date` unique) — records catch-up opportunities detected when a correlation pair is DIVERGING with z-score ≥ 1.5. Fields include `z_score`, `pair_corr_30d`, `price_at_flag`, and `return_5d`/`return_20d` (populated on later runs). `get_active_opportunity_flags()` returns flags from the most recent analysis date; they are displayed as compact strips in the Signals and Daily Briefing header blocks.
 - **`Performance`** (`ticker, date` unique) — rolling performance metrics: daily return, cumulative return, drawdown, max drawdown, Sharpe, Sortino, Calmar, win rate, avg win/loss, profit factor. Currently written by the analysis pipeline but not yet surfaced in a dedicated UI view beyond the closed-trade Performance page.
+- **`BacktestRun`** (`id` PK) — metadata for each backtest run: name, created_at, start_date, end_date, tickers_json, params_json, status (running/complete/failed), error_message, and summary metrics (total_trades, win_rate, avg_return_pct, sharpe_ratio, max_drawdown_pct, total_return_pct, avg_holding_days).
+- **`BacktestSignal`** (`run_id, ticker, date` unique) — per-ticker per-date signal history generated during a backtest run: regime, confluence_score, signal classification, all five module scores, close_price, atr.
+- **`BacktestTrade`** (`id` PK, FK to `run_id`) — simulated trades from a backtest run: ticker, direction, entry/exit date and price, entry_signal, exit_reason (STOP_LOSS / SIGNAL_REVERSAL / MAX_HOLDING / END_OF_DATA), pnl_pct, regime_at_entry, all five module scores at entry, holding_days, is_win.
+
+The `correlations` table uses column names `divergence` (CONFIRMING/DIVERGING/NEUTRAL), `z_score`, and `pair_score` — not `status_30d`, `z_score_30d`, or `expected_direction`. Always use the ORM model or check `data/database.py:CorrelationData` before writing raw SQL against this table.
+
+### Backtesting engine
+
+`analysis/backtest.py` vectorizes the full signal logic over historical price data. It does **not** call the live analysis modules — instead it re-implements the scoring logic using `rolling()` and `ewm()` which are inherently look-ahead free. Key functions:
+
+- `compute_signal_history(ticker, start_date, end_date, config)` → DataFrame of daily regime/scores/signals for a ticker. The correlation module is excluded; its 0.10 weight is re-normalised across the other five modules per date.
+- `simulate_trades(signal_df, config)` → list of trade dicts. Entry on STRONG_BUY (LONG) or STRONG_SELL (SHORT). Exit priority: stop loss (entry ± `atr_stop_multiplier` × ATR) → signal reversal → `max_holding_days` → end of data.
+- `run_backtest(tickers, start_date, end_date, config, name)` → creates a `BacktestRun` record, iterates tickers, stores signals and trades in bulk, updates run with summary metrics, returns `run_id`.
+- Query helpers: `get_all_runs()`, `get_run(run_id)`, `get_run_trades(run_id)` (returns DataFrame), `get_run_signals(run_id)`, `delete_run(run_id)`.
+
+`analysis/backtest_metrics.py` is pure-pandas, no DB calls. It accepts a trades DataFrame from `get_run_trades()` and provides:
+- `compute_metrics(df)` → full dict: win_rate, avg_return, Sharpe, Calmar, max_drawdown, profit_factor, max_loss_streak.
+- `equity_curve(df)` → dated DataFrame (date, equity, drawdown_pct).
+- `period_breakdown(df)` → metrics per predefined period (COVID Crash / 2022 Bear / 2023-24 Recovery).
+- `module_attribution(df)` → per-module win rate when module agreed vs disagreed with trade direction.
+- `signal_decay(df)` → hold distribution histogram, exit reason percentages, avg hold by regime.
+- `walk_forward(df, window_months, step_months)` → list of rolling-window metric dicts.
+- `regime_performance(df)` → win rate and return broken down by regime at entry.
+
+Backtest config lives under `backtest:` in `config.yaml` (`max_holding_days`, `atr_stop_multiplier`, `walk_forward_months`, `walk_forward_step`). The `_render_backtest_page(config, watchlist)` function in `main.py` implements all six UI tabs.
+
+### Email alerts
+
+`output/briefing.py` provides three email functions that share the SMTP config under `notifications.email`:
+
+- `send_alert_email(alerts, config)` — plain-text trade alert email. Called by `_trade_alert_job()` in the scheduler. `should_send_alert(config)` checks `alert_cooldown_hours` before sending.
+- `send_weekly_summary_email(config)` — gathers data via `_gather_weekly_data(config)` (DB-only, no external API calls) and formats it with `_build_weekly_email(data, config)`. Uses `MIMEText(..., 'plain', 'utf-8')` to support Unicode box-drawing characters. Sends are stamped to `system_metadata` under `last_weekly_summary_sent`. Respects `notifications.weekly_summary.enabled` independently of `notifications.email.enabled`.
+- `send_test_email(config, ...)` — bypasses the enabled flag; always sends.
+
+When writing raw SQL against the `correlations` table in email or scheduler code, use the actual column names: `divergence` (not `status_30d`), `z_score` (not `z_score_30d`), `pair_score` (not `expected_direction`).
 
 ### yfinance MultiIndex handling
 
