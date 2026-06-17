@@ -2783,7 +2783,7 @@ def _pipeline_row(
     desc: str,
     never_badge: str = "PENDING",
 ) -> str:
-    """Return an HTML table row for one pipeline step."""
+    """Return an HTML flex row for one pipeline step."""
     _COLOURS = {"ok": "#16a34a", "warn": "#f59e0b", "error": "#dc2626"}
     _BADGES  = {"ok": "OK", "warn": "STALE", "error": "OVERDUE"}
 
@@ -2803,31 +2803,30 @@ def _pipeline_row(
             else f"{int(hours)}h ago" if hours < 24
             else f"{hours / 24:.1f}d ago"
         )
-        level   = _age_level(ts, warn_hours=warn_h, error_hours=error_h)
-        colour  = _COLOURS[level]
-        badge   = _BADGES[level]
+        level    = _age_level(ts, warn_hours=warn_h, error_hours=error_h)
+        colour   = _COLOURS[level]
+        badge    = _BADGES[level]
         badge_bg = f"{colour}20"
         badge_fg = colour
 
-    dot = (
-        f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-        f'background:{colour};flex-shrink:0"></span>'
-    )
     return (
-        f'<tr style="border-bottom:1px solid #f1f5f9">'
-        f'<td style="padding:9px 10px 9px 0;vertical-align:middle;text-align:center">{dot}</td>'
-        f'<td style="padding:9px 10px;font-weight:600;color:#1e293b;vertical-align:top;white-space:nowrap">'
-        f'{html.escape(label)}</td>'
-        f'<td style="padding:9px 10px;color:#475569;font-size:0.82rem;vertical-align:top;white-space:nowrap">'
-        f'{html.escape(ts_str)}</td>'
-        f'<td style="padding:9px 10px;color:#94a3b8;font-size:0.82rem;vertical-align:top;white-space:nowrap">'
-        f'{html.escape(age_str)}</td>'
-        f'<td style="padding:9px 10px;vertical-align:top">'
+        f'<div style="display:flex;align-items:center;padding:9px 0;'
+        f'border-bottom:1px solid #f1f5f9;gap:0;font-size:0.88rem">'
+        f'<div style="width:32px;flex-shrink:0;display:flex;justify-content:center;align-items:center">'
+        f'<span style="display:block;width:10px;height:10px;border-radius:50%;background:{colour}"></span>'
+        f'</div>'
+        f'<div style="flex:0 0 18%;min-width:0;font-weight:600;color:#1e293b;padding-right:8px">'
+        f'{html.escape(label)}</div>'
+        f'<div style="flex:0 0 17%;min-width:0;color:#475569;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
+        f'{html.escape(ts_str)}</div>'
+        f'<div style="flex:0 0 7%;min-width:0;color:#94a3b8;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
+        f'{html.escape(age_str)}</div>'
+        f'<div style="flex:0 0 8%;min-width:0;padding-right:8px">'
         f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 9px;border-radius:4px;'
-        f'font-size:0.73rem;font-weight:700;letter-spacing:0.04em">{badge}</span></td>'
-        f'<td style="padding:9px 10px;color:#64748b;font-size:0.82rem;vertical-align:top">'
-        f'{html.escape(desc)}</td>'
-        f'</tr>'
+        f'font-size:0.73rem;font-weight:700;letter-spacing:0.04em">{badge}</span></div>'
+        f'<div style="flex:1;min-width:0;color:#64748b;font-size:0.82rem">'
+        f'{html.escape(desc)}</div>'
+        f'</div>'
     )
 
 
@@ -2966,18 +2965,18 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("### Pipeline")
 
     _THEAD = (
-        '<table style="width:100%;border-collapse:collapse;font-size:0.88rem">'
-        '<thead><tr style="border-bottom:2px solid #e2e8f0;color:#94a3b8;font-size:0.70rem;'
-        'text-transform:uppercase;letter-spacing:0.07em">'
-        '<th style="padding:4px 10px 6px 0;width:1%"></th>'
-        '<th style="padding:4px 10px 6px;text-align:left;width:18%">Step</th>'
-        '<th style="padding:4px 10px 6px;text-align:left;width:17%">Last Run</th>'
-        '<th style="padding:4px 10px 6px;text-align:left;width:7%">Age</th>'
-        '<th style="padding:4px 10px 6px;text-align:left;width:8%">Status</th>'
-        '<th style="padding:4px 10px 6px;text-align:left">Description</th>'
-        '</tr></thead><tbody>'
+        '<div style="font-size:0.88rem">'
+        '<div style="display:flex;align-items:center;padding:4px 0 6px;border-bottom:2px solid #e2e8f0;'
+        'color:#94a3b8;font-size:0.70rem;text-transform:uppercase;letter-spacing:0.07em">'
+        '<div style="width:32px;flex-shrink:0"></div>'
+        '<div style="flex:0 0 18%;padding-right:8px">Step</div>'
+        '<div style="flex:0 0 17%;padding-right:8px">Last Run</div>'
+        '<div style="flex:0 0 7%;padding-right:8px">Age</div>'
+        '<div style="flex:0 0 8%;padding-right:8px">Status</div>'
+        '<div style="flex:1">Description</div>'
+        '</div>'
     )
-    _TFOOT = "</tbody></table>"
+    _TFOOT = "</div>"
 
     rows = "".join([
         _pipeline_row(
