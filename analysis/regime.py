@@ -29,7 +29,7 @@ REGIME_DESCRIPTIONS: dict[str, str] = {
     Regime.TRENDING_BEAR:   "Market trending strongly downward — trend and volatility signals dominate.",
     Regime.RANGING_LOW_VOL: "Low-volatility consolidation — mean-reversion signals carry extra weight.",
     Regime.HIGH_VOLATILITY: "Elevated volatility or fear — volatility and macro signals dominate.",
-    Regime.UNKNOWN:         "Insufficient stored data to classify regime — equal weights applied.",
+    Regime.UNKNOWN:         "Market conditions are mixed — no regime rule applies cleanly, equal weights used.",
 }
 
 # UI accent colours for each regime
