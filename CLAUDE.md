@@ -71,7 +71,7 @@ The app has eight pages toggled via a sidebar radio button (default: **Daily Bri
 - **Daily Briefing** — compact regime/overlay/catch-up/signal-counts header card; open trade monitor with live GBP P&L, health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS), and ATR-based stop loss; top opportunities filtered to tradeable assets
 - **Signals** — compact header block (overlays + catch-up strips + regime badge + signal distribution pills + timestamp, all in one bordered card); market intelligence plain-English summary; ranked table of all assets by confluence score with module symbols; Generate Signals button
 - **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
-- **Relationships** — 30-day correlation matrix heatmap for all 14 tracked cross-asset tickers, pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), plain-English divergence narratives; shows last-computed timestamp (correlations recompute automatically — no manual button)
+- **Relationships** — compact single-line header (pair count + last-computed timestamp, read dynamically from `RELATIONSHIP_MAP`); 30-day correlation matrix heatmap across all price-data tickers (FRED series excluded); pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status); plain-English divergence narratives (correlations recompute automatically — no manual button)
 - **Trade Log** — log new CFD trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name); open-position tracker with live GBP P&L and per-trade edit expanders; close-trade form; position sizing guidance
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
 - **Backtest** — 6-tab page: Run & Overview (date range presets, ticker scope, equity curve, metrics, trade table), Period Analysis (COVID Crash / 2022 Bear / 2023–24 Recovery + per-regime breakdown), Module Attribution (win rate when each module agreed vs disagreed with trade direction), Signal Decay (holding period histogram, exit reason distribution, avg hold by regime), Walk-Forward (rolling 6-month windows), Virtual Trading (open/closed virtual positions)
@@ -146,26 +146,15 @@ Watchlist entries may carry `trading212_instrument: "XAG/USD"` when the T212 ins
 
 ### Cross-asset correlation module
 
-`analysis/correlations.py` defines a `RELATIONSHIP_MAP` of 10 predefined pairs with expected correlation direction (+1 positive, -1 inverse):
+`analysis/correlations.py` defines a `RELATIONSHIP_MAP` of **28 predefined pairs** with expected correlation direction (+1 positive, -1 inverse). The original 10 pairs cover core macro relationships (GLD/UUP, USO/XLE, CPER/^GSPC, HYG/^GSPC, ^VIX/^GSPC, TLT/^GSPC, GBPUSD=X/^FTSE, EURUSD=X/^GSPC, BTC-USD/^GSPC, SLV/GLD as a risk-appetite ratio). The expanded set adds: TLT/GLD, USO/UNG, XLF/TLT, XLK/^VIX, XLU/TLT, GLD/^GSPC, EEM/UUP, HYG/TLT, BTC-USD/GLD, XLE/USO, SOXX/^GSPC, KRE/TLT, VNQ/TLT, FXI/UUP, EMB/UUP, KBE/T10Y2Y, GLD/DFII10, INDA/UUP.
 
-| Pair | Expected | Rationale |
-|------|----------|-----------|
-| GLD vs UUP | inverse | Gold rises when dollar falls |
-| USO vs XLE | positive | Oil price leads energy stocks |
-| CPER vs ^GSPC | positive | Copper leads economic growth |
-| HYG vs ^GSPC | positive | Credit stress precedes equity stress |
-| ^VIX vs ^GSPC | inverse | Volatility spikes when market falls |
-| TLT vs ^GSPC | inverse | Flight to safety in risk-off |
-| GBPUSD=X vs ^FTSE | inverse | Strong pound hurts FTSE exporters |
-| EURUSD=X vs ^GSPC | positive | Dollar strength affects multinationals |
-| BTC-USD vs ^GSPC | positive | Risk-on correlation |
-| SLV vs GLD | positive | Silver follows gold with higher beta |
+**FRED series as pair legs:** Two pairs use FRED macro series (not yfinance price tickers) as one leg — `KBE/T10Y2Y` (bank stocks vs yield curve steepness) and `GLD/DFII10` (gold vs real yields). `_FRED_PAIR_SERIES: frozenset[str] = frozenset({"T10Y2Y", "DFII10"})` gates which legs use macro data. `_get_macro_changes(series_id, days)` reads from the `macro_indicators` table and returns a `pd.Series` of day-over-day changes using `diff()` not `pct_change()` — yield series can cross zero and `pct_change()` is undefined there. FRED legs do not generate catch-up opportunity flags (`return_30d = None`). `_ALL_PAIR_TICKERS` is derived dynamically by filtering out `_FRED_PAIR_SERIES` members, so only price-data tickers appear in the correlation matrix heatmap.
 
 Per pair, the module computes: 30-day rolling correlation, 90-day rolling correlation, historical mean/std of the 30d rolling series, z-score, and a CONFIRMING/DIVERGING/NEUTRAL status. DIVERGING requires both a sign mismatch (current vs expected) AND z-score ≥ 1.5. CONFIRMING requires a sign match AND z-score ≤ 1.0.
 
 `compute_all_pairs(config)` is called once at the end of `run_analysis()` (not per-ticker) and upserts results to the `correlations` table (`ticker_a, ticker_b, date` unique constraint).
 
-`build_correlation_matrix(window=30)` returns a square pandas DataFrame of pairwise correlations across all 14 tickers involved in any pair — used to render the Plotly heatmap on the Relationships page.
+`build_correlation_matrix(window=30)` returns a square pandas DataFrame of pairwise correlations across all price-data tickers referenced in any pair (FRED series excluded) — used to render the Plotly heatmap on the Relationships page.
 
 The regime string is stored in both the `regime` column and the legacy `notes` column of the signals table. `get_latest_signals()` returns rows sorted by `confluence_score` descending.
 
@@ -193,7 +182,7 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 `_trade_alert_job()` runs hourly 14:00–21:00 UTC on weekdays. It fetches live prices for every open non-virtual trade, calls `enrich_open_trade()` to get the current health status, and emails an alert when a trade reaches STOP LOSS or EXIT SIGNAL. Deduplication: the last-alerted status per trade is stored in `system_metadata` under `trade_alert_status:{trade_id}` — the same status only triggers one email until it changes. The global `alert_cooldown_hours` setting prevents email storms.
 
-`_weekly_summary_job()` runs every Sunday at 10:00 UTC. It calls `output/briefing.py:send_weekly_summary_email(config)` which gathers all data from the DB (no external API calls) and sends a structured plain-text summary. Can be triggered on demand via the "Send Weekly Summary Now" button on the Status page. Controlled independently via `notifications.weekly_summary.enabled`.
+`_weekly_summary_job()` runs every Sunday at 10:00 UTC. It calls `output/briefing.py:send_weekly_summary_email(config)` which gathers all data from the DB (no external API calls) and sends an HTML email with plain-text fallback covering regime/overlays, signal snapshot, 7-day signal performance, open trades, closed trades P&L, accuracy progress, macro pulse, diverging pairs, and virtual portfolio status. Can be triggered on demand via the "Send Weekly Summary Now" button on the Status page. Controlled independently via `notifications.weekly_summary.enabled`.
 
 `_process_virtual_trades(config)` is called at the end of every `_run_analysis_pipeline()` call. It reads open virtual positions and latest signals from the DB, then:
 - **Close phase**: closes any virtual position where the current price has crossed the stored stop_loss_price, or the signal has reversed direction.
@@ -255,11 +244,11 @@ Backtest config lives under `backtest:` in `config.yaml` (`max_holding_days`, `a
 
 ### Email alerts
 
-`output/briefing.py` provides three email functions that share the SMTP config under `notifications.email`:
+`output/briefing.py` provides three email functions that all send **HTML emails with plain-text fallback** via a shared `_smtp_send(subject, text_body, html_body, config)` helper. `_smtp_send` builds a `MIMEMultipart("alternative")` message, attaches both text and HTML parts, reads `smtp_pass` from config or `os.environ.get("SMTP_PASSWORD", "")`, and handles the SMTP connection/login/sendmail in one place. All HTML uses inline CSS only (no flex/grid, `bgcolor` attribute on TD elements for Outlook compatibility).
 
-- `send_alert_email(alerts, config)` — plain-text trade alert email. Called by `_trade_alert_job()` in the scheduler. `should_send_alert(config)` checks `alert_cooldown_hours` before sending.
-- `send_weekly_summary_email(config)` — gathers data via `_gather_weekly_data(config)` (DB-only, no external API calls) and formats it with `_build_weekly_email(data, config)`. Uses `MIMEText(..., 'plain', 'utf-8')` to support Unicode box-drawing characters. Sends are stamped to `system_metadata` under `last_weekly_summary_sent`. Respects `notifications.weekly_summary.enabled` independently of `notifications.email.enabled`.
-- `send_test_email(config, ...)` — bypasses the enabled flag; always sends.
+- `send_alert_email(alerts, config)` — trade alert email. `_build_alert_html(alerts)` renders per-alert bordered table cards with a coloured status header. Called by `_trade_alert_job()`. `should_send_alert(config)` checks `alert_cooldown_hours` before sending.
+- `send_weekly_summary_email(config)` — gathers data via `_gather_weekly_data(config)` (DB-only, no external API calls). `_build_weekly_email_html(data, config)` produces HTML sections: Market Regime & Overlays, Signal Snapshot, Last Week's Performance, Open Trades, Closed This Week, Signal Accuracy Progress (HTML progress bar), Macro Pulse, Watch List, Virtual Portfolio. Plain text built separately by `_build_weekly_email(data, config)`. Sends stamped to `system_metadata` under `last_weekly_summary_sent`. Respects `notifications.weekly_summary.enabled` independently of `notifications.email.enabled`.
+- `send_test_email(config, ...)` — `_build_test_html(config, regime, last_analysis, open_trade_count)` produces a status table + confirmation strip. Bypasses the enabled flag; always sends. Returns a success string with recipient addresses.
 
 When writing raw SQL against the `correlations` table in email or scheduler code, use the actual column names: `divergence` (not `status_30d`), `z_score` (not `z_score_30d`), `pair_score` (not `expected_direction`).
 

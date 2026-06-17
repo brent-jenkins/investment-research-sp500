@@ -41,7 +41,7 @@ Compact header block (regime badge, overlays, catch-up flags, signal distributio
 Asset-group landing page with group cards. Clicking through shows a candlestick + volume chart, indicator panel (RSI, Bollinger Bands, MACD, ADX, SMA20/50/200), and raw indicator values for the most recent date.
 
 ### 🔗 Relationships
-Cross-asset correlation analysis across 10 predefined pairs. Shows a 30-day correlation heatmap across all 14 involved tickers, pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), and plain-English divergence narratives. Correlations are recomputed automatically on every analysis run.
+Cross-asset correlation analysis across **28 predefined pairs**. Compact header shows the pair count and last-computed timestamp (read dynamically from `RELATIONSHIP_MAP`). 30-day correlation matrix heatmap across all price-data tickers (FRED series such as T10Y2Y and DFII10 are excluded from the heatmap). Pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), and plain-English divergence narratives. Correlations are recomputed automatically on every analysis run.
 
 | Pair | Expected direction |
 |------|--------------------|
@@ -54,7 +54,27 @@ Cross-asset correlation analysis across 10 predefined pairs. Shows a 30-day corr
 | GBPUSD=X vs ^FTSE | Inverse — strong pound hurts FTSE exporters |
 | EURUSD=X vs ^GSPC | Positive — dollar strength affects multinationals |
 | BTC-USD vs ^GSPC | Positive — risk-on correlation |
-| SLV vs GLD | Positive — silver follows gold with higher beta |
+| SLV vs GLD | Positive — silver/gold ratio as risk-appetite indicator |
+| TLT vs GLD | Positive — both benefit from falling real yields |
+| USO vs UNG | Positive — oil and gas move on broad energy demand |
+| XLF vs TLT | Inverse — banks benefit from rising rates (falling TLT) |
+| XLK vs ^VIX | Inverse — tech most sensitive to risk appetite |
+| XLU vs TLT | Positive — utilities act as bond proxies |
+| GLD vs ^GSPC | Inverse — gold/equity ratio is the classic risk-off indicator |
+| EEM vs UUP | Inverse — strong dollar weighs on emerging markets |
+| HYG vs TLT | Inverse — credit spread proxy |
+| BTC-USD vs GLD | Positive — both treated as inflation hedges |
+| XLE vs USO | Positive — energy stocks vs oil price relative value |
+| SOXX vs ^GSPC | Positive — semiconductors lead the broader market |
+| KRE vs TLT | Inverse — regional banks benefit from rising rates |
+| VNQ vs TLT | Positive — REITs act as bond proxies |
+| FXI vs UUP | Inverse — strong dollar weighs on China equities |
+| EMB vs UUP | Inverse — strong dollar raises EM sovereign debt costs |
+| KBE vs T10Y2Y ¹ | Positive — banks expand NIMs when yield curve steepens |
+| GLD vs DFII10 ¹ | Inverse — gold rallies when real yields fall |
+| INDA vs UUP | Inverse — strong dollar weakens rupee and weighs on India equities |
+
+¹ T10Y2Y and DFII10 are FRED macro series, not price tickers — these pairs read from the `macro_indicators` table via `_get_macro_changes()`.
 
 ### 📋 Trade Log
 Full CFD trade lifecycle: log new trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name), open-position tracker with live GBP P&L and per-trade edit expanders, close-trade form, and position sizing guidance based on account balance and per-trade risk settings.
@@ -205,7 +225,7 @@ Virtual positions are sized at `position_pct` of `portfolio_size_gbp` (default 5
 
 ## Email alerts
 
-Three automated email functions share the same SMTP configuration under `notifications.email`:
+All three email functions send **HTML emails with plain-text fallback** via a shared `_smtp_send()` helper in `output/briefing.py`. Emails are built as `MIMEMultipart("alternative")` with inline CSS only (Outlook-compatible — no external stylesheets, no flex/grid, `bgcolor` on TD elements). SMTP password is read from config or the `SMTP_PASSWORD` environment variable.
 
 | Type | When | Controlled by |
 |------|------|--------------|
@@ -213,7 +233,7 @@ Three automated email functions share the same SMTP configuration under `notific
 | **Weekly summary** | Every Sunday at 10:00 UTC | `notifications.weekly_summary.enabled` |
 | **Test email** | On demand via Status page button | Always sends (ignores enabled flag) |
 
-The weekly summary covers: regime + overlays, signal snapshot with tradeable counts, 7-day signal performance (directional hit rate), open trade status, trades closed that week, signal accuracy progress toward the 20-trade learning threshold, FRED macro pulse (VIX + key series with week-over-week change), diverging pairs and catch-up flags, and virtual portfolio status.
+The weekly summary covers: regime + overlays, signal snapshot with tradeable counts, 7-day signal performance (directional hit rate), open trade status, trades closed that week, signal accuracy progress toward the 20-trade learning threshold (HTML progress bar), FRED macro pulse (VIX + key series with week-over-week change), diverging pairs and catch-up flags, and virtual portfolio status.
 
 The trade alert cooldown (`alert_cooldown_hours: 8`) prevents email storms. Each trade's last-alerted status is stored in `system_metadata` under `trade_alert_status:{trade_id}` to prevent duplicate alerts for the same condition.
 
