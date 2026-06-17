@@ -309,27 +309,6 @@ def _hex_rgba(hx: str, alpha: float) -> str:
     return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
 
 
-@st.cache_data(ttl=60)
-def _cached_last_full_refresh() -> "datetime | None":
-    """Timestamp of the last successful data pull (EOD scheduled run or manual refresh).
-
-    Reads last_full_refresh first; falls back to last_refresh_run for backward
-    compat with databases written before the multi-run scheduler was deployed.
-    """
-    return get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
-
-
-@st.cache_data(ttl=60)
-def _cached_last_analysis() -> "datetime | None":
-    """Last analysis run timestamp (any run type), cached for 60 s."""
-    return get_metadata("last_analysis_run")
-
-
-@st.cache_data(ttl=60)
-def _cached_last_run_type() -> "str | None":
-    """Run type of the most recent scheduled job ('full' or 'analysis_only')."""
-    return get_metadata_str("last_run_type")
-
 
 def _has_price_data() -> bool:
     """Return True if the price_data table contains at least one row."""
@@ -2796,72 +2775,264 @@ def _render_learning_dashboard(config: dict) -> None:
 # Status page (also shown on Charts landing when no asset is selected)
 # ---------------------------------------------------------------------------
 
+def _pipeline_row(
+    label: str,
+    ts: "datetime | None",
+    warn_h: float,
+    error_h: float,
+    desc: str,
+    never_badge: str = "PENDING",
+) -> str:
+    """Return an HTML table row for one pipeline step."""
+    _COLOURS = {"ok": "#16a34a", "warn": "#f59e0b", "error": "#dc2626"}
+    _BADGES  = {"ok": "OK", "warn": "STALE", "error": "OVERDUE"}
+
+    if ts is None:
+        colour   = "#94a3b8"
+        ts_str   = "Never"
+        age_str  = "—"
+        badge    = html.escape(never_badge)
+        badge_bg = "#94a3b820"
+        badge_fg = "#94a3b8"
+    else:
+        _ts     = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+        hours   = (datetime.utcnow() - _ts).total_seconds() / 3600
+        ts_str  = _ts.strftime("%Y-%m-%d %H:%M UTC")
+        age_str = (
+            f"{int(hours * 60)}m ago" if hours < 1
+            else f"{int(hours)}h ago" if hours < 24
+            else f"{hours / 24:.1f}d ago"
+        )
+        level   = _age_level(ts, warn_hours=warn_h, error_hours=error_h)
+        colour  = _COLOURS[level]
+        badge   = _BADGES[level]
+        badge_bg = f"{colour}20"
+        badge_fg = colour
+
+    dot = (
+        f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+        f'background:{colour};flex-shrink:0;margin-top:2px"></span>'
+    )
+    return (
+        f'<tr style="border-bottom:1px solid #f1f5f9">'
+        f'<td style="padding:9px 10px 9px 0;vertical-align:top">{dot}</td>'
+        f'<td style="padding:9px 10px;font-weight:600;color:#1e293b;vertical-align:top;white-space:nowrap">'
+        f'{html.escape(label)}</td>'
+        f'<td style="padding:9px 10px;color:#475569;font-size:0.82rem;vertical-align:top;white-space:nowrap">'
+        f'{html.escape(ts_str)}</td>'
+        f'<td style="padding:9px 10px;color:#94a3b8;font-size:0.82rem;vertical-align:top;white-space:nowrap">'
+        f'{html.escape(age_str)}</td>'
+        f'<td style="padding:9px 10px;vertical-align:top">'
+        f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 9px;border-radius:4px;'
+        f'font-size:0.73rem;font-weight:700;letter-spacing:0.04em">{badge}</span></td>'
+        f'<td style="padding:9px 10px;color:#64748b;font-size:0.82rem;vertical-align:top">'
+        f'{html.escape(desc)}</td>'
+        f'</tr>'
+    )
+
+
 def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     """System status panel — rendered as the Status page and as the Charts landing."""
-    # Clear all cached data so the status panel always reflects the latest DB
-    # state — without this, cached metadata values would be served even after
-    # a refresh or analysis run completed since the last render.
     st.cache_data.clear()
-
     st.markdown("## 🖥️ System Status")
 
-    # ── Collect all status data ───────────────────────────────────────────
-    deploy_ts, deploy_msg      = _git_log_info()
-    uptime                     = _service_uptime()
-    last_full_refresh          = _cached_last_full_refresh()
-    last_analysis              = _cached_last_analysis()
-    last_run_type              = _cached_last_run_type()
-    db_size_str, db_level      = _db_size(config)
+    # ── Compact system strip ──────────────────────────────────────────────
+    deploy_ts, deploy_msg = _git_log_info()
+    uptime                = _service_uptime()
+    db_size_str, db_level = _db_size(config)
 
-    refresh_val,  refresh_sub  = _age_display(last_full_refresh)
-    analysis_val, analysis_sub = _age_display(last_analysis)
-    # Full refresh: amber after 2 days, red after 4 (weekends break the daily cadence).
-    refresh_level  = _age_level(last_full_refresh, warn_hours=48.0, error_hours=96.0)
-    # Analysis: amber after 14h (should run 3× per weekday), red after 28h.
-    analysis_level = _age_level(last_analysis,     warn_hours=14.0, error_hours=28.0)
+    sc1, sc2, sc3 = st.columns(3)
+    _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info")
+    _status_card(sc2, "Service Uptime",  uptime, "Process running", "ok")
+    _status_card(sc3, "Database Size",   db_size_str, "", db_level)
 
-    _RUN_TYPE_LABELS = {
-        "full":          "Full Refresh",
-        "analysis_only": "Analysis Only",
-    }
-    run_type_label = _RUN_TYPE_LABELS.get(last_run_type or "", "—")
+    # ── Collect pipeline data ─────────────────────────────────────────────
+    last_refresh   = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
+    last_fred      = get_metadata("last_fred_run")
+    last_analysis  = get_metadata("last_analysis_run")
+    last_run_type  = get_metadata_str("last_run_type")
+    active_overlays = get_metadata_str("active_overlays") or "none"
+    fred_key       = bool(config.get("macro", {}).get("fred_api_key", ""))
+    series_count   = len(config.get("macro", {}).get("fred_series", {}))
 
-    # Colour: green for full refresh, blue for analysis-only, amber if missing
-    # or stale (last analysis more than 25 hours ago).
-    _stale = last_analysis is None or (
-        (datetime.utcnow() - last_analysis).total_seconds() > 25 * 3600
-    )
-    if not last_run_type or _stale:
-        run_type_level = "warn"
-    elif last_run_type == "full":
-        run_type_level = "ok"
+    fresh, stale, missing = _price_coverage(watchlist)
+    total = len(watchlist)
+
+    try:
+        from sqlalchemy import text as sa_text
+        with get_engine().connect() as _conn:
+            _cr = _conn.execute(
+                sa_text(
+                    "SELECT COUNT(*) AS cnt, "
+                    "SUM(CASE WHEN divergence='DIVERGING' THEN 1 ELSE 0 END) AS divg, "
+                    "MAX(created_at) AS last_ts "
+                    "FROM correlations"
+                )
+            ).mappings().first()
+            corr_cnt  = int(_cr["cnt"] or 0)
+            corr_divg = int(_cr["divg"] or 0)
+
+            _sr = _conn.execute(
+                sa_text(
+                    "SELECT COUNT(*) AS cnt, "
+                    "SUM(CASE WHEN signal IN ('BUY','STRONG_BUY') THEN 1 ELSE 0 END) AS buys, "
+                    "SUM(CASE WHEN signal IN ('SELL','STRONG_SELL') THEN 1 ELSE 0 END) AS sells "
+                    "FROM signals WHERE date=(SELECT MAX(date) FROM signals)"
+                )
+            ).mappings().first()
+            sig_cnt  = int(_sr["cnt"]  or 0)
+            sig_buys = int(_sr["buys"] or 0)
+            sig_sells= int(_sr["sells"]or 0)
+
+            _mac = _conn.execute(
+                sa_text("SELECT COUNT(DISTINCT series_id) AS cnt FROM macro_indicators")
+            ).mappings().first()
+            fred_stored = int(_mac["cnt"] or 0)
+
+            _ind = _conn.execute(
+                sa_text("SELECT COUNT(DISTINCT ticker) AS cnt FROM indicators")
+            ).mappings().first()
+            ind_tickers = int(_ind["cnt"] or 0)
+    except Exception:
+        corr_cnt = corr_divg = sig_cnt = sig_buys = sig_sells = fred_stored = ind_tickers = 0
+        corr_ts = None
+
+    regime_result  = detect_regime()
+    regime_name    = str(regime_result["regime"]).replace("Regime.", "")
+    overlay_list   = [k for k in (active_overlays or "").split(",") if k and k != "none"]
+
+    # ── Price Data Refresh description ────────────────────────────────────
+    if not fresh and not stale and not missing:
+        price_desc = "No price data yet — click Refresh Data below"
+    elif missing:
+        price_desc = (
+            f"{len(fresh)}/{total} tickers up to date"
+            + (f" · {len(stale)} stale" if stale else "")
+            + f" · {len(missing)} missing: {', '.join(missing[:4])}"
+            + ("…" if len(missing) > 4 else "")
+        )
+    elif stale:
+        price_desc = (
+            f"{len(fresh)}/{total} fresh · {len(stale)} stale: "
+            + ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "")
+        )
     else:
-        run_type_level = "info"
+        price_desc = f"All {total} tickers up to date"
 
-    # ── Row 1: deployment / uptime / database ─────────────────────────────
-    c1, c2, c3 = st.columns(3)
-    _status_card(c1, "Last Deployment", deploy_ts, deploy_msg, "info")
-    _status_card(c2, "Service Uptime",  uptime,    "Process running", "ok")
-    _status_card(c3, "Database Size",   db_size_str, "", db_level)
+    # ── FRED description ──────────────────────────────────────────────────
+    if not fred_key:
+        fred_desc = (
+            "No FRED API key — macro scoring uses VIX and stored data only. "
+            "Add fred_api_key to config.yaml to enable full macro indicators."
+        )
+        fred_badge = "NO KEY"
+    elif fred_stored == 0:
+        fred_desc  = f"{series_count} series configured — not yet fetched (runs at EOD)"
+        fred_badge = "PENDING"
+    else:
+        fred_desc  = f"{fred_stored} series stored · {series_count} configured"
+        fred_badge = "PENDING"   # overridden below if ts is set
 
-    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+    # ── Analysis description ──────────────────────────────────────────────
+    run_label   = {"full": "Full Refresh", "analysis_only": "Analysis Only"}.get(last_run_type or "", "")
+    analysis_desc = (
+        f"{ind_tickers} tickers analysed"
+        + (f" · {run_label}" if run_label else "")
+    ) if ind_tickers else "Not yet run"
 
-    # ── Row 2: data freshness / analysis freshness / last run type ────────
-    c1, c2, c3 = st.columns(3)
-    _status_card(c1, "Last Full Data Refresh",  refresh_val,  refresh_sub,  refresh_level)
-    _status_card(c2, "Last Analysis Update",    analysis_val, analysis_sub, analysis_level)
-    _status_card(c3, "Last Run Type",           run_type_label,
-                 "full = data pull + analysis" if last_run_type == "full"
-                 else ("analysis only — no data pull" if last_run_type == "analysis_only" else ""),
-                 run_type_level)
+    # ── Correlations description ──────────────────────────────────────────
+    corr_desc = (
+        f"{corr_cnt} pairs computed · {corr_divg} DIVERGING"
+        if corr_cnt else "Not yet computed"
+    )
 
-    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+    # ── Signals description ───────────────────────────────────────────────
+    sig_neutral = sig_cnt - sig_buys - sig_sells
+    signals_desc = (
+        f"{sig_cnt} signals · {sig_buys} BUY/STRONG_BUY · {sig_sells} SELL/STRONG_SELL"
+        + (f" · {sig_neutral} NEUTRAL" if sig_neutral else "")
+        if sig_cnt else "No signals generated yet"
+    )
 
-    # ── Row 3: upcoming scheduled runs ────────────────────────────────────
+    # ── Regime description ────────────────────────────────────────────────
+    regime_desc = regime_name
+    if overlay_list:
+        regime_desc += " · Overlays: " + ", ".join(overlay_list)
+    else:
+        regime_desc += " · No overlays active"
+
+    # ── Render pipeline table ─────────────────────────────────────────────
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+    st.markdown("### Pipeline")
+
+    _THEAD = (
+        '<table style="width:100%;border-collapse:collapse;font-size:0.88rem">'
+        '<thead><tr style="border-bottom:2px solid #e2e8f0;color:#94a3b8;font-size:0.70rem;'
+        'text-transform:uppercase;letter-spacing:0.07em">'
+        '<th style="padding:4px 10px 6px 0;width:1%"></th>'
+        '<th style="padding:4px 10px 6px;text-align:left;width:18%">Step</th>'
+        '<th style="padding:4px 10px 6px;text-align:left;width:17%">Last Run</th>'
+        '<th style="padding:4px 10px 6px;text-align:left;width:7%">Age</th>'
+        '<th style="padding:4px 10px 6px;text-align:left;width:8%">Status</th>'
+        '<th style="padding:4px 10px 6px;text-align:left">Description</th>'
+        '</tr></thead><tbody>'
+    )
+    _TFOOT = "</tbody></table>"
+
+    rows = "".join([
+        _pipeline_row(
+            "1 · Price Data Refresh",
+            last_refresh,
+            warn_h=48.0, error_h=96.0,
+            desc=price_desc,
+            never_badge="PENDING",
+        ),
+        _pipeline_row(
+            "2 · FRED Macro Indicators",
+            last_fred if fred_key else None,
+            warn_h=48.0, error_h=168.0,
+            desc=fred_desc,
+            never_badge="NO KEY" if not fred_key else "PENDING",
+        ),
+        _pipeline_row(
+            "3 · Technical Analysis",
+            last_analysis,
+            warn_h=14.0, error_h=28.0,
+            desc=analysis_desc,
+            never_badge="PENDING",
+        ),
+        _pipeline_row(
+            "4 · Correlation Pairs",
+            last_analysis,
+            warn_h=14.0, error_h=28.0,
+            desc=corr_desc,
+            never_badge="PENDING",
+        ),
+        _pipeline_row(
+            "5 · Signal Generation",
+            last_analysis,
+            warn_h=14.0, error_h=28.0,
+            desc=signals_desc,
+            never_badge="PENDING",
+        ),
+        _pipeline_row(
+            "6 · Regime & Overlays",
+            last_analysis,
+            warn_h=14.0, error_h=28.0,
+            desc=regime_desc,
+            never_badge="PENDING",
+        ),
+    ])
+
+    st.markdown(_THEAD + rows + _TFOOT, unsafe_allow_html=True)
+
+    # ── Scheduled runs ────────────────────────────────────────────────────
+    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+    st.markdown("### Scheduled Runs")
     sched_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_DISPLAY = {
-        "pre_market": ("Pre-Market",  "07:00 UTC", "Analysis only — Asian session closed, European opening"),
-        "us_open":    ("US Open",     "13:30 UTC", "Analysis only — catches overnight moves"),
+        "pre_market": ("Pre-Market",  "07:00 UTC", "Analysis only — Asian closed, European opening"),
+        "us_open":    ("US Open",     "13:30 UTC", "Analysis only — catches overnight moves before US open"),
         "eod":        ("End of Day",  "21:30 UTC", "Full refresh + analysis after NYSE close"),
     }
     run_cols = st.columns(len(_RUN_DISPLAY))
@@ -2870,44 +3041,29 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
         nxt     = _next_run_for_time(h, m)
         delta   = (nxt - datetime.utcnow()).total_seconds()
-        if delta < 3600:
-            until = f"in {int(delta / 60)}m"
-        elif delta < 86400:
-            until = f"in {delta / 3600:.1f}h"
-        else:
-            until = f"in {delta / 86400:.1f}d"
-        _status_card(
-            col,
-            f"{label} · {time_str}",
-            nxt.strftime("%a %H:%M UTC"),
-            f"{until} — {desc}",
-            "info",
+        until   = (
+            f"in {int(delta / 60)}m" if delta < 3600
+            else f"in {delta / 3600:.1f}h" if delta < 86400
+            else f"in {delta / 86400:.1f}d"
         )
+        _status_card(col, f"{label} · {time_str}", nxt.strftime("%a %H:%M UTC"),
+                     f"{until} — {desc}", "info")
 
+    # ── Data coverage ─────────────────────────────────────────────────────
     st.divider()
-    mc1, mc2 = st.columns(2)
-    mc1.metric("Watchlist Assets", len(watchlist))
-    mc2.metric("Asset Groups", len(config["watchlist"]))
-
-    # ── Data coverage ─────────────────────────────────────────────────────────
-    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
     st.markdown("### Data Coverage")
-    fresh, stale, missing = _price_coverage(watchlist)
-    total = len(watchlist)
-
     cc1, cc2, cc3 = st.columns(3)
-    fresh_level  = "ok"    if len(fresh)   == total else ("warn" if len(fresh) >= total * 0.9 else "error")
-    stale_level  = "ok"    if len(stale)   == 0     else "warn"
-    missing_level = "ok"   if len(missing) == 0     else "error"
-
-    _status_card(cc1, "Fresh (≤4 days)",   f"{len(fresh)} / {total}",
-                 "up to date" if len(fresh) == total else f"{total - len(fresh)} not fresh", fresh_level)
-    _status_card(cc2, "Stale (>4 days)",   f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
+    fresh_level   = "ok"    if len(fresh)   == total else ("warn" if len(fresh) >= total * 0.9 else "error")
+    stale_level   = "ok"    if not stale    else "warn"
+    missing_level = "ok"    if not missing  else "error"
+    _status_card(cc1, "Fresh (≤4 days)", f"{len(fresh)} / {total}",
+                 "all up to date" if len(fresh) == total else f"{total - len(fresh)} not fresh", fresh_level)
+    _status_card(cc2, "Stale (>4 days)", f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
                  ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "") if stale else "none", stale_level)
-    _status_card(cc3, "Missing entirely",  f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
+    _status_card(cc3, "Missing entirely", f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
                  ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
 
-    # ── Manual controls ───────────────────────────────────────────────────────
+    # ── Manual controls ───────────────────────────────────────────────────
     st.divider()
     st.markdown("### Manual Controls")
     st.caption("Trigger the analysis pipeline immediately without waiting for the next scheduled run.")

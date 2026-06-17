@@ -339,6 +339,12 @@ def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str,
             logger.warning("Failed to fetch FRED series %s: %s", series_id, exc)
             results[series_id] = False
 
+    successes = sum(1 for ok in results.values() if ok)
+    if successes:
+        from data.database import set_metadata as _set_meta
+        _set_meta("last_fred_run", datetime.today().strftime("%Y-%m-%dT%H:%M:%S"))
+        logger.info("Stamped last_fred_run (%d/%d series fetched).", successes, len(results))
+
     return results
 
 
