@@ -2811,11 +2811,11 @@ def _pipeline_row(
 
     dot = (
         f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-        f'background:{colour};flex-shrink:0;margin-top:2px"></span>'
+        f'background:{colour};flex-shrink:0"></span>'
     )
     return (
         f'<tr style="border-bottom:1px solid #f1f5f9">'
-        f'<td style="padding:9px 10px 9px 0;vertical-align:top">{dot}</td>'
+        f'<td style="padding:9px 10px 9px 0;vertical-align:middle;text-align:center">{dot}</td>'
         f'<td style="padding:9px 10px;font-weight:600;color:#1e293b;vertical-align:top;white-space:nowrap">'
         f'{html.escape(label)}</td>'
         f'<td style="padding:9px 10px;color:#475569;font-size:0.82rem;vertical-align:top;white-space:nowrap">'
