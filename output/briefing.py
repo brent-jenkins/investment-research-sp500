@@ -642,7 +642,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     # ── Market Regime & Overlays ──────────────────────────────────────
     section("MARKET REGIME")
     curr = data["curr_signals"]
-    regime = curr[0]["regime"] if curr else "UNKNOWN"
+    regime = (curr[0].get("regime") or "UNKNOWN") if curr else "UNKNOWN"
     L.append(f"Regime:  {regime.replace('_', ' ')}  —  {_REGIME_DESCRIPTIONS.get(regime, '')}")
     overlays = data["active_overlays"]
     if overlays:
