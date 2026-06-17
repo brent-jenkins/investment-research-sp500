@@ -4,16 +4,18 @@ Run schedule (weekdays only, UTC):
   07:00  Pre-market  — analysis only, no data pull
   13:30  US open     — analysis only, no data pull
   21:30  End of day  — full data refresh then analysis (primary run)
+  14–21  Hourly      — open-trade health check; email alert on STOP LOSS / EXIT SIGNAL
 
-All three runs execute the complete analysis pipeline:
+All three analysis runs execute the complete analysis pipeline:
   run_analysis()       → indicators table
   generate_signals()   → signals table  (also stamps last_analysis_run)
   compute_all_pairs()  → correlations table
 
 Metadata keys written to system_metadata:
-  last_full_refresh  — UTC timestamp of the last successful data pull (EOD run or manual)
-  last_analysis_run  — UTC timestamp of the last completed analysis (any run type)
-  last_run_type      — 'full' or 'analysis_only'
+  last_full_refresh         — UTC timestamp of the last successful data pull (EOD run or manual)
+  last_analysis_run         — UTC timestamp of the last completed analysis (any run type)
+  last_run_type             — 'full' or 'analysis_only'
+  trade_alert_status:{id}   — last health status for which an alert email was sent per trade
 """
 
 import logging
@@ -29,7 +31,7 @@ from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
 from analysis.macro import fetch_and_store_macro_indicators
-from data.database import set_metadata
+from data.database import get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
 logger = logging.getLogger(__name__)
@@ -190,6 +192,94 @@ def _eod_job() -> None:
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
 
 
+def _trade_alert_job() -> None:
+    """Hourly (14:00–21:00 UTC, weekdays) — check open trade health and send alerts.
+
+    Fetches a live price for every open trade, enriches it with current signal
+    and stop-loss status, then emails an alert when any trade reaches STOP LOSS
+    or EXIT SIGNAL.  Deduplicates per trade: the same status for the same trade
+    only triggers one email until the status changes.
+
+    The global alert_cooldown_hours setting in config.yaml still applies — if an
+    alert was sent very recently it is deferred until the cooldown elapses.
+    """
+    logger.info("Trade alert check starting…")
+    config = _load_config()
+
+    # Lazy imports to avoid circular dependencies at module load time.
+    from output.performance import get_latest_price, get_open_trades  # noqa: PLC0415
+    from output.briefing import (  # noqa: PLC0415
+        enrich_open_trade,
+        send_alert_email,
+        should_send_alert,
+    )
+
+    trades = get_open_trades()
+    if not trades:
+        logger.info("Trade alert check: no open trades.")
+        return
+
+    _ALERT_STATUSES: frozenset[str] = frozenset({"STOP LOSS", "EXIT SIGNAL"})
+    pending: list[dict] = []
+
+    for trade in trades:
+        ticker   = trade.get("ticker", "")
+        trade_id = trade.get("id")
+
+        try:
+            live_price = get_latest_price(ticker)
+        except Exception as exc:
+            logger.warning("Price fetch failed for %s: %s", ticker, exc)
+            live_price = None
+
+        try:
+            enriched = enrich_open_trade(trade, live_price)
+        except Exception as exc:
+            logger.warning("enrich_open_trade failed for %s: %s", ticker, exc)
+            continue
+
+        status = enriched.get("status", "ON TRACK")
+        if status not in _ALERT_STATUSES:
+            continue
+
+        # Only alert when the status is new (differs from what we last alerted for).
+        meta_key = f"trade_alert_status:{trade_id}"
+        if get_metadata_str(meta_key) == status:
+            logger.info(
+                "Trade %s (%s): already alerted for %s — skipping.",
+                trade_id, ticker, status,
+            )
+            continue
+
+        pending.append(enriched)
+
+    if not pending:
+        logger.info(
+            "Trade alert check: no new conditions across %d open trade(s).", len(trades)
+        )
+        return
+
+    logger.info("Trade alert check: %d new alert(s) pending.", len(pending))
+
+    if not should_send_alert(config):
+        logger.info("Alert email suppressed by cooldown or disabled config.")
+        return
+
+    ok, msg = send_alert_email(pending, config)
+    logger.info("Alert email result: %s — %s", ok, msg)
+
+    if ok:
+        for enriched in pending:
+            meta_key = f"trade_alert_status:{enriched.get('id')}"
+            try:
+                set_metadata(meta_key, enriched.get("status", ""))
+            except Exception as exc:
+                logger.warning(
+                    "Could not stamp alert status for trade %s: %s",
+                    enriched.get("id"), exc,
+                )
+
+
 def start_scheduler() -> BackgroundScheduler:
     """Start the background scheduler with all three daily jobs if not already running."""
     global _scheduler
@@ -228,6 +318,22 @@ def start_scheduler() -> BackgroundScheduler:
             "Scheduled '%s' job at %02d:%02d %s on weekdays.",
             run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz,
         )
+
+    # Hourly trade alert check during US market hours (14:00–21:00 UTC, weekdays).
+    # Fires on the hour; 14:00 catches the open (US market opens 14:30 UTC) and
+    # 21:00 catches the close (US market closes 21:00 UTC).
+    _scheduler.add_job(
+        _trade_alert_job,
+        trigger=CronTrigger(
+            hour="14-21",
+            minute=0,
+            day_of_week="mon-fri",
+            timezone=tz,
+        ),
+        id="trade_alert_check",
+        replace_existing=True,
+    )
+    logger.info("Scheduled trade alert check hourly 14:00–21:00 %s on weekdays.", tz)
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))
