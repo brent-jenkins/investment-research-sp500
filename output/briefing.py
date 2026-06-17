@@ -5,6 +5,7 @@ import os
 import smtplib
 from collections import defaultdict
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,146 @@ _STATUS_PRIORITY: dict[str, int] = {
     "EXIT SIGNAL": 3,
     "STOP LOSS":   4,
 }
+
+
+# ---------------------------------------------------------------------------
+# HTML email helpers — shared across all notification types
+# ---------------------------------------------------------------------------
+
+_BASE_FONT = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif"
+
+_SIG_STYLES_H: dict[str, tuple[str, str]] = {
+    "STRONG_BUY":  ("#16a34a", "#ffffff"),
+    "BUY":         ("#bbf7d0", "#166534"),
+    "NEUTRAL":     ("#e2e8f0", "#475569"),
+    "SELL":        ("#fecaca", "#991b1b"),
+    "STRONG_SELL": ("#dc2626", "#ffffff"),
+}
+
+_STATUS_COLORS_H: dict[str, str] = {
+    "ON TRACK":    "#16a34a",
+    "WEAKENING":   "#d97706",
+    "EXIT SIGNAL": "#ea580c",
+    "STOP LOSS":   "#dc2626",
+}
+
+
+def _badge_h(text: str, bg: str, fg: str = "#ffffff", size: int = 11) -> str:
+    return (
+        f'<span style="display:inline-block;background-color:{bg};color:{fg};'
+        f'padding:2px 8px;border-radius:4px;font-size:{size}px;font-weight:700">'
+        f'{text}</span>'
+    )
+
+
+def _sig_badge_h(signal: str) -> str:
+    bg, fg = _SIG_STYLES_H.get(signal, ("#e2e8f0", "#475569"))
+    return _badge_h(signal.replace("_", " "), bg, fg)
+
+
+def _pnl_color(val: float) -> str:
+    return "#16a34a" if val >= 0 else "#dc2626"
+
+
+def _table_h(headers: list[str], rows: list[list[str]]) -> str:
+    head = "".join(
+        f'<th style="padding:6px 8px;font-size:12px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:0.5px;color:#64748b;text-align:left;border-bottom:2px solid #e2e8f0">'
+        f'{h}</th>'
+        for h in headers
+    )
+    body = "".join(
+        "<tr>" + "".join(
+            f'<td style="padding:6px 8px;font-size:13px;color:#1e293b;'
+            f'border-bottom:1px solid #f1f5f9">{c}</td>'
+            for c in row
+        ) + "</tr>"
+        for row in rows
+    )
+    return (
+        '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">'
+        f'<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+    )
+
+
+def _section_h(title: str, content: str, border: str = "#3b82f6") -> str:
+    title_html = (
+        f'<p style="margin:0 0 10px;font-size:11px;font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:1px;color:#94a3b8">{title}</p>'
+        if title else ""
+    )
+    return (
+        f'<div style="background-color:#ffffff;margin-bottom:3px;'
+        f'padding:18px 22px;border-left:4px solid {border}">'
+        f'{title_html}{content}</div>'
+    )
+
+
+def _email_wrap_h(header: str, body: str, footer: str) -> str:
+    return (
+        '<!DOCTYPE html><html lang="en"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '</head>'
+        f'<body style="margin:0;padding:16px 8px;background-color:#f1f5f9;{_BASE_FONT}">'
+        '<div style="max-width:640px;margin:0 auto">'
+        f'{header}{body}{footer}'
+        '</div></body></html>'
+    )
+
+
+def _email_header_h(title: str, subtitle: str, accent: str = "#0f172a") -> str:
+    return (
+        f'<div style="background-color:{accent};padding:24px 26px;border-radius:8px 8px 0 0">'
+        '<p style="margin:0 0 4px;font-size:10px;font-weight:700;text-transform:uppercase;'
+        'letter-spacing:1.5px;color:#94a3b8">Investment Research Dashboard</p>'
+        f'<h1 style="margin:0 0 4px;font-size:21px;font-weight:700;color:#ffffff">{title}</h1>'
+        f'<p style="margin:0;font-size:13px;color:#94a3b8">{subtitle}</p>'
+        '</div>'
+    )
+
+
+def _email_footer_h(note: str = "") -> str:
+    extra = f' &nbsp;·&nbsp; {note}' if note else ''
+    return (
+        '<div style="background-color:#1e293b;padding:14px 22px;border-radius:0 0 8px 8px">'
+        '<p style="margin:0;font-size:12px;color:#64748b">'
+        '<a href="https://research.example.com" style="color:#60a5fa;text-decoration:none">'
+        'research.example.com</a>'
+        f'{extra}</p></div>'
+    )
+
+
+def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
+    """Build and send a multipart plain+HTML email via SMTP."""
+    notif     = config.get("notifications", {}).get("email", {})
+    smtp_host = notif.get("smtp_host",     "smtp-relay.brevo.com")
+    smtp_port = int(notif.get("smtp_port", 587))
+    smtp_user = notif.get("smtp_user",     "")
+    smtp_pass = notif.get("smtp_password", "") or os.environ.get("SMTP_PASSWORD", "")
+    from_addr = notif.get("from_address")  or smtp_user
+    to_addrs  = notif.get("to_addresses") or []
+
+    if not to_addrs:
+        return False, "No recipient addresses configured in notifications.email.to_addresses"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = from_addr
+    msg["To"]      = ", ".join(to_addrs)
+    msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html",  "utf-8"))
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(from_addr, to_addrs, msg.as_string())
+        return True, f"Sent to {len(to_addrs)} recipient(s)"
+    except Exception as exc:
+        logger.error("SMTP send failed: %s", exc)
+        return False, f"Email send failed: {exc}"
 
 
 def _load_config() -> dict:
@@ -287,6 +428,97 @@ def build_opportunities(
     return sorted(result, key=lambda x: abs(x.get("score") or 0), reverse=True)
 
 
+def _build_alert_html(alerts: list[dict]) -> str:
+    """Build an HTML email body for trade alerts."""
+    now = datetime.utcnow()
+    n   = len(alerts)
+
+    cards = ""
+    for a in alerts:
+        status    = a.get("status", "?")
+        ticker    = a.get("ticker", "?")
+        direction = a.get("direction", "?")
+        ep        = float(a.get("entry_price") or 0)
+        lp        = a.get("live_price")
+        up        = a.get("unreal_pct")
+        es        = a.get("entry_signal",   "?")
+        cs        = a.get("current_signal", "?")
+        e_sc      = float(a.get("entry_score")   or 0)
+        c_sc      = float(a.get("current_score") or 0)
+        sl        = a.get("stop_loss")
+        atr       = a.get("atr")
+
+        sc      = _STATUS_COLORS_H.get(status, "#64748b")
+        lp_str  = f"{lp:.4f}" if lp is not None else "—"
+        pnl_str = f"{up:+.1f}%" if up is not None else "—"
+        pc      = _pnl_color(up or 0)
+        delta   = c_sc - e_sc
+
+        sl_row = ""
+        if sl is not None:
+            atr_note = f" (entry &plusmn; 2&times;ATR {atr:.4f})" if atr else ""
+            sl_row = (
+                f'<tr><td style="color:#64748b;font-size:13px;padding:3px 6px">Stop loss</td>'
+                f'<td colspan="3" style="font-size:13px;font-weight:600;padding:3px 6px">'
+                f'{sl:.4f}{atr_note}</td></tr>'
+            )
+
+        dir_badge = _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569")
+
+        cards += (
+            f'<table width="100%" cellpadding="0" cellspacing="0" '
+            f'style="border:2px solid {sc};border-radius:6px;margin-bottom:14px">'
+            f'<tr><td bgcolor="{sc}" style="background-color:{sc};padding:10px 14px;'
+            f'border-radius:4px 4px 0 0">'
+            f'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+            f'<td style="color:#ffffff;font-size:15px;font-weight:700">{status}</td>'
+            f'<td align="right" style="color:#ffffff;font-size:13px">'
+            f'{dir_badge} &nbsp;{ticker}</td>'
+            f'</tr></table></td></tr>'
+            f'<tr><td style="background-color:#ffffff;padding:12px 14px">'
+            f'<table width="100%" cellpadding="0" cellspacing="0">'
+            f'<tr>'
+            f'<td style="color:#64748b;font-size:13px;padding:3px 6px;width:25%">Entry</td>'
+            f'<td style="font-size:13px;font-weight:600;padding:3px 6px;width:25%">{ep:.4f}</td>'
+            f'<td style="color:#64748b;font-size:13px;padding:3px 6px;width:20%">Current</td>'
+            f'<td style="font-size:13px;font-weight:600;padding:3px 6px">{lp_str}</td>'
+            f'</tr>'
+            f'<tr>'
+            f'<td style="color:#64748b;font-size:13px;padding:3px 6px">Unrealised</td>'
+            f'<td style="font-size:14px;font-weight:700;color:{pc};padding:3px 6px">{pnl_str}</td>'
+            f'<td></td><td></td>'
+            f'</tr>'
+            f'<tr>'
+            f'<td style="color:#64748b;font-size:13px;padding:3px 6px;vertical-align:top">'
+            f'Signal</td>'
+            f'<td colspan="3" style="font-size:13px;padding:3px 6px">'
+            f'{_sig_badge_h(es)} &rarr; {_sig_badge_h(cs)}<br>'
+            f'<span style="color:#94a3b8;font-size:12px">'
+            f'Score: {e_sc:+.3f} &rarr; {c_sc:+.3f} &nbsp;(&Delta; {delta:+.3f})'
+            f'</span></td>'
+            f'</tr>'
+            f'{sl_row}'
+            f'</table></td></tr></table>'
+        )
+
+    return _email_wrap_h(
+        _email_header_h(
+            f"Trade Alert — {n} position{'s' if n != 1 else ''} require attention",
+            f"Generated {now.strftime('%Y-%m-%d %H:%M')} UTC",
+            accent="#7f1d1d",
+        ),
+        _section_h("POSITIONS REQUIRING ATTENTION", cards, "#dc2626")
+        + _section_h(
+            "",
+            '<p style="margin:0;font-size:12px;color:#64748b">To disable these alerts: set '
+            '<code style="background-color:#f1f5f9;padding:1px 4px;border-radius:3px">'
+            'notifications.email.enabled: false</code> in config.yaml</p>',
+            "#e2e8f0",
+        ),
+        _email_footer_h(),
+    )
+
+
 def should_send_alert(config: dict) -> bool:
     """Return True if email alerts are enabled and the cooldown window has elapsed."""
     notif = config.get("notifications", {}).get("email", {})
@@ -301,32 +533,19 @@ def should_send_alert(config: dict) -> bool:
 
 
 def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
-    """Send a plain-text alert email via SMTP.
-
-    Defaults to Brevo SMTP (smtp-relay.brevo.com:587) but any STARTTLS-capable
-    SMTP relay works.  Returns (success, human-readable message).
-    """
+    """Send an HTML+plain-text trade alert email via SMTP."""
     notif = config.get("notifications", {}).get("email", {})
     if not notif.get("enabled"):
         return False, "Email notifications not enabled in config.yaml"
 
-    smtp_host  = notif.get("smtp_host",     "smtp-relay.brevo.com")
-    smtp_port  = int(notif.get("smtp_port", 587))
-    smtp_user  = notif.get("smtp_user",     "")
-    smtp_pass  = notif.get("smtp_password", "")
-    from_addr  = notif.get("from_address")  or smtp_user
-    to_addrs   = notif.get("to_addresses")  or []
-
-    if not to_addrs:
-        return False, "No recipient addresses configured in notifications.email.to_addresses"
-
-    now     = datetime.utcnow()
-    n_pos   = len(alerts)
+    now   = datetime.utcnow()
+    n_pos = len(alerts)
     subject = (
         f"Trade Alert — {n_pos} position{'s' if n_pos != 1 else ''} require attention "
         f"({now.strftime('%Y-%m-%d %H:%M')} UTC)"
     )
 
+    # Plain-text fallback
     lines = [
         "Investment Research Dashboard — Trade Alert",
         f"Generated: {now.strftime('%Y-%m-%d %H:%M')} UTC",
@@ -335,7 +554,6 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
         "=" * 45,
         "",
     ]
-
     for a in alerts:
         lines.append(f"[{a['status']}]  {a['ticker']}  {a.get('direction', '?')}")
         ep  = a.get("entry_price") or 0
@@ -347,11 +565,11 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
             f"{up:+.2f} ({upc:+.2f}%)" if up is not None and upc is not None else "—"
         )
         lines.append(f"  Entry: ${ep:,.4f}  |  Current: {lp_str}  |  Unrealised: {pnl_str}")
-        es     = a.get("entry_signal",   "—")
-        cs     = a.get("current_signal", "—")
-        e_sc   = float(a.get("entry_score")   or 0)
-        c_sc   = float(a.get("current_score") or 0)
-        delta  = c_sc - e_sc
+        es    = a.get("entry_signal",   "—")
+        cs    = a.get("current_signal", "—")
+        e_sc  = float(a.get("entry_score")   or 0)
+        c_sc  = float(a.get("current_score") or 0)
+        delta = c_sc - e_sc
         lines.append(
             f"  Signal: {es} → {cs}  |  Score: {e_sc:+.3f} → {c_sc:+.3f}  (Δ {delta:+.3f})"
         )
@@ -364,28 +582,73 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
                 sl_str += f"  (entry {dir_sym} 2×ATR {atr:.4f})"
             lines.append(f"  Stop loss: {sl_str}")
         lines.append("")
-
     lines += [
         "---",
-        "To disable these alerts: set notifications.email.enabled: false in config.yaml",
+        "To disable: set notifications.email.enabled: false in config.yaml",
     ]
 
-    msg = MIMEText("\n".join(lines), "plain")
-    msg["Subject"] = subject
-    msg["From"]    = from_addr
-    msg["To"]      = ", ".join(to_addrs)
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(from_addr, to_addrs, msg.as_string())
+    ok, msg = _smtp_send(subject, "\n".join(lines), _build_alert_html(alerts), config)
+    if ok:
         set_metadata("last_alert_email_sent", now.isoformat())
-        return True, f"Alert sent to {len(to_addrs)} recipient(s)"
-    except Exception as exc:
-        logger.error("Failed to send alert email: %s", exc)
-        return False, f"Email send failed: {exc}"
+        to_n = len(notif.get("to_addresses") or [])
+        return True, f"Alert sent to {to_n} recipient(s)"
+    return False, msg
+
+
+def _build_test_html(
+    config: dict,
+    regime: str,
+    last_analysis: "datetime | None",
+    open_trade_count: int,
+) -> str:
+    """Build an HTML test-notification email body."""
+    notif     = config.get("notifications", {}).get("email", {})
+    from_addr = notif.get("from_address") or notif.get("smtp_user", "—")
+    to_addrs  = notif.get("to_addresses") or []
+    relay     = f"{notif.get('smtp_host', '—')}:{notif.get('smtp_port', '—')}"
+    now       = datetime.utcnow()
+    last_str  = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "—"
+
+    rows_data = [
+        ("Regime",        regime.replace("_", " ")),
+        ("Last analysis", last_str),
+        ("Open trades",   str(open_trade_count)),
+        ("From",          from_addr),
+        ("To",            ", ".join(to_addrs) if to_addrs else "—"),
+        ("Via",           relay),
+    ]
+    table_html = (
+        '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">'
+        + "".join(
+            f'<tr>'
+            f'<td style="color:#64748b;font-size:13px;padding:6px 0;width:35%;'
+            f'border-bottom:1px solid #f1f5f9">{k}</td>'
+            f'<td style="font-size:13px;font-weight:600;padding:6px 0;'
+            f'border-bottom:1px solid #f1f5f9">{v}</td>'
+            f'</tr>'
+            for k, v in rows_data
+        )
+        + '</table>'
+    )
+
+    return _email_wrap_h(
+        _email_header_h(
+            "Test Notification",
+            f"Sent {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        ),
+        _section_h("SYSTEM STATUS", table_html, "#3b82f6")
+        + _section_h(
+            "",
+            '<p style="margin:0;font-size:13px;color:#1e293b">'
+            'If you received this, email delivery is working correctly.</p>',
+            "#16a34a",
+        ),
+        _email_footer_h(
+            'To disable alerts: set '
+            '<code style="background-color:#2d3748;padding:1px 4px;border-radius:3px;color:#a5f3fc">'
+            'notifications.email.enabled: false</code>'
+        ),
+    )
 
 
 def send_test_email(
@@ -394,30 +657,19 @@ def send_test_email(
     last_analysis: "datetime | None",
     open_trade_count: int,
 ) -> "tuple[bool, str]":
-    """Send a test notification email to verify SMTP delivery.
+    """Send an HTML+plain-text test notification to verify SMTP delivery.
 
-    Bypasses the enabled flag — the purpose is to verify delivery works
-    before committing to enabling live alerts.
-    Subject is always 'Investment Research — Test Notification'.
-    Body includes sender, recipient, current regime, last analysis time,
-    and open trade count so the recipient can confirm end-to-end delivery.
-    Returns (success, human-readable message).
+    Bypasses notifications.email.enabled — the purpose is to verify delivery
+    works before committing to enabling live alerts.
     """
-    notif = config.get("notifications", {}).get("email", {})
-
-    smtp_host  = notif.get("smtp_host",     "smtp-relay.brevo.com")
-    smtp_port  = int(notif.get("smtp_port", 587))
-    smtp_user  = notif.get("smtp_user",     "")
-    smtp_pass  = notif.get("smtp_password", "")
-    from_addr  = notif.get("from_address")  or smtp_user
-    to_addrs   = notif.get("to_addresses")  or []
+    notif     = config.get("notifications", {}).get("email", {})
+    to_addrs  = notif.get("to_addresses") or []
+    from_addr = notif.get("from_address") or notif.get("smtp_user", "")
 
     if not to_addrs:
         return False, "No recipient addresses configured in notifications.email.to_addresses"
 
-    now = datetime.utcnow()
-    subject = "Investment Research — Test Notification"
-
+    now          = datetime.utcnow()
     last_run_str = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "—"
 
     lines = [
@@ -425,7 +677,7 @@ def send_test_email(
         f"Sent:      {now.strftime('%Y-%m-%d %H:%M')} UTC",
         f"From:      {from_addr}",
         f"To:        {', '.join(to_addrs)}",
-        f"Via:       {smtp_host}:{smtp_port}",
+        f"Via:       {notif.get('smtp_host','—')}:{notif.get('smtp_port','—')}",
         "",
         "CURRENT SYSTEM STATUS",
         "=" * 45,
@@ -438,21 +690,12 @@ def send_test_email(
         "To disable alerts: set notifications.email.enabled: false in config.yaml",
     ]
 
-    msg = MIMEText("\n".join(lines), "plain")
-    msg["Subject"] = subject
-    msg["From"]    = from_addr
-    msg["To"]      = ", ".join(to_addrs)
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(from_addr, to_addrs, msg.as_string())
+    html_body = _build_test_html(config, regime, last_analysis, open_trade_count)
+    ok, msg   = _smtp_send("Investment Research — Test Notification",
+                            "\n".join(lines), html_body, config)
+    if ok:
         return True, f"Test email sent to {', '.join(to_addrs)}"
-    except Exception as exc:
-        logger.error("Failed to send test email: %s", exc)
-        return False, f"Email send failed: {exc}"
+    return False, msg
 
 
 # ---------------------------------------------------------------------------
@@ -928,6 +1171,471 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     return "\n".join(L)
 
 
+def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
+    """Format the weekly summary as a styled HTML email body."""
+    now          = data["now"]
+    week_ago     = data["week_ago"]
+    curr         = data["curr_signals"]
+    curr_prices  = data["current_prices"]
+
+    tradeable: set[str] = {
+        e["ticker"]
+        for g in config.get("watchlist", {}).values()
+        if isinstance(g, list)
+        for e in g
+        if isinstance(e, dict) and e.get("tradeable")
+    }
+
+    sections = ""
+
+    # ── Market Regime & Overlays ──────────────────────────────────────
+    regime = (curr[0].get("regime") or "UNKNOWN") if curr else "UNKNOWN"
+    regime_bg, regime_fg = {
+        "TRENDING_BULL":   ("#16a34a", "#ffffff"),
+        "TRENDING_BEAR":   ("#dc2626", "#ffffff"),
+        "RANGING_LOW_VOL": ("#3b82f6", "#ffffff"),
+        "HIGH_VOLATILITY": ("#ea580c", "#ffffff"),
+        "UNKNOWN":         ("#64748b", "#ffffff"),
+    }.get(regime, ("#1e293b", "#ffffff"))
+
+    regime_badge = _badge_h(regime.replace("_", " "), regime_bg, regime_fg, size=13)
+    regime_desc  = _REGIME_DESCRIPTIONS.get(regime, "")
+
+    overlays     = data["active_overlays"]
+    overlay_html = ""
+    for o in overlays:
+        overlay_html += (
+            f'<div style="background-color:#fffbeb;border-left:3px solid #d97706;'
+            f'padding:8px 12px;margin-top:8px;border-radius:0 4px 4px 0;'
+            f'font-size:13px;color:#92400e">&#9888; {_OVERLAY_DESCRIPTIONS.get(o, o)}</div>'
+        )
+    if not overlays:
+        overlay_html = (
+            '<p style="margin:8px 0 0;font-size:13px;color:#64748b">'
+            'No overlays active — all cross-asset relationships within normal range</p>'
+        )
+
+    sections += _section_h(
+        "MARKET REGIME",
+        f'<div>{regime_badge} <span style="font-size:13px;color:#475569;margin-left:8px">'
+        f'{regime_desc}</span></div>{overlay_html}',
+        regime_bg,
+    )
+
+    # ── Signal Snapshot ───────────────────────────────────────────────
+    by_sig: dict[str, list[str]] = defaultdict(list)
+    for s in curr:
+        by_sig[s["signal"]].append(s["ticker"])
+
+    sig_rows = []
+    for sig in ("STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL"):
+        tickers = by_sig.get(sig, [])
+        if not tickers:
+            continue
+        tr = [t for t in tickers if t in tradeable]
+        an = [t for t in tickers if t not in tradeable]
+        parts = ""
+        if tr:
+            parts += ", ".join(f"<strong>{t}</strong>" for t in tr)
+        if an:
+            if parts:
+                parts += ' &nbsp;<span style="color:#94a3b8">+'
+            else:
+                parts += '<span style="color:#94a3b8">'
+            parts += f'{", ".join(an)}</span>'
+        sig_rows.append([_sig_badge_h(sig), parts or "—", str(len(tickers)), str(len(tr))])
+
+    strong_buy_tr  = [t for t in by_sig.get("STRONG_BUY",  []) if t in tradeable]
+    strong_sell_tr = [t for t in by_sig.get("STRONG_SELL", []) if t in tradeable]
+    summary_line   = (
+        f'<p style="margin:10px 0 0;font-size:13px;color:#475569">'
+        f'<strong>{len(strong_buy_tr)}</strong> actionable STRONG BUY &nbsp;·&nbsp; '
+        f'<strong>{len(strong_sell_tr)}</strong> actionable STRONG SELL (tradeable only)</p>'
+    )
+    sections += _section_h(
+        "SIGNAL SNAPSHOT",
+        (_table_h(["Signal", "Assets", "Total", "Tradeable"], sig_rows) if sig_rows
+         else '<p style="color:#64748b;font-size:13px">No signals.</p>') + summary_line,
+        "#3b82f6",
+    )
+
+    # ── Last Week's Signal Performance ────────────────────────────────
+    perf_rows = []
+    for ws in data["week_signals"]:
+        ticker = ws["ticker"]
+        sig    = ws["signal"]
+        entry  = ws.get("price_at_signal")
+        curr_p = curr_prices.get(ticker)
+        if not entry or not curr_p:
+            continue
+        ret     = (curr_p - entry) / entry * 100
+        correct = (
+            (ret > 0) if sig in ("STRONG_BUY", "BUY")
+            else (ret < 0) if sig in ("STRONG_SELL", "SELL")
+            else None
+        )
+        chk = (
+            '<span style="color:#16a34a;font-weight:700">&#10003;</span>' if correct is True
+            else '<span style="color:#dc2626;font-weight:700">&#10007;</span>' if correct is False
+            else '<span style="color:#94a3b8">—</span>'
+        )
+        pc = _pnl_color(ret)
+        perf_rows.append((ticker, sig, entry, curr_p, ret, correct, pc, chk))
+
+    if perf_rows:
+        perf_rows.sort(key=lambda x: abs(x[4]), reverse=True)
+        n_correct = sum(1 for r in perf_rows if r[5] is True)
+        n_total   = sum(1 for r in perf_rows if r[5] is not None)
+        hit       = n_correct / n_total * 100 if n_total else 0
+        hit_color = "#16a34a" if hit >= 50 else "#dc2626"
+
+        table_rows = [
+            [
+                chk,
+                f"<strong>{ticker}</strong>",
+                _sig_badge_h(sig),
+                f'<span style="color:{pc};font-weight:600">{ret:+.1f}%</span>',
+                f'<span style="color:#94a3b8;font-size:12px">{entry:.4g} &rarr; {curr_p:.4g}</span>',
+            ]
+            for ticker, sig, entry, curr_p, ret, _, pc, chk in perf_rows[:15]
+        ]
+        hit_html = (
+            f'<p style="margin:10px 0 0;font-size:13px">'
+            f'<strong style="color:{hit_color}">{hit:.0f}%</strong> directional hit rate '
+            f'({n_correct}/{n_total} correct)</p>'
+        )
+        perf_html = _table_h(["", "Ticker", "Signal", "7-day Return", "Price"], table_rows) + hit_html
+        if len(perf_rows) > 15:
+            perf_html += (
+                f'<p style="margin:6px 0 0;font-size:12px;color:#94a3b8">'
+                f'… and {len(perf_rows) - 15} more tickers</p>'
+            )
+    else:
+        perf_html = (
+            '<p style="color:#64748b;font-size:13px">'
+            'No prior-week signal data — needs signals stored 7+ days ago.</p>'
+        )
+
+    sections += _section_h(
+        f"LAST WEEK'S SIGNAL PERFORMANCE &nbsp;"
+        f'<span style="font-weight:400;color:#94a3b8;font-size:11px">'
+        f'~{week_ago.strftime("%d %b")}</span>',
+        perf_html,
+        "#8b5cf6",
+    )
+
+    # ── Open Trades ───────────────────────────────────────────────────
+    open_trades = data["open_trades"]
+    if open_trades:
+        tr_rows = []
+        for t in open_trades:
+            ticker    = t.get("ticker", "?")
+            direction = t.get("direction", "?")
+            ep        = float(t.get("entry_price") or 0)
+            entry_raw = t.get("entry_date")
+            sig_type  = t.get("signal_type", "?")
+            acct      = t.get("account_type", "PRACTICE")
+            try:
+                entry_dt  = datetime.fromisoformat(str(entry_raw).split(".")[0]) if entry_raw else None
+                hold_days = (now - entry_dt).days if entry_dt else 0
+                entry_str = entry_dt.strftime("%d %b") if entry_dt else "?"
+            except Exception:
+                hold_days, entry_str = 0, "?"
+            curr_p = curr_prices.get(ticker)
+            if curr_p and ep:
+                ret = (curr_p - ep) / ep * 100 if direction == "LONG" else (ep - curr_p) / ep * 100
+                pnl_cell = f'<span style="color:{_pnl_color(ret)};font-weight:600">{ret:+.1f}%</span>'
+            else:
+                pnl_cell = "—"
+            acct_note = (
+                f' <span style="color:#94a3b8;font-size:11px">[{acct}]</span>'
+                if acct not in ("PRACTICE", "") else ""
+            )
+            tr_rows.append([
+                _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569"),
+                f"<strong>{ticker}</strong>{acct_note}",
+                f"{entry_str} ({hold_days}d)",
+                _sig_badge_h(sig_type) if sig_type in _SIG_STYLES_H else sig_type,
+                pnl_cell,
+            ])
+        open_html = _table_h(["Dir", "Ticker", "Entry", "Signal at entry", "Price &Delta;"], tr_rows)
+        open_html += (
+            '<p style="margin:8px 0 0;font-size:12px;color:#94a3b8">'
+            'Price change only — excludes FX conversion and leverage.</p>'
+        )
+    else:
+        open_html = '<p style="color:#64748b;font-size:13px">No open trades.</p>'
+
+    sections += _section_h(f"OPEN TRADES ({len(open_trades)})", open_html, "#0891b2")
+
+    # ── Closed This Week ──────────────────────────────────────────────
+    closed = data["closed_week"]
+    if closed:
+        wins = [t for t in closed if float(t.get("pnl_pct") or 0) > 0]
+        losses = [t for t in closed if float(t.get("pnl_pct") or 0) <= 0]
+        net  = sum(float(t.get("pnl_pct") or 0) * 100 for t in closed)
+        summary = (
+            f'<p style="margin:0 0 10px;font-size:13px">'
+            f'{_badge_h("W", "#16a34a")} {len(wins)} wins &nbsp; '
+            f'{_badge_h("L", "#dc2626")} {len(losses)} losses &nbsp;·&nbsp; '
+            f'Net: <strong style="color:{_pnl_color(net)}">{net:+.1f}%</strong></p>'
+        )
+        cl_rows = []
+        for t in closed:
+            pnl  = float(t.get("pnl_pct") or 0) * 100
+            hold = t.get("holding_days", 0)
+            sig  = t.get("signal_type", "?")
+            d    = t.get("direction", "?")
+            cl_rows.append([
+                _badge_h("W", "#16a34a") if pnl > 0 else _badge_h("L", "#dc2626"),
+                _badge_h(d, "#1e293b" if d == "LONG" else "#475569"),
+                f"<strong>{t.get('ticker','?')}</strong>",
+                f'<span style="color:{_pnl_color(pnl)};font-weight:600">{pnl:+.1f}%</span>',
+                f"{hold}d",
+                _sig_badge_h(sig) if sig in _SIG_STYLES_H else sig,
+            ])
+        closed_html = summary + _table_h(
+            ["", "Dir", "Ticker", "P&amp;L", "Hold", "Entry Signal"], cl_rows
+        )
+    else:
+        closed_html = '<p style="color:#64748b;font-size:13px">No trades closed this week.</p>'
+
+    sections += _section_h(f"TRADES CLOSED THIS WEEK ({len(closed)})", closed_html, "#7c3aed")
+
+    # ── Signal Accuracy Progress ──────────────────────────────────────
+    all_c   = data["all_closed"]
+    min_trd = config.get("learning", {}).get("min_trades_before_adjustment", 20)
+    n       = len(all_c)
+
+    if n == 0:
+        acc_html = (
+            '<p style="color:#64748b;font-size:13px">'
+            'No closed trades yet — accuracy tracking begins after the first closed trade.</p>'
+        )
+    else:
+        wins_all = [t for t in all_c if float(t.get("pnl_pct") or 0) > 0]
+        wr       = len(wins_all) / n * 100
+        pct_done = min(n / min_trd * 100, 100)
+        bar_w    = 300
+        fill_w   = int(pct_done / 100 * bar_w)
+
+        bar_html = (
+            f'<div style="background-color:#e2e8f0;border-radius:4px;height:10px;'
+            f'width:{bar_w}px;max-width:100%;margin:8px 0">'
+            f'<div style="background-color:#3b82f6;width:{fill_w}px;height:10px;'
+            f'border-radius:4px"></div></div>'
+        )
+        wr_color = "#16a34a" if wr >= 50 else "#dc2626"
+        stats    = (
+            f'<p style="margin:6px 0;font-size:13px">'
+            f'<strong>{n}</strong> closed trades / {min_trd} target &nbsp;·&nbsp; '
+            f'Win rate: <strong style="color:{wr_color}">{wr:.1f}%</strong></p>'
+        )
+        sig_stats: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        for t in all_c:
+            s = t.get("signal_type", "UNKNOWN") or "UNKNOWN"
+            sig_stats[s][0] += 1
+            if float(t.get("pnl_pct") or 0) > 0:
+                sig_stats[s][1] += 1
+
+        sig_rows_acc = [
+            [
+                _sig_badge_h(sig) if sig in _SIG_STYLES_H else sig,
+                str(cnt),
+                f'<span style="color:{"#16a34a" if (w/cnt*100 if cnt else 0) >= 50 else "#dc2626"};'
+                f'font-weight:600">{w/cnt*100 if cnt else 0:.1f}%</span>',
+            ]
+            for sig, (cnt, w) in sorted(sig_stats.items(), key=lambda x: -x[1][0])
+        ]
+
+        ticker_pnl: dict[str, list[float]] = defaultdict(list)
+        for t in all_c:
+            ticker_pnl[t.get("ticker", "?")].append(float(t.get("pnl_pct") or 0) * 100)
+        ticker_avg = {tk: sum(v) / len(v) for tk, v in ticker_pnl.items() if v}
+
+        best_worst = ""
+        if len(ticker_avg) >= 2:
+            best  = max(ticker_avg, key=ticker_avg.get)  # type: ignore[arg-type]
+            worst = min(ticker_avg, key=ticker_avg.get)  # type: ignore[arg-type]
+            best_worst = (
+                f'<p style="margin:10px 0 0;font-size:13px;color:#475569">'
+                f'Best: <strong>{best}</strong> avg '
+                f'<span style="color:#16a34a">{ticker_avg[best]:+.1f}%</span>'
+                f' &nbsp;·&nbsp; '
+                f'Worst: <strong>{worst}</strong> avg '
+                f'<span style="color:#dc2626">{ticker_avg[worst]:+.1f}%</span></p>'
+            )
+
+        acc_html = (
+            bar_html + stats
+            + (_table_h(["Signal Type", "Trades", "Win Rate"], sig_rows_acc) if sig_rows_acc else "")
+            + best_worst
+        )
+
+    sections += _section_h("SIGNAL ACCURACY PROGRESS", acc_html, "#f59e0b")
+
+    # ── Macro Pulse ───────────────────────────────────────────────────
+    ml       = data["macro_latest"]
+    mp       = data["macro_prev"]
+    vix_now  = curr_prices.get("^VIX")
+    vix_prev = data["vix_prev"]
+
+    macro_rows = []
+    if vix_now is not None:
+        vix_chg = f" ({vix_now - vix_prev:+.1f} wow)" if vix_prev else ""
+        lvl     = "low" if vix_now < 15 else ("elevated" if vix_now < 25 else "HIGH")
+        lvl_c   = "#16a34a" if vix_now < 15 else ("#d97706" if vix_now < 25 else "#dc2626")
+        macro_rows.append([
+            "VIX (fear gauge)",
+            f"<strong>{vix_now:.1f}</strong>",
+            f'<span style="color:#64748b;font-size:12px">{vix_chg}</span>',
+            f'<span style="color:{lvl_c};font-size:12px">{lvl}</span>',
+        ])
+
+    for series_id, label in _MACRO_LABELS.items():
+        row = ml.get(series_id)
+        if not row or row.get("value") is None:
+            continue
+        val_now = float(row["value"])
+        prev    = mp.get(series_id)
+        chg_str = ""
+        if prev is not None:
+            diff    = val_now - prev
+            pct     = diff / abs(prev) * 100 if prev != 0 else 0
+            arrow   = "&#9650;" if diff > 0 else ("&#9660;" if diff < 0 else "&#9654;")
+            chg_c   = "#dc2626" if diff > 0.05 else ("#16a34a" if diff < -0.05 else "#64748b")
+            chg_str = (
+                f'<span style="color:{chg_c};font-size:12px">'
+                f'{arrow} {abs(diff):.3f} ({pct:+.1f}% wow)</span>'
+            )
+        score   = int(row.get("score") or 0)
+        s_label = (
+            '<span style="color:#16a34a;font-size:12px">&#8593; bullish</span>' if score == 1
+            else '<span style="color:#dc2626;font-size:12px">&#8595; bearish</span>' if score == -1
+            else '<span style="color:#94a3b8;font-size:12px">neutral</span>'
+        )
+        macro_rows.append([label, f"<strong>{val_now:.3f}</strong>", chg_str, s_label])
+
+    if macro_rows:
+        macro_html = _table_h(["Indicator", "Value", "WoW Change", "Signal"], macro_rows)
+        macro_html += (
+            '<p style="margin:8px 0 0;font-size:12px;color:#94a3b8">'
+            'HY OAS &gt; 5% = credit stress zone. Yield curve &gt; 0 = normal slope.</p>'
+        )
+    else:
+        macro_html = (
+            '<p style="color:#64748b;font-size:13px">'
+            'No FRED data available — set macro.fred_api_key in config.yaml.</p>'
+        )
+
+    sections += _section_h("MACRO PULSE", macro_html, "#0f766e")
+
+    # ── Watch List ────────────────────────────────────────────────────
+    div_pairs = data["div_pairs"]
+    watch_html = ""
+    if div_pairs:
+        watch_html += (
+            '<p style="margin:0 0 8px;font-size:13px;color:#475569;font-weight:600">'
+            'Diverging cross-asset relationships:</p>'
+        )
+        for p in div_pairs[:6]:
+            z   = float(p.get("z_score") or 0)
+            ps  = int(p.get("pair_score") or 1)
+            exp = "positive" if ps == 1 else "inverse"
+            z_c = "#dc2626" if abs(z) >= 2.5 else "#d97706"
+            watch_html += (
+                f'<div style="border-left:3px solid {z_c};padding:6px 10px;margin-bottom:6px;'
+                f'background-color:#fffbeb;border-radius:0 4px 4px 0;font-size:13px">'
+                f'<strong>{p["ticker_a"]}</strong> / <strong>{p["ticker_b"]}</strong>'
+                f' &nbsp;—&nbsp; expected {exp}, currently diverging'
+                f' <span style="color:{z_c};font-weight:700">(z={z:+.1f})</span></div>'
+            )
+    else:
+        watch_html += (
+            '<p style="color:#64748b;font-size:13px">'
+            'No diverging pairs — all cross-asset relationships within normal range.</p>'
+        )
+
+    flags = data["opp_flags"]
+    if flags:
+        watch_html += (
+            '<p style="margin:12px 0 6px;font-size:13px;color:#475569;font-weight:600">'
+            'Catch-up opportunities flagged this week:</p>'
+        )
+        for f_ in flags[:5]:
+            z = float(f_.get("z_score") or 0)
+            watch_html += (
+                f'<p style="margin:3px 0;font-size:13px">'
+                f'<strong>{f_["ticker"]}</strong> &nbsp; {f_["flag_type"]} &nbsp;'
+                f'<span style="color:#d97706">(z={z:+.1f})</span></p>'
+            )
+
+    sections += _section_h("WATCH LIST", watch_html, "#b45309")
+
+    # ── Virtual Portfolio ─────────────────────────────────────────────
+    if data["vt_enabled"]:
+        v_open = data["virt_open"]
+        v_week = data["virt_week"]
+        vt_html = (
+            f'<p style="margin:0 0 8px;font-size:13px">'
+            f'<strong>Portfolio:</strong> £{data["vt_portfolio"]:,.0f} &nbsp;·&nbsp; '
+            f'<strong>Open positions:</strong> {len(v_open)}</p>'
+        )
+        if v_open:
+            vt_rows = []
+            for t in v_open:
+                ticker    = t.get("ticker", "?")
+                direction = t.get("direction", "?")
+                ep        = float(t.get("entry_price") or 0)
+                curr_p    = curr_prices.get(ticker)
+                if curr_p and ep:
+                    ret = (curr_p - ep) / ep * 100 if direction == "LONG" else (ep - curr_p) / ep * 100
+                    pnl_cell = f'<span style="color:{_pnl_color(ret)};font-weight:600">{ret:+.1f}%</span>'
+                else:
+                    pnl_cell = "—"
+                sig_type = t.get("signal_type", "?")
+                vt_rows.append([
+                    _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569"),
+                    f"<strong>{ticker}</strong>",
+                    _sig_badge_h(sig_type) if sig_type in _SIG_STYLES_H else sig_type,
+                    pnl_cell,
+                ])
+            vt_html += _table_h(["Dir", "Ticker", "Entry Signal", "Price &Delta;"], vt_rows)
+
+        if v_week:
+            v_wins = [t for t in v_week if float(t.get("pnl_pct") or 0) > 0]
+            v_net  = sum(float(t.get("pnl_pct") or 0) * 100 for t in v_week)
+            vt_html += (
+                f'<p style="margin:10px 0 0;font-size:13px">'
+                f'Week closed: {len(v_week)} trade{"s" if len(v_week) != 1 else ""}, '
+                f'{len(v_wins)} wins &nbsp;·&nbsp; '
+                f'Net: <strong style="color:{_pnl_color(v_net)}">{v_net:+.1f}%</strong></p>'
+            )
+        else:
+            vt_html += (
+                '<p style="margin:10px 0 0;font-size:13px;color:#64748b">'
+                'No virtual trades closed this week.</p>'
+            )
+
+        sections += _section_h(
+            f'VIRTUAL PORTFOLIO (£{data["vt_portfolio"]:,.0f})', vt_html, "#7c3aed"
+        )
+
+    # ── Assemble ──────────────────────────────────────────────────────
+    next_sunday = now + timedelta(days=(6 - now.weekday() + 7) % 7 or 7)
+    footer_note = f"Next summary: Sunday {next_sunday.strftime('%d %b %Y')} 10:00 UTC"
+
+    return _email_wrap_h(
+        _email_header_h(
+            "Weekly Summary",
+            f"Week of {week_ago.strftime('%d %b')} – {now.strftime('%d %b %Y')} "
+            f"&nbsp;·&nbsp; Generated {now.strftime('%H:%M')} UTC",
+        ),
+        sections,
+        _email_footer_h(footer_note),
+    )
+
+
 def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
     """Gather weekly data and send the summary email.
 
@@ -942,16 +1650,6 @@ def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
     if weekly_cfg.get("enabled") is False:
         return False, "Weekly summary disabled (notifications.weekly_summary.enabled: false)"
 
-    smtp_host = notif.get("smtp_host",     "smtp-relay.brevo.com")
-    smtp_port = int(notif.get("smtp_port", 587))
-    smtp_user = notif.get("smtp_user",     "")
-    smtp_pass = notif.get("smtp_password", "")
-    from_addr = notif.get("from_address")  or smtp_user
-    to_addrs  = notif.get("to_addresses")  or []
-
-    if not to_addrs:
-        return False, "No recipient addresses configured in notifications.email.to_addresses"
-
     try:
         data = _gather_weekly_data(config)
     except Exception as exc:
@@ -959,7 +1657,8 @@ def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
         return False, f"Data gathering failed: {exc}"
 
     try:
-        body = _build_weekly_email(data, config)
+        text_body = _build_weekly_email(data, config)
+        html_body = _build_weekly_email_html(data, config)
     except Exception as exc:
         logger.error("Weekly summary email build failed: %s", exc, exc_info=True)
         return False, f"Email build failed: {exc}"
@@ -970,20 +1669,11 @@ def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
         f"Investment Research — Weekly Summary "
         f"{week_ago.strftime('%d %b')}–{now.strftime('%d %b %Y')}"
     )
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"]    = from_addr
-    msg["To"]      = ", ".join(to_addrs)
 
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(from_addr, to_addrs, msg.as_string())
+    ok, msg = _smtp_send(subject, text_body, html_body, config)
+    if ok:
+        to_n = len(notif.get("to_addresses") or [])
         set_metadata("last_weekly_summary_sent", now.isoformat())
-        logger.info("Weekly summary email sent to %d recipient(s).", len(to_addrs))
-        return True, f"Weekly summary sent to {len(to_addrs)} recipient(s)"
-    except Exception as exc:
-        logger.error("Failed to send weekly summary email: %s", exc)
-        return False, f"Email send failed: {exc}"
+        logger.info("Weekly summary email sent to %d recipient(s).", to_n)
+        return True, f"Weekly summary sent to {to_n} recipient(s)"
+    return False, msg
