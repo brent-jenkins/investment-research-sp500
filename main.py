@@ -83,6 +83,7 @@ from output.briefing import (
     get_macro_context,
     send_alert_email,
     send_test_email,
+    send_weekly_summary_email,
     should_send_alert,
 )
 from output.signals import (
@@ -3140,16 +3141,27 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         f"From: **{_from}** · To: **{_to}** · Via: {_relay} · "
         f"Alerts: {'**enabled**' if _enabled else 'disabled'}"
     )
-    if st.button("📧 Send Test Email", key="status_send_test_email"):
-        _regime_str = detect_regime().get("regime", "UNKNOWN")
-        _open_count = len(get_open_trades())
-        with st.spinner("Sending…"):
-            _ok, _msg = send_test_email(config, _regime_str, last_analysis, _open_count)
-        if _ok:
-            st.success(_msg)
-        else:
-            st.error(_msg)
-    st.caption("Sends a real email to confirm SMTP delivery is working. Check your inbox after clicking.")
+    _btn_col1, _btn_col2 = st.columns(2)
+    with _btn_col1:
+        if st.button("📧 Send Test Email", key="status_send_test_email"):
+            _regime_str = detect_regime().get("regime", "UNKNOWN")
+            _open_count = len(get_open_trades())
+            with st.spinner("Sending…"):
+                _ok, _msg = send_test_email(config, _regime_str, last_analysis, _open_count)
+            if _ok:
+                st.success(_msg)
+            else:
+                st.error(_msg)
+        st.caption("Confirms SMTP delivery is working.")
+    with _btn_col2:
+        if st.button("📊 Send Weekly Summary Now", key="status_send_weekly"):
+            with st.spinner("Gathering data and sending…"):
+                _ok, _msg = send_weekly_summary_email(config)
+            if _ok:
+                st.success(_msg)
+            else:
+                st.error(_msg)
+        st.caption("Sends the full weekly summary immediately — useful for testing.")
 
 
 # ---------------------------------------------------------------------------

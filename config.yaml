@@ -460,6 +460,9 @@ notifications:
       - "you@example.com"
     alert_cooldown_hours: 8  # Minimum hours between auto-sent alert emails
 
+  weekly_summary:
+    enabled: true           # set false to disable without touching email.enabled
+
 backtest:
   # Exit conditions for trade simulation
   max_holding_days: 60           # close position after this many days regardless of signal

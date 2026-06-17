@@ -515,6 +515,15 @@ def _trade_alert_job() -> None:
                 )
 
 
+def _weekly_summary_job() -> None:
+    """Every Sunday at 10:00 UTC — send the weekly performance summary email."""
+    logger.info("Weekly summary job starting…")
+    config = _load_config()
+    from output.briefing import send_weekly_summary_email  # noqa: PLC0415
+    ok, msg = send_weekly_summary_email(config)
+    logger.info("Weekly summary: %s — %s", "sent" if ok else "failed", msg)
+
+
 def start_scheduler() -> BackgroundScheduler:
     """Start the background scheduler with all three daily jobs if not already running."""
     global _scheduler
@@ -569,6 +578,20 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     logger.info("Scheduled trade alert check hourly 14:00–21:00 %s on weekdays.", tz)
+
+    # Weekly summary email — every Sunday at 10:00 UTC.
+    _scheduler.add_job(
+        _weekly_summary_job,
+        trigger=CronTrigger(
+            day_of_week="sun",
+            hour=10,
+            minute=0,
+            timezone=tz,
+        ),
+        id="weekly_summary",
+        replace_existing=True,
+    )
+    logger.info("Scheduled weekly summary email every Sunday 10:00 %s.", tz)
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))
