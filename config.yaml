@@ -73,11 +73,11 @@ watchlist:
     - ticker: "BNO"
       name: "United States Brent Oil Fund"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
     - ticker: "UNG"
       name: "United States Natural Gas Fund"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
 
   commodities:
     - ticker: "GLD"
@@ -108,7 +108,7 @@ watchlist:
     - ticker: "DBA"
       name: "Invesco DB Agriculture Fund"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
     - ticker: "WEAT"
       name: "Teucrium Wheat Fund"
       exchange: "NYSE"
@@ -202,15 +202,15 @@ watchlist:
     - ticker: "^VIX3M"
       name: "3-Month VIX"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
     - ticker: "VIXY"
       name: "ProShares VIX Short-Term Futures"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
     - ticker: "^VVIX"
       name: "CBOE VVIX Index"
       exchange: "NYSE"
-      tradeable: true
+      tradeable: false
 
   tech_subsectors:
     - ticker: "SOXX"
@@ -304,11 +304,11 @@ watchlist:
     - ticker: "SOL-USD"
       name: "Solana"
       exchange: "Crypto"
-      tradeable: true
+      tradeable: false
     - ticker: "BNB-USD"
       name: "Binance Coin"
       exchange: "Crypto"
-      tradeable: true
+      tradeable: false
 
   uk_etfs: []
 
