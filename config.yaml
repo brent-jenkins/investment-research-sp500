@@ -470,11 +470,11 @@ backtest:
   walk_forward_step: 1           # step between windows in months
 
 virtual_trading:
-  enabled: false                 # set true to enable automatic virtual trades
-  portfolio_size_gbp: 10000      # starting virtual portfolio value
+  enabled: true                  # set true to enable automatic virtual trades
+  portfolio_size_gbp: 2000       # starting virtual portfolio value
   position_pct: 0.05             # fraction of portfolio per trade (5%)
-  max_open_positions: 5          # cap on simultaneous virtual positions
-  entry_signal: "STRONG_BUY"    # STRONG_BUY = strict; BUY = looser entry
+  max_open_positions: 10         # cap on simultaneous virtual positions
+  entry_signal: "STRONG_BUY"     # STRONG_BUY = strict; BUY = looser entry
 
 learning:
   enabled: true
