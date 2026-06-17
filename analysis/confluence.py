@@ -68,27 +68,26 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-# Signal classification thresholds (weighted score ∈ [-1, +1])
-_THRESHOLDS = [
-    ( 0.60,  1.00, "STRONG_BUY"),
-    ( 0.30,  0.60, "BUY"),
-    (-0.30,  0.30, "NEUTRAL"),
-    (-0.60, -0.30, "SELL"),
-    (-1.00, -0.60, "STRONG_SELL"),
-]
+def _classify(score: float, config: dict | None = None) -> str:
+    """Map a weighted confluence score to a named signal classification.
 
-
-def _classify(score: float) -> str:
-    """Map a weighted confluence score to a named signal classification."""
-    for lo, hi, label in _thresholds_sorted():
+    The STRONG_BUY / STRONG_SELL boundary is read from config
+    (confluence.buy_threshold), defaulting to 0.55.  The BUY / SELL
+    midpoint is fixed at ±0.30.
+    """
+    strong = (config or {}).get("confluence", {}).get("buy_threshold", 0.55)
+    mid = 0.30
+    thresholds = [
+        ( strong,  1.00, "STRONG_BUY"),
+        ( mid,  strong, "BUY"),
+        (-mid,   mid,   "NEUTRAL"),
+        (-strong, -mid, "SELL"),
+        (-1.00, -strong, "STRONG_SELL"),
+    ]
+    for lo, hi, label in sorted(thresholds, key=lambda t: -t[0]):
         if lo <= score <= hi:
             return label
     return "NEUTRAL"
-
-
-def _thresholds_sorted():
-    """Yield (lo, hi, label) sorted so the first match wins correctly."""
-    return sorted(_THRESHOLDS, key=lambda t: -t[0])
 
 
 def _weighted_score(scores: dict[str, int], weights: dict[str, float]) -> float:
@@ -342,7 +341,7 @@ def score_ticker(
             w_score = round(w_score * 0.85, 3)
             overlay_applied.append("CREDIT_STRESS")
 
-    classification = _classify(w_score)
+    classification = _classify(w_score, config)
 
     return {
         "ticker":               ticker,

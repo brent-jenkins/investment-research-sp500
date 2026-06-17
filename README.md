@@ -173,11 +173,13 @@ Detected by `detect_overlays()` after each correlation run. Three overlays are d
 
 `weighted_score = Σ(module_score × regime_weight)` ∈ [−1, +1]
 
-- ≥ 0.60 → `STRONG_BUY`
+- ≥ `buy_threshold` (default 0.55) → `STRONG_BUY`
 - ≥ 0.30 → `BUY`
 - (−0.30, +0.30) → `NEUTRAL`
 - ≤ −0.30 → `SELL`
-- ≤ −0.60 → `STRONG_SELL`
+- ≤ `−buy_threshold` → `STRONG_SELL`
+
+The STRONG BUY/SELL boundary is configurable via `confluence.buy_threshold` in `config.yaml`.
 
 ### Feedback learning
 

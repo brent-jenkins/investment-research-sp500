@@ -127,7 +127,7 @@ Active overlays are displayed as compact inline strips on the Signals and Daily 
 `analysis/confluence.py:generate_signals()` calls `score_ticker()` for each asset, which:
 1. Calls all seven `compute_*` functions fresh from stored price data
 2. Computes `weighted_score = Σ(module_score × regime_weight)` ∈ [-1, 1]
-3. Classifies as `STRONG_BUY` (≥0.6), `BUY` (≥0.3), `NEUTRAL`, `SELL` (≤-0.3), `STRONG_SELL` (≤-0.6)
+3. Classifies as `STRONG_BUY` (≥`buy_threshold`), `BUY` (≥0.3), `NEUTRAL`, `SELL` (≤-0.3), `STRONG_SELL` (≤`-buy_threshold`) — the STRONG boundary is read from `confluence.buy_threshold` in config (default 0.55)
 4. Upserts to the `signals` table keyed on `(ticker, today's date)`
 
 The seventh module is `compute_correlations(ticker, config)` from `analysis/correlations.py`. It finds all predefined pairs involving the ticker, checks if the current rolling correlation matches the expected direction (CONFIRMING/DIVERGING/NEUTRAL), and returns a score of -1/0/1. Most watchlist tickers appear in zero or one pair and receive score=0; tickers like `^GSPC`, `GLD`, and `^VIX` appear in multiple pairs and receive a blended score.
