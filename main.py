@@ -2902,7 +2902,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     # ── Price Data Refresh description ────────────────────────────────────
     if not fresh and not stale and not missing:
-        price_desc = "No price data yet — click Refresh Data below"
+        price_desc = "No price data yet — use Manual Controls below to trigger an immediate pull"
     elif missing:
         price_desc = (
             f"{len(fresh)}/{total} tickers up to date"
@@ -3202,21 +3202,9 @@ def _render_relationships_page(config: dict) -> None:
         "diverge significantly from their historical norms."
     )
 
-    # ── Refresh button ─────────────────────────────────────────────────────────
-    col_btn, col_ts = st.columns([1, 4])
-    if col_btn.button("↻ Recompute Now", type="primary"):
-        with st.spinner("Computing correlations…"):
-            try:
-                compute_all_pairs(config)
-                st.session_state["_corr_refresh_ts"] = datetime.utcnow()
-                st.success("Correlations updated.")
-            except Exception as exc:
-                st.error(f"Failed: {exc}")
-        st.rerun()
-
-    refresh_ts = st.session_state.get("_corr_refresh_ts")
-    if refresh_ts:
-        col_ts.caption(f"Last recomputed: {refresh_ts.strftime('%H:%M UTC')}")
+    _corr_ts = get_metadata("last_analysis_run")
+    if _corr_ts:
+        st.caption(f"Last computed: {_corr_ts.strftime('%Y-%m-%d %H:%M')} UTC · Updates run automatically at 07:00, 13:30 and 21:30 UTC")
 
     st.divider()
 
@@ -3228,7 +3216,7 @@ def _render_relationships_page(config: dict) -> None:
         corr_df, tickers_in_matrix = build_correlation_matrix(window=30)
 
     if corr_df.empty:
-        st.info("Insufficient price data to build the correlation matrix. Run a data refresh first.")
+        st.info("Insufficient price data to build the correlation matrix — data refreshes automatically at 21:30 UTC.")
     else:
         # Round for display and build the heatmap
         z_vals    = corr_df.values.tolist()
@@ -3275,7 +3263,7 @@ def _render_relationships_page(config: dict) -> None:
     stored = get_stored_correlations()
 
     if not any(p.get("corr_30d") is not None for p in stored):
-        st.info("No correlation data stored yet — click **↻ Recompute Now** or run analysis.")
+        st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
     else:
         records = []
         for p in stored:
@@ -3352,7 +3340,7 @@ def _render_relationships_page(config: dict) -> None:
     st.markdown("### Notable Relationships")
 
     if not stored or not any(p.get("corr_30d") is not None for p in stored):
-        st.info("No data yet. Run a data refresh and then recompute correlations.")
+        st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
         return
 
     diverging = [p for p in stored if p.get("divergence") == "DIVERGING"]
@@ -4249,33 +4237,13 @@ def main() -> None:
 
         st.divider()
 
-        # Last data pull timestamp — prefer last_full_refresh (set by scheduler
-        # and manual refresh); fall back to last_refresh_run for older DBs.
-        last_pull_ts = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
-        if last_pull_ts:
-            st.caption(f"Last data pull: {last_pull_ts.strftime('%Y-%m-%d %H:%M')} UTC")
-        else:
-            st.caption("No data yet — click Refresh Data to load.")
-
-        # Refresh button — manual full refresh (data pull + analysis pipeline)
-        if st.button("🔄 Refresh Data", use_container_width=True, type="primary"):
-            _cfg     = _load_config()
-            _tickers = get_all_tickers(_cfg)
-            with st.spinner("Pulling latest prices…"):
-                results  = pull_incremental(tickers=_tickers)
-                new_rows = sum(results.values())
-                try:
-                    set_metadata("last_full_refresh", datetime.utcnow().isoformat())
-                except Exception:
-                    pass
-            with st.spinner("Running analysis pipeline…"):
-                try:
-                    run_analysis(tickers=_tickers, config=_cfg)
-                    generate_signals(tickers=_tickers, config=_cfg)
-                except Exception as _exc:
-                    st.warning(f"Analysis completed with errors: {_exc}")
-            st.success(f"Fetched {new_rows} new rows · Analysis and signals updated.")
-            st.rerun()
+        # Pipeline status — last data pull and last analysis timestamps.
+        _sb_refresh  = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
+        _sb_analysis = get_metadata("last_analysis_run")
+        _sb_r_str = _sb_refresh.strftime("%Y-%m-%d %H:%M UTC")  if _sb_refresh  else "Pending"
+        _sb_a_str = _sb_analysis.strftime("%Y-%m-%d %H:%M UTC") if _sb_analysis else "Pending"
+        st.caption(f"**Last refresh:** {_sb_r_str}")
+        st.caption(f"**Last analysis:** {_sb_a_str}")
 
 
     # ---- Main content --------------------------------------------------
@@ -4342,7 +4310,7 @@ def main() -> None:
     if df.empty:
         st.warning(
             f"No price data found for **{selected}**. "
-            "Click **Refresh Data** in the sidebar to load history."
+            "Data is refreshed automatically at 21:30 UTC — use Manual Controls on the Status page to trigger an immediate pull."
         )
         return
 
