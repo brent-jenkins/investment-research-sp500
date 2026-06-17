@@ -56,6 +56,24 @@ from output.performance import (
     update_trade_plan,
 )
 from analysis.macro import get_macro_dashboard
+from analysis.backtest import (
+    delete_run,
+    get_all_runs,
+    get_run,
+    get_run_trades,
+    run_backtest,
+)
+from analysis.backtest_metrics import (
+    ANALYSIS_PERIODS,
+    MODULE_LABELS,
+    compute_metrics,
+    equity_curve as bt_equity_curve,
+    module_attribution,
+    period_breakdown,
+    regime_performance,
+    signal_decay,
+    walk_forward,
+)
 from output.briefing import (
     STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
     STATUS_ICONS   as _BRIEF_STATUS_ICONS,
@@ -4180,6 +4198,420 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         )
 
 
+# ---------------------------------------------------------------------------
+# Backtest page
+# ---------------------------------------------------------------------------
+
+def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
+    st.markdown("## 🧪 Backtest")
+    st.caption(
+        "Replay the current signal logic over historical price data. "
+        "Uses vectorized pandas — no look-ahead bias. "
+        "Correlation module excluded (contributes a fixed weight of 0.10); "
+        "remaining module weights are re-normalised."
+    )
+
+    tab_run, tab_period, tab_attr, tab_decay, tab_wf, tab_vt = st.tabs([
+        "▶ Run & Overview",
+        "📅 Period Analysis",
+        "🎯 Module Attribution",
+        "⏱ Signal Decay",
+        "📈 Walk-Forward",
+        "🤖 Virtual Trading",
+    ])
+
+    # ── shared: load runs list once ──────────────────────────────────────────
+    all_runs  = get_all_runs()
+    complete  = [r for r in all_runs if r.get("status") == "complete"]
+    run_opts  = {f"#{r['id']} — {r['name']} ({r.get('total_trades',0)} trades)": r["id"]
+                 for r in complete}
+
+    # ── Tab 1: Run & Overview ─────────────────────────────────────────────────
+    with tab_run:
+        st.markdown("### Configure & Run")
+
+        tradeable = [t for g in config.get("watchlist", {}).values()
+                     if isinstance(g, list)
+                     for t in g
+                     if isinstance(t, dict) and t.get("tradeable")]
+        tradeable_tickers = [e["ticker"] for e in tradeable]
+        all_tickers_list  = get_all_tickers(config)
+
+        col_l, col_r = st.columns(2)
+        with col_l:
+            preset = st.selectbox("Date range preset", [
+                "Full history (2019–present)",
+                "COVID era (2019–2021)",
+                "Bear market (2022)",
+                "Recovery (2023–2024)",
+                "Custom",
+            ], key="bt_preset")
+            presets = {
+                "Full history (2019–present)": (datetime(2019, 1, 1), datetime.utcnow()),
+                "COVID era (2019–2021)":        (datetime(2019, 1, 1), datetime(2021, 12, 31)),
+                "Bear market (2022)":           (datetime(2022, 1, 1), datetime(2022, 12, 31)),
+                "Recovery (2023–2024)":         (datetime(2023, 1, 1), datetime(2024, 12, 31)),
+            }
+            if preset != "Custom":
+                sd, ed = presets[preset]
+            else:
+                sd = datetime.combine(st.date_input("Start date", value=datetime(2019, 1, 1).date(), key="bt_sd"), datetime.min.time())
+                ed = datetime.combine(st.date_input("End date",   value=datetime.utcnow().date(), key="bt_ed"),     datetime.min.time())
+
+            bt_name = st.text_input("Run name (optional)", placeholder="e.g. Full history LONG-only", key="bt_name")
+
+        with col_r:
+            ticker_scope = st.radio("Tickers to test", ["Tradeable assets only", "All assets"], key="bt_scope")
+            tickers_to_test = tradeable_tickers if ticker_scope == "Tradeable assets only" else all_tickers_list
+            st.caption(f"{len(tickers_to_test)} tickers selected")
+
+            max_hold = st.slider("Max holding days", 10, 120, int(config.get("backtest", {}).get("max_holding_days", 60)), key="bt_maxhold")
+            atr_mult = st.slider("ATR stop multiplier", 1.0, 4.0, float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0)), step=0.5, key="bt_atrmult")
+
+        bt_config = {**config, "backtest": {**config.get("backtest", {}), "max_holding_days": max_hold, "atr_stop_multiplier": atr_mult}}
+
+        if st.button("▶ Run Backtest", type="primary", key="bt_run"):
+            with st.spinner(f"Running backtest for {len(tickers_to_test)} tickers ({sd.date()} → {ed.date()})…"):
+                try:
+                    new_id = run_backtest(tickers_to_test, sd, ed, bt_config, name=bt_name)
+                    st.success(f"Backtest #{new_id} complete.")
+                    st.session_state["bt_selected_run"] = new_id
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Backtest failed: {exc}")
+
+        st.divider()
+        st.markdown("### Previous Runs")
+
+        if not complete:
+            st.info("No completed backtest runs yet — configure and run one above.")
+        else:
+            sel_label = st.selectbox("Select run to view", list(run_opts.keys()), key="bt_sel_run")
+            sel_id    = run_opts[sel_label]
+            st.session_state["bt_selected_run"] = sel_id
+
+            run  = get_run(sel_id)
+            df   = get_run_trades(sel_id)
+            mets = compute_metrics(df)
+
+            # Delete button
+            with st.expander("⚙ Manage run"):
+                if st.button(f"🗑 Delete run #{sel_id}", key="bt_del"):
+                    delete_run(sel_id)
+                    st.success("Run deleted.")
+                    st.rerun()
+
+            # Metrics strip
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Trades", mets.get("total_trades", 0))
+            wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
+            c2.metric("Win Rate", f"{wr_pct}%",
+                      delta=f"{wr_pct - 50:.1f}pp vs 50%",
+                      delta_color="normal")
+            c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
+            c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
+            c5.metric("Sharpe", f"{mets.get('sharpe_ratio', 0):.2f}")
+            c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
+
+            c7, c8, c9 = st.columns(3)
+            c7.metric("Avg Hold", f"{mets.get('avg_holding_days', 0):.0f} days")
+            c8.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
+            c9.metric("Max Loss Streak", mets.get("max_loss_streak", 0))
+
+            # Equity curve
+            if not df.empty:
+                ec = bt_equity_curve(df)
+                if not ec.empty:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=ec["date"], y=ec["equity"],
+                        mode="lines", name="Portfolio (normalised to 1.0)",
+                        line=dict(color="#3b82f6", width=2),
+                        fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                    ))
+                    fig.update_layout(
+                        title=f"Equity Curve — Run #{sel_id}",
+                        xaxis_title="Date", yaxis_title="Portfolio Value",
+                        height=350, margin=dict(l=0, r=0, t=40, b=0),
+                        yaxis=dict(tickformat=".2f"),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Trades table
+                st.markdown("#### Simulated Trades")
+                show_df = df[[
+                    "ticker", "direction", "entry_date", "exit_date",
+                    "entry_price", "exit_price", "pnl_pct",
+                    "exit_reason", "regime_at_entry", "holding_days", "is_win",
+                ]].copy()
+                show_df["pnl_pct"] = (show_df["pnl_pct"] * 100).round(2)
+                show_df.columns = [
+                    "Ticker", "Dir", "Entry Date", "Exit Date",
+                    "Entry Price", "Exit Price", "P&L %",
+                    "Exit Reason", "Regime", "Hold Days", "Win",
+                ]
+                st.dataframe(
+                    show_df.style.map(lambda v: "color:#16a34a" if v is True else ("color:#dc2626" if v is False else ""), subset=["Win"])
+                              .map(lambda v: f"color:{'#16a34a' if v > 0 else '#dc2626'}" if isinstance(v, (int, float)) else "", subset=["P&L %"]),
+                    use_container_width=True, hide_index=True,
+                )
+
+    # ── Tab 2: Period Analysis ─────────────────────────────────────────────────
+    with tab_period:
+        st.markdown("### Performance by Market Period")
+        if not complete:
+            st.info("Run a backtest first.")
+        else:
+            sel_id = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
+            df     = get_run_trades(sel_id)
+            bdown  = period_breakdown(df)
+
+            for period_name, m in bdown.items():
+                colour  = m.get("colour", "#6b7280")
+                desc    = m.get("desc", "")
+                n       = m.get("total_trades", 0)
+
+                with st.expander(f"{period_name}  —  {n} trade{'s' if n != 1 else ''}", expanded=True):
+                    st.caption(desc)
+                    if n == 0:
+                        st.info("No trades simulated in this period with the selected run.")
+                        continue
+                    pc1, pc2, pc3, pc4 = st.columns(4)
+                    wr = round((m.get("win_rate") or 0) * 100, 1)
+                    pc1.metric("Win Rate",     f"{wr}%")
+                    pc2.metric("Avg Return",   f"{m.get('avg_return_pct', 0):+.2f}%")
+                    pc3.metric("Total Return", f"{m.get('total_return_pct', 0):+.1f}%")
+                    pc4.metric("Max Drawdown", f"{m.get('max_drawdown_pct', 0):.1f}%")
+
+            # Regime performance
+            st.divider()
+            st.markdown("### Performance by Regime")
+            rp = regime_performance(df)
+            if not rp.empty:
+                st.dataframe(rp, use_container_width=True)
+
+    # ── Tab 3: Module Attribution ─────────────────────────────────────────────
+    with tab_attr:
+        st.markdown("### Which Modules Drive Winning Trades?")
+        st.caption(
+            "Agreement = module score direction matches trade direction at entry. "
+            "High 'Win Rate When Agree' shows the module is a useful signal."
+        )
+        if not complete:
+            st.info("Run a backtest first.")
+        else:
+            sel_id = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
+            df     = get_run_trades(sel_id)
+            attr   = module_attribution(df)
+
+            if attr.empty:
+                st.info("Not enough trade data for attribution analysis.")
+            else:
+                # Bar chart: win rate when agree vs disagree
+                import plotly.graph_objects as go
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    name="Win rate when module agrees",
+                    x=attr.index.tolist(),
+                    y=attr["win_rate_when_agree"].tolist(),
+                    marker_color="#22c55e",
+                ))
+                fig.add_trace(go.Bar(
+                    name="Win rate when module disagrees",
+                    x=attr.index.tolist(),
+                    y=attr["win_rate_when_disagree"].tolist(),
+                    marker_color="#ef4444",
+                ))
+                fig.add_hline(y=50, line_dash="dot", line_color="#94a3b8",
+                              annotation_text="50% baseline")
+                fig.update_layout(
+                    barmode="group", title="Module Win Rate: Agreement vs Disagreement",
+                    yaxis_title="Win Rate %", height=350,
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Detailed table
+                st.markdown("#### Module Detail")
+                show = attr.reset_index().rename(columns={
+                    "module":                 "Module",
+                    "win_rate_when_agree":    "Win% (Agree)",
+                    "win_rate_when_disagree": "Win% (Disagree)",
+                    "avg_score_wins":         "Avg Score (Wins)",
+                    "avg_score_losses":       "Avg Score (Losses)",
+                    "agreement_pct":          "Agreement %",
+                    "n_trades":               "N Trades",
+                })
+                st.dataframe(show, use_container_width=True, hide_index=True)
+
+    # ── Tab 4: Signal Decay ───────────────────────────────────────────────────
+    with tab_decay:
+        st.markdown("### How Long Do Signals Last?")
+        st.caption("Distribution of holding periods and exit reasons across all simulated trades.")
+        if not complete:
+            st.info("Run a backtest first.")
+        else:
+            sel_id = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
+            df     = get_run_trades(sel_id)
+            decay  = signal_decay(df)
+
+            if not decay:
+                st.info("Not enough trade data.")
+            else:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Median Hold",   f"{decay.get('median_hold', 0):.0f} days")
+                m2.metric("Mean Hold",     f"{decay.get('mean_hold', 0):.0f} days")
+                m3.metric("Stop Loss %",   f"{decay.get('pct_stop_loss', 0):.1f}%")
+
+                m4, m5, m6 = st.columns(3)
+                m4.metric("Signal Reversal %", f"{decay.get('pct_signal_reversal', 0):.1f}%")
+                m5.metric("Max Holding %",     f"{decay.get('pct_max_holding', 0):.1f}%")
+                m6.metric("End of Data %",     f"{decay.get('pct_end_of_data', 0):.1f}%")
+
+                # Histogram
+                bins = decay.get("hold_bins", [])
+                if bins:
+                    import plotly.graph_objects as go
+                    fig = go.Figure(go.Bar(
+                        x=[b["bin"] for b in bins],
+                        y=[b["count"] for b in bins],
+                        marker_color="#6366f1",
+                    ))
+                    fig.update_layout(
+                        title="Holding Period Distribution",
+                        xaxis_title="Days Held", yaxis_title="Number of Trades",
+                        height=300, margin=dict(l=0, r=0, t=40, b=0),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Avg hold by regime
+                rh = decay.get("regime_holds", {})
+                if rh:
+                    st.markdown("#### Average Holding by Regime")
+                    rh_df = pd.DataFrame(list(rh.items()), columns=["Regime", "Avg Days"])
+                    st.dataframe(rh_df, use_container_width=True, hide_index=True)
+
+    # ── Tab 5: Walk-Forward ───────────────────────────────────────────────────
+    with tab_wf:
+        st.markdown("### Rolling 6-Month Window Validation")
+        st.caption(
+            "Each data point = performance of all trades entered within a 6-month window. "
+            "Consistent win rates across windows suggest the signal logic has stable edge."
+        )
+        if not complete:
+            st.info("Run a backtest first.")
+        else:
+            sel_id  = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
+            df      = get_run_trades(sel_id)
+            wf_data = walk_forward(df, window_months=config.get("backtest", {}).get("walk_forward_months", 6))
+
+            if not wf_data:
+                st.info("Not enough data for walk-forward analysis (need trades across multiple 6-month windows).")
+            else:
+                wf_df = pd.DataFrame(wf_data)
+
+                import plotly.graph_objects as go
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=wf_df["window_start"], y=(wf_df["win_rate"] * 100).round(1),
+                    mode="lines+markers", name="Win Rate %",
+                    line=dict(color="#3b82f6", width=2),
+                ))
+                fig.add_hline(y=50, line_dash="dot", line_color="#94a3b8",
+                              annotation_text="50% baseline")
+                fig.update_layout(
+                    title="Rolling Win Rate (6-month windows)",
+                    xaxis_title="Window Start", yaxis_title="Win Rate %",
+                    height=320, margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Avg return line
+                fig2 = go.Figure()
+                fig2.add_trace(go.Bar(
+                    x=wf_df["window_start"],
+                    y=wf_df["avg_return_pct"].round(2),
+                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in wf_df["avg_return_pct"]],
+                    name="Avg Return %",
+                ))
+                fig2.add_hline(y=0, line_color="#94a3b8")
+                fig2.update_layout(
+                    title="Average Return per Window",
+                    xaxis_title="Window Start", yaxis_title="Avg Return %",
+                    height=280, margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+                st.markdown("#### Window Detail")
+                show_wf = wf_df.copy()
+                show_wf["win_rate"] = (show_wf["win_rate"] * 100).round(1)
+                show_wf.columns = ["Window Start", "Window End", "Win Rate %",
+                                    "Avg Return %", "N Trades", "Sharpe", "Max DD %"]
+                st.dataframe(show_wf, use_container_width=True, hide_index=True)
+
+    # ── Tab 6: Virtual Trading ────────────────────────────────────────────────
+    with tab_vt:
+        st.markdown("### Automated Virtual Trading")
+        vt_cfg = config.get("virtual_trading", {})
+        enabled = vt_cfg.get("enabled", False)
+
+        st.info(
+            "When enabled, the system automatically opens virtual trades on STRONG_BUY / "
+            "STRONG_SELL signals (tradeable assets only) and closes them on EXIT SIGNAL or "
+            "STOP LOSS — identical logic to live monitoring, but against a separate virtual "
+            "portfolio. Enable by setting `virtual_trading.enabled: true` in config.yaml on "
+            "the server."
+        )
+
+        status_col, cfg_col = st.columns(2)
+        with status_col:
+            if enabled:
+                st.success("✅ Virtual trading is **enabled**")
+            else:
+                st.warning("⏸ Virtual trading is **disabled**")
+            st.write(f"**Portfolio size:** £{vt_cfg.get('portfolio_size_gbp', 10000):,}")
+            st.write(f"**Position size:** {int(vt_cfg.get('position_pct', 0.05) * 100)}% per trade")
+            st.write(f"**Max open positions:** {vt_cfg.get('max_open_positions', 5)}")
+            st.write(f"**Entry threshold:** {vt_cfg.get('entry_signal', 'STRONG_BUY')}")
+
+        # Virtual trade history
+        st.divider()
+        st.markdown("#### Virtual Positions")
+        try:
+            from sqlalchemy import text as sa_text
+            from data.database import get_engine as _get_engine
+            _eng = _get_engine()
+            with _eng.connect() as _conn:
+                v_open = _conn.execute(
+                    sa_text("SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=1 ORDER BY entry_date DESC")
+                ).mappings().all()
+                v_closed = _conn.execute(
+                    sa_text("SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=0 ORDER BY exit_date DESC LIMIT 50")
+                ).mappings().all()
+        except Exception:
+            v_open, v_closed = [], []
+
+        if v_open:
+            st.markdown(f"**{len(v_open)} open virtual position{'s' if len(v_open) != 1 else ''}**")
+            open_df = pd.DataFrame([dict(r) for r in v_open])[
+                ["ticker", "direction", "entry_date", "entry_price", "signal_type", "regime"]
+            ]
+            st.dataframe(open_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No open virtual positions.")
+
+        if v_closed:
+            st.markdown(f"**{len(v_closed)} recent closed virtual trades**")
+            closed_df = pd.DataFrame([dict(r) for r in v_closed])[
+                ["ticker", "direction", "entry_date", "exit_date", "pnl_pct", "signal_type"]
+            ].copy()
+            closed_df["pnl_pct"] = (pd.to_numeric(closed_df["pnl_pct"], errors="coerce") * 100).round(2)
+            st.dataframe(closed_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No closed virtual trades yet.")
+
+
 # Main UI
 # ---------------------------------------------------------------------------
 
@@ -4210,7 +4642,7 @@ def main() -> None:
         st.divider()
 
         # Page navigation
-        _PAGES = ["📅 Daily Briefing", "📊 Signals", "📈 Charts", "🔗 Relationships", "📋 Trade Log", "🏆 Performance", "🖥️ Status"]
+        _PAGES = ["📅 Daily Briefing", "📊 Signals", "📈 Charts", "🔗 Relationships", "📋 Trade Log", "🏆 Performance", "🧪 Backtest", "🖥️ Status"]
         _PAGE_KEYS = {
             "📅 Daily Briefing": "briefing",
             "📊 Signals":       "signals",
@@ -4218,6 +4650,7 @@ def main() -> None:
             "🔗 Relationships": "relationships",
             "📋 Trade Log":     "trade_log",
             "🏆 Performance":   "performance",
+            "🧪 Backtest":      "backtest",
             "🖥️ Status":        "status",
         }
         current_key = st.session_state.get("page", "briefing")
@@ -4271,6 +4704,10 @@ def main() -> None:
 
     if page_key == "performance":
         _render_performance_page(config, watchlist)
+        return
+
+    if page_key == "backtest":
+        _render_backtest_page(config, watchlist)
         return
 
     # Charts page

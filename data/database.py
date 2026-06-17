@@ -8,6 +8,7 @@ import yaml
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     Integer,
@@ -329,6 +330,82 @@ class OpportunityFlag(Base):
     __table_args__ = (
         UniqueConstraint("ticker", "flag_type", "date", name="uq_flag_ticker_type_date"),
     )
+
+
+class BacktestRun(Base):
+    """Metadata for a single backtest run."""
+
+    __tablename__ = "backtest_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    start_date = Column(Date)
+    end_date = Column(Date)
+    tickers_json = Column(Text)   # JSON list of tickers tested
+    params_json = Column(Text)    # JSON snapshot of backtest config
+    status = Column(String(20), default="pending")  # pending/running/complete/error
+    error_message = Column(Text)
+
+    # Summary metrics (populated on completion)
+    total_trades = Column(Integer)
+    win_rate = Column(Float)
+    avg_return_pct = Column(Float)
+    sharpe_ratio = Column(Float)
+    max_drawdown_pct = Column(Float)
+    total_return_pct = Column(Float)
+    avg_holding_days = Column(Float)
+
+
+class BacktestSignal(Base):
+    """Daily signal for each ticker within a backtest run."""
+
+    __tablename__ = "backtest_signals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, nullable=False, index=True)
+    ticker = Column(String(20), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    regime = Column(String(30))
+    confluence_score = Column(Float)
+    signal = Column(String(20))
+    trend_score = Column(Integer)
+    mean_reversion_score = Column(Integer)
+    volatility_score = Column(Integer)
+    volume_score = Column(Integer)
+    macro_score = Column(Integer)
+    close_price = Column(Float)
+    atr = Column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "ticker", "date", name="uq_bt_signal_run_ticker_date"),
+    )
+
+
+class BacktestTrade(Base):
+    """Simulated trade produced by the backtest engine."""
+
+    __tablename__ = "backtest_trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, nullable=False, index=True)
+    ticker = Column(String(20), nullable=False, index=True)
+    direction = Column(String(10))   # LONG / SHORT
+    entry_date = Column(Date)
+    exit_date = Column(Date)
+    entry_price = Column(Float)
+    exit_price = Column(Float)
+    entry_signal = Column(String(20))
+    exit_reason = Column(String(30))  # SIGNAL_REVERSAL / STOP_LOSS / MAX_HOLDING / END_OF_DATA
+    pnl_pct = Column(Float)
+    regime_at_entry = Column(String(30))
+    trend_at_entry = Column(Integer)
+    mean_reversion_at_entry = Column(Integer)
+    volatility_at_entry = Column(Integer)
+    volume_at_entry = Column(Integer)
+    macro_at_entry = Column(Integer)
+    holding_days = Column(Integer)
+    is_win = Column(Boolean)
 
 
 class SystemMetadata(Base):
@@ -669,6 +746,9 @@ def init_db() -> None:
         OpportunityFlag,
         SystemMetadata,
         SchemaMigration,
+        BacktestRun,
+        BacktestSignal,
+        BacktestTrade,
     )
     if not all(c.__tablename__ in Base.metadata.tables for c in _register):
         raise RuntimeError(

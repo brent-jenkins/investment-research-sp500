@@ -84,6 +84,236 @@ def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
         return True
 
 
+def _process_virtual_trades(config: dict) -> None:
+    """Auto-open/close virtual positions based on current signals.
+
+    Called at the end of every analysis pipeline run.  Has no effect unless
+    virtual_trading.enabled: true in config.yaml.
+
+    Close conditions  (checked first):
+      - Current price has crossed the stored stop_loss_price, or
+      - Signal has reversed direction (LONG trade when signal is SELL/STRONG_SELL, or vice-versa).
+
+    Open conditions:
+      - Signal is STRONG_BUY or STRONG_SELL (or BUY/SELL if entry_signal: "BUY" in config),
+      - Ticker is tradeable,
+      - No existing open virtual position for that ticker,
+      - Total open virtual positions < max_open_positions.
+    """
+    vt = config.get("virtual_trading", {})
+    if not vt.get("enabled", False):
+        return
+
+    from sqlalchemy import text as sa_text  # noqa: PLC0415
+    from data.database import get_engine    # noqa: PLC0415
+
+    entry_threshold = vt.get("entry_signal", "STRONG_BUY")
+    max_positions   = int(vt.get("max_open_positions", 5))
+    position_pct    = float(vt.get("position_pct", 0.05))
+    portfolio_gbp   = float(vt.get("portfolio_size_gbp", 10000))
+    atr_mult        = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
+
+    tradeable: set[str] = {
+        e["ticker"]
+        for g in config.get("watchlist", {}).values()
+        if isinstance(g, list)
+        for e in g
+        if isinstance(e, dict) and e.get("tradeable")
+    }
+
+    if not tradeable:
+        return
+
+    eng = get_engine()
+    now = datetime.utcnow()
+
+    # ── Load data ─────────────────────────────────────────────────────────────
+    with eng.connect() as conn:
+        open_rows = conn.execute(sa_text(
+            "SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=1"
+        )).mappings().all()
+
+        sig_rows = conn.execute(sa_text("""
+            SELECT s.ticker, s.signal, s.confluence_score, s.regime,
+                   s.trend_score, s.mean_reversion_score, s.volatility_score,
+                   s.volume_score, s.macro_score
+            FROM signals s
+            INNER JOIN (
+                SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
+            ) latest ON s.ticker = latest.ticker AND s.date = latest.md
+        """)).mappings().all()
+
+        price_rows = conn.execute(sa_text("""
+            SELECT p.ticker, p.close
+            FROM price_data p
+            INNER JOIN (
+                SELECT ticker, MAX(date) AS md FROM price_data GROUP BY ticker
+            ) latest ON p.ticker = latest.ticker AND p.date = latest.md
+        """)).mappings().all()
+
+        atr_rows = conn.execute(sa_text("""
+            SELECT i.ticker, i.atr
+            FROM indicators i
+            INNER JOIN (
+                SELECT ticker, MAX(date) AS md FROM indicators GROUP BY ticker
+            ) latest ON i.ticker = latest.ticker AND i.date = latest.md
+        """)).mappings().all()
+
+    open_trades   = [dict(r) for r in open_rows]
+    open_by_ticker = {t["ticker"]: t for t in open_trades}
+    signals       = {r["ticker"]: dict(r) for r in sig_rows if r["ticker"] in tradeable}
+    prices        = {r["ticker"]: float(r["close"]) for r in price_rows if r["close"] is not None}
+    atrs          = {r["ticker"]: float(r["atr"]) for r in atr_rows if r["atr"] is not None}
+
+    # ── Close phase ───────────────────────────────────────────────────────────
+    to_close: list[tuple[int, float, str]] = []  # (trade_id, exit_price, reason)
+    for ticker, trade in list(open_by_ticker.items()):
+        live_price = prices.get(ticker)
+        if live_price is None:
+            continue
+
+        direction   = trade.get("direction", "LONG")
+        entry_price = float(trade.get("entry_price") or 0)
+        sl_price    = trade.get("stop_loss_price")
+        trade_id    = trade["id"]
+
+        # Fall back to ATR-based stop if none stored
+        if sl_price is None and entry_price and ticker in atrs:
+            if direction == "LONG":
+                sl_price = entry_price - atr_mult * atrs[ticker]
+            else:
+                sl_price = entry_price + atr_mult * atrs[ticker]
+
+        stop_hit = (
+            (direction == "LONG"  and sl_price is not None and live_price <= sl_price) or
+            (direction == "SHORT" and sl_price is not None and live_price >= sl_price)
+        )
+
+        sig_now = signals.get(ticker, {}).get("signal", "NEUTRAL")
+        signal_reversal = (
+            (direction == "LONG"  and sig_now in ("SELL", "STRONG_SELL")) or
+            (direction == "SHORT" and sig_now in ("BUY",  "STRONG_BUY"))
+        )
+
+        if stop_hit or signal_reversal:
+            reason = "STOP LOSS" if stop_hit else "SIGNAL REVERSAL"
+            to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date")))
+            del open_by_ticker[ticker]
+
+    if to_close:
+        with eng.begin() as conn:
+            for trade_id, live_price, reason, direction, entry_price, entry_dt in to_close:
+                pnl_pct = 0.0
+                if entry_price:
+                    pnl_pct = ((live_price - entry_price) / entry_price
+                               if direction == "LONG"
+                               else (entry_price - live_price) / entry_price)
+                hold_days = 0
+                if entry_dt:
+                    try:
+                        entry_dt_parsed = (
+                            entry_dt if isinstance(entry_dt, datetime)
+                            else datetime.fromisoformat(str(entry_dt).split(".")[0])
+                        )
+                        hold_days = max(0, (now - entry_dt_parsed).days)
+                    except Exception:
+                        pass
+                conn.execute(sa_text("""
+                    UPDATE trades
+                    SET is_open=0, exit_date=:exit_date, exit_price=:exit_price,
+                        pnl_pct=:pnl_pct, holding_days=:hold_days
+                    WHERE id=:trade_id
+                """), {
+                    "exit_date":  now.isoformat(),
+                    "exit_price": live_price,
+                    "pnl_pct":    round(pnl_pct, 6),
+                    "hold_days":  hold_days,
+                    "trade_id":   trade_id,
+                })
+                logger.info(
+                    "Virtual trade closed: %s at %.4f (P&L %.2f%%) — %s",
+                    trade_id, live_price, pnl_pct * 100, reason,
+                )
+
+    # ── Open phase ────────────────────────────────────────────────────────────
+    open_count = len(open_by_ticker)
+    if open_count >= max_positions:
+        logger.info("Virtual trading: at max positions (%d/%d) — no new entries.", open_count, max_positions)
+        return
+
+    entry_signal_set = (
+        {"STRONG_BUY", "BUY", "STRONG_SELL", "SELL"}
+        if entry_threshold == "BUY"
+        else {"STRONG_BUY", "STRONG_SELL"}
+    )
+
+    to_open: list[dict] = []
+    for ticker, sig in signals.items():
+        if open_count + len(to_open) >= max_positions:
+            break
+        if ticker in open_by_ticker:
+            continue
+        sig_type = sig.get("signal", "NEUTRAL")
+        if sig_type not in entry_signal_set:
+            continue
+        live_price = prices.get(ticker)
+        if not live_price:
+            continue
+
+        direction  = "LONG" if sig_type in ("STRONG_BUY", "BUY") else "SHORT"
+        atr        = atrs.get(ticker)
+        sl_price   = None
+        if atr:
+            sl_price = (live_price - atr_mult * atr if direction == "LONG"
+                        else live_price + atr_mult * atr)
+
+        to_open.append({
+            "ticker":               ticker,
+            "direction":            direction,
+            "entry_date":           now.isoformat(),
+            "entry_price":          live_price,
+            "signal_type":          sig_type,
+            "confluence_score":     sig.get("confluence_score"),
+            "regime":               sig.get("regime"),
+            "trend_score":          sig.get("trend_score"),
+            "mean_reversion_score": sig.get("mean_reversion_score"),
+            "volatility_score":     sig.get("volatility_score"),
+            "volume_score":         sig.get("volume_score"),
+            "macro_score":          sig.get("macro_score"),
+            "investment":           round(portfolio_gbp * position_pct, 2),
+            "sl":                   round(sl_price, 6) if sl_price else None,
+        })
+
+    if to_open:
+        with eng.begin() as conn:
+            for row in to_open:
+                conn.execute(sa_text("""
+                    INSERT INTO trades (
+                        ticker, account_type, account_name, account_id,
+                        direction, entry_date, entry_price, signal_type,
+                        confluence_score, regime, trend_score, mean_reversion_score,
+                        volatility_score, volume_score, macro_score,
+                        investment_amount, stop_loss_price, is_open, created_at
+                    ) VALUES (
+                        :ticker, 'VIRTUAL', 'Virtual Portfolio', 'virtual',
+                        :direction, :entry_date, :entry_price, :signal_type,
+                        :confluence_score, :regime, :trend_score, :mean_reversion_score,
+                        :volatility_score, :volume_score, :macro_score,
+                        :investment, :sl, 1, :now
+                    )
+                """), {**row, "now": now.isoformat()})
+                logger.info(
+                    "Virtual trade opened: %s %s at %.4f (signal=%s, regime=%s)",
+                    row["direction"], row["ticker"], row["entry_price"],
+                    row["signal_type"], row["regime"],
+                )
+
+    logger.info(
+        "Virtual trading: closed %d, opened %d, total open %d/%d.",
+        len(to_close), len(to_open), open_count - len(to_close) + len(to_open), max_positions,
+    )
+
+
 def _run_analysis_pipeline(config: dict, all_tickers: list[str], run_type: str) -> None:
     """Execute the full analysis pipeline and stamp metadata.
 
@@ -110,6 +340,11 @@ def _run_analysis_pipeline(config: dict, all_tickers: list[str], run_type: str) 
         set_metadata("last_run_type", run_type)
     except Exception as exc:
         logger.warning("Could not stamp last_run_type: %s", exc)
+
+    try:
+        _process_virtual_trades(config)
+    except Exception as exc:
+        logger.error("Virtual trading automation failed: %s", exc, exc_info=True)
 
     logger.info("Analysis pipeline complete (run_type=%s).", run_type)
 
