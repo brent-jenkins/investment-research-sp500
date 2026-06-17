@@ -203,6 +203,7 @@ def _process_virtual_trades(
     position_pct    = float(vt.get("position_pct", 0.05))
     portfolio_gbp   = float(vt.get("portfolio_size_gbp", 10000))
     atr_mult        = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
+    max_hold_days   = int(config.get("backtest", {}).get("max_holding_days", 30))
 
     tradeable: set[str] = {
         e["ticker"]
@@ -313,8 +314,26 @@ def _process_virtual_trades(
             (direction == "SHORT" and sig_now in ("BUY",  "STRONG_BUY"))
         )
 
-        if stop_hit or signal_reversal:
-            reason = "STOP LOSS" if stop_hit else "SIGNAL REVERSAL"
+        hold_days = 0
+        entry_dt_raw = trade.get("entry_date")
+        if entry_dt_raw:
+            try:
+                entry_dt_parsed = (
+                    entry_dt_raw if isinstance(entry_dt_raw, datetime)
+                    else datetime.fromisoformat(str(entry_dt_raw).split(".")[0])
+                )
+                hold_days = (now - entry_dt_parsed).days
+            except Exception:
+                pass
+        max_hold_exceeded = hold_days >= max_hold_days
+
+        if stop_hit or signal_reversal or max_hold_exceeded:
+            if stop_hit:
+                reason = "STOP LOSS"
+            elif max_hold_exceeded:
+                reason = "MAX HOLDING"
+            else:
+                reason = "SIGNAL REVERSAL"
             to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date")))
             del open_by_ticker[ticker]
 
