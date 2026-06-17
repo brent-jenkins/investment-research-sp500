@@ -84,21 +84,28 @@ def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
         return True
 
 
-def _process_virtual_trades(config: dict) -> None:
+def _process_virtual_trades(config: dict, run_type: str = RUN_FULL) -> None:
     """Auto-open/close virtual positions based on current signals.
 
     Called at the end of every analysis pipeline run.  Has no effect unless
     virtual_trading.enabled: true in config.yaml.
 
-    Close conditions  (checked first):
+    Close conditions (checked on every run):
       - Current price has crossed the stored stop_loss_price, or
-      - Signal has reversed direction (LONG trade when signal is SELL/STRONG_SELL, or vice-versa).
+      - Signal has reversed direction (LONG when signal is SELL/STRONG_SELL, or vice-versa).
 
-    Open conditions:
-      - Signal is STRONG_BUY or STRONG_SELL (or BUY/SELL if entry_signal: "BUY" in config),
+    Open conditions (EOD run only, exchange must have a session today):
+      - run_type == RUN_FULL (EOD job — price data was freshly pulled this run),
+      - The ticker's exchange had a trading session today,
+      - Signal is STRONG_BUY or STRONG_SELL (or BUY/SELL if entry_signal: "BUY"),
       - Ticker is tradeable,
       - No existing open virtual position for that ticker,
       - Total open virtual positions < max_open_positions.
+
+    Restricting opens to the EOD full run ensures entry prices reflect the
+    session's closing price and that the relevant market actually traded today.
+    The 07:00 and 13:30 analysis-only runs use stale price data and should
+    never open new positions.
     """
     vt = config.get("virtual_trading", {})
     if not vt.get("enabled", False):
@@ -123,6 +130,20 @@ def _process_virtual_trades(config: dict) -> None:
 
     if not tradeable:
         return
+
+    # Pre-compute which tradeable tickers had an exchange session today.
+    # Used to gate new position openings (EOD run only).
+    today_utc = datetime.now(timezone.utc).date()
+    ticker_exchange = _build_ticker_exchange_map(config)
+    exchange_open_today: dict[str, bool] = {}
+    for ticker in tradeable:
+        exch = ticker_exchange.get(ticker, "NYSE")
+        if exch not in exchange_open_today:
+            exchange_open_today[exch] = _is_exchange_open(exch, today_utc)
+    tradeable_open_today: set[str] = {
+        t for t in tradeable
+        if exchange_open_today.get(ticker_exchange.get(t, "NYSE"), True)
+    }
 
     eng = get_engine()
     now = datetime.utcnow()
@@ -237,6 +258,22 @@ def _process_virtual_trades(config: dict) -> None:
 
     # ── Open phase ────────────────────────────────────────────────────────────
     open_count = len(open_by_ticker)
+
+    # New positions are only opened in the EOD full run (fresh price data) and
+    # only for tickers whose exchange had a session today.  The 07:00 and 13:30
+    # analysis-only runs use stale price data from a closed market — entering
+    # there would not be achievable at the recorded price in the real world.
+    if run_type != RUN_FULL:
+        logger.info(
+            "Virtual trading: skipping open phase on analysis-only run "
+            "(run_type=%s) — new positions require the EOD run.", run_type,
+        )
+        logger.info(
+            "Virtual trading: closed %d, opened 0, total open %d/%d.",
+            len(to_close), open_count, max_positions,
+        )
+        return
+
     if open_count >= max_positions:
         logger.info("Virtual trading: at max positions (%d/%d) — no new entries.", open_count, max_positions)
         return
@@ -252,6 +289,10 @@ def _process_virtual_trades(config: dict) -> None:
         if open_count + len(to_open) >= max_positions:
             break
         if ticker in open_by_ticker:
+            continue
+        # Only enter if this ticker's exchange was open today
+        if ticker not in tradeable_open_today:
+            logger.debug("Virtual trading: skipping %s — exchange closed today.", ticker)
             continue
         sig_type = sig.get("signal", "NEUTRAL")
         if sig_type not in entry_signal_set:
@@ -310,7 +351,7 @@ def _process_virtual_trades(config: dict) -> None:
 
     logger.info(
         "Virtual trading: closed %d, opened %d, total open %d/%d.",
-        len(to_close), len(to_open), open_count - len(to_close) + len(to_open), max_positions,
+        len(to_close), len(to_open), open_count + len(to_open), max_positions,
     )
 
 
@@ -342,7 +383,7 @@ def _run_analysis_pipeline(config: dict, all_tickers: list[str], run_type: str) 
         logger.warning("Could not stamp last_run_type: %s", exc)
 
     try:
-        _process_virtual_trades(config)
+        _process_virtual_trades(config, run_type)
     except Exception as exc:
         logger.error("Virtual trading automation failed: %s", exc, exc_info=True)
 
