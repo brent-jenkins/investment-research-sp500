@@ -3226,17 +3226,11 @@ _DIV_ICONS = {
 
 def _render_relationships_page(config: dict) -> None:
     """Render the Relationships page: correlation heatmap, pair table, and divergence narrative."""
-    st.markdown("## 🔗 Cross-Asset Relationships")
-    st.caption(
-        "Tracks 10 predefined cross-asset pairs and flags when current correlations "
-        "diverge significantly from their historical norms."
-    )
-
-    _corr_ts = get_metadata("last_analysis_run")
-    if _corr_ts:
-        st.caption(f"Last computed: {_corr_ts.strftime('%Y-%m-%d %H:%M')} UTC · Updates run automatically at 07:00, 13:30 and 21:30 UTC")
-
-    st.divider()
+    from analysis.correlations import RELATIONSHIP_MAP as _REL_MAP
+    _corr_ts  = get_metadata("last_analysis_run")
+    _ts_str   = _corr_ts.strftime("%Y-%m-%d %H:%M UTC") if _corr_ts else "pending"
+    _n_pairs  = len(_REL_MAP)
+    st.caption(f"🔗 **Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; Last computed: {_ts_str} &nbsp;·&nbsp; Updates: 07:00 / 13:30 / 21:30 UTC")
 
     # ── Correlation heatmap ───────────────────────────────────────────────────
     st.markdown("### Correlation Matrix (30-day window)")
