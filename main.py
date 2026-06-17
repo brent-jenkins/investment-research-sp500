@@ -3146,8 +3146,10 @@ def _initialise() -> None:
     already present. This guarantees schema changes are picked up immediately
     after a code update without requiring a Streamlit session restart.
 
-    The scheduler and startup analysis are only run once per session (guarded
-    by session_state) so subsequent re-renders skip them.
+    The scheduler is started once per session (guarded by session_state).
+    Analysis is only triggered on startup on the very first run (no prior
+    last_analysis_run recorded) — all subsequent page loads return instantly
+    and rely on the scheduler for freshness.
     """
     init_db()
     if "app_initialised" not in st.session_state:
@@ -3156,21 +3158,19 @@ def _initialise() -> None:
         except Exception as exc:
             logger.warning("Scheduler could not start: %s", exc)
 
-        # On first page load, run analysis only if data exists and the last run
-        # was more than 60 minutes ago — avoids blocking page loads when the
-        # scheduler has already kept things current.
-        if _has_price_data():
+        # Run analysis on startup only on the very first run (last_analysis_run is None),
+        # i.e. a fresh install where price data exists but has never been analysed.
+        # For all subsequent startups the scheduler keeps analysis current — blocking
+        # the page load to reprocess identical data is not worthwhile.
+        if _has_price_data() and get_metadata("last_analysis_run") is None:
             try:
-                last_run = get_metadata("last_analysis_run")
-                stale = last_run is None or (datetime.utcnow() - last_run).total_seconds() > 3600
-                if stale:
-                    _cfg = _load_config()
-                    _tickers = get_all_tickers(_cfg)
-                    run_analysis(tickers=_tickers, config=_cfg)
-                    generate_signals(tickers=_tickers, config=_cfg)
-                    ts = datetime.utcnow().strftime("%H:%M UTC")
-                    st.session_state["_startup_msg"] = ("ok", f"Analysis updated on startup — {ts}")
-                    logger.info("Startup analysis complete.")
+                _cfg = _load_config()
+                _tickers = get_all_tickers(_cfg)
+                run_analysis(tickers=_tickers, config=_cfg)
+                generate_signals(tickers=_tickers, config=_cfg)
+                ts = datetime.utcnow().strftime("%H:%M UTC")
+                st.session_state["_startup_msg"] = ("ok", f"Initial analysis complete — {ts}")
+                logger.info("First-run startup analysis complete.")
             except Exception as exc:
                 logger.warning("Startup analysis failed: %s", exc)
                 st.session_state["_startup_msg"] = ("err", f"Startup analysis failed: {exc}")
