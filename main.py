@@ -2457,13 +2457,16 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
         show_acct_col = acct_filter == "All"
         ct_rows = []
         for t in reversed(closed_trades):     # most recent first
+            _entry = float(t.get("entry_price") or 0)
+            _exit  = float(t.get("exit_price")  or 0)
+            _mult  = 1 if t.get("direction", "LONG") == "LONG" else -1
             row = {
                 "Ticker":  t.get("ticker", ""),
                 "Signal":  (t.get("signal_type") or "—").replace("_", " "),
                 "Dir":     t.get("direction", "LONG"),
-                "Entry":   float(t.get("entry_price") or 0),
-                "Exit":    float(t.get("exit_price")  or 0),
-                "P&L pts": float(t.get("pnl")         or 0),
+                "Entry":   _entry,
+                "Exit":    _exit,
+                "P&L pts": round((_exit - _entry) * _mult, 5) if _entry else 0.0,
                 "P&L %":   float(t.get("pnl_pct")     or 0) * 100,
                 "Days":    t.get("holding_days"),
                 "Regime":  (t.get("regime") or "—").replace("_", " "),
