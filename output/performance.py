@@ -264,13 +264,13 @@ def close_trade(
         # FX conversion fee is applied to the actual realised P&L (not the trade value at open)
         fx_fee_cost    = round(abs(pnl_before_fee) * fx_fee_pct / 100, 4) if fx_fee_pct > 0 else 0.0
         pnl            = round(pnl_before_fee - fx_fee_cost, 4)
-        base           = margin_required if margin_required > 0 else (investment_amount if investment_amount > 0 else position_value)
-        pnl_pct        = round(pnl / base * 100, 4) if base else 0.0
+        # pnl_pct = simple price movement as a fraction (consistent with backtest/virtual convention)
+        pnl_pct        = round((exit_price - entry_price) * multiplier / entry_price, 6) if entry_price else 0.0
     else:
         pnl_before_fee = round((exit_price - entry_price) * multiplier * quantity, 4)
         fx_fee_cost    = round(abs(pnl_before_fee) * fx_fee_pct / 100, 4) if fx_fee_pct > 0 else 0.0
         pnl            = round(pnl_before_fee - fx_fee_cost, 4)
-        pnl_pct        = round((exit_price - entry_price) / entry_price * multiplier * 100, 4) if entry_price else 0.0
+        pnl_pct        = round((exit_price - entry_price) * multiplier / entry_price, 6) if entry_price else 0.0
 
     with engine.begin() as conn:
         conn.execute(

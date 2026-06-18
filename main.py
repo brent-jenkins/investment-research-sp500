@@ -2148,7 +2148,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                             _icon   = "🟢" if _pnl >= 0 else "🔴"
                             st.success(
                                 f"{_icon} Closed {_result['ticker']} — "
-                                f"P&L: {_pnl:+.4f} pts  ({_result['pnl_pct']:+.2f}%)  "
+                                f"P&L: {_pnl:+.4f} pts  ({_result['pnl_pct']*100:+.2f}%)  "
                                 f"over {_result['holding_days']} day(s)."
                             )
                             _updated = maybe_update_weights(_load_config())
@@ -2464,7 +2464,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 "Entry":   float(t.get("entry_price") or 0),
                 "Exit":    float(t.get("exit_price")  or 0),
                 "P&L pts": float(t.get("pnl")         or 0),
-                "P&L %":   float(t.get("pnl_pct")     or 0),
+                "P&L %":   float(t.get("pnl_pct")     or 0) * 100,
                 "Days":    t.get("holding_days"),
                 "Regime":  (t.get("regime") or "—").replace("_", " "),
             }

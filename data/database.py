@@ -647,6 +647,30 @@ def _apply_data_fixes(engine) -> None:
         except Exception:
             pass
 
+    # --- fix_pnl_pct_fraction_convention ---
+    # Recalculate pnl_pct for all non-VIRTUAL closed trades as a fraction
+    # (exit_price - entry_price) / entry_price × direction sign.
+    # Previously leveraged trades stored return-on-margin; non-leveraged stored
+    # the percentage (* 100).  All consumers (briefing, backtest, virtual) expect
+    # a fraction, so normalise everything to that convention.
+    if not _migration_applied(engine, "fix_pnl_pct_fraction_convention"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE trades
+                    SET pnl_pct = CASE
+                        WHEN direction = 'LONG' THEN (exit_price - entry_price) / entry_price
+                        ELSE (entry_price - exit_price) / entry_price
+                    END
+                    WHERE is_open = 0
+                      AND COALESCE(account_type, 'PRACTICE') != 'VIRTUAL'
+                      AND entry_price > 0
+                      AND exit_price IS NOT NULL
+                """))
+            _record_migration(engine, "fix_pnl_pct_fraction_convention")
+        except Exception:
+            pass
+
 
 def _purge_unlisted_tickers(engine) -> None:
     """Delete rows for tickers no longer present in config.yaml watchlist.
