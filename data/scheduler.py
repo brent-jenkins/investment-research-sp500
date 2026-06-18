@@ -603,6 +603,7 @@ def _eod_job() -> None:
     try:
         logger.info("Fetching FRED macro indicators…")
         fetch_and_store_macro_indicators(config)
+        set_metadata("last_fred_run", datetime.utcnow().isoformat())
     except Exception as exc:
         logger.error("FRED macro indicator fetch failed: %s", exc, exc_info=True)
 

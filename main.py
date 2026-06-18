@@ -2962,7 +2962,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         fred_badge = "PENDING"
     else:
         fred_desc  = f"{fred_stored} series stored · {series_count} configured"
-        fred_badge = "PENDING"   # overridden below if ts is set
+        fred_badge = "OK" if last_fred else "PENDING"
 
     # ── Analysis description ──────────────────────────────────────────────
     run_label   = {"full": "Full Refresh", "analysis_only": "Analysis Only"}.get(last_run_type or "", "")
