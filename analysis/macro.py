@@ -208,6 +208,21 @@ def _score_fred_series(
             return -1
         return 0
 
+    if series_id == "DFEDTARU":
+        # Fed Funds Target Rate upper bound.  A recent cut (pct_30d < 0) is
+        # bullish; a recent hike is bearish.  When no change occurred, compare
+        # the current level to the 2-year average: rate well above normal history
+        # = restrictive = bearish; well below = accommodative = bullish.
+        if (pct_30d or 0) < -2.0:   # rate cut (≥ 25 bps) in last observation period
+            return 1
+        if (pct_30d or 0) > 2.0:    # rate hike in last observation period
+            return -1
+        if z_score < -1.0:           # rate materially below 2y average (accommodative)
+            return 1
+        if z_score > 1.0:            # rate materially above 2y average (restrictive)
+            return -1
+        return 0
+
     logger.debug("No scoring rule for FRED series %s — scoring neutral", series_id)
     return 0
 
@@ -455,6 +470,19 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
     permit_pct1m  = _get("PERMIT",  "pct_change_30d")
     permit_score  = _get("PERMIT",  "score")
 
+    # ── Fed Funds Target Rate (DFEDTARU) ──────────────────────────────────────
+    fed_rate       = _get("DFEDTARU", "value")
+    fed_rate_pct30 = _get("DFEDTARU", "pct_change_30d")
+    fed_rate_z     = _get("DFEDTARU", "z_score_2y")
+    fed_rate_score = _get("DFEDTARU", "score")
+    # Trend: "cut" / "hiked" / "unchanged"
+    if fed_rate_pct30 is not None and fed_rate_pct30 < -2.0:
+        fed_rate_trend = "cut"
+    elif fed_rate_pct30 is not None and fed_rate_pct30 > 2.0:
+        fed_rate_trend = "hiked"
+    else:
+        fed_rate_trend = "unchanged"
+
     # ── Yield curve ─────────────────────────────────────────────────────────
     t10y2y = _get("T10Y2Y", "value")
     t10y3m = _get("T10Y3M", "value")
@@ -544,6 +572,10 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "permit":            permit_val,
         "permit_pct1m":      permit_pct1m,
         "permit_score":      permit_score,
+        "fed_rate":          fed_rate,
+        "fed_rate_trend":    fed_rate_trend,
+        "fed_rate_score":    fed_rate_score,
+        "fed_rate_z":        fed_rate_z,
         "composite_score":   round(composite, 3),
         "n_bullish":         n_bullish,
         "n_bearish":         n_bearish,

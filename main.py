@@ -3736,6 +3736,62 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             unsafe_allow_html=True,
         )
 
+    # ── Key Events (FOMC / Fed calendar) ───────────────────────────────────
+    try:
+        from analysis.fomc import get_fomc_events  # noqa: PLC0415
+        _fomc_events = get_fomc_events(days_ahead=7)
+    except Exception:
+        _fomc_events = []
+
+    if _fomc_events:
+        _EV_COLOURS = {
+            "FOMC Decision":   "#dc2626",
+            "FOMC Minutes":    "#f59e0b",
+            "Fed Speech":      "#3b82f6",
+            "Fed Announcement": "#6b7280",
+        }
+        _ev_parts: list[str] = []
+        _caution_days: list[tuple[int, str]] = []   # (days_away, event_type)
+
+        for ev in _fomc_events:
+            ec      = _EV_COLOURS.get(ev["event_type"], "#6b7280")
+            da      = ev["days_away"]
+            da_str  = "Today" if da == 0 else ("Tomorrow" if da == 1 else f"in {da}d")
+            _ev_parts.append(
+                f'<span style="background:{ec}18;border:1px solid {ec}44;'
+                f'border-radius:4px;padding:2px 9px;font-size:0.8rem;'
+                f'color:{ec};font-weight:600;white-space:nowrap">'
+                f'{html.escape(ev["event_type"])} &nbsp;'
+                f'<span style="font-weight:400">{html.escape(ev["date"].strftime("%b %-d"))} '
+                f'({da_str})</span></span>'
+            )
+            if ev["event_type"] == "FOMC Decision" and da <= 2:
+                _caution_days.append((da, ev["event_type"]))
+
+        _ev_html = (
+            '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;'
+            'padding:6px 0 4px">'
+            '<span style="font-size:0.75rem;font-weight:700;color:#94a3b8;'
+            'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">'
+            '📅 Key Events</span> '
+            + " ".join(_ev_parts)
+            + "</div>"
+        )
+        st.markdown(_ev_html, unsafe_allow_html=True)
+
+        for days_away, ev_type in _caution_days:
+            _when = "Today" if days_away == 0 else ("Tomorrow" if days_away == 1 else f"in {days_away} days")
+            st.markdown(
+                '<div style="border-left:4px solid #f59e0b;padding:7px 14px;'
+                'background:#fef3c720;border-radius:0 4px 4px 0;margin:4px 0 6px">'
+                f'<span style="background:#f59e0b;color:#fff;padding:1px 7px;'
+                f'border-radius:3px;font-size:0.68rem;font-weight:800">CAUTION</span> '
+                f'<strong style="color:#b45309">Fed Decision {_when}</strong>'
+                f'<span style="font-size:0.82rem;color:#92400e"> — consider reducing '
+                f'position sizes ahead of the announcement</span></div>',
+                unsafe_allow_html=True,
+            )
+
     # ── Top Long / Short Opportunities ─────────────────────────────────────
     all_signals = get_latest_signals(list(watchlist.keys()))
 
@@ -4095,9 +4151,13 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         permit_pct   = macro_dash.get("permit_pct1m")
         permit_sc    = macro_dash.get("permit_score")
 
-        if usslind_val is not None or permit_val is not None:
+        fed_rate_val   = macro_dash.get("fed_rate")
+        fed_rate_trend = macro_dash.get("fed_rate_trend", "unchanged")
+        fed_rate_sc    = macro_dash.get("fed_rate_score")
+
+        if usslind_val is not None or permit_val is not None or fed_rate_val is not None:
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            c7, c8, _ = st.columns(3)
+            c7, c8, c9 = st.columns(3)
             with c7:
                 usslind_c = (
                     "#16a34a" if usslind_sc == 1 else
@@ -4136,6 +4196,23 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                     )
                 else:
                     st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
+            with c9:
+                if fed_rate_val is not None:
+                    _FED_TREND_LABEL = {"cut": "Rate cut ↓", "hiked": "Rate hiked ↑", "unchanged": "Unchanged →"}
+                    _FED_TREND_COLOUR = {"cut": "#16a34a", "hiked": "#ef5350", "unchanged": "#6b7280"}
+                    fr_c   = _FED_TREND_COLOUR.get(fed_rate_trend, "#6b7280")
+                    fr_lbl = _FED_TREND_LABEL.get(fed_rate_trend, "Unchanged →")
+                    st.markdown(
+                        _metric_card(
+                            "Fed Funds Rate (Upper Bound)",
+                            f"{fed_rate_val:.2f}%",
+                            fr_lbl,
+                            fr_c,
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
 
     st.divider()
 

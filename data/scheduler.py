@@ -630,6 +630,42 @@ def _trade_alert_job() -> None:
     logger.info("Trade alert check starting…")
     config = _load_config()
 
+    # ── VIX spike check ────────────────────────────────────────────────────
+    # Fire once per calendar day when VIX rises >20% vs the previous close.
+    # Triggers an immediate analysis pipeline run and sends a spike alert email.
+    try:
+        from data.ingestion import get_price_df as _gpdf  # noqa: PLC0415
+        _vix_df = _gpdf("^VIX", days=5)
+        if _vix_df is not None and len(_vix_df) >= 2:
+            _vix_prev  = float(_vix_df["close"].iloc[-2])
+            _vix_curr  = float(_vix_df["close"].iloc[-1])
+            if _vix_prev > 0:
+                _vix_chg_pct = (_vix_curr - _vix_prev) / _vix_prev * 100
+                if _vix_chg_pct >= 20.0:
+                    _today_str = date.today().isoformat()
+                    _spike_key = "last_vix_spike_alert"
+                    _last_spike = get_metadata_str(_spike_key) or ""
+                    if _last_spike != _today_str:
+                        logger.warning(
+                            "VIX spike detected: %.2f → %.2f (+%.1f%%) — "
+                            "running immediate analysis.",
+                            _vix_prev, _vix_curr, _vix_chg_pct,
+                        )
+                        # Stamp immediately so repeated hourly firings don't
+                        # trigger another analysis run even if the email fails.
+                        set_metadata(_spike_key, _today_str)
+                        _run_analysis_pipeline(
+                            config, get_all_tickers(config), RUN_ANALYSIS_ONLY
+                        )
+                        from output.briefing import send_vix_spike_alert  # noqa: PLC0415
+                        _ok, _msg = send_vix_spike_alert(
+                            _vix_chg_pct, _vix_curr, _vix_prev, config
+                        )
+                        logger.info("VIX spike alert email: %s — %s", _ok, _msg)
+    except Exception as _vix_exc:
+        logger.warning("VIX spike check failed: %s", _vix_exc)
+    # ── End VIX spike check ────────────────────────────────────────────────
+
     from output.performance import get_latest_price, get_open_trades  # noqa: PLC0415
     from output.briefing import (  # noqa: PLC0415
         enrich_open_trade,
@@ -732,6 +768,27 @@ def _weekly_summary_job() -> None:
     logger.info("Weekly summary: %s — %s", "sent" if ok else "failed", msg)
 
 
+def _fomc_reaction_job() -> None:
+    """19:05 UTC weekdays — run analysis-only if today is an FOMC decision day.
+
+    FOMC statements are released at 2:00 PM US/Eastern (18:00–19:00 UTC).
+    This job fires at 19:05 UTC, captures the immediate post-decision market
+    reaction before the regular 21:30 EOD run, and refreshes signals so the
+    Daily Briefing reflects any regime shift triggered by the Fed announcement.
+    Silently exits on non-FOMC days so it adds no cost on normal weekdays.
+    """
+    from analysis.fomc import is_fomc_decision_day  # noqa: PLC0415
+
+    if not is_fomc_decision_day():
+        logger.debug("FOMC reaction check: not an FOMC decision day — skipping.")
+        return
+
+    logger.info("FOMC decision day — running post-decision analysis (19:05 UTC)…")
+    config = _load_config()
+    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
+    logger.info("FOMC reaction analysis complete.")
+
+
 def start_scheduler() -> BackgroundScheduler:
     """Start the background scheduler with all three daily jobs if not already running."""
     global _scheduler
@@ -804,6 +861,24 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     logger.info("Scheduled weekly summary email every Sunday 10:00 %s.", tz)
+
+    # FOMC reaction run: fires every weekday at 19:05 UTC but executes the
+    # analysis pipeline only on days matching the hardcoded FOMC decision schedule.
+    _scheduler.add_job(
+        _fomc_reaction_job,
+        trigger=CronTrigger(
+            hour=19,
+            minute=5,
+            day_of_week="mon-fri",
+            timezone=tz,
+        ),
+        id="fomc_reaction",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled FOMC reaction analysis at 19:05 %s weekdays "
+        "(active on FOMC decision days only).", tz,
+    )
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))

@@ -618,6 +618,89 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
     return False, msg
 
 
+def send_vix_spike_alert(
+    vix_pct: float, vix_current: float, vix_prev: float, config: dict
+) -> tuple[bool, str]:
+    """Send an HTML+plain-text alert when VIX rises more than 20% in a single day.
+
+    Args:
+        vix_pct:      Intraday change in percent (positive number, e.g. 24.5).
+        vix_current:  Current VIX close.
+        vix_prev:     Previous VIX close.
+        config:       App config dict.
+    Returns:
+        (success, message) tuple.
+    """
+    notif = config.get("notifications", {}).get("email", {})
+    if not notif.get("enabled"):
+        return False, "Email notifications not enabled in config.yaml"
+
+    now     = datetime.utcnow()
+    subject = (
+        f"Volatility Spike — VIX +{vix_pct:.1f}% — Signals Refreshed "
+        f"({now.strftime('%Y-%m-%d %H:%M')} UTC)"
+    )
+
+    text_body = "\n".join([
+        "Investment Research Dashboard — Volatility Spike Alert",
+        f"Generated: {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        "",
+        f"VIX has risen {vix_pct:.1f}% today ({vix_prev:.2f} → {vix_current:.2f}).",
+        "This exceeds the 20% single-day threshold.",
+        "",
+        "Action taken: An immediate analysis run has been triggered.",
+        "Signals have been refreshed to capture the current market conditions.",
+        "",
+        "Review your open positions on the Daily Briefing page.",
+        "---",
+        "To disable: set notifications.email.enabled: false in config.yaml",
+    ])
+
+    colour = "#dc2626"
+    html_body = _email_wrap_h(
+        _email_header_h(
+            f"Volatility Spike: VIX +{vix_pct:.1f}%",
+            f"{now.strftime('%Y-%m-%d %H:%M')} UTC",
+            accent=colour,
+        ),
+        _section_h(
+            "VOLATILITY SPIKE DETECTED",
+            (
+                f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="border-collapse:collapse;margin-bottom:12px">'
+                f'<tr>'
+                f'<td style="padding:6px 0;font-size:13px;color:#64748b;width:40%">Previous VIX</td>'
+                f'<td style="padding:6px 0;font-size:14px;font-weight:600;color:#1e293b">'
+                f'{vix_prev:.2f}</td>'
+                f'</tr>'
+                f'<tr>'
+                f'<td style="padding:6px 0;font-size:13px;color:#64748b">Current VIX</td>'
+                f'<td style="padding:6px 0;font-size:14px;font-weight:700;color:{colour}">'
+                f'{vix_current:.2f}</td>'
+                f'</tr>'
+                f'<tr>'
+                f'<td style="padding:6px 0;font-size:13px;color:#64748b">Daily Change</td>'
+                f'<td style="padding:6px 0">'
+                f'{_badge_h(f"+{vix_pct:.1f}%", colour)}</td>'
+                f'</tr>'
+                f'</table>'
+                f'<p style="margin:8px 0 0;font-size:13px;color:#475569">'
+                f'An immediate analysis run has been triggered. '
+                f'Signals have been refreshed to capture current conditions. '
+                f'Review open positions on the Daily Briefing page.</p>'
+            ),
+            border=colour,
+        ),
+        _email_footer_h("To disable: set notifications.email.enabled: false in config.yaml"),
+    )
+
+    ok, msg = _smtp_send(subject, text_body, html_body, config)
+    if ok:
+        set_metadata("last_vix_spike_alert", now.date().isoformat())
+        return True, f"VIX spike alert sent ({vix_pct:.1f}%)"
+    return False, msg
+
+
 def _build_test_html(
     config: dict,
     regime: str,

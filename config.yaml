@@ -421,6 +421,9 @@ macro:
     BOGMBASE:
       label: "Monetary Base"
       category: "liquidity"
+    DFEDTARU:
+      label: "Fed Funds Rate (Upper Bound)"
+      category: "monetary_policy"
 
 confluence:
   # Minimum number of signals that must agree for a BUY/SELL call
