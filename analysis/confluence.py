@@ -343,6 +343,14 @@ def score_ticker(
 
     classification = _classify(w_score, config)
 
+    # Regime direction filter: suppress counter-trend signals in strongly trending regimes
+    if config.get("signals", {}).get("regime_direction_filter", True):
+        regime_name = regime_result["regime"].value
+        if regime_name == "TRENDING_BULL" and classification in ("SELL", "STRONG_SELL"):
+            classification = "NEUTRAL"
+        elif regime_name == "TRENDING_BEAR" and classification in ("BUY", "STRONG_BUY"):
+            classification = "NEUTRAL"
+
     return {
         "ticker":               ticker,
         "regime":               regime_result["regime"].value,

@@ -13,7 +13,7 @@ from typing import Optional
 import yaml
 from sqlalchemy import text
 
-from data.database import get_engine, get_metadata, get_metadata_str, set_metadata
+from data.database import clear_metadata, get_engine, get_metadata, get_metadata_str, set_metadata
 from output.performance import get_closed_trades, get_current_signal, get_open_trades
 
 logger = logging.getLogger(__name__)
@@ -379,6 +379,33 @@ def enrich_open_trade(
         )
     except Exception:
         status = "ON TRACK"
+
+    # Reversal confirmation: hold EXIT_SIGNAL as WEAKENING until the reversal
+    # has persisted for at least reversal_confirmation_runs × 3 hours.
+    trade_id = trade.get("id")
+    if trade_id is not None:
+        meta_key = f"weakening_since:{trade_id}"
+        if status == "EXIT SIGNAL":
+            try:
+                cfg = _load_config()
+                runs = int(cfg.get("signals", {}).get("reversal_confirmation_runs", 2))
+                min_hours = runs * 3
+                if min_hours > 0:
+                    first_weak = get_metadata_str(meta_key)
+                    if first_weak is None:
+                        set_metadata(meta_key, datetime.utcnow().isoformat())
+                        status = "WEAKENING"
+                    else:
+                        hours_weak = (datetime.utcnow() - datetime.fromisoformat(first_weak)).total_seconds() / 3600
+                        if hours_weak < min_hours:
+                            status = "WEAKENING"
+            except Exception:
+                pass
+        else:
+            # Signal recovered or non-reversal — clear the timer if it was running
+            first_weak = get_metadata_str(meta_key)
+            if first_weak is not None:
+                clear_metadata(meta_key)
 
     return {
         **trade,

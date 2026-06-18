@@ -449,6 +449,12 @@ signals:
   adx_period: 14
   adx_trend_threshold: 25
   volume_avg_period: 20
+  # In TRENDING_BULL suppress SELL/STRONG_SELL; in TRENDING_BEAR suppress BUY/STRONG_BUY
+  regime_direction_filter: true
+  # Require a reversal signal to persist for this many analysis runs (~3 h each)
+  # before EXIT_SIGNAL is confirmed and a virtual trade is closed on reversal.
+  # Set to 0 to disable (close immediately on first reversal signal).
+  reversal_confirmation_runs: 2
 
 notifications:
   email:

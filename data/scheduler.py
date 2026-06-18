@@ -33,7 +33,7 @@ from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
 from analysis.macro import fetch_and_store_macro_indicators
-from data.database import get_metadata_str, set_metadata
+from data.database import clear_metadata, get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
 logger = logging.getLogger(__name__)
@@ -327,15 +327,43 @@ def _process_virtual_trades(
                 pass
         max_hold_exceeded = hold_days >= max_hold_days
 
-        if stop_hit or signal_reversal or max_hold_exceeded:
-            if stop_hit:
-                reason = "STOP LOSS"
-            elif max_hold_exceeded:
-                reason = "MAX HOLDING"
-            else:
-                reason = "SIGNAL REVERSAL"
+        reversal_meta_key = f"weakening_since:{trade_id}"
+        if stop_hit or max_hold_exceeded:
+            # Hard exits: close immediately regardless of confirmation
+            reason = "STOP LOSS" if stop_hit else "MAX HOLDING"
             to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date")))
             del open_by_ticker[ticker]
+            clear_metadata(reversal_meta_key)
+        elif signal_reversal:
+            # Reversal confirmation: require the reversal to persist for N runs
+            conf_runs = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
+            min_hours = conf_runs * 3
+            if min_hours <= 0:
+                to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date")))
+                del open_by_ticker[ticker]
+            else:
+                first_weak = get_metadata_str(reversal_meta_key)
+                if first_weak is None:
+                    set_metadata(reversal_meta_key, now.isoformat())
+                    logger.info("Virtual trade %s (%s): reversal detected — waiting for confirmation.", trade_id, ticker)
+                else:
+                    try:
+                        hours_weak = (now - datetime.fromisoformat(first_weak)).total_seconds() / 3600
+                    except Exception:
+                        hours_weak = 0.0
+                    if hours_weak >= min_hours:
+                        to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date")))
+                        del open_by_ticker[ticker]
+                        clear_metadata(reversal_meta_key)
+                    else:
+                        logger.info(
+                            "Virtual trade %s (%s): reversal pending confirmation (%.1fh / %.0fh).",
+                            trade_id, ticker, hours_weak, min_hours,
+                        )
+        else:
+            # No close condition — clear reversal timer if it was running
+            if get_metadata_str(reversal_meta_key) is not None:
+                clear_metadata(reversal_meta_key)
 
     if to_close:
         with eng.begin() as conn:

@@ -468,6 +468,16 @@ def get_metadata_str(key: str) -> "str | None":
     return str(row[0]) if row and row[0] is not None else None
 
 
+def clear_metadata(key: str) -> None:
+    """Delete *key* from system_metadata (no-op if the key does not exist)."""
+    engine = get_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM system_metadata WHERE key = :key"), {"key": key})
+    except Exception:
+        pass
+
+
 def get_metadata(key: str) -> "datetime | None":
     """Return the value stored for *key* as a datetime, or None if not set."""
     engine = get_engine()
