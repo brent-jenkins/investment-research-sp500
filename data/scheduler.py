@@ -49,10 +49,11 @@ _CALENDAR_ALIASES: dict[str, str] = {
     "TSE": "JPX",   # Tokyo Stock Exchange → Japan Exchange Group
 }
 
-# Tickers that must always be pulled regardless of calendar status (European
-# indices that close before the 21:30 UTC EOD run).
+# Tickers that must always be pulled regardless of calendar status.  Includes
+# European/Asian indices that close before the 21:30 UTC EOD run, and ^VIX
+# which is on NYSE (closed for US federal holidays like Juneteenth).
 _ALWAYS_PULL: frozenset[str] = frozenset({
-    "^FTSE", "^GDAXI", "^HSI", "^N225", "^STOXX50E",
+    "^FTSE", "^GDAXI", "^HSI", "^N225", "^STOXX50E", "^VIX",
 })
 
 # Exchange types with no pandas_market_calendars mapping that trade continuously

@@ -11,7 +11,7 @@ import yaml
 import yfinance as yf
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import PriceData, get_engine, get_metadata_str, get_session, init_db, set_metadata
+from data.database import PriceData, clear_metadata, get_engine, get_metadata_str, get_session, init_db, set_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -232,11 +232,6 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     results: dict[str, int] = {}
 
     for ticker in tickers:
-        if _is_ticker_unavailable(ticker):
-            logger.info("Ticker %s marked unavailable, skipping.", ticker)
-            results[ticker] = 0
-            continue
-
         # Open a short-lived session just for the history check, then close it
         # immediately so no read transaction is held when _upsert_price_rows()
         # opens its own write connection via engine.begin().
@@ -249,6 +244,17 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
             ) is not None
         finally:
             session.close()
+
+        if _is_ticker_unavailable(ticker):
+            if has_history:
+                # Ticker has been pulled before — the earlier failure was transient.
+                # Clear the stale flag so this run retries it.
+                clear_metadata(_ticker_unavailable_key(ticker))
+                logger.info("Cleared stale unavailable flag for %s — retrying.", ticker)
+            else:
+                logger.info("Ticker %s marked unavailable (no prior data), skipping.", ticker)
+                results[ticker] = 0
+                continue
 
         if has_history:
             # Rolling 10-day window: yfinance returns whatever trading days
