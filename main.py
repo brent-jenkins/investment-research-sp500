@@ -4785,62 +4785,241 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
     with tab_vt:
         st.markdown("### Automated Virtual Trading")
         vt_cfg = config.get("virtual_trading", {})
-        enabled = vt_cfg.get("enabled", False)
+        enabled      = vt_cfg.get("enabled", False)
+        port_gbp     = float(vt_cfg.get("portfolio_size_gbp", 2000))
+        pos_pct      = float(vt_cfg.get("position_pct", 0.05))
+        pos_size_gbp = port_gbp * pos_pct
 
         st.info(
             "When enabled, the system automatically opens virtual trades on STRONG_BUY / "
-            "STRONG_SELL signals (tradeable assets only) and closes them on EXIT SIGNAL or "
-            "STOP LOSS — identical logic to live monitoring, but against a separate virtual "
-            "portfolio. Enable by setting `virtual_trading.enabled: true` in config.yaml on "
-            "the server."
+            "STRONG_SELL signals (tradeable assets only) and closes them on STOP LOSS, "
+            "EXIT SIGNAL, or after the max holding period — identical logic to live "
+            "monitoring, but risk-free. Enable by setting `virtual_trading.enabled: true` "
+            "in config.yaml on the server."
         )
 
-        status_col, cfg_col = st.columns(2)
-        with status_col:
+        _vt_status_col, _vt_cfg_col = st.columns(2)
+        with _vt_status_col:
             if enabled:
-                st.success("✅ Virtual trading is **enabled**")
+                st.success("Virtual trading is **enabled**")
             else:
-                st.warning("⏸ Virtual trading is **disabled**")
-            st.write(f"**Portfolio size:** £{vt_cfg.get('portfolio_size_gbp', 10000):,}")
-            st.write(f"**Position size:** {int(vt_cfg.get('position_pct', 0.05) * 100)}% per trade")
-            st.write(f"**Max open positions:** {vt_cfg.get('max_open_positions', 5)}")
-            st.write(f"**Entry threshold:** {vt_cfg.get('entry_signal', 'STRONG_BUY')}")
+                st.warning("Virtual trading is **disabled**")
+        with _vt_cfg_col:
+            st.caption(
+                f"Portfolio £{port_gbp:,.0f} · "
+                f"{int(pos_pct * 100)}% per trade (£{pos_size_gbp:,.0f}) · "
+                f"Max {vt_cfg.get('max_open_positions', 5)} positions · "
+                f"Entry: {vt_cfg.get('entry_signal', 'STRONG_BUY')}"
+            )
 
-        # Virtual trade history
-        st.divider()
-        st.markdown("#### Virtual Positions")
+        # ── Load all virtual trades ───────────────────────────────────────────
         try:
             from sqlalchemy import text as sa_text
             from data.database import get_engine as _get_engine
             _eng = _get_engine()
             with _eng.connect() as _conn:
-                v_open = _conn.execute(
-                    sa_text("SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=1 ORDER BY entry_date DESC")
-                ).mappings().all()
-                v_closed = _conn.execute(
-                    sa_text("SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=0 ORDER BY exit_date DESC LIMIT 50")
-                ).mappings().all()
+                v_open_rows = _conn.execute(sa_text(
+                    "SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=1 "
+                    "ORDER BY entry_date DESC"
+                )).mappings().all()
+                v_closed_rows = _conn.execute(sa_text(
+                    "SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=0 "
+                    "ORDER BY exit_date ASC"
+                )).mappings().all()
         except Exception:
-            v_open, v_closed = [], []
+            v_open_rows, v_closed_rows = [], []
 
-        if v_open:
-            st.markdown(f"**{len(v_open)} open virtual position{'s' if len(v_open) != 1 else ''}**")
-            open_df = pd.DataFrame([dict(r) for r in v_open])[
-                ["ticker", "direction", "entry_date", "entry_price", "signal_type", "regime"]
-            ]
-            st.dataframe(open_df, use_container_width=True, hide_index=True)
+        v_open   = [dict(r) for r in v_open_rows]
+        v_closed = [dict(r) for r in v_closed_rows]
+        n_closed = len(v_closed)
+
+        st.divider()
+
+        # ── Portfolio metrics ─────────────────────────────────────────────────
+        if n_closed > 0:
+            _closed_df = pd.DataFrame(v_closed)
+            _closed_df["pnl_pct"]        = pd.to_numeric(_closed_df["pnl_pct"], errors="coerce").fillna(0.0)
+            _closed_df["investment_amount"] = pd.to_numeric(
+                _closed_df.get("investment_amount", pd.Series(dtype=float)), errors="coerce"
+            ).fillna(pos_size_gbp)
+            _closed_df["pnl_gbp"] = _closed_df["investment_amount"] * _closed_df["pnl_pct"]
+
+            total_pnl_gbp   = float(_closed_df["pnl_gbp"].sum())
+            current_value   = port_gbp + total_pnl_gbp
+            total_return_pct = (total_pnl_gbp / port_gbp) * 100
+            wins            = (_closed_df["pnl_gbp"] > 0).sum()
+            losses          = (_closed_df["pnl_gbp"] <= 0).sum()
+            win_rate        = wins / n_closed * 100
+            avg_win         = float(_closed_df.loc[_closed_df["pnl_gbp"] > 0,  "pnl_gbp"].mean()) if wins  > 0 else 0.0
+            avg_loss        = float(_closed_df.loc[_closed_df["pnl_gbp"] <= 0, "pnl_gbp"].mean()) if losses > 0 else 0.0
+            profit_factor   = (
+                abs(_closed_df.loc[_closed_df["pnl_gbp"] > 0,  "pnl_gbp"].sum()) /
+                abs(_closed_df.loc[_closed_df["pnl_gbp"] <= 0, "pnl_gbp"].sum())
+                if losses > 0 and _closed_df.loc[_closed_df["pnl_gbp"] <= 0, "pnl_gbp"].sum() != 0
+                else float("inf")
+            )
+
+            _pf_colour  = "#16a34a" if current_value >= port_gbp else "#dc2626"
+            _ret_sign   = "+" if total_return_pct >= 0 else ""
+            _m1, _m2, _m3, _m4 = st.columns(4)
+            _m1.metric("Portfolio Value",  f"£{current_value:,.2f}",
+                       f"{_ret_sign}{total_return_pct:.1f}% vs £{port_gbp:,.0f} start")
+            _m2.metric("Closed Trades",    f"{n_closed}",
+                       f"{wins}W / {losses}L")
+            _m3.metric("Win Rate",         f"{win_rate:.0f}%",
+                       f"Avg win £{avg_win:+.2f} / loss £{avg_loss:.2f}")
+            _m4.metric("Profit Factor",
+                       f"{profit_factor:.2f}" if profit_factor != float('inf') else "∞",
+                       "gross wins ÷ gross losses")
+
+            # ── Equity curve ─────────────────────────────────────────────────
+            _closed_df["exit_date_dt"] = pd.to_datetime(_closed_df["exit_date"], errors="coerce")
+            _curve = (
+                _closed_df.dropna(subset=["exit_date_dt"])
+                .sort_values("exit_date_dt")
+                .copy()
+            )
+            _curve["cumulative_pnl"] = _curve["pnl_gbp"].cumsum()
+            _curve["portfolio_value"] = port_gbp + _curve["cumulative_pnl"]
+
+            _fig_vt = go.Figure()
+            _colour_fill = "rgba(22,163,74,0.15)" if current_value >= port_gbp else "rgba(220,38,38,0.15)"
+            _colour_line = "#16a34a" if current_value >= port_gbp else "#dc2626"
+            _fig_vt.add_trace(go.Scatter(
+                x=_curve["exit_date_dt"],
+                y=_curve["portfolio_value"],
+                mode="lines",
+                line=dict(color=_colour_line, width=2),
+                fill="tozeroy",
+                fillcolor=_colour_fill,
+                name="Portfolio value",
+                hovertemplate="£%{y:,.2f}<extra></extra>",
+            ))
+            _fig_vt.add_hline(
+                y=port_gbp,
+                line_dash="dot",
+                line_color="#64748b",
+                annotation_text=f"Start £{port_gbp:,.0f}",
+                annotation_position="bottom right",
+            )
+            _fig_vt.update_layout(
+                height=280,
+                margin=dict(l=0, r=0, t=8, b=0),
+                yaxis=dict(tickprefix="£", gridcolor="#1e293b"),
+                xaxis=dict(gridcolor="#1e293b"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,
+            )
+            st.plotly_chart(_fig_vt, use_container_width=True)
+
+            # ── Attribution breakdowns ────────────────────────────────────────
+            _attr1, _attr2 = st.columns(2)
+
+            with _attr1:
+                st.markdown("**By regime**")
+                _by_regime = (
+                    _closed_df.groupby("regime")
+                    .agg(trades=("pnl_gbp", "count"),
+                         win_rate=("pnl_gbp", lambda x: (x > 0).mean() * 100),
+                         total_pnl=("pnl_gbp", "sum"))
+                    .reset_index()
+                    .sort_values("total_pnl", ascending=False)
+                )
+                _by_regime.columns = ["Regime", "Trades", "Win %", "P&L (£)"]
+                _by_regime["Win %"]   = _by_regime["Win %"].round(0).astype(int)
+                _by_regime["P&L (£)"] = _by_regime["P&L (£)"].round(2)
+                st.dataframe(_by_regime, use_container_width=True, hide_index=True)
+
+            with _attr2:
+                st.markdown("**By signal type**")
+                _by_sig = (
+                    _closed_df.groupby("signal_type")
+                    .agg(trades=("pnl_gbp", "count"),
+                         win_rate=("pnl_gbp", lambda x: (x > 0).mean() * 100),
+                         total_pnl=("pnl_gbp", "sum"))
+                    .reset_index()
+                    .sort_values("total_pnl", ascending=False)
+                )
+                _by_sig.columns = ["Signal", "Trades", "Win %", "P&L (£)"]
+                _by_sig["Win %"]   = _by_sig["Win %"].round(0).astype(int)
+                _by_sig["P&L (£)"] = _by_sig["P&L (£)"].round(2)
+                st.dataframe(_by_sig, use_container_width=True, hide_index=True)
+
         else:
-            st.info("No open virtual positions.")
+            st.info("No closed virtual trades yet — portfolio metrics will appear once the first trade closes.")
 
-        if v_closed:
-            st.markdown(f"**{len(v_closed)} recent closed virtual trades**")
-            closed_df = pd.DataFrame([dict(r) for r in v_closed])[
-                ["ticker", "direction", "entry_date", "exit_date", "pnl_pct", "signal_type"]
-            ].copy()
-            closed_df["pnl_pct"] = (pd.to_numeric(closed_df["pnl_pct"], errors="coerce") * 100).round(2)
-            st.dataframe(closed_df, use_container_width=True, hide_index=True)
+        # ── Open positions ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("#### Open Positions")
+        if v_open:
+            _open_disp = pd.DataFrame(v_open)[[
+                "ticker", "direction", "entry_date", "entry_price",
+                "quantity", "signal_type", "regime", "stop_loss_price",
+            ]].copy()
+            _open_disp["entry_date"]    = pd.to_datetime(_open_disp["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            _open_disp["entry_price"]   = pd.to_numeric(_open_disp["entry_price"],   errors="coerce").round(4)
+            _open_disp["quantity"]      = pd.to_numeric(_open_disp["quantity"],      errors="coerce").round(4)
+            _open_disp["stop_loss_price"] = pd.to_numeric(_open_disp["stop_loss_price"], errors="coerce").round(4)
+            _open_disp.columns = ["Ticker", "Dir", "Entry Date", "Entry Price", "Units", "Signal", "Regime", "Stop Loss"]
+            st.dataframe(_open_disp, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No open virtual positions.")
+
+        # ── Closed trades log ─────────────────────────────────────────────────
+        st.divider()
+        st.markdown("#### Closed Trades")
+        if n_closed > 0:
+            _closed_disp = pd.DataFrame(v_closed)[[
+                "ticker", "direction", "entry_date", "exit_date",
+                "entry_price", "exit_price", "pnl_pct", "signal_type", "regime",
+            ]].copy()
+            _closed_disp["entry_date"] = pd.to_datetime(_closed_disp["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            _closed_disp["exit_date"]  = pd.to_datetime(_closed_disp["exit_date"],  errors="coerce").dt.strftime("%Y-%m-%d")
+            _closed_disp["pnl_pct"]    = (pd.to_numeric(_closed_disp["pnl_pct"], errors="coerce") * 100).round(2)
+            _closed_disp.columns = ["Ticker", "Dir", "Entry", "Exit", "Entry $", "Exit $", "P&L %", "Signal", "Regime"]
+            _closed_disp = _closed_disp.sort_values("Exit", ascending=False)
+            st.dataframe(_closed_disp, use_container_width=True, hide_index=True)
         else:
             st.caption("No closed virtual trades yet.")
+
+        # ── Reset ─────────────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("#### Reset Virtual Portfolio")
+        st.warning(
+            "This permanently deletes all virtual trades and resets the portfolio "
+            f"to £{port_gbp:,.0f}. Use this to start a fresh learning cycle."
+        )
+        _confirm = st.checkbox("I understand this cannot be undone", key="vt_reset_confirm")
+        if st.button("Reset Virtual Portfolio", type="primary",
+                     disabled=not _confirm, key="vt_reset_btn"):
+            try:
+                from sqlalchemy import text as _sa_text2
+                from data.database import get_engine as _ge2, clear_metadata as _cm2, get_metadata_str as _gms2
+                _eng2 = _ge2()
+                # Gather virtual trade IDs before deleting so we can clean up metadata
+                with _eng2.connect() as _c2:
+                    _vt_ids = [
+                        r[0] for r in _c2.execute(
+                            _sa_text2("SELECT id FROM trades WHERE account_type='VIRTUAL'")
+                        ).fetchall()
+                    ]
+                with _eng2.begin() as _c2:
+                    _c2.execute(_sa_text2("DELETE FROM trades WHERE account_type='VIRTUAL'"))
+                # Clear per-trade metadata (weakening timers, alert dedup keys)
+                for _vid in _vt_ids:
+                    for _pfx in ("weakening_since:", "trade_alert_status:"):
+                        try:
+                            _cm2(f"{_pfx}{_vid}")
+                        except Exception:
+                            pass
+                st.success(
+                    f"Virtual portfolio reset. All {len(_vt_ids)} trade(s) deleted. "
+                    f"Starting fresh from £{port_gbp:,.0f}."
+                )
+                st.cache_data.clear()
+            except Exception as _exc:
+                st.error(f"Reset failed: {_exc}")
 
 
 # Main UI
