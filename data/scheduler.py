@@ -61,6 +61,59 @@ _ALWAYS_PULL: frozenset[str] = frozenset({
 # these — an unrecognised calendar name could cause them to be skipped.
 _ALWAYS_OPEN_EXCHANGES: frozenset[str] = frozenset({"FX", "Crypto"})
 
+# Native pricing currency for each exchange (used when opening virtual trades
+# to compute units = investment_GBP × fx_rate / entry_price).
+_EXCHANGE_CURRENCY: dict[str, str] = {
+    "NYSE":   "USD",
+    "NASDAQ": "USD",
+    "CBOE":   "USD",
+    "LSE":    "GBP",
+    "TSE":    "JPY",
+    "JPX":    "JPY",
+    "XETR":   "EUR",
+    "EUREX":  "EUR",
+    "HKEX":   "HKD",
+    "Crypto": "USD",
+}
+
+# Quote currency for FX ticker pairs (the currency the rate is priced in).
+_FX_QUOTE_CCY: dict[str, str] = {
+    "GBPUSD=X": "USD",
+    "EURUSD=X": "USD",
+    "AUDUSD=X": "USD",
+    "USDJPY=X": "JPY",
+    "USDCHF=X": "CHF",
+    "USDCAD=X": "CAD",
+    "EURGBP=X": "GBP",
+}
+
+
+def _instrument_ccy(ticker: str, exchange: str) -> str:
+    """Return the native pricing currency for a ticker."""
+    if exchange == "FX":
+        return _FX_QUOTE_CCY.get(ticker, "USD")
+    return _EXCHANGE_CURRENCY.get(exchange, "USD")
+
+
+def _gbp_to_ccy_rate(ccy: str, prices: dict[str, float]) -> float:
+    """Units of *ccy* per GBP, derived from prices already loaded from the DB."""
+    if ccy == "GBP":
+        return 1.0
+    gbpusd = prices.get("GBPUSD=X", 1.27)
+    if ccy == "USD":
+        return gbpusd
+    if ccy == "JPY":
+        return gbpusd * prices.get("USDJPY=X", 150.0)
+    if ccy == "EUR":
+        eurusd = prices.get("EURUSD=X", 1.10)
+        return gbpusd / eurusd if eurusd else gbpusd
+    if ccy == "AUD":
+        audusd = prices.get("AUDUSD=X", 0.64)
+        return gbpusd / audusd if audusd else gbpusd
+    if ccy == "HKD":
+        return gbpusd * 7.8  # approximate; GBPHKD not in watchlist
+    return gbpusd  # fallback: treat as USD-denominated
+
 
 def _resolve_calendar(name: str) -> str:
     return _CALENDAR_ALIASES.get(name, name)
@@ -455,6 +508,14 @@ def _process_virtual_trades(
             sl_price = (live_price - atr_mult * atr if direction == "LONG"
                         else live_price + atr_mult * atr)
 
+        # Position sizing: convert GBP investment to native currency, then to units.
+        exchange       = ticker_exchange.get(ticker, "NYSE")
+        instr_ccy      = _instrument_ccy(ticker, exchange)
+        fx_rate        = _gbp_to_ccy_rate(instr_ccy, prices)
+        investment_gbp = round(portfolio_gbp * position_pct, 2)
+        pos_value_native = round(investment_gbp * fx_rate, 4)
+        quantity       = round(pos_value_native / live_price, 6) if live_price else None
+
         to_open.append({
             "ticker":               ticker,
             "direction":            direction,
@@ -468,8 +529,12 @@ def _process_virtual_trades(
             "volatility_score":     sig.get("volatility_score"),
             "volume_score":         sig.get("volume_score"),
             "macro_score":          sig.get("macro_score"),
-            "investment":           round(portfolio_gbp * position_pct, 2),
+            "investment":           investment_gbp,
             "sl":                   round(sl_price, 6) if sl_price else None,
+            "currency":             instr_ccy,
+            "fx_rate":              round(fx_rate, 6),
+            "quantity":             quantity,
+            "pos_value":            pos_value_native,
         })
 
     if to_open:
@@ -481,13 +546,17 @@ def _process_virtual_trades(
                         direction, entry_date, entry_price, signal_type,
                         confluence_score, regime, trend_score, mean_reversion_score,
                         volatility_score, volume_score, macro_score,
-                        investment_amount, stop_loss_price, is_open, created_at
+                        investment_amount, stop_loss_price,
+                        quantity, currency, fx_rate_at_entry, position_value,
+                        is_open, created_at
                     ) VALUES (
                         :ticker, 'VIRTUAL', 'Virtual Portfolio', 'virtual',
                         :direction, :entry_date, :entry_price, :signal_type,
                         :confluence_score, :regime, :trend_score, :mean_reversion_score,
                         :volatility_score, :volume_score, :macro_score,
-                        :investment, :sl, 1, :now
+                        :investment, :sl,
+                        :quantity, :currency, :fx_rate, :pos_value,
+                        1, :now
                     )
                 """), {**row, "now": now.isoformat()})
                 logger.info(
