@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import pandas as pd
 import yaml
 from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -60,6 +61,27 @@ def _equity_only_tickers(config: dict) -> frozenset[str]:
                 if isinstance(e, dict) and "ticker" in e:
                     result.add(e["ticker"])
     return frozenset(result)
+
+
+def _compute_gspc_corr(df: pd.DataFrame, gspc_df: pd.DataFrame, days: int = 30) -> Optional[float]:
+    """Compute trailing `days`-day return correlation between a ticker and ^GSPC.
+
+    Used by the regime direction filter to distinguish assets that move with the
+    broad market (high positive correlation) from those that move independently
+    or inversely (low/negative correlation).
+
+    Returns None when either DataFrame lacks sufficient data.
+    """
+    try:
+        a_ret = df["close"].pct_change().replace([float("inf"), float("-inf")], float("nan"))
+        g_ret = gspc_df["close"].pct_change().replace([float("inf"), float("-inf")], float("nan"))
+        combined = pd.concat([a_ret.rename("a"), g_ret.rename("g")], axis=1).dropna()
+        if len(combined) < days:
+            return None
+        corr = float(combined.tail(days)[["a", "g"]].corr().iloc[0, 1])
+        return None if pd.isna(corr) else corr
+    except Exception:
+        return None
 
 
 def _load_config() -> dict:
@@ -269,6 +291,7 @@ def score_ticker(
     config: dict,
     vix_close: Optional[float] = None,
     overlays: Optional[dict] = None,
+    gspc_df: Optional[pd.DataFrame] = None,
 ) -> dict:
     """Compute a regime-weighted confluence signal for a single ticker.
 
@@ -287,6 +310,8 @@ def score_ticker(
         config:        Loaded config.yaml dict.
         vix_close:     Pre-fetched VIX close price (avoids redundant DB reads).
         overlays:      Active regime overlays from :func:`~analysis.regime.detect_overlays`.
+        gspc_df:       Pre-fetched ^GSPC price DataFrame for correlation-aware regime
+                       direction filtering (avoids a redundant DB read per ticker).
 
     Returns:
         Dict with ticker, signal classification, weighted score, per-module scores,
@@ -343,13 +368,50 @@ def score_ticker(
 
     classification = _classify(w_score, config)
 
-    # Regime direction filter: suppress counter-trend signals in strongly trending regimes
+    # Regime direction filter: suppress counter-trend signals in strongly trending regimes,
+    # but only for assets that move with the broad market (^GSPC correlation > threshold).
+    # Assets with negative or low correlation (e.g. GLD, FXI) may be selling/buying for
+    # independent reasons and are allowed through even in a trending regime.
     if config.get("signals", {}).get("regime_direction_filter", True):
         regime_name = regime_result["regime"].value
+        corr_threshold = float(
+            config.get("signals", {}).get("regime_filter_corr_threshold", 0.5)
+        )
         if regime_name == "TRENDING_BULL" and classification in ("SELL", "STRONG_SELL"):
-            classification = "NEUTRAL"
+            gspc_corr = (
+                _compute_gspc_corr(df, gspc_df)
+                if gspc_df is not None and not gspc_df.empty
+                else None
+            )
+            # Unknown correlation → conservative default: suppress
+            if gspc_corr is None or gspc_corr > corr_threshold:
+                logger.debug(
+                    "%s SELL suppressed in TRENDING_BULL (^GSPC corr=%.2f, threshold=%.2f)",
+                    ticker, gspc_corr if gspc_corr is not None else float("nan"), corr_threshold,
+                )
+                classification = "NEUTRAL"
+            else:
+                logger.debug(
+                    "%s SELL allowed in TRENDING_BULL (^GSPC corr=%.2f ≤ threshold=%.2f)",
+                    ticker, gspc_corr, corr_threshold,
+                )
         elif regime_name == "TRENDING_BEAR" and classification in ("BUY", "STRONG_BUY"):
-            classification = "NEUTRAL"
+            gspc_corr = (
+                _compute_gspc_corr(df, gspc_df)
+                if gspc_df is not None and not gspc_df.empty
+                else None
+            )
+            if gspc_corr is None or gspc_corr > corr_threshold:
+                logger.debug(
+                    "%s BUY suppressed in TRENDING_BEAR (^GSPC corr=%.2f, threshold=%.2f)",
+                    ticker, gspc_corr if gspc_corr is not None else float("nan"), corr_threshold,
+                )
+                classification = "NEUTRAL"
+            else:
+                logger.debug(
+                    "%s BUY allowed in TRENDING_BEAR (^GSPC corr=%.2f ≤ threshold=%.2f)",
+                    ticker, gspc_corr, corr_threshold,
+                )
 
     return {
         "ticker":               ticker,
@@ -447,9 +509,11 @@ def generate_signals(
     active_overlay_str = ",".join(k for k, v in overlays.items() if v)
     logger.info("Active overlays: %s", active_overlay_str or "none")
 
-    # Pre-fetch VIX to avoid one DB query per ticker
+    # Pre-fetch VIX and GSPC once to avoid one DB query per ticker
     vix_df = get_price_df("^VIX", days=5)
     vix_close = float(vix_df["close"].iloc[-1]) if not vix_df.empty else None
+
+    gspc_df = get_price_df("^GSPC", days=config["data"]["history_days"])
 
     signals: list[dict] = []
     errors:  list[dict] = []
@@ -459,7 +523,7 @@ def generate_signals(
         try:
             result = score_ticker(
                 ticker, regime_result, config,
-                vix_close=vix_close, overlays=overlays,
+                vix_close=vix_close, overlays=overlays, gspc_df=gspc_df,
             )
             _persist_signal(result, as_of)
             signals.append(result)
