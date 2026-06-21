@@ -4,7 +4,8 @@ import logging
 import os
 import smtplib
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -17,6 +18,20 @@ from data.database import clear_metadata, get_engine, get_metadata, get_metadata
 from output.performance import get_closed_trades, get_current_signal, get_open_trades
 
 logger = logging.getLogger(__name__)
+
+_UK_TZ = ZoneInfo("Europe/London")
+
+
+def _fmt_uk(dt: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Convert a naive-UTC (or UTC-aware) datetime to UK local time and format it.
+
+    Appends 'GMT' or 'BST' depending on whether DST is currently active.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    uk = dt.astimezone(_UK_TZ)
+    abbr = "BST" if uk.dst() else "GMT"
+    return f"{uk.strftime(fmt)} {abbr}"
 
 _SIGNAL_RANK: dict[str, int] = {
     "STRONG_BUY":  2,
@@ -554,7 +569,7 @@ def _build_alert_html(alerts: list[dict]) -> str:
     return _email_wrap_h(
         _email_header_h(
             f"Trade Alert — {n} position{'s' if n != 1 else ''} require attention",
-            f"Generated {now.strftime('%Y-%m-%d %H:%M')} UTC",
+            f"Generated {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
             accent="#7f1d1d",
         ),
         _section_h("POSITIONS REQUIRING ATTENTION", cards, "#dc2626")
@@ -592,13 +607,13 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
     n_pos = len(alerts)
     subject = (
         f"Trade Alert — {n_pos} position{'s' if n_pos != 1 else ''} require attention "
-        f"({now.strftime('%Y-%m-%d %H:%M')} UTC)"
+        f"({_fmt_uk(now, '%Y-%m-%d %H:%M')})"
     )
 
     # Plain-text fallback
     lines = [
         "Investment Research Dashboard — Trade Alert",
-        f"Generated: {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        f"Generated: {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
         "",
         f"POSITIONS REQUIRING ATTENTION ({n_pos})",
         "=" * 45,
@@ -665,12 +680,12 @@ def send_vix_spike_alert(
     now     = datetime.utcnow()
     subject = (
         f"Volatility Spike — VIX +{vix_pct:.1f}% — Signals Refreshed "
-        f"({now.strftime('%Y-%m-%d %H:%M')} UTC)"
+        f"({_fmt_uk(now, '%Y-%m-%d %H:%M')})"
     )
 
     text_body = "\n".join([
         "Investment Research Dashboard — Volatility Spike Alert",
-        f"Generated: {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        f"Generated: {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
         "",
         f"VIX has risen {vix_pct:.1f}% today ({vix_prev:.2f} → {vix_current:.2f}).",
         "This exceeds the 20% single-day threshold.",
@@ -687,7 +702,7 @@ def send_vix_spike_alert(
     html_body = _email_wrap_h(
         _email_header_h(
             f"Volatility Spike: VIX +{vix_pct:.1f}%",
-            f"{now.strftime('%Y-%m-%d %H:%M')} UTC",
+            _fmt_uk(now, "%Y-%m-%d %H:%M"),
             accent=colour,
         ),
         _section_h(
@@ -740,7 +755,7 @@ def _build_test_html(
     to_addrs  = notif.get("to_addresses") or []
     relay     = f"{notif.get('smtp_host', '—')}:{notif.get('smtp_port', '—')}"
     now       = datetime.utcnow()
-    last_str  = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "—"
+    last_str  = _fmt_uk(last_analysis, "%Y-%m-%d %H:%M") if last_analysis else "—"
 
     rows_data = [
         ("Regime",        regime.replace("_", " ")),
@@ -767,7 +782,7 @@ def _build_test_html(
     return _email_wrap_h(
         _email_header_h(
             "Test Notification",
-            f"Sent {now.strftime('%Y-%m-%d %H:%M')} UTC",
+            f"Sent {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
         ),
         _section_h("SYSTEM STATUS", table_html, "#3b82f6")
         + _section_h(
@@ -803,11 +818,11 @@ def send_test_email(
         return False, "No recipient addresses configured in notifications.email.to_addresses"
 
     now          = datetime.utcnow()
-    last_run_str = last_analysis.strftime("%Y-%m-%d %H:%M UTC") if last_analysis else "—"
+    last_run_str = _fmt_uk(last_analysis, "%Y-%m-%d %H:%M") if last_analysis else "—"
 
     lines = [
         "Investment Research Dashboard — Test Notification",
-        f"Sent:      {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        f"Sent:      {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
         f"From:      {from_addr}",
         f"To:        {', '.join(to_addrs)}",
         f"Via:       {notif.get('smtp_host','—')}:{notif.get('smtp_port','—')}",
@@ -1012,7 +1027,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     L.append(
         f"Week of {week_ago.strftime('%d %b')} "
         f"to {now.strftime('%d %b %Y')}  |  "
-        f"Generated {now.strftime('%Y-%m-%d %H:%M')} UTC"
+        f"Generated {_fmt_uk(now, '%Y-%m-%d %H:%M')}"
     )
 
     # ── Market Regime & Overlays ──────────────────────────────────────
@@ -1299,7 +1314,8 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     rule("-", 60)
     L.append("Investment Research Dashboard  |  research.example.com")
     next_sunday = now + timedelta(days=(6 - now.weekday() + 7) % 7 or 7)
-    L.append(f"Next weekly summary: Sunday {next_sunday.strftime('%d %b %Y')} at 10:00 UTC")
+    _uk_10 = _fmt_uk(next_sunday.replace(hour=10, minute=0, second=0, tzinfo=timezone.utc), "%H:%M")
+    L.append(f"Next weekly summary: Sunday {next_sunday.strftime('%d %b %Y')} at {_uk_10}")
     L.append("To disable: notifications.weekly_summary.enabled: false in config.yaml")
     return "\n".join(L)
 
@@ -1770,13 +1786,14 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
 
     # ── Assemble ──────────────────────────────────────────────────────
     next_sunday = now + timedelta(days=(6 - now.weekday() + 7) % 7 or 7)
-    footer_note = f"Next summary: Sunday {next_sunday.strftime('%d %b %Y')} 10:00 UTC"
+    _ns_10_uk   = _fmt_uk(next_sunday.replace(hour=10, minute=0, second=0, tzinfo=timezone.utc), "%H:%M")
+    footer_note = f"Next summary: Sunday {next_sunday.strftime('%d %b %Y')} {_ns_10_uk}"
 
     return _email_wrap_h(
         _email_header_h(
             "Weekly Summary",
             f"Week of {week_ago.strftime('%d %b')} – {now.strftime('%d %b %Y')} "
-            f"&nbsp;·&nbsp; Generated {now.strftime('%H:%M')} UTC",
+            f"&nbsp;·&nbsp; Generated {_fmt_uk(now, '%H:%M')}",
         ),
         sections,
         _email_footer_h(footer_note),

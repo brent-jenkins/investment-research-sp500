@@ -13,7 +13,8 @@ import html
 import logging
 import subprocess
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -99,6 +100,34 @@ from output.signals import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# UK-time display helpers
+# ---------------------------------------------------------------------------
+_UK_TZ = ZoneInfo("Europe/London")
+
+
+def _fmt_uk(dt: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Convert a naive-UTC (or UTC-aware) datetime to UK local time and format it.
+
+    Appends 'GMT' or 'BST' depending on whether DST is currently active.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    uk = dt.astimezone(_UK_TZ)
+    abbr = "BST" if uk.dst() else "GMT"
+    return f"{uk.strftime(fmt)} {abbr}"
+
+
+def _uk_sched_time(hour: int, minute: int) -> str:
+    """Format a fixed UTC hour:minute as UK local time using today's DST offset."""
+    ref = datetime.now(timezone.utc).replace(
+        hour=hour, minute=minute, second=0, microsecond=0
+    )
+    uk = ref.astimezone(_UK_TZ)
+    abbr = "BST" if uk.dst() else "GMT"
+    return f"{uk.strftime('%H:%M')} {abbr}"
+
 
 # Ensure the DB schema exists before any page renders or background jobs fire.
 # init_db() is idempotent — create_all() and _apply_migrations() are no-ops
@@ -401,7 +430,7 @@ def _age_display(ts: datetime | None) -> tuple[str, str]:
         age = f"{int(hours)}h ago"
     else:
         age = f"{hours / 24:.1f}d ago"
-    return _ts.strftime("%Y-%m-%d %H:%M UTC"), age
+    return _fmt_uk(_ts, "%Y-%m-%d %H:%M"), age
 
 
 def _next_run_for_time(hour: int, minute: int) -> datetime:
@@ -424,11 +453,15 @@ def _git_log_info() -> tuple[str, str]:
         )
         if res.returncode == 0 and res.stdout.strip():
             raw_ts, _, msg = res.stdout.strip().partition("|")
-            dt  = datetime.strptime(raw_ts.strip()[:19], "%Y-%m-%d %H:%M:%S")
+            raw_ts = raw_ts.strip()
+            try:
+                dt = datetime.strptime(raw_ts[:25], "%Y-%m-%d %H:%M:%S %z")
+            except ValueError:
+                dt = datetime.strptime(raw_ts[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             msg = msg.strip()
             if len(msg) > 60:
                 msg = msg[:57] + "…"
-            return dt.strftime("%Y-%m-%d %H:%M UTC"), msg
+            return _fmt_uk(dt, "%Y-%m-%d %H:%M"), msg
     except Exception:
         pass
     return "Unknown", ""
@@ -791,7 +824,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     )
 
     last_ts = get_metadata("last_analysis_run") or get_last_signal_timestamp()
-    ts_str  = last_ts.strftime("%Y-%m-%d %H:%M UTC") if last_ts else "not yet generated"
+    ts_str  = _fmt_uk(last_ts, "%Y-%m-%d %H:%M") if last_ts else "not yet generated"
 
     st.markdown(
         f"<div style='border:1px solid #334155;border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
@@ -2832,7 +2865,7 @@ def _pipeline_row(
     else:
         _ts     = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
         hours   = (datetime.utcnow() - _ts).total_seconds() / 3600
-        ts_str  = _ts.strftime("%Y-%m-%d %H:%M UTC")
+        ts_str  = _fmt_uk(_ts, "%Y-%m-%d %H:%M")
         age_str = (
             f"{int(hours * 60)}m ago" if hours < 1
             else f"{int(hours)}h ago" if hours < 24
@@ -3080,7 +3113,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             else f"in {delta / 3600:.1f}h" if delta < 86400
             else f"in {delta / 86400:.1f}d"
         )
-        _status_card(col, f"{label} · {time_str}", nxt.strftime("%a %H:%M UTC"),
+        _status_card(col, f"{label} · {time_str}", _fmt_uk(nxt, "%a %H:%M"),
                      f"{until} — {desc}", "info")
 
     # ── Data coverage ─────────────────────────────────────────────────────
@@ -3114,7 +3147,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     generate_signals(tickers=_tickers, config=_cfg)
                     st.success(
                         f"Analysis complete — signals updated at "
-                        f"{datetime.utcnow().strftime('%H:%M UTC')}."
+                        f"{_fmt_uk(datetime.utcnow(), "%H:%M")}."
                     )
                     st.cache_data.clear()
                 except Exception as _exc:
@@ -3139,7 +3172,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     generate_signals(tickers=_tickers, config=_cfg)
                     st.success(
                         f"Done — {_new_rows} new price rows · signals updated at "
-                        f"{datetime.utcnow().strftime('%H:%M UTC')}."
+                        f"{_fmt_uk(datetime.utcnow(), "%H:%M")}."
                     )
                     st.cache_data.clear()
                 except Exception as _exc:
@@ -3230,7 +3263,7 @@ def _initialise() -> None:
                 _tickers = get_all_tickers(_cfg)
                 run_analysis(tickers=_tickers, config=_cfg)
                 generate_signals(tickers=_tickers, config=_cfg)
-                ts = datetime.utcnow().strftime("%H:%M UTC")
+                ts = _fmt_uk(datetime.utcnow(), "%H:%M")
                 st.session_state["_startup_msg"] = ("ok", f"Initial analysis complete — {ts}")
                 logger.info("First-run startup analysis complete.")
             except Exception as exc:
@@ -3260,9 +3293,13 @@ def _render_relationships_page(config: dict) -> None:
     """Render the Relationships page: divergence narratives, pair table, correlation heatmap."""
     from analysis.correlations import RELATIONSHIP_MAP as _REL_MAP
     _corr_ts  = get_metadata("last_analysis_run")
-    _ts_str   = _corr_ts.strftime("%Y-%m-%d %H:%M UTC") if _corr_ts else "pending"
+    _ts_str   = _fmt_uk(_corr_ts, "%Y-%m-%d %H:%M") if _corr_ts else "pending"
     _n_pairs  = len(_REL_MAP)
-    st.caption(f"🔗 **Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; Last computed: {_ts_str} &nbsp;·&nbsp; Updates: 07:00 / 13:30 / 21:30 UTC")
+    st.caption(
+        f"🔗 **Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; "
+        f"Last computed: {_ts_str} &nbsp;·&nbsp; "
+        f"Updates: {_uk_sched_time(7,0)} / {_uk_sched_time(13,30)} / {_uk_sched_time(21,30)}"
+    )
 
     stored = get_stored_correlations()
     _has_data = bool(stored) and any(p.get("corr_30d") is not None for p in stored)
@@ -3662,8 +3699,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     last_analysis = get_metadata("last_analysis_run")
     if last_analysis:
         st.caption(
-            f"As of: {last_analysis.strftime('%Y-%m-%d %H:%M')} UTC · "
-            f"Updates run automatically at 07:00, 13:30 and 21:30 UTC"
+            f"As of: {_fmt_uk(last_analysis, '%Y-%m-%d %H:%M')} · "
+            f"Updates: {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}"
         )
     else:
         st.caption("No analysis run yet — updates run automatically on weekdays.")
@@ -4867,8 +4904,8 @@ def main() -> None:
         # Pipeline status — last data pull and last analysis timestamps.
         _sb_refresh  = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
         _sb_analysis = get_metadata("last_analysis_run")
-        _sb_r_str = _sb_refresh.strftime("%Y-%m-%d %H:%M UTC")  if _sb_refresh  else "Pending"
-        _sb_a_str = _sb_analysis.strftime("%Y-%m-%d %H:%M UTC") if _sb_analysis else "Pending"
+        _sb_r_str = _fmt_uk(_sb_refresh,  "%Y-%m-%d %H:%M") if _sb_refresh  else "Pending"
+        _sb_a_str = _fmt_uk(_sb_analysis, "%Y-%m-%d %H:%M") if _sb_analysis else "Pending"
         st.caption(f"**Last refresh:** {_sb_r_str}")
         st.caption(f"**Last analysis:** {_sb_a_str}")
 
