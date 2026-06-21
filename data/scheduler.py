@@ -821,6 +821,55 @@ def _trade_alert_job() -> None:
         if status not in _ALERT_STATUSES:
             continue
 
+        # Close virtual trades immediately on STOP LOSS.  The exchange-session
+        # check earlier in this loop already guarantees the market is open, so
+        # the market-hours constraint is satisfied.  EXIT SIGNAL is left to the
+        # scheduled analysis runs (07:00 / 13:30 / 21:30) where the reversal-
+        # confirmation logic runs.
+        if status == "STOP LOSS" and trade.get("account_type") == "VIRTUAL":
+            try:
+                from data.database import get_engine as _get_engine  # noqa: PLC0415
+                from sqlalchemy import text as _sa_text              # noqa: PLC0415
+                _entry = float(trade.get("entry_price") or 0)
+                _dir   = trade.get("direction", "LONG")
+                _live  = live_price or 0.0
+                _pnl   = 0.0
+                if _entry:
+                    _pnl = ((_live - _entry) / _entry if _dir == "LONG"
+                            else (_entry - _live) / _entry)
+                _hold = 0
+                _edt  = trade.get("entry_date")
+                if _edt:
+                    try:
+                        _ep = (_edt if isinstance(_edt, datetime)
+                               else datetime.fromisoformat(str(_edt).split(".")[0]))
+                        _hold = max(0, (now_utc.replace(tzinfo=None) - _ep).days)
+                    except Exception:
+                        pass
+                with _get_engine().begin() as _conn:
+                    _conn.execute(_sa_text("""
+                        UPDATE trades
+                        SET is_open=0, exit_date=:ts, exit_price=:price,
+                            pnl_pct=:pnl, holding_days=:hold
+                        WHERE id=:tid AND is_open=1
+                    """), {
+                        "ts":    now_utc.replace(tzinfo=None).isoformat(),
+                        "price": _live,
+                        "pnl":   round(_pnl, 6),
+                        "hold":  _hold,
+                        "tid":   trade_id,
+                    })
+                logger.info(
+                    "Virtual trade %s (%s) closed: STOP LOSS at %.4f (P&L %.2f%%)",
+                    trade_id, ticker, _live, _pnl * 100,
+                )
+                # Clear the weakening timer now the trade is closed.
+                clear_metadata(f"weakening_since:{trade_id}")
+            except Exception as _exc:
+                logger.error(
+                    "Failed to close virtual trade %s on STOP LOSS: %s", trade_id, _exc
+                )
+
         meta_key = f"trade_alert_status:{trade_id}"
         if get_metadata_str(meta_key) == status:
             logger.info(
