@@ -3147,7 +3147,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     generate_signals(tickers=_tickers, config=_cfg)
                     st.success(
                         f"Analysis complete — signals updated at "
-                        f"{_fmt_uk(datetime.utcnow(), "%H:%M")}."
+                        f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
                     )
                     st.cache_data.clear()
                 except Exception as _exc:
@@ -3172,7 +3172,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     generate_signals(tickers=_tickers, config=_cfg)
                     st.success(
                         f"Done — {_new_rows} new price rows · signals updated at "
-                        f"{_fmt_uk(datetime.utcnow(), "%H:%M")}."
+                        f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
                     )
                     st.cache_data.clear()
                 except Exception as _exc:
@@ -3263,7 +3263,7 @@ def _initialise() -> None:
                 _tickers = get_all_tickers(_cfg)
                 run_analysis(tickers=_tickers, config=_cfg)
                 generate_signals(tickers=_tickers, config=_cfg)
-                ts = _fmt_uk(datetime.utcnow(), "%H:%M")
+                ts = _fmt_uk(datetime.utcnow(), '%H:%M')
                 st.session_state["_startup_msg"] = ("ok", f"Initial analysis complete — {ts}")
                 logger.info("First-run startup analysis complete.")
             except Exception as exc:
