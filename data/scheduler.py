@@ -49,6 +49,17 @@ _CALENDAR_ALIASES: dict[str, str] = {
     "TSE": "JPX",   # Tokyo Stock Exchange → Japan Exchange Group
 }
 
+# Tickers that must always be pulled regardless of calendar status (European
+# indices that close before the 21:30 UTC EOD run).
+_ALWAYS_PULL: frozenset[str] = frozenset({
+    "^FTSE", "^GDAXI", "^HSI", "^N225", "^STOXX50E",
+})
+
+# Exchange types with no pandas_market_calendars mapping that trade continuously
+# on weekdays.  The EOD job must not rely solely on _is_exchange_open() for
+# these — an unrecognised calendar name could cause them to be skipped.
+_ALWAYS_OPEN_EXCHANGES: frozenset[str] = frozenset({"FX", "Crypto"})
+
 
 def _resolve_calendar(name: str) -> str:
     return _CALENDAR_ALIASES.get(name, name)
@@ -226,7 +237,7 @@ def _process_virtual_trades(
         can_open: set[str] = {
             t for t in tradeable
             if ticker_exchange.get(t, "NYSE") in eligible_exchanges
-            or ticker_exchange.get(t, "NYSE") in ("Crypto", "FX")
+            or ticker_exchange.get(t, "NYSE") in _ALWAYS_OPEN_EXCHANGES
         }
     elif run_type == RUN_FULL:
         # EOD run: open for all tradeable tickers whose exchange had a session today
@@ -590,10 +601,6 @@ def _eod_job() -> None:
     config = _load_config()
     ticker_exchange = _build_ticker_exchange_map(config)
 
-    _ALWAYS_PULL: frozenset[str] = frozenset({
-        "^FTSE", "^GDAXI", "^HSI", "^N225", "^STOXX50E",
-    })
-
     today_utc: date = datetime.now(timezone.utc).date()
     unique_exchanges = set(ticker_exchange.values())
     open_exchanges: dict[str, bool] = {
@@ -604,7 +611,7 @@ def _eod_job() -> None:
     open_tickers:    list[str] = []
     skipped_tickers: list[str] = []
     for ticker, exchange in ticker_exchange.items():
-        if ticker in _ALWAYS_PULL or open_exchanges[exchange]:
+        if ticker in _ALWAYS_PULL or exchange in _ALWAYS_OPEN_EXCHANGES or open_exchanges[exchange]:
             open_tickers.append(ticker)
         else:
             logger.info("Skipping %s — %s closed today (%s).", ticker, exchange, today_utc)
