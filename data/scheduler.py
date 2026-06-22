@@ -33,7 +33,7 @@ from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
 from analysis.macro import fetch_and_store_macro_indicators
-from data.database import clear_metadata, get_metadata_str, set_metadata
+from data.database import clear_metadata, get_metadata, get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
 logger = logging.getLogger(__name__)
@@ -615,6 +615,11 @@ def _pre_market_job() -> None:
     The 13:30 and 21:30 runs handle European and US markets respectively.
     """
     logger.info("Scheduled pre-market analysis starting (07:00 UTC)…")
+    try:
+        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
+        set_metadata("last_scheduled_run_name", "Pre-Market")
+    except Exception as _exc:
+        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
     config = _load_config()
     ticker_exchange = _build_ticker_exchange_map(config)
 
@@ -661,6 +666,11 @@ def _us_open_job() -> None:
     no virtual trade openings — both require a complete session close.
     """
     logger.info("Scheduled US-open analysis starting (13:30 UTC)…")
+    try:
+        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
+        set_metadata("last_scheduled_run_name", "US Open")
+    except Exception as _exc:
+        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
     config = _load_config()
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
 
@@ -668,6 +678,11 @@ def _us_open_job() -> None:
 def _eod_job() -> None:
     """21:30 UTC — pull incremental data for open exchanges, then run full analysis."""
     logger.info("Scheduled end-of-day refresh starting (21:30 UTC)…")
+    try:
+        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
+        set_metadata("last_scheduled_run_name", "End of Day")
+    except Exception as _exc:
+        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
     config = _load_config()
     ticker_exchange = _build_ticker_exchange_map(config)
 
@@ -943,6 +958,75 @@ def _fomc_reaction_job() -> None:
     logger.info("FOMC reaction analysis complete.")
 
 
+def _maybe_catch_up_missed_eod(config: dict) -> None:
+    """Trigger an immediate EOD catch-up if the last full refresh was missed.
+
+    Called at scheduler startup on weekdays.  Two conditions each independently
+    trigger a catch-up run:
+
+    1. last_full_refresh is more than 26 hours ago — the service was down for a
+       full cycle and missed at least one EOD run.
+    2. Current UTC time is past today's configured EOD run time but
+       last_full_refresh.date() < today — the service was restarted after the
+       EOD run was due (e.g. a deployment at 22:00 UTC when the run fires at 21:30).
+
+    The catch-up runs in a daemon thread so start_scheduler() returns promptly.
+    """
+    last_refresh_str = get_metadata_str("last_full_refresh")
+    now_utc = datetime.now(timezone.utc)
+
+    if now_utc.weekday() >= 5:  # Saturday (5) or Sunday (6) — no scheduled EOD
+        return
+
+    if last_refresh_str is None:
+        logger.debug(
+            "Missed-EOD check: no last_full_refresh recorded yet — "
+            "startup init handles the first analysis run."
+        )
+        return
+
+    try:
+        last_dt = datetime.fromisoformat(last_refresh_str)
+    except ValueError:
+        logger.warning(
+            "Missed-EOD check: could not parse last_full_refresh '%s' — skipping.",
+            last_refresh_str,
+        )
+        return
+
+    now_naive  = now_utc.replace(tzinfo=None)
+    last_naive = last_dt.replace(tzinfo=None) if last_dt.tzinfo else last_dt
+    hours_since = (now_naive - last_naive).total_seconds() / 3600
+
+    eod_cfg  = config.get("scheduler", {}).get("runs", {}).get("eod", {})
+    eod_hour = int(eod_cfg.get("hour", 21))
+    eod_min  = int(eod_cfg.get("minute", 30))
+    eod_today = now_naive.replace(hour=eod_hour, minute=eod_min, second=0, microsecond=0)
+
+    stale_cycle  = hours_since > 26
+    missed_today = (now_naive >= eod_today) and (last_naive.date() < now_naive.date())
+
+    if not (stale_cycle or missed_today):
+        logger.debug(
+            "Missed-EOD check: last refresh %.1fh ago — no catch-up needed.", hours_since
+        )
+        return
+
+    reason = (
+        f"last refresh {hours_since:.1f}h ago (>26 h threshold)"
+        if stale_cycle
+        else f"past EOD run time ({eod_hour:02d}:{eod_min:02d} UTC) with no refresh recorded today"
+    )
+    logger.warning(
+        "Missed EOD run detected (%s) — launching immediate catch-up in background.", reason
+    )
+    set_metadata("missed_eod_catch_up", now_utc.isoformat())
+
+    import threading  # noqa: PLC0415
+    t = threading.Thread(target=_eod_job, name="eod-catch-up", daemon=True)
+    t.start()
+
+
 def start_scheduler() -> BackgroundScheduler:
     """Start the background scheduler with all three daily jobs if not already running."""
     global _scheduler
@@ -1036,6 +1120,11 @@ def start_scheduler() -> BackgroundScheduler:
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))
+
+    # Check for missed EOD runs after starting, so the scheduler is already
+    # accepting jobs before we potentially queue a catch-up run.
+    _maybe_catch_up_missed_eod(config)
+
     return _scheduler
 
 

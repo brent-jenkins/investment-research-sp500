@@ -2903,20 +2903,72 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.cache_data.clear()
     st.markdown("## 🖥️ System Status")
 
-    # ── Compact system strip ──────────────────────────────────────────────
+    # ── Collect data needed for both status rows ──────────────────────────
     deploy_ts, deploy_msg = _git_log_info()
     uptime                = _service_uptime()
     db_size_str, db_level = _db_size(config)
 
+    last_refresh   = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
+    last_analysis  = get_metadata("last_analysis_run")
+    last_sched     = get_metadata("last_scheduled_run") or last_analysis
+    last_sched_name = get_metadata_str("last_scheduled_run_name") or ""
+
+    # ── Status grid row 1: system info ───────────────────────────────────
     sc1, sc2, sc3 = st.columns(3)
     _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info")
     _status_card(sc2, "Service Uptime",  uptime, "Process running", "ok")
     _status_card(sc3, "Database Size",   db_size_str, "", db_level)
 
+    # ── Status grid row 2: scheduling health ─────────────────────────────
+    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+    pr1, pr2, pr3 = st.columns(3)
+
+    # Last Data Refresh
+    _ref_val, _ref_sub = _age_display(last_refresh)
+    _status_card(pr1, "Last Data Refresh", _ref_val, _ref_sub,
+                 _age_level(last_refresh, warn_hours=48.0, error_hours=96.0))
+
+    # Last Scheduled Run — red when >26 h on a weekday (missed cycle indicator)
+    _sched_val, _sched_sub = _age_display(last_sched)
+    if last_sched_name:
+        _sched_sub = f"{last_sched_name} · {_sched_sub}"
+    _now_check  = datetime.utcnow()
+    _sched_hrs  = (
+        (_now_check - last_sched.replace(tzinfo=None)).total_seconds() / 3600
+        if last_sched else float("inf")
+    )
+    _is_weekday = _now_check.weekday() < 5
+    _sched_lvl  = (
+        "error" if (_sched_hrs > 26 and _is_weekday)
+        else "warn" if _sched_hrs > 14
+        else ("ok" if last_sched else "error")
+    )
+    _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub, _sched_lvl)
+
+    # Next Scheduled Run — soonest upcoming job across all configured runs
+    _sched_cfg_runs = config.get("scheduler", {}).get("runs", {})
+    _RUN_LABELS = {"pre_market": "Pre-Market", "us_open": "US Open", "eod": "End of Day"}
+    _nxt_dt, _nxt_label = None, ""
+    for _rn, _rl in _RUN_LABELS.items():
+        _rc = _sched_cfg_runs.get(_rn, {})
+        _nt = _next_run_for_time(int(_rc.get("hour", 0)), int(_rc.get("minute", 0)))
+        if _nxt_dt is None or _nt < _nxt_dt:
+            _nxt_dt, _nxt_label = _nt, _rl
+    if _nxt_dt:
+        _nxt_delta = (_nxt_dt - datetime.utcnow()).total_seconds()
+        _nxt_until = (
+            f"in {int(_nxt_delta / 60)}m" if _nxt_delta < 3600
+            else f"in {_nxt_delta / 3600:.1f}h" if _nxt_delta < 86400
+            else f"in {_nxt_delta / 86400:.1f}d"
+        )
+        _nxt_val = _fmt_uk(_nxt_dt, "%a %H:%M UTC")
+        _nxt_sub = f"{_nxt_until} — {_nxt_label}"
+    else:
+        _nxt_val, _nxt_sub = "Unknown", ""
+    _status_card(pr3, "Next Scheduled Run", _nxt_val, _nxt_sub, "info")
+
     # ── Collect pipeline data ─────────────────────────────────────────────
-    last_refresh   = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
     last_fred      = get_metadata("last_fred_run")
-    last_analysis  = get_metadata("last_analysis_run")
     last_run_type  = get_metadata_str("last_run_type")
     active_overlays = get_metadata_str("active_overlays") or "none"
     fred_key       = bool(config.get("macro", {}).get("fred_api_key", ""))
