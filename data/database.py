@@ -696,6 +696,16 @@ def _purge_unlisted_tickers(engine) -> None:
     import logging
     logger = logging.getLogger(__name__)
 
+    # Top-level config.yaml section names — never valid ticker symbols.
+    # Excluded from stale-ticker detection so that rows erroneously written
+    # under a config key name (from any past mis-parse) are silently skipped
+    # rather than being logged as purge targets on every startup.
+    _CONFIG_SECTIONS: frozenset[str] = frozenset({
+        "watchlist", "virtual_trading", "signals", "scheduler",
+        "notifications", "macro", "learning", "database", "data",
+        "confluence", "backtest", "accounts",
+    })
+
     try:
         config = _load_config()
     except Exception as exc:
@@ -721,7 +731,10 @@ def _purge_unlisted_tickers(engine) -> None:
                 result = conn.execute(
                     text(f"SELECT DISTINCT ticker FROM {table}")  # noqa: S608
                 )
-                stale = [row[0] for row in result if row[0] not in allowed]
+                stale = [
+                    row[0] for row in result
+                    if row[0] not in allowed and row[0] not in _CONFIG_SECTIONS
+                ]
             for ticker in stale:
                 with engine.begin() as conn:
                     conn.execute(
@@ -740,7 +753,8 @@ def _purge_unlisted_tickers(engine) -> None:
             )
             stale_pairs = [
                 (a, b) for a, b in result
-                if a not in allowed or b not in allowed
+                if (a not in allowed or b not in allowed)
+                and a not in _CONFIG_SECTIONS and b not in _CONFIG_SECTIONS
             ]
         for ticker_a, ticker_b in stale_pairs:
             with engine.begin() as conn:
