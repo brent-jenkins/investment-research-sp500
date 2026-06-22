@@ -502,6 +502,27 @@ def _process_virtual_trades(
             continue
 
         direction = "LONG" if sig_type in ("STRONG_BUY", "BUY") else "SHORT"
+
+        # Theme concentration gate: don't open if this theme is already at limit.
+        try:
+            from output.performance import classify_trade_theme  # noqa: PLC0415
+            _vt_theme     = classify_trade_theme(ticker, direction)
+            _max_theme    = int(vt.get("max_theme_positions", 3))
+            _theme_open   = sum(
+                1 for _ot in open_trades
+                if classify_trade_theme(
+                    _ot.get("ticker", ""), _ot.get("direction", "LONG")
+                ) == _vt_theme
+            )
+            if _theme_open >= _max_theme:
+                logger.info(
+                    "Virtual trading: skipping %s — theme '%s' at limit (%d/%d open).",
+                    ticker, _vt_theme, _theme_open, _max_theme,
+                )
+                continue
+        except Exception as _te:
+            logger.debug("Theme concentration check failed for %s: %s", ticker, _te)
+
         atr       = atrs.get(ticker)
         sl_price  = None
         if atr:

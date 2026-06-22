@@ -26,6 +26,52 @@ FOREX_QUOTE_CCY: dict[str, str] = {
     "EURGBP=X": "GBP",
 }
 
+# USD-base pairs: USD is the left-hand currency.  LONG = buy USD → usd_long.
+_USD_BASE_FOREX: frozenset[str] = frozenset({"USDJPY=X", "USDCHF=X", "USDCAD=X"})
+# USD-quote pairs: USD is the right-hand currency.  LONG = sell USD → usd_short.
+_USD_QUOTE_FOREX: frozenset[str] = frozenset({"GBPUSD=X", "EURUSD=X", "AUDUSD=X", "NZDUSD=X"})
+_BOND_TICKERS: frozenset[str] = frozenset({
+    "TLT", "IEF", "BND", "SHY", "VGSH", "BIL", "LQD", "HYG", "EMB", "BNDX",
+})
+_COMMODITY_TICKERS: frozenset[str] = frozenset({
+    "GLD", "SLV", "USO", "UNG", "CPER", "CORN", "WEAT", "DBA", "PDBC",
+})
+_CRYPTO_TICKERS: frozenset[str] = frozenset({"BTC-USD", "ETH-USD", "SOL-USD"})
+
+# Human-readable labels for each theme (used in UI and log messages)
+THEME_LABELS: dict[str, str] = {
+    "forex_usd_long":  "USD-long forex",
+    "forex_usd_short": "USD-short forex",
+    "forex_other":     "forex (cross)",
+    "bonds":           "bonds",
+    "commodities":     "commodities",
+    "crypto":          "crypto",
+    "equities":        "equities",
+}
+
+
+def classify_trade_theme(ticker: str, direction: str) -> str:
+    """Return a macro-theme string for position-concentration tracking.
+
+    Forex pairs are split by USD direction so that GBPUSD LONG and AUDUSD LONG
+    both map to 'forex_usd_short' — they profit when the dollar weakens and
+    represent the same concentration risk regardless of the non-USD leg.
+    """
+    d = (direction or "LONG").upper()
+    if ticker in _USD_BASE_FOREX:
+        return "forex_usd_long" if d == "LONG" else "forex_usd_short"
+    if ticker in _USD_QUOTE_FOREX:
+        return "forex_usd_short" if d == "LONG" else "forex_usd_long"
+    if ticker.endswith("=X"):
+        return "forex_other"
+    if ticker in _CRYPTO_TICKERS:
+        return "crypto"
+    if ticker in _BOND_TICKERS:
+        return "bonds"
+    if ticker in _COMMODITY_TICKERS:
+        return "commodities"
+    return "equities"
+
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"

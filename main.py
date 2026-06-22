@@ -47,6 +47,8 @@ from data.ingestion import (
 from data.scheduler import start_scheduler
 from output.performance import (
     FOREX_QUOTE_CCY,
+    THEME_LABELS,
+    classify_trade_theme,
     close_trade,
     get_all_trades,
     get_closed_trades,
@@ -1398,7 +1400,39 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
         _overlay_factor = 0.80 if _macro_stress_ps else 1.00
         _base_size      = _acct_balance * _max_pos_pct if _acct_balance > 0 else 0.0
-        _suggested_inv  = round(_base_size * _sig_scale * _overlay_factor, 2)
+
+        # Concentration check: count same-account open trades in the same macro theme.
+        # Each existing same-theme position reduces the suggestion by 15%, floored at 50%.
+        # At or beyond max_theme_positions the suggestion is zeroed.
+        _max_theme_pos    = 3
+        _conc_reduction_per = 0.15
+        _ps_direction     = "SHORT" if _signal_raw in ("SELL", "STRONG_SELL") else "LONG"
+        _sel_theme        = classify_trade_theme(sel_ticker, _ps_direction)
+        _open_trades_ps   = get_open_trades(account_type=_acct_type_log)
+        _theme_count      = sum(
+            1 for _ot in _open_trades_ps
+            if classify_trade_theme(
+                _ot.get("ticker", ""), _ot.get("direction", "LONG")
+            ) == _sel_theme
+        )
+        _conc_label: str | None = None
+        if _theme_count >= _max_theme_pos:
+            _conc_factor = 0.0
+            _conc_label  = (
+                f"Theme limit reached — {_theme_count}/{_max_theme_pos} "
+                f"{THEME_LABELS.get(_sel_theme, _sel_theme)} positions already open"
+            )
+        elif _theme_count > 0:
+            _raw_red     = _theme_count * _conc_reduction_per
+            _conc_factor = max(0.5, 1.0 - _raw_red)
+            _conc_label  = (
+                f"{_theme_count} {THEME_LABELS.get(_sel_theme, _sel_theme)} open — "
+                f"size reduced {round((1 - _conc_factor) * 100):.0f}%"
+            )
+        else:
+            _conc_factor = 1.0
+
+        _suggested_inv  = round(_base_size * _sig_scale * _overlay_factor * _conc_factor, 2)
 
         # Pre-fill investment field when ticker or account changes
         _size_ctx_key = f"{sel_ticker}|{sel_acct_id}"
@@ -1426,6 +1460,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 _ps_rows.append(
                     f"<span style='color:#94a3b8'>Overlay (MACRO_STRESS): </span>"
                     f"<span style='color:#f59e0b'>×0.80 (−20%)</span>"
+                )
+            if _conc_label:
+                _conc_col = "#ef5350" if _conc_factor == 0.0 else "#f59e0b"
+                _ps_rows.append(
+                    f"<span style='color:#94a3b8'>Concentration:          </span>"
+                    f"<span style='color:{_conc_col}'>{html.escape(_conc_label)}</span>"
                 )
             _divider_html = "<span style='color:#1e3a5f'>──────────────────────────────────</span>"
             _ps_rows.append(_divider_html)
@@ -1503,6 +1543,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     )
                 elif _suggested_inv > 0:
                     _why.append(f"No active overlays — full signal allocation applies.")
+                if _conc_label:
+                    _why.append(
+                        f"Concentration: {_conc_label}. "
+                        f"Same-theme positions are reduced by {_conc_reduction_per*100:.0f}% each "
+                        f"(floor 50%), zeroed at {_max_theme_pos}+."
+                    )
                 if _atr_ps is not None:
                     _why.append(
                         f"The ATR-based stop sits {2*_atr_ps:.4f} away from entry (2×ATR). "
