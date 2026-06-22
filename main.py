@@ -1494,6 +1494,16 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
         # ── Trade inputs (no st.form — dynamic calculations need live rerenders) ──
+        # Reset ticker-specific fields when the user switches tickers so that stale
+        # session-state values (e.g. units from a previous entry) cannot contaminate
+        # the break-even, SL/TP, and spread calculations.
+        _fx_fee_default_pre = 0.50 if sel_ticker in FOREX_QUOTE_CCY else 0.0
+        if st.session_state.get("_log_trade_ticker") != sel_ticker:
+            st.session_state["_log_trade_ticker"] = sel_ticker
+            for _k in ("log_entry_price", "log_units", "log_custom_sl", "log_custom_tp", "log_spread_cost"):
+                st.session_state.pop(_k, None)
+            st.session_state["log_fx_fee_pct"] = _fx_fee_default_pre
+
         # Market price from yfinance shown for reference only — never used as default
         _ref_note  = (
             f"yfinance reference: **{_ref_price:,.4f}**"
@@ -1649,10 +1659,6 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
         # FX conversion fee — auto-filled to 0.50% for forex pairs, 0% otherwise.
         _fx_fee_default = 0.50 if sel_ticker in FOREX_QUOTE_CCY else 0.0
-        _fx_fee_key     = f"log_fx_fee_pct_{sel_ticker}"  # reset when ticker changes
-        if st.session_state.get("_log_fx_fee_ticker") != sel_ticker:
-            st.session_state["_log_fx_fee_ticker"] = sel_ticker
-            st.session_state["log_fx_fee_pct"]     = _fx_fee_default
         fx_fee_pct = st.number_input(
             "FX Conversion Fee (%)",
             min_value=0.0, max_value=5.0,
