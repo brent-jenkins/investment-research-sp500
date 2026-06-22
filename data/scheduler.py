@@ -901,6 +901,131 @@ def _trade_alert_job() -> None:
             skipped_closed_exchange,
         )
 
+    # ── Price-level SL/TP proximity alerts (live prices via yfinance fast_info) ──
+    # Runs independently of the enrich-based check above so you're alerted within
+    # one hour if a price approaches or crosses a stored SL/TP level.
+    _price_pending: list[dict] = []
+    try:
+        import yfinance as yf  # noqa: PLC0415
+
+        for _pt in trades:
+            _pt_ticker   = _pt.get("ticker", "")
+            _pt_id       = _pt.get("id")
+            _pt_dir      = _pt.get("direction", "LONG")
+            _pt_entry    = float(_pt.get("entry_price") or 0)
+            _pt_sl       = _pt.get("stop_loss_price")
+            _pt_tp       = _pt.get("take_profit_price")
+
+            if _pt_sl is None and _pt_tp is None:
+                continue
+
+            _pt_exch = ticker_exchange.get(_pt_ticker, "NYSE")
+            if not _is_exchange_in_session(_pt_exch, now_utc):
+                continue
+
+            try:
+                _pt_live = float(yf.Ticker(_pt_ticker).fast_info["last_price"])
+                if not _pt_live or _pt_live <= 0:
+                    continue
+            except Exception as _fe:
+                logger.debug("fast_info fetch failed for %s: %s", _pt_ticker, _fe)
+                continue
+
+            _pt_sl = float(_pt_sl) if _pt_sl is not None else None
+            _pt_tp = float(_pt_tp) if _pt_tp is not None else None
+
+            # Determine triggered condition — priority: SL HIT > APPROACHING > TP HIT
+            _pt_alert: str | None = None
+            if _pt_sl is not None:
+                _sl_hit = (
+                    (_pt_dir == "LONG"  and _pt_live <= _pt_sl) or
+                    (_pt_dir == "SHORT" and _pt_live >= _pt_sl)
+                )
+                _approaching = not _sl_hit and (
+                    (_pt_dir == "LONG"  and _pt_live <= _pt_sl * 1.01) or
+                    (_pt_dir == "SHORT" and _pt_live >= _pt_sl * 0.99)
+                )
+                if _sl_hit:
+                    _pt_alert = "STOP LOSS HIT"
+                elif _approaching:
+                    _pt_alert = "APPROACHING STOP"
+
+            if _pt_alert is None and _pt_tp is not None and _pt_tp > 0:
+                _tp_hit = (
+                    (_pt_dir == "LONG"  and _pt_live >= _pt_tp) or
+                    (_pt_dir == "SHORT" and _pt_live <= _pt_tp)
+                )
+                if _tp_hit:
+                    _pt_alert = "TAKE PROFIT REACHED"
+
+            _pt_meta_key = f"trade_price_alert:{_pt_id}"
+
+            if _pt_alert is None:
+                # Clear APPROACHING STOP dedup when price recovers so re-approach re-alerts.
+                if get_metadata_str(_pt_meta_key) == "APPROACHING STOP":
+                    clear_metadata(_pt_meta_key)
+                continue
+
+            # Dedup: only alert on state transitions
+            if get_metadata_str(_pt_meta_key) == _pt_alert:
+                logger.info(
+                    "Trade %s (%s): already alerted for %s — skipping.",
+                    _pt_id, _pt_ticker, _pt_alert,
+                )
+                continue
+
+            # Compute fields for the alert card
+            _pt_unreal = None
+            if _pt_entry:
+                _raw = (_pt_live - _pt_entry) if _pt_dir == "LONG" else (_pt_entry - _pt_live)
+                _pt_unreal = round(_raw / _pt_entry * 100, 2)
+
+            _pt_days = 0
+            _pt_edt = _pt.get("entry_date")
+            if _pt_edt:
+                try:
+                    _pt_ep = (
+                        _pt_edt if isinstance(_pt_edt, datetime)
+                        else datetime.fromisoformat(str(_pt_edt).split(".")[0])
+                    )
+                    _pt_days = max(0, (datetime.utcnow() - _pt_ep).days)
+                except Exception:
+                    pass
+
+            _price_pending.append({
+                "id":               _pt_id,
+                "ticker":           _pt_ticker,
+                "direction":        _pt_dir,
+                "entry_price":      _pt_entry,
+                "live_price":       _pt_live,
+                "unreal_pct":       _pt_unreal,
+                "entry_signal":     _pt.get("signal_type", "?"),
+                "current_signal":   "—",
+                "entry_score":      float(_pt.get("confluence_score") or 0),
+                "current_score":    float(_pt.get("confluence_score") or 0),
+                "stop_loss":        _pt_sl,
+                "take_profit_price": _pt_tp,
+                "days_held":        _pt_days,
+                "days_remaining":   None,
+                "max_holding_days": _max_hold_days,
+                "near_max_hold":    False,
+                "status":           _pt_alert,
+            })
+
+    except Exception as _pe:
+        logger.warning("Price-level SL/TP alert check failed: %s", _pe)
+
+    # Merge price alerts — skip STOP LOSS HIT duplicates if enrich already caught them
+    if _price_pending:
+        _enriched_ids = {e.get("id") for e in pending}
+        for _pa in _price_pending:
+            if _pa["status"] == "STOP LOSS HIT" and _pa["id"] in _enriched_ids:
+                continue
+            pending.append(_pa)
+        logger.info(
+            "Price-level check: %d new alert(s) added to pending.", len(_price_pending)
+        )
+
     if not pending:
         logger.info(
             "Trade alert check: no new conditions across %d open trade(s).", len(trades)
@@ -917,14 +1042,20 @@ def _trade_alert_job() -> None:
     logger.info("Alert email result: %s — %s", ok, msg)
 
     if ok:
+        _price_alert_statuses = frozenset({"APPROACHING STOP", "STOP LOSS HIT", "TAKE PROFIT REACHED"})
         for enriched in pending:
-            meta_key = f"trade_alert_status:{enriched.get('id')}"
+            _eid = enriched.get("id")
+            _est = enriched.get("status", "")
+            _mk  = (
+                f"trade_price_alert:{_eid}"
+                if _est in _price_alert_statuses
+                else f"trade_alert_status:{_eid}"
+            )
             try:
-                set_metadata(meta_key, enriched.get("status", ""))
+                set_metadata(_mk, _est)
             except Exception as exc:
                 logger.warning(
-                    "Could not stamp alert status for trade %s: %s",
-                    enriched.get("id"), exc,
+                    "Could not stamp alert status for trade %s: %s", _eid, exc,
                 )
 
 

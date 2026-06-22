@@ -78,10 +78,13 @@ _SIG_STYLES_H: dict[str, tuple[str, str]] = {
 }
 
 _STATUS_COLORS_H: dict[str, str] = {
-    "ON TRACK":    "#16a34a",
-    "WEAKENING":   "#d97706",
-    "EXIT SIGNAL": "#ea580c",
-    "STOP LOSS":   "#dc2626",
+    "ON TRACK":           "#16a34a",
+    "WEAKENING":          "#d97706",
+    "EXIT SIGNAL":        "#ea580c",
+    "STOP LOSS":          "#dc2626",
+    "STOP LOSS HIT":      "#dc2626",
+    "APPROACHING STOP":   "#f59e0b",
+    "TAKE PROFIT REACHED": "#16a34a",
 }
 
 
