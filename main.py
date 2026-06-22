@@ -1774,8 +1774,14 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 _sl_dist = None
 
             if _eff_sl is not None and _sl_dist is not None and _sl_dist > 0:
-                _sl_pct      = _sl_dist / entry_price * 100
-                _gbp_risk    = investment_amount * (_sl_pct / 100) * leverage
+                _sl_pct = _sl_dist / entry_price * 100
+                # Units already encode the actual position size (including leverage as
+                # T212 defines it), so raw account P&L = units × price_move / fx_rate.
+                # Fall back to investment × leverage approach only when units are 0.
+                if units > 0 and fx_rate > 0:
+                    _gbp_risk = units * _sl_dist / fx_rate
+                else:
+                    _gbp_risk = investment_amount * (_sl_pct / 100) * leverage
 
                 # Risk context
                 _risk_pct_of_invest = (_gbp_risk / investment_amount * 100) if investment_amount > 0 else 0.0
@@ -1783,14 +1789,22 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
                 # Risk-adjusted position sizing (2% rule)
                 _pos_suggest_html = ""
-                if _acct_balance > 0 and leverage > 0:
-                    _max_risk_gbp       = _acct_balance * _max_risk_pct
-                    _suggested_raw      = _max_risk_gbp / (_sl_pct / 100 * leverage)
-                    _max_pos_gbp        = _acct_balance * _max_pos_pct
-                    _suggested_invest   = min(_suggested_raw, _max_pos_gbp)
-                    _suggested_sl_risk  = _suggested_invest * (_sl_pct / 100) * leverage
-                    _cap_reason         = " (position cap)" if _suggested_raw > _max_pos_gbp else ""
-                    _pos_suggest_html   = (
+                if _acct_balance > 0:
+                    _max_risk_gbp     = _acct_balance * _max_risk_pct
+                    # Scale suggested investment from the observed risk-per-£-invested ratio.
+                    if units > 0 and investment_amount > 0 and _gbp_risk > 0:
+                        _risk_rate    = _gbp_risk / investment_amount
+                        _suggested_raw = _max_risk_gbp / _risk_rate
+                    else:
+                        _suggested_raw = _max_risk_gbp / (_sl_pct / 100 * leverage) if leverage > 0 else 0
+                    _max_pos_gbp      = _acct_balance * _max_pos_pct
+                    _suggested_invest = min(_suggested_raw, _max_pos_gbp)
+                    _suggested_sl_risk = (
+                        _suggested_invest * _gbp_risk / investment_amount
+                        if investment_amount > 0 else 0
+                    )
+                    _cap_reason       = " (position cap)" if _suggested_raw > _max_pos_gbp else ""
+                    _pos_suggest_html = (
                         f"<span style='color:#60a5fa;font-size:0.76rem'>"
                         f"Risk-adjusted size: {account_ccy} {_suggested_invest:.0f}{html.escape(_cap_reason)}"
                         f" (limits loss to {account_ccy} {_suggested_sl_risk:.2f} at stop)"
@@ -1861,7 +1875,9 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     + _tp_row("TP3 (3:1)", _tp3, _tp3_gbp, preferred_rr == 3.0 and custom_tp_price == 0)
                     + (
                         (lambda _ctp_dist=abs(custom_tp_price - entry_price),
-                                _ctp_gbp=investment_amount * (abs(custom_tp_price - entry_price) / entry_price) * leverage:
+                                _ctp_gbp=(units * abs(custom_tp_price - entry_price) / fx_rate
+                                          if units > 0 and fx_rate > 0
+                                          else investment_amount * (abs(custom_tp_price - entry_price) / entry_price) * leverage):
                          f"<span style='color:#c084fc'>Custom TP ★: {custom_tp_price:.4f} "
                          f"<span style='color:#6b7280'>({_ctp_dist:.4f} away)</span> → "
                          f"<span style='color:#16a34a'>+{account_ccy} {_ctp_gbp:.2f}</span></span><br>"
