@@ -3250,7 +3250,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 try:
                     _results  = pull_incremental(tickers=_tickers)
                     _new_rows = sum(_results.values())
-                    set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+                    if _new_rows > 0:
+                        set_metadata("last_full_refresh", datetime.utcnow().isoformat())
                 except Exception as _exc:
                     st.error(f"Data pull failed: {_exc}")
                     _new_rows = 0

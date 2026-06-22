@@ -9,6 +9,7 @@ from typing import Optional
 import pandas as pd
 import yaml
 import yfinance as yf
+from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from data.database import PriceData, clear_metadata, get_engine, get_metadata_str, get_session, init_db, set_metadata
@@ -232,23 +233,20 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     results: dict[str, int] = {}
 
     for ticker in tickers:
-        # Open a short-lived session just for the history check, then close it
-        # immediately so no read transaction is held when _upsert_price_rows()
-        # opens its own write connection via engine.begin().
-        session = get_session()
-        try:
-            has_history = (
-                session.query(PriceData.date)
-                .filter(PriceData.ticker == ticker)
-                .first()
-            ) is not None
-        finally:
-            session.close()
+        # Raw connection via context manager: guaranteed closed on exit so no
+        # read transaction lingers when _upsert_price_rows() calls engine.begin().
+        # Using get_session() / session.close() left the connection in the pool
+        # and caused the write transaction to return 0 rows written.
+        with get_engine().connect() as conn:
+            _max_date = conn.execute(
+                text("SELECT MAX(date) FROM price_data WHERE ticker = :t"),
+                {"t": ticker},
+            ).scalar()
+        has_history = _max_date is not None
 
         if _is_ticker_unavailable(ticker):
             if has_history:
-                # Ticker has been pulled before — the earlier failure was transient.
-                # Clear the stale flag so this run retries it.
+                # Previously failed transiently — clear the flag and retry.
                 clear_metadata(_ticker_unavailable_key(ticker))
                 logger.info("Cleared stale unavailable flag for %s — retrying.", ticker)
             else:
