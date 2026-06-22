@@ -238,6 +238,7 @@ def _fx_pair_label(instrument_ccy: str, account_ccy: str) -> str:
 
 def _fetch_fx_live(yf_ticker: str) -> "float | None":
     """Try four methods to get a live close price for *yf_ticker*. Returns None if all fail."""
+    import yfinance as yf
     # Method 1: fast_info — fastest, single HTTP call, no DataFrame
     try:
         price = yf.Ticker(yf_ticker).fast_info["last_price"]
@@ -296,6 +297,30 @@ def _get_fx_db_fallback(pair_key: str) -> "tuple[float | None, str | None]":
     except Exception:
         pass
     return None, None
+
+
+def _prefetch_fx_rates() -> None:
+    """Fetch and store common FX rates to DB on startup so the DB fallback always has data.
+
+    Called once per session during _initialise(). Stores the raw yfinance close price
+    under the same key that _get_fx_db_fallback() reads (last_{pair_key}_rate), ensuring
+    the Level-3 DB fallback in _get_fx_rate() returns a usable rate even if the first
+    live fetch in a user session fails.
+    """
+    import yfinance as yf
+    _pairs = [
+        ("GBPUSD=X", "gbpusd"),
+        ("EURUSD=X", "eurusd"),
+        ("USDJPY=X", "usdjpy"),
+        ("AUDUSD=X", "audusd"),
+    ]
+    for _ticker, _key in _pairs:
+        try:
+            _rate = yf.Ticker(_ticker).fast_info["last_price"]
+            if _rate and float(_rate) > 0:
+                set_metadata(f"last_{_key}_rate", str(float(_rate)))
+        except Exception:
+            pass
 
 
 _FX_SESSION_TTL = 300  # seconds before session-state cache is considered stale
@@ -1775,11 +1800,24 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
 
             if _eff_sl is not None and _sl_dist is not None and _sl_dist > 0:
                 _sl_pct = _sl_dist / entry_price * 100
+                # Use the already-fetched fx_rate; if it defaulted to 1.0 despite a
+                # cross-currency pair (live fetch failed and DB was empty), try once
+                # more via fast_info before falling back.
+                _trade_plan_fx = fx_rate
+                if _trade_plan_fx <= 1.0 and instr_ccy != account_ccy:
+                    try:
+                        import yfinance as yf
+                        _fb = yf.Ticker("GBPUSD=X").fast_info["last_price"]
+                        if _fb and float(_fb) > 0:
+                            _trade_plan_fx = float(_fb)
+                            set_metadata("last_gbpusd_rate", str(_trade_plan_fx))
+                    except Exception:
+                        pass
                 # Units already encode the actual position size (including leverage as
                 # T212 defines it), so raw account P&L = units × price_move / fx_rate.
                 # Fall back to investment × leverage approach only when units are 0.
-                if units > 0 and fx_rate > 0:
-                    _gbp_risk = units * _sl_dist / fx_rate
+                if units > 0 and _trade_plan_fx > 0:
+                    _gbp_risk = units * _sl_dist / _trade_plan_fx
                 else:
                     _gbp_risk = investment_amount * (_sl_pct / 100) * leverage
 
@@ -1875,8 +1913,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     + _tp_row("TP3 (3:1)", _tp3, _tp3_gbp, preferred_rr == 3.0 and custom_tp_price == 0)
                     + (
                         (lambda _ctp_dist=abs(custom_tp_price - entry_price),
-                                _ctp_gbp=(units * abs(custom_tp_price - entry_price) / fx_rate
-                                          if units > 0 and fx_rate > 0
+                                _ctp_gbp=(units * abs(custom_tp_price - entry_price) / _trade_plan_fx
+                                          if units > 0 and _trade_plan_fx > 0
                                           else investment_amount * (abs(custom_tp_price - entry_price) / entry_price) * leverage):
                          f"<span style='color:#c084fc'>Custom TP ★: {custom_tp_price:.4f} "
                          f"<span style='color:#6b7280'>({_ctp_dist:.4f} away)</span> → "
@@ -3691,6 +3729,11 @@ def _initialise() -> None:
             start_scheduler()
         except Exception as exc:
             logger.warning("Scheduler could not start: %s", exc)
+
+        try:
+            _prefetch_fx_rates()
+        except Exception as exc:
+            logger.warning("FX rate pre-fetch failed: %s", exc)
 
         # Run analysis on startup only on the very first run (last_analysis_run is None),
         # i.e. a fresh install where price data exists but has never been analysed.
