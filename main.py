@@ -496,31 +496,95 @@ def _db_size(config: dict) -> tuple[str, str]:
         return "Unknown", "warn"
 
 
-def _price_coverage(watchlist: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
-    """Return (fresh, stale, missing) ticker lists based on latest price date.
+def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]:
+    """Return (fresh, stale, missing, max_stale_trading_days) based on latest price date.
 
-    Fresh  = data within the last 4 calendar days (covers long weekends).
-    Stale  = data present but older than 4 days.
+    Fresh   = data within 3 trading days on the ticker's home exchange.
+    Stale   = data present but older than 3 trading days.
     Missing = no rows at all in price_data for that ticker.
+    max_stale_trading_days = trading sessions since last data for the worst stale ticker
+                             (0 when the stale list is empty).
+
+    Uses pandas_market_calendars so that weekends and public holidays on the
+    ticker's home exchange are not counted as missed trading days.
     """
+    import pandas_market_calendars as mcal  # already a dependency via data/scheduler.py
+
+    # Build ticker → exchange mapping from config watchlist groups.
+    ticker_exchange: dict[str, str] = {}
+    for assets in config.get("watchlist", {}).values():
+        if not isinstance(assets, list):
+            continue
+        for entry in assets:
+            if isinstance(entry, dict) and "ticker" in entry:
+                ticker_exchange[entry["ticker"]] = entry.get("exchange", "NYSE")
+
+    # Query latest stored date per ticker.
     try:
         from sqlalchemy import text as sa_text
         with get_engine().connect() as conn:
             rows = conn.execute(
                 sa_text("SELECT ticker, MAX(date) AS latest FROM price_data GROUP BY ticker")
             ).fetchall()
-        latest_by_ticker = {r[0]: r[1] for r in rows}
+        latest_by_ticker: dict[str, object] = {r[0]: r[1] for r in rows}
     except Exception:
         latest_by_ticker = {}
 
-    cutoff = datetime.utcnow() - timedelta(days=4)
+    # Map config exchange names → pandas_market_calendars calendar names.
+    _MCAL_MAP: dict[str, str] = {
+        "NYSE": "NYSE", "NASDAQ": "NASDAQ", "CBOE": "NYSE",
+        "LSE": "LSE",
+        "TSE": "JPX", "JPX": "JPX",       # config uses "TSE"; mcal uses "JPX"
+        "XETR": "NYSE",                    # XETRA not universally available; NYSE as proxy
+        "HKEX": "HKEX", "FX": "NYSE", "Crypto": "NYSE",
+    }
+
+    today = datetime.utcnow().date()
+    _lookback = (datetime.utcnow() - timedelta(days=30)).date()
+    _cal_sessions: dict[str, list] = {}  # cal_name → sorted list of session dates
+
+    def _get_sessions(cal_name: str) -> list:
+        if cal_name not in _cal_sessions:
+            try:
+                cal = mcal.get_calendar(cal_name)
+                sched = cal.schedule(
+                    start_date=_lookback.strftime("%Y-%m-%d"),
+                    end_date=today.strftime("%Y-%m-%d"),
+                )
+                _cal_sessions[cal_name] = [pd.Timestamp(d).date() for d in sched.index]
+            except Exception:
+                # Unrecognised or unavailable calendar — fall back to NYSE.
+                if cal_name != "NYSE" and "NYSE" not in _cal_sessions:
+                    try:
+                        cal = mcal.get_calendar("NYSE")
+                        sched = cal.schedule(
+                            start_date=_lookback.strftime("%Y-%m-%d"),
+                            end_date=today.strftime("%Y-%m-%d"),
+                        )
+                        _cal_sessions["NYSE"] = [pd.Timestamp(d).date() for d in sched.index]
+                    except Exception:
+                        _cal_sessions["NYSE"] = []
+                _cal_sessions[cal_name] = _cal_sessions.get("NYSE", [])
+        return _cal_sessions[cal_name]
+
+    def _trading_days_since(last_dt: datetime, exchange: str) -> int:
+        """Count trading sessions strictly after last_dt on the given exchange."""
+        cal_name = _MCAL_MAP.get(exchange, "NYSE")
+        sessions = _get_sessions(cal_name)
+        last_date = last_dt.date() if hasattr(last_dt, "date") else last_dt
+        return sum(1 for d in sessions if d > last_date)
+
+    _FRESH_TD = 3  # ≤ 3 trading days = fresh
+
     fresh, stale, missing = [], [], []
-    for ticker in watchlist:
+    max_stale_trading_days = 0
+
+    for ticker, exchange in ticker_exchange.items():
         raw = latest_by_ticker.get(ticker)
         if raw is None:
             missing.append(ticker)
             continue
-        # SQLite returns dates as strings or datetime objects depending on driver
+        # SQLite returns dates as strings or datetime objects depending on driver.
         if isinstance(raw, str):
             try:
                 dt = datetime.fromisoformat(raw)
@@ -530,9 +594,15 @@ def _price_coverage(watchlist: dict[str, str]) -> tuple[list[str], list[str], li
         else:
             dt = raw
         dt = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
-        (fresh if dt >= cutoff else stale).append(ticker)
 
-    return fresh, stale, missing
+        td = _trading_days_since(dt, exchange)
+        if td <= _FRESH_TD:
+            fresh.append(ticker)
+        else:
+            stale.append(ticker)
+            max_stale_trading_days = max(max_stale_trading_days, td)
+
+    return fresh, stale, missing, max_stale_trading_days
 
 
 def _parse_journal_line(raw: str) -> "dict | None":
@@ -3010,7 +3080,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     fred_key       = bool(config.get("macro", {}).get("fred_api_key", ""))
     series_count   = len(config.get("macro", {}).get("fred_series", {}))
 
-    fresh, stale, missing = _price_coverage(watchlist)
+    fresh, stale, missing, _max_stale_td = _price_coverage(config)
     total = len(watchlist)
 
     try:
@@ -3209,11 +3279,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("### Data Coverage")
     cc1, cc2, cc3 = st.columns(3)
     fresh_level   = "ok"    if len(fresh)   == total else ("warn" if len(fresh) >= total * 0.9 else "error")
-    stale_level   = "ok"    if not stale    else "warn"
+    stale_level   = "ok"    if not stale    else ("error" if _max_stale_td > 7 else "warn")
     missing_level = "ok"    if not missing  else "error"
-    _status_card(cc1, "Fresh (≤4 days)", f"{len(fresh)} / {total}",
+    _status_card(cc1, "Fresh (≤3 trading days)", f"{len(fresh)} / {total}",
                  "all up to date" if len(fresh) == total else f"{total - len(fresh)} not fresh", fresh_level)
-    _status_card(cc2, "Stale (>4 days)", f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
+    _status_card(cc2, "Stale (>3 trading days)", f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
                  ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "") if stale else "none", stale_level)
     _status_card(cc3, "Missing entirely", f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
                  ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
