@@ -20,7 +20,7 @@ class Regime(str, Enum):
     TRENDING_BEAR   = "TRENDING_BEAR"
     RANGING_LOW_VOL = "RANGING_LOW_VOL"
     HIGH_VOLATILITY = "HIGH_VOLATILITY"
-    UNKNOWN         = "UNKNOWN"
+    MIXED           = "MIXED"
 
 
 # Human-readable descriptions shown in the UI
@@ -29,7 +29,7 @@ REGIME_DESCRIPTIONS: dict[str, str] = {
     Regime.TRENDING_BEAR:   "Market trending strongly downward — trend and volatility signals dominate.",
     Regime.RANGING_LOW_VOL: "Low-volatility consolidation — mean-reversion signals carry extra weight.",
     Regime.HIGH_VOLATILITY: "Elevated volatility or fear — volatility and macro signals dominate.",
-    Regime.UNKNOWN:         "Market conditions are mixed — no regime rule applies cleanly, equal weights used.",
+    Regime.MIXED:           "Market conditions are mixed — no regime rule applies cleanly, equal weights used.",
 }
 
 # UI accent colours for each regime
@@ -38,7 +38,7 @@ REGIME_COLOURS: dict[str, str] = {
     Regime.TRENDING_BEAR:   "#ef5350",   # red
     Regime.RANGING_LOW_VOL: "#6366f1",   # indigo / blue
     Regime.HIGH_VOLATILITY: "#f59e0b",   # amber
-    Regime.UNKNOWN:         "#6b7280",   # grey
+    Regime.MIXED:           "#6b7280",   # grey
 }
 
 # Module weight profiles — must sum to 1.0 per regime.
@@ -77,7 +77,7 @@ REGIME_WEIGHTS: dict[str, dict[str, float]] = {
         "macro":          0.15,  # was 0.20
         "correlation":    0.10,
     },
-    Regime.UNKNOWN: {
+    Regime.MIXED: {
         "trend":          0.18,  # was 0.20
         "mean_reversion": 0.18,
         "volatility":     0.18,
@@ -98,7 +98,7 @@ def detect_regime() -> dict:
     2. TRENDING_BULL    — price > SMA200, ADX > 25, VIX < 20
     3. TRENDING_BEAR    — price < SMA200, ADX > 25, VIX > 20
     4. RANGING_LOW_VOL  — ADX < 20, VIX < 15
-    5. UNKNOWN          — fallback when indicators are unavailable or ambiguous
+    5. MIXED            — fallback when indicators are unavailable or ambiguous
 
     Returns:
         Dict with:
@@ -134,7 +134,7 @@ def detect_regime() -> dict:
         row = None
 
     if row is None:
-        regime = Regime.UNKNOWN
+        regime = Regime.MIXED
         return _build_result(regime, details)
 
     price   = row.get("price")
@@ -169,7 +169,7 @@ def detect_regime() -> dict:
     ):
         regime = Regime.RANGING_LOW_VOL
     else:
-        regime = Regime.UNKNOWN
+        regime = Regime.MIXED
 
     return _build_result(regime, details)
 

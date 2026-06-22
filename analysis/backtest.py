@@ -266,12 +266,12 @@ def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: d
                 (close < sma_200) & (adx_s > 25) & (vix > 20), "TRENDING_BEAR",
                 np.where(
                     (adx_s < 20) & (vix < 15), "RANGING_LOW_VOL",
-                    "UNKNOWN",
+                    "MIXED",
                 ),
             ),
         ),
     )
-    regime = np.where(sma_200.isna(), "UNKNOWN", regime)
+    regime = np.where(sma_200.isna(), "MIXED", regime)
     return pd.DataFrame({"regime": regime}, index=close.index)
 
 
@@ -344,7 +344,7 @@ def compute_signal_history(
     volume_sc   = _volume_scores(df, config)
     macro_sc    = _macro_scores(df, ticker, vix_s, macro_df)
 
-    regime_aligned = regime_hist["regime"].reindex(df.index).ffill().fillna("UNKNOWN")
+    regime_aligned = regime_hist["regime"].reindex(df.index).ffill().fillna("MIXED")
 
     # Build per-date weight series for the five modules included in backtest.
     # Correlation module (weight=0.10) is excluded; remaining weights are
@@ -355,7 +355,7 @@ def compute_signal_history(
     w = {k: pd.Series(np.nan, index=df.index) for k in WEIGHT_KEYS}
     for rname in regime_aligned.unique():
         mask = regime_aligned == rname
-        r    = regime_map.get(rname, Regime.UNKNOWN)
+        r    = regime_map.get(rname, Regime.MIXED)
         rw   = REGIME_WEIGHTS[r]
         total = sum(rw[k] for k in WEIGHT_KEYS)
         for k in WEIGHT_KEYS:

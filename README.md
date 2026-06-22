@@ -144,13 +144,13 @@ Reads the most recent stored ^GSPC indicators. Priority order:
 2. price > SMA200, ADX > 25, VIX < 20 → `TRENDING_BULL`
 3. price < SMA200, ADX > 25, VIX > 20 → `TRENDING_BEAR`
 4. ADX < 20, VIX < 15 → `RANGING_LOW_VOL`
-5. else → `UNKNOWN`
+5. else → `MIXED`
 
-The ADX thresholds (> 25 for trending, < 20 for ranging) are intentionally strict. ADX in the 20–25 range correctly produces `UNKNOWN`, which signals that regime certainty is low and keeps position sizing conservative.
+The ADX thresholds (> 25 for trending, < 20 for ranging) are intentionally strict. ADX in the 20–25 range correctly produces `MIXED`, which signals that regime certainty is low and keeps position sizing conservative.
 
 ### Regime weights (sum to 1.0 per regime)
 
-| Module | TRENDING_BULL | TRENDING_BEAR | RANGING_LOW_VOL | HIGH_VOLATILITY | UNKNOWN |
+| Module | TRENDING_BULL | TRENDING_BEAR | RANGING_LOW_VOL | HIGH_VOLATILITY | MIXED |
 |--------|:---:|:---:|:---:|:---:|:---:|
 | Trend | 0.30 | 0.25 | 0.10 | 0.10 | 0.18 |
 | Mean Reversion | 0.10 | 0.15 | 0.35 | 0.15 | 0.18 |

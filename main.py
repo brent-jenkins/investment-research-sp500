@@ -879,7 +879,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         "TRENDING_BEAR":   "Trend signals carry the most weight. Favour short positions and breakdown plays — avoid buying dips unless confirmed by multiple modules.",
         "HIGH_VOLATILITY": "Volatility signals are most informative. Prioritise defensive positions and tight risk management — directional signals are less reliable when VIX is elevated.",
         "RANGING_LOW_VOL": "Mean reversion signals carry the most weight. Look for oversold bounces and range-bound plays — trend-following signals are less reliable in a sideways market.",
-        "UNKNOWN":         "Regime is unclear — signals are weighted equally across all modules. Treat all calls with extra caution.",
+        "MIXED":           "Regime is unclear — signals are weighted equally across all modules. Treat all calls with extra caution.",
     }
     note = _REGIME_NOTES.get(regime, "")
 
@@ -1366,7 +1366,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         sc1, sc2, sc3 = st.columns(3)
         sc1.metric("Signal",           (sig.get("signal") or "—").replace("_", " "))
         sc2.metric("Confluence Score", f"{sig.get('confluence_score', 0):+.3f}" if sig else "—")
-        sc3.metric("Regime",           (sig.get("regime") or "—").replace("_", " "))
+        sc3.metric("Regime",           (sig.get("regime") or "—").replace("UNKNOWN", "MIXED").replace("_", " "))
 
         # ── Position sizing guidance ──────────────────────────────────────────
         # Fetch live price here (reused below for the yfinance reference warning)
@@ -2714,7 +2714,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 "P&L pts": round((_exit - _entry) * _mult, 5) if _entry else 0.0,
                 "P&L %":   float(t.get("pnl_pct")     or 0) * 100,
                 "Days":    t.get("holding_days"),
-                "Regime":  (t.get("regime") or "—").replace("_", " "),
+                "Regime":  (t.get("regime") or "—").replace("UNKNOWN", "MIXED").replace("_", " "),
             }
             if show_acct_col:
                 row["Account"] = t.get("account_type") or "PRACTICE"
@@ -3458,7 +3458,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     _btn_col1, _btn_col2 = st.columns(2)
     with _btn_col1:
         if st.button("📧 Send Test Email", key="status_send_test_email"):
-            _regime_str = detect_regime().get("regime", "UNKNOWN")
+            _regime_str = detect_regime().get("regime", "MIXED")
             _open_count = len(get_open_trades())
             with st.spinner("Sending…"):
                 _ok, _msg = send_test_email(config, _regime_str, last_analysis, _open_count)

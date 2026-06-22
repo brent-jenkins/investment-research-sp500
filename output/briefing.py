@@ -864,7 +864,7 @@ _REGIME_DESCRIPTIONS: dict[str, str] = {
     "TRENDING_BEAR":   "Sustained downtrend — defensive posture and short signals preferred",
     "RANGING_LOW_VOL": "Tight low-volatility range — mean-reversion signals more reliable",
     "HIGH_VOLATILITY": "Elevated risk environment — reduce position size, watch stop losses",
-    "UNKNOWN":         "Mixed signals — ADX between thresholds, neutral positioning preferred",
+    "MIXED":           "Mixed signals — ADX between thresholds, neutral positioning preferred",
 }
 
 _MACRO_LABELS: dict[str, str] = {
@@ -1036,7 +1036,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     # ── Market Regime & Overlays ──────────────────────────────────────
     section("MARKET REGIME")
     curr = data["curr_signals"]
-    regime = (curr[0].get("regime") or "UNKNOWN") if curr else "UNKNOWN"
+    regime = ((curr[0].get("regime") or "MIXED") if curr else "MIXED").replace("UNKNOWN", "MIXED")
     L.append(f"Regime:  {regime.replace('_', ' ')}  —  {_REGIME_DESCRIPTIONS.get(regime, '')}")
     overlays = data["active_overlays"]
     if overlays:
@@ -1341,13 +1341,13 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
     sections = ""
 
     # ── Market Regime & Overlays ──────────────────────────────────────
-    regime = (curr[0].get("regime") or "UNKNOWN") if curr else "UNKNOWN"
+    regime = ((curr[0].get("regime") or "MIXED") if curr else "MIXED").replace("UNKNOWN", "MIXED")
     regime_bg, regime_fg = {
         "TRENDING_BULL":   ("#16a34a", "#ffffff"),
         "TRENDING_BEAR":   ("#dc2626", "#ffffff"),
         "RANGING_LOW_VOL": ("#3b82f6", "#ffffff"),
         "HIGH_VOLATILITY": ("#ea580c", "#ffffff"),
-        "UNKNOWN":         ("#64748b", "#ffffff"),
+        "MIXED":           ("#64748b", "#ffffff"),
     }.get(regime, ("#1e293b", "#ffffff"))
 
     regime_badge = _badge_h(regime.replace("_", " "), regime_bg, regime_fg, size=13)

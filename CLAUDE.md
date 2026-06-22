@@ -97,11 +97,11 @@ Each `compute_*` function in the analysis modules returns the **latest** scalar 
 2. price > SMA200, ADX > 25, VIX < 20 → `TRENDING_BULL`
 3. price < SMA200, ADX > 25, VIX > 20 → `TRENDING_BEAR`
 4. ADX < 20, VIX < 15 → `RANGING_LOW_VOL`
-5. else → `UNKNOWN`
+5. else → `MIXED`
 
 Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the six analysis modules. Weights by regime:
 
-| Module | TRENDING_BULL | TRENDING_BEAR | RANGING_LOW_VOL | HIGH_VOLATILITY | UNKNOWN |
+| Module | TRENDING_BULL | TRENDING_BEAR | RANGING_LOW_VOL | HIGH_VOLATILITY | MIXED |
 |--------|:---:|:---:|:---:|:---:|:---:|
 | trend | 0.30 | 0.25 | 0.10 | 0.10 | 0.18 |
 | mean_reversion | 0.10 | 0.15 | 0.35 | 0.15 | 0.18 |
