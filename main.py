@@ -535,6 +535,42 @@ def _price_coverage(watchlist: dict[str, str]) -> tuple[list[str], list[str], li
     return fresh, stale, missing
 
 
+def _parse_journal_line(raw: str) -> "dict | None":
+    """Parse one journalctl short-iso line into a dict with ts, level, message, raw.
+
+    Handles the format:
+      2024-06-22T10:30:45+0000 hostname investment-research[pid]: LEVEL:module:msg
+    Returns None for lines that don't match (e.g. header lines from older sessions).
+    """
+    import re as _re  # noqa: PLC0415
+    _PAT = _re.compile(
+        r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'   # ISO timestamp (no tz)
+        r'[^\s]*\s+'                                    # timezone suffix + space
+        r'\S+\s+'                                       # hostname
+        r'[^\[]+\[\d+\]:\s*'                            # service[pid]:
+        r'(.*)$'                                         # message
+    )
+    _m = _PAT.match(raw)
+    if not _m:
+        return None
+    ts_raw, msg = _m.group(1), _m.group(2)
+    ts = ts_raw.replace("T", " ")
+
+    _lvl_m = _re.match(r'^(DEBUG|INFO|WARNING|ERROR|CRITICAL):', msg)
+    level = _lvl_m.group(1) if _lvl_m else "INFO"
+    # Strip "LEVEL:module:" prefix from the displayed message
+    if _lvl_m:
+        # e.g. "INFO:data.scheduler:text" → "text"
+        _rest = msg[_lvl_m.end():]
+        if ":" in _rest:
+            _colon = _rest.index(":")
+            msg = _rest[_colon + 1:]
+        else:
+            msg = _rest
+
+    return {"ts": ts, "level": level, "message": msg, "raw": raw}
+
+
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
     """Build a Plotly candlestick + volume chart for a ticker."""
     fig = go.Figure()
@@ -3279,6 +3315,264 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 if st.button("Cancel", key="status_weekly_cancel"):
                     st.session_state["_weekly_summary_confirm"] = False
                     st.rerun()
+
+    # ── Scheduler Health ──────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Scheduler Health")
+
+    try:
+        import data.scheduler as _sched_mod  # noqa: PLC0415
+        _aps        = getattr(_sched_mod, "_scheduler", None)
+        _aps_running = _aps is not None and getattr(_aps, "running", False)
+    except Exception:
+        _aps        = None
+        _aps_running = False
+
+    _JOB_LABELS: dict[str, tuple[str, str]] = {
+        "scheduled_pre_market": ("Pre-Market",    "07:00 UTC · Mon–Fri"),
+        "scheduled_us_open":    ("US Open",       "13:30 UTC · Mon–Fri"),
+        "scheduled_eod":        ("End of Day",    "21:30 UTC · Mon–Fri"),
+        "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
+        "weekly_summary":       ("Weekly Summary","10:00 UTC · Sunday"),
+        "fomc_reaction":        ("FOMC Reaction", "19:05 UTC · Mon–Fri (FOMC days only)"),
+    }
+
+    _aps_colour = "#16a34a" if _aps_running else "#dc2626"
+    _aps_label  = "RUNNING" if _aps_running else "STOPPED"
+    st.markdown(
+        f'<div style="margin-bottom:10px">'
+        f'<span style="font-size:0.82rem;color:#64748b">Scheduler: </span>'
+        f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if _aps_running and _aps is not None:
+        _aps_jobs   = _aps.get_jobs()
+        _now_utc_tz = datetime.now(timezone.utc)
+        _sh_rows: list[str] = []
+        for _job in _aps_jobs:
+            _jlabel, _jsched = _JOB_LABELS.get(_job.id, (_job.id, "—"))
+            _nrt = _job.next_run_time
+            if _nrt is None:
+                _nrt_str, _until_str, _dot, _badge = "Paused", "—", "#94a3b8", "PAUSED"
+            else:
+                _d = (_nrt - _now_utc_tz).total_seconds()
+                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
+                _until_str = (
+                    f"{int(_d / 60)}m"  if _d < 3600
+                    else f"{_d / 3600:.1f}h" if _d < 86400
+                    else f"{_d / 86400:.1f}d"
+                )
+                _dot, _badge = "#16a34a", "OK"
+
+            # Overdue flag for EOD: last_full_refresh > 26 h on a weekday
+            if _job.id == "scheduled_eod":
+                _ref_age = (
+                    (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
+                    if last_refresh else float("inf")
+                )
+                if _ref_age > 26 and datetime.utcnow().weekday() < 5:
+                    _dot, _badge = "#dc2626", "OVERDUE"
+
+            _sh_rows.append(
+                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #f1f5f9;'
+                f'align-items:center;font-size:0.78rem">'
+                f'<div style="flex:0 0 22%;font-weight:600">{html.escape(_jlabel)}</div>'
+                f'<div style="flex:0 0 28%;color:#64748b;font-size:0.73rem">{html.escape(_jsched)}</div>'
+                f'<div style="flex:0 0 25%">{html.escape(_nrt_str)}</div>'
+                f'<div style="flex:0 0 12%;color:#64748b">{html.escape(_until_str)}</div>'
+                f'<div style="flex:0 0 13%;color:{_dot};font-weight:700">{html.escape(_badge)}</div>'
+                f'</div>'
+            )
+        _sh_head = (
+            '<div style="font-size:0.82rem">'
+            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #e2e8f0;'
+            'color:#94a3b8;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
+            '<div style="flex:0 0 22%">Job</div>'
+            '<div style="flex:0 0 28%">Schedule</div>'
+            '<div style="flex:0 0 25%">Next Run</div>'
+            '<div style="flex:0 0 12%">In</div>'
+            '<div style="flex:0 0 13%">Status</div>'
+            '</div>'
+        )
+        st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
+    else:
+        st.warning(
+            "Scheduler is not running — scheduled jobs will not fire until the service restarts."
+        )
+
+    # ── Log Viewer ─────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Log Viewer")
+
+    _lc1, _lc2, _lc3 = st.columns([3, 2, 1])
+    with _lc1:
+        _log_search = st.text_input(
+            "Search logs", placeholder="Filter by keyword…",
+            key="status_log_search", label_visibility="collapsed",
+        )
+    with _lc2:
+        _log_filter = st.selectbox(
+            "Category", ["All", "Errors Only", "Scheduler", "Data", "Analysis", "Trades"],
+            key="status_log_filter", label_visibility="collapsed",
+        )
+    with _lc3:
+        _log_auto_refresh = st.toggle("Auto-refresh", key="status_log_auto_refresh")
+
+    # Read last 200 lines from journalctl
+    try:
+        _jctl_result = subprocess.run(
+            ["journalctl", "-u", "investment-research", "--no-pager",
+             "-n", "200", "--output=short-iso"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _raw_log_lines = (
+            _jctl_result.stdout.strip().splitlines()
+            if _jctl_result.returncode == 0 else []
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        _raw_log_lines = []
+
+    if not _raw_log_lines:
+        st.info(
+            "Log output not available on this machine. "
+            "On the server, view logs with:  `journalctl -u investment-research -f`"
+        )
+    else:
+        # Parse and filter
+        _FILTER_KEYWORDS: dict[str, frozenset[str]] = {
+            "Errors Only": frozenset(),   # handled separately by level
+            "Scheduler":   frozenset({"scheduler", "pre-market", "us-open", "eod",
+                                      "analysis starting", "pipeline complete",
+                                      "weekly summary", "fomc", "catch-up",
+                                      "missed eod", "trade alert", "scheduled_"}),
+            "Data":        frozenset({"pull_incremental", "yfinance", "new rows", "fred",
+                                      "price data", "data pull", "incremental",
+                                      "ingestion", "rows across"}),
+            "Analysis":    frozenset({"run_analysis", "generate_signals",
+                                      "compute_all_pairs", "analysis pipeline",
+                                      "indicators", "signals", "confluence", "regime"}),
+            "Trades":      frozenset({"virtual trade", "stop loss", "exit signal",
+                                      "alert email", "pnl", "open trade", "alerted"}),
+        }
+        _GREEN_KEYS = frozenset({
+            "complete", "success", "opened", "closed at", "started", "sent",
+            "pipeline complete", "new rows", "virtual trade opened", "virtual trade closed",
+        })
+
+        _parsed: list[dict] = []
+        for _rl in _raw_log_lines:
+            _p = _parse_journal_line(_rl)
+            if _p:
+                _parsed.append(_p)
+
+        _filtered: list[dict] = []
+        _search_lower = _log_search.lower() if _log_search else ""
+        for _p in _parsed:
+            _lvl = _p["level"]
+            _msg_lower = _p["message"].lower()
+            if _log_filter == "Errors Only":
+                if _lvl not in ("ERROR", "CRITICAL", "WARNING"):
+                    continue
+            elif _log_filter in _FILTER_KEYWORDS:
+                if not any(k in _msg_lower for k in _FILTER_KEYWORDS[_log_filter]):
+                    continue
+            if _search_lower and _search_lower not in _p["raw"].lower():
+                continue
+            _filtered.append(_p)
+
+        # Display newest-first
+        _display_lines = _filtered[::-1]
+
+        _line_htmls: list[str] = []
+        for _p in _display_lines:
+            _lvl = _p["level"]
+            _msg = _p["message"]
+            if _lvl in ("ERROR", "CRITICAL"):
+                _mc, _lc_col = "#ef4444", "#ef4444"
+            elif _lvl == "WARNING":
+                _mc, _lc_col = "#f97316", "#f97316"
+            elif any(k in _msg.lower() for k in _GREEN_KEYS):
+                _mc, _lc_col = "#22c55e", "#22c55e"
+            else:
+                _mc, _lc_col = "#cbd5e1", "#94a3b8"
+            _line_htmls.append(
+                f'<div style="line-height:1.5;padding:1px 0">'
+                f'<span style="color:#475569">{html.escape(_p["ts"])}</span>'
+                f'<span style="color:{_lc_col};font-weight:600;margin-left:6px">'
+                f'{html.escape(_lvl[:4])}</span>'
+                f'<span style="color:{_mc};margin-left:6px;word-break:break-all">'
+                f'{html.escape(_msg)}</span>'
+                f'</div>'
+            )
+
+        _count_note = (
+            f"{len(_filtered)} lines shown (newest first)"
+            if _log_filter == "All" and not _log_search
+            else f"{len(_filtered)} matching lines"
+        )
+        st.caption(_count_note)
+
+        if _line_htmls:
+            st.markdown(
+                '<div style="background:#0f172a;border-radius:6px;padding:10px 14px;'
+                'height:420px;overflow-y:auto;font-family:monospace;font-size:0.72rem">'
+                + "".join(_line_htmls)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No log lines match the current filter / search.")
+
+        # Download buttons
+        _dl1, _dl2, _dl3, _dl4 = st.columns([1, 1, 1, 3])
+        with _dl1:
+            st.download_button(
+                "⬇ Current view",
+                data="\n".join(_p["raw"] for _p in _filtered),
+                file_name="investment-research-log.txt",
+                mime="text/plain",
+                key="log_dl_current",
+            )
+        with _dl2:
+            try:
+                _dl_24h = subprocess.run(
+                    ["journalctl", "-u", "investment-research", "--no-pager",
+                     "--since", "24 hours ago", "--output=short-iso"],
+                    capture_output=True, text=True, timeout=15,
+                ).stdout
+            except Exception:
+                _dl_24h = ""
+            st.download_button(
+                "⬇ Last 24 h",
+                data=_dl_24h or "(not available)",
+                file_name="investment-research-log-24h.txt",
+                mime="text/plain",
+                key="log_dl_24h",
+            )
+        with _dl3:
+            try:
+                _dl_7d = subprocess.run(
+                    ["journalctl", "-u", "investment-research", "--no-pager",
+                     "--since", "7 days ago", "--output=short-iso"],
+                    capture_output=True, text=True, timeout=30,
+                ).stdout
+            except Exception:
+                _dl_7d = ""
+            st.download_button(
+                "⬇ Last 7 days",
+                data=_dl_7d or "(not available)",
+                file_name="investment-research-log-7d.txt",
+                mime="text/plain",
+                key="log_dl_7d",
+            )
+
+    # Auto-refresh: sleep after rendering so the user sees the content first.
+    if _log_auto_refresh:
+        import time as _time_mod  # noqa: PLC0415
+        _time_mod.sleep(30)
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
