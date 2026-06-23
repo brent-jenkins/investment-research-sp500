@@ -58,7 +58,7 @@ from output.performance import (
     log_trade,
     update_trade_plan,
 )
-from analysis.macro import get_macro_dashboard
+from analysis.macro import get_macro_dashboard, fetch_and_store_macro_indicators
 from analysis.backtest import (
     asset_max_hold,
     delete_run,
@@ -3443,6 +3443,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 except Exception as _exc:
                     st.error(f"Data pull failed: {_exc}")
                     _new_rows = 0
+            with st.spinner("Fetching FRED macro indicators…"):
+                try:
+                    fetch_and_store_macro_indicators(_cfg)
+                except Exception as _exc:
+                    st.warning(f"FRED fetch failed (continuing): {_exc}")
             with st.spinner("Running analysis pipeline…"):
                 try:
                     run_analysis(tickers=_tickers, config=_cfg)

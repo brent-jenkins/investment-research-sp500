@@ -95,7 +95,7 @@ Replay the current signal logic over up to 10 years of stored historical price d
 - **Virtual Trading** — view open/closed virtual positions and weekly virtual P&L (requires virtual trading enabled in config).
 
 ### 🖥️ Status
-System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls section. Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
+System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **⚡ Run Analysis Now** (analysis + signals only) and **🔄 Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
 ---
 

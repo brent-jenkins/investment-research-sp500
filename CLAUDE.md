@@ -69,7 +69,7 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has eight pages toggled via a sidebar radio button (default: **Daily Briefing**). The sidebar shows Last Refresh and Last Analysis timestamps (no manual Refresh Data button — data is pulled automatically by the scheduler). The watchlist has approximately **72 assets across 19 groups**.
+The app has eight pages toggled via a sidebar radio button (default: **Daily Briefing**). The sidebar shows Last Refresh and Last Analysis timestamps. The watchlist has approximately **72 assets across 19 groups**.
 - **Daily Briefing** — compact regime/overlay/catch-up/signal-counts header card; open trade monitor with live GBP P&L, health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS), and ATR-based stop loss; top opportunities filtered to tradeable assets
 - **Signals** — compact header block (overlays + catch-up strips + regime badge + signal distribution pills + timestamp, all in one bordered card); market intelligence plain-English summary; ranked table of all assets by confluence score with module symbols; Generate Signals button
 - **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
@@ -77,7 +77,7 @@ The app has eight pages toggled via a sidebar radio button (default: **Daily Bri
 - **Trade Log** — log new CFD trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name); open-position tracker with live GBP P&L and per-trade edit expanders; close-trade form; position sizing guidance
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
 - **Backtest** — 6-tab page: Run & Overview (date range presets, ticker scope, equity curve, metrics, trade table), Period Analysis (COVID Crash / 2022 Bear / 2023–24 Recovery + per-regime breakdown), Module Attribution (win rate when each module agreed vs disagreed with trade direction), Signal Decay (holding period histogram, exit reason distribution, avg hold by regime), Walk-Forward (rolling 6-month windows), Virtual Trading (open/closed virtual positions)
-- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section; Send Test Email button and Send Weekly Summary Now button side by side
+- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section with two buttons: "⚡ Run Analysis Now" (analysis + signals only, no data pull) and "🔄 Refresh Data + Analysis" (price pull + FRED macro fetch + analysis + signals, matching the full EOD scheduler job); Send Test Email button and Send Weekly Summary Now button side by side
 
 ### Configuration
 
