@@ -483,10 +483,265 @@ def build_opportunities(
     return sorted(result, key=lambda x: abs(x.get("score") or 0), reverse=True)
 
 
+_STATUS_EMAIL_LABELS: dict[str, str] = {
+    "STOP LOSS":           "Stop Loss Hit",
+    "STOP LOSS HIT":       "Stop Loss Hit",
+    "EXIT SIGNAL":         "Exit Signal",
+    "APPROACHING STOP":    "Approaching Stop",
+    "TAKE PROFIT REACHED": "Take Profit Reached",
+}
+
+_REGIME_SIGNAL_NOTES: dict[str, str] = {
+    "TRENDING_BULL":   "high reliability — strong trending conditions",
+    "TRENDING_BEAR":   "high reliability — bearish bias, short signals favoured",
+    "RANGING_LOW_VOL": "moderate reliability — ranging market, mean-reversion dominant",
+    "HIGH_VOLATILITY": "reduced reliability — elevated VIX lowers signal confidence",
+    "MIXED":           "moderate reliability — mixed conditions",
+}
+
+
+def _next_analysis_run_uk() -> str:
+    """Return the next scheduled analysis run time as a UK-local string."""
+    now = datetime.utcnow()
+    for h, m, name in ((7, 0, "Pre-market"), (13, 30, "US Open"), (21, 30, "End of Day")):
+        candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if candidate > now:
+            return f"{_fmt_uk(candidate, '%H:%M')} ({name})"
+    tomorrow = (now + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
+    return f"Tomorrow {_fmt_uk(tomorrow, '%H:%M')} (Pre-market)"
+
+
+def _stop_distance_str(ticker: str, live: float, sl: float) -> str:
+    """Return a human-readable distance-to-stop string (pips for FX, % for others)."""
+    if not live or not sl:
+        return ""
+    diff = abs(live - sl)
+    pct  = diff / max(live, sl) * 100
+    if ticker.endswith("=X"):
+        pip  = 0.01 if "JPY" in ticker.upper() else 0.0001
+        pips = round(diff / pip)
+        return f"{pips:,.0f} pips ({pct:.2f}%)"
+    return f"{pct:.2f}%"
+
+
+def _current_regime() -> str:
+    """Read the current market regime from the most recent ^GSPC signal row."""
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT regime FROM signals WHERE ticker='^GSPC' "
+                    "ORDER BY date DESC LIMIT 1"
+                )
+            ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        pass
+    return "MIXED"
+
+
+def _option_row_h(
+    number: int,
+    title: str,
+    bullets: list[str],
+    border: str,
+    label: str = "",
+) -> str:
+    label_html = (
+        f' <span style="font-size:11px;font-weight:700;color:{border}">{label}</span>'
+    ) if label else ""
+    bullets_html = "".join(
+        f'<div style="color:#475569;font-size:12px;margin-top:2px">&#8594; {b}</div>'
+        for b in bullets
+    )
+    return (
+        f'<div style="margin-bottom:7px;padding:8px 10px;background:#ffffff;'
+        f'border-radius:4px;border-left:3px solid {border}">'
+        f'<p style="margin:0 0 3px;font-size:13px;font-weight:700;color:#1e293b">'
+        f'{number}. {title}{label_html}</p>'
+        f'{bullets_html}</div>'
+    )
+
+
+def _options_block_html(alert: dict, regime: str) -> str:
+    """Return a <tr><td>…</td></tr> with the YOUR OPTIONS guidance for this alert."""
+    status      = alert.get("status", "")
+    ticker      = alert.get("ticker", "?")
+    direction   = alert.get("direction", "LONG")
+    ep          = float(alert.get("entry_price")    or 0)
+    lp          = alert.get("live_price")
+    sl_atr      = alert.get("stop_loss")
+    sl_stored   = alert.get("stop_loss_price")
+    tp          = alert.get("take_profit_price")
+    c_sig       = alert.get("current_signal") or "NEUTRAL"
+    c_sc        = float(alert.get("current_score") or 0)
+    e_sc        = float(alert.get("entry_score")   or 0)
+    planned_gbp = alert.get("planned_risk_gbp")
+    unreal_pct  = alert.get("unreal_pct")
+    days_held   = int(alert.get("days_held")         or 0)
+    max_hold    = int(alert.get("max_holding_days")  or 30)
+
+    # Prefer the stored T212 stop (more accurate for price-level alerts)
+    effective_sl = float(sl_stored) if sl_stored else sl_atr
+
+    regime_display = regime.replace("_", " ").title() if regime else "Mixed"
+    regime_note    = _REGIME_SIGNAL_NOTES.get(regime, "moderate reliability — mixed conditions")
+
+    _bullish = {"BUY", "STRONG_BUY"}
+    _bearish = {"SELL", "STRONG_SELL"}
+    sig_ok = (
+        (direction == "LONG"  and c_sig in _bullish | {"NEUTRAL"}) or
+        (direction == "SHORT" and c_sig in _bearish | {"NEUTRAL"})
+    )
+    sig_display     = c_sig.replace("_", " ")
+    entry_sig_disp  = (alert.get("entry_signal") or "?").replace("_", " ")
+
+    options_html   = ""
+    recommendation = ""
+
+    if status == "APPROACHING STOP":
+        dist       = _stop_distance_str(ticker, lp, effective_sl) if (lp and effective_sl) else ""
+        sl_str     = f"{effective_sl:.4f}" if effective_sl else "stop"
+        dist_clause = f" — distance {dist}" if dist else ""
+        planned_str = f"~£{float(planned_gbp):.2f}" if planned_gbp else "defined"
+        current_str = f"{unreal_pct:+.2f}%" if unreal_pct is not None else "—"
+        sig_note = (
+            f"Signal still {sig_display} ({c_sc:+.3f}) — thesis intact"
+            if sig_ok else
+            f"Signal {sig_display} ({c_sc:+.3f}) — thesis weakening alongside price"
+        )
+        options_html = (
+            _option_row_h(1, "DO NOTHING", [
+                f"Stop at {sl_str}{dist_clause} — max loss {planned_str}",
+                sig_note,
+                "Let the stop work as planned — this is exactly what it is for",
+            ], "#16a34a", "RECOMMENDED" if sig_ok else "")
+            + _option_row_h(2, "CLOSE MANUALLY NOW", [
+                f"Current position: {current_str} — closing now costs more than using the stop",
+                "Only if you have new information the system does not have",
+                "Not recommended — the stop handles this scenario",
+            ], "#94a3b8")
+            + _option_row_h(3, "TIGHTEN STOP LOSS IN TRADING212", [
+                "Move stop closer to current price to limit further drawdown",
+                "Risk: normal volatility may trigger it before the move resolves",
+                "Only consider if you believe this move is directional, not noise",
+            ], "#f59e0b")
+        )
+        recommendation = (
+            "Hold — signal unchanged, stop provides defined risk."
+            if sig_ok else
+            "Consider tightening stop — signal weakening alongside price decline."
+        )
+
+    elif status in ("STOP LOSS", "STOP LOSS HIT"):
+        lp_str = f"{lp:.4f}" if lp else "current price"
+        options_html = (
+            _option_row_h(1, "CLOSE NOW", [
+                f"Stop triggered at {lp_str} — pre-defined risk boundary reached",
+                "Loss is already realised — closing limits slippage from further adverse moves",
+                "The trade management system has done its job",
+            ], "#dc2626", "RECOMMENDED")
+            + _option_row_h(2, "ASSESS RECOVERY BEFORE CLOSING", [
+                "Only relevant if the breach was a brief whipsaw and price has bounced",
+                "Re-check live price vs stop level before acting",
+                "High risk: re-entering on the same thesis after a stop-out usually loses",
+            ], "#94a3b8")
+        )
+        recommendation = "Close — stop loss has been triggered. Define your next trade separately."
+
+    elif status == "EXIT SIGNAL":
+        borderline = abs(c_sc) < 0.35
+        score_note = (
+            f"Score {c_sc:+.3f} — borderline (threshold ±0.30)"
+            if borderline else
+            f"Score {c_sc:+.3f} — clearly reversed"
+        )
+        options_html = (
+            _option_row_h(1, "CLOSE NOW", [
+                f"Signal reversed to {sig_display} — original thesis invalidated",
+                score_note,
+                "Exit before further adverse movement",
+            ], "#ea580c", "" if borderline else "RECOMMENDED")
+            + _option_row_h(2, "WAIT FOR NEXT ANALYSIS RUN", [
+                "Signal may recover if this is a temporary dip below the threshold",
+                "Only consider if score is borderline — clear reversals rarely recover quickly",
+                f"Next run: {_next_analysis_run_uk()}",
+            ], "#f59e0b", "CONSIDER" if borderline else "")
+        )
+        recommendation = (
+            f"Monitor — borderline score ({c_sc:+.3f}), confirm at next analysis run."
+            if borderline else
+            f"Close — signal clearly reversed to {sig_display}."
+        )
+
+    elif status == "TAKE PROFIT REACHED":
+        tp_str       = f"{tp:.4f}" if tp else "take profit level"
+        profit_str   = f"{unreal_pct:+.2f}%" if unreal_pct is not None else "in profit"
+        sig_note     = f"Signal: {sig_display} ({c_sc:+.3f})"
+        strengthening = sig_ok and c_sc > e_sc + 0.05
+        options_html = (
+            _option_row_h(1, "CLOSE NOW", [
+                f"Take profit at {tp_str} reached — pre-planned objective fulfilled",
+                f"Unrealised gain: {profit_str}",
+                "Locks in your profit with a clean, pre-planned exit",
+            ], "#16a34a", "" if strengthening else "RECOMMENDED")
+            + _option_row_h(2, "LET IT RUN", [
+                "Remove TP and trail stop below current price to capture further momentum",
+                f"{sig_note} — {'strengthening beyond target' if strengthening else 'not clearly strengthening'}",
+                "Risk: profit may evaporate quickly if the trend reverses",
+            ], "#3b82f6", "CONSIDER" if strengthening else "")
+            + _option_row_h(3, "PARTIAL CLOSE", [
+                "Close half the position and let the rest run",
+                "Note: not available on Trading212 practice CFDs",
+            ], "#94a3b8")
+        )
+        recommendation = (
+            "Let it run — signal still strengthening. Trail stop to protect profit."
+            if strengthening else
+            "Close — take your profit. Signal not clearly strengthening beyond the target."
+        )
+
+    else:
+        return ""
+
+    context_line = (
+        f'Signal at alert: <strong>{sig_display}</strong> ({c_sc:+.3f})'
+        f' &nbsp;·&nbsp; Entry signal: {entry_sig_disp}'
+        f' &nbsp;·&nbsp; Regime: <strong>{regime_display}</strong> — {regime_note}'
+        f' &nbsp;·&nbsp; Days held: {days_held}&thinsp;/&thinsp;{max_hold} max'
+    )
+
+    return (
+        f'<tr><td style="padding:0">'
+        f'<div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:14px 14px 10px">'
+        f'<p style="margin:0 0 10px;font-size:12px;color:#475569;line-height:1.6">'
+        f'{context_line}</p>'
+        f'<p style="margin:0 0 7px;font-size:11px;font-weight:700;letter-spacing:0.5px;'
+        f'color:#64748b;text-transform:uppercase">Your options</p>'
+        f'{options_html}'
+        f'<div style="background:#eff6ff;border-radius:4px;padding:8px 10px;margin-top:8px">'
+        f'<p style="margin:0;font-size:13px;font-weight:700;color:#1d4ed8">'
+        f'SYSTEM RECOMMENDATION: {recommendation}</p>'
+        f'</div>'
+        f'<p style="margin:8px 0 0;font-size:11px;color:#94a3b8">'
+        f'Next analysis run: {_next_analysis_run_uk()}</p>'
+        f'</div></td></tr>'
+    )
+
+
 def _build_alert_html(alerts: list[dict]) -> str:
     """Build an HTML email body for trade alerts."""
-    now = datetime.utcnow()
-    n   = len(alerts)
+    now    = datetime.utcnow()
+    n      = len(alerts)
+    regime = _current_regime()
+
+    if n == 1:
+        a0           = alerts[0]
+        status_label = _STATUS_EMAIL_LABELS.get(a0.get("status", ""), a0.get("status", "Alert"))
+        header_title = f'{a0.get("ticker", "?")} {a0.get("direction", "")} — {status_label}'
+    else:
+        header_title = f"Trade Alert — {n} position{'s' if n != 1 else ''} require attention"
 
     cards = ""
     for a in alerts:
@@ -509,12 +764,12 @@ def _build_alert_html(alerts: list[dict]) -> str:
         pc      = _pnl_color(up or 0)
         delta   = c_sc - e_sc
 
-        days_held_a    = int(a.get("days_held") or 0)
-        days_rem_a     = a.get("days_remaining")
-        max_hold_a     = int(a.get("max_holding_days") or 30)
-        near_max_a     = bool(a.get("near_max_hold"))
-        hold_color_a   = "#f59e0b" if near_max_a else "#1e293b"
-        hold_note_a    = f" &nbsp;({days_rem_a}d remaining)" if days_rem_a is not None else ""
+        days_held_a  = int(a.get("days_held") or 0)
+        days_rem_a   = a.get("days_remaining")
+        max_hold_a   = int(a.get("max_holding_days") or 30)
+        near_max_a   = bool(a.get("near_max_hold"))
+        hold_color_a = "#f59e0b" if near_max_a else "#1e293b"
+        hold_note_a  = f" &nbsp;({days_rem_a}d remaining)" if days_rem_a is not None else ""
         hold_row = (
             f'<tr><td style="color:#64748b;font-size:13px;padding:3px 6px">Held</td>'
             f'<td colspan="3" style="font-size:13px;font-weight:{"700" if near_max_a else "600"};'
@@ -531,7 +786,17 @@ def _build_alert_html(alerts: list[dict]) -> str:
                 f'{sl:.4f}{atr_note}</td></tr>'
             )
 
-        dir_badge = _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569")
+        risk_row = ""
+        planned_gbp = a.get("planned_risk_gbp")
+        if planned_gbp:
+            risk_row = (
+                f'<tr><td style="color:#64748b;font-size:13px;padding:3px 6px">Stop risk</td>'
+                f'<td colspan="3" style="font-size:13px;font-weight:700;'
+                f'color:#dc2626;padding:3px 6px">~£{float(planned_gbp):.2f}</td></tr>'
+            )
+
+        dir_badge    = _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569")
+        options_block = _options_block_html(a, regime)
 
         cards += (
             f'<table width="100%" cellpadding="0" cellspacing="0" '
@@ -567,12 +832,16 @@ def _build_alert_html(alerts: list[dict]) -> str:
             f'</tr>'
             f'{hold_row}'
             f'{sl_row}'
-            f'</table></td></tr></table>'
+            f'{risk_row}'
+            f'</table>'
+            f'</td></tr>'
+            f'{options_block}'
+            f'</table>'
         )
 
     return _email_wrap_h(
         _email_header_h(
-            f"Trade Alert — {n} position{'s' if n != 1 else ''} require attention",
+            header_title,
             f"Generated {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
             accent="#7f1d1d",
         ),
@@ -584,7 +853,10 @@ def _build_alert_html(alerts: list[dict]) -> str:
             'notifications.email.enabled: false</code> in config.yaml</p>',
             "#e2e8f0",
         ),
-        _email_footer_h(),
+        _email_footer_h(
+            '<a href="https://research.example.com" style="color:#60a5fa;text-decoration:none">'
+            'View full dashboard &rarr;</a>'
+        ),
     )
 
 
@@ -609,31 +881,45 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
 
     now   = datetime.utcnow()
     n_pos = len(alerts)
-    subject = (
-        f"Trade Alert — {n_pos} position{'s' if n_pos != 1 else ''} require attention "
-        f"({_fmt_uk(now, '%Y-%m-%d %H:%M')})"
-    )
+
+    if n_pos == 1:
+        a0           = alerts[0]
+        status_label = _STATUS_EMAIL_LABELS.get(a0.get("status", ""), a0.get("status", "Alert"))
+        subject = (
+            f"{a0.get('ticker', '?')} {a0.get('direction', '')} — {status_label} "
+            f"({_fmt_uk(now, '%H:%M')})"
+        )
+    else:
+        subject = (
+            f"Trade Alert — {n_pos} positions require attention "
+            f"({_fmt_uk(now, '%Y-%m-%d %H:%M')})"
+        )
+
+    regime_t = _current_regime()
 
     # Plain-text fallback
     lines = [
         "Investment Research Dashboard — Trade Alert",
         f"Generated: {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
+        f"Regime: {regime_t.replace('_', ' ')}",
+        f"Next analysis run: {_next_analysis_run_uk()}",
         "",
         f"POSITIONS REQUIRING ATTENTION ({n_pos})",
         "=" * 45,
         "",
     ]
     for a in alerts:
-        lines.append(f"[{a['status']}]  {a['ticker']}  {a.get('direction', '?')}")
+        status = a.get("status", "?")
+        lines.append(f"[{status}]  {a['ticker']}  {a.get('direction', '?')}")
         ep  = a.get("entry_price") or 0
         lp  = a.get("live_price")
         up  = a.get("unreal_pnl")
         upc = a.get("unreal_pct")
-        lp_str  = f"${lp:,.4f}" if lp  is not None else "—"
+        lp_str  = f"{lp:,.4f}" if lp  is not None else "—"
         pnl_str = (
             f"{up:+.2f} ({upc:+.2f}%)" if up is not None and upc is not None else "—"
         )
-        lines.append(f"  Entry: ${ep:,.4f}  |  Current: {lp_str}  |  Unrealised: {pnl_str}")
+        lines.append(f"  Entry: {ep:,.4f}  |  Current: {lp_str}  |  Unrealised: {pnl_str}")
         es    = a.get("entry_signal",   "—")
         cs    = a.get("current_signal", "—")
         e_sc  = float(a.get("entry_score")   or 0)
@@ -642,17 +928,36 @@ def send_alert_email(alerts: list[dict], config: dict) -> tuple[bool, str]:
         lines.append(
             f"  Signal: {es} → {cs}  |  Score: {e_sc:+.3f} → {c_sc:+.3f}  (Δ {delta:+.3f})"
         )
+        dh = int(a.get("days_held") or 0)
+        mh = int(a.get("max_holding_days") or 30)
+        lines.append(f"  Days held: {dh} / {mh} max")
         if a.get("stop_loss") is not None:
             sl  = a["stop_loss"]
             atr = a.get("atr")
-            sl_str = f"${sl:,.4f}"
+            sl_str = f"{sl:,.4f}"
             if atr:
                 dir_sym = "−" if a.get("direction") == "LONG" else "+"
                 sl_str += f"  (entry {dir_sym} 2×ATR {atr:.4f})"
             lines.append(f"  Stop loss: {sl_str}")
+        if a.get("planned_risk_gbp"):
+            lines.append(f"  Stop risk: ~£{float(a['planned_risk_gbp']):.2f}")
+        # Status-specific recommendation
+        if status == "APPROACHING STOP":
+            lines.append("  RECOMMENDATION: Hold — let stop work as planned.")
+        elif status in ("STOP LOSS", "STOP LOSS HIT"):
+            lines.append("  RECOMMENDATION: Close — stop has been triggered.")
+        elif status == "EXIT SIGNAL":
+            lines.append(
+                "  RECOMMENDATION: Close — signal reversed."
+                if abs(c_sc) >= 0.35 else
+                "  RECOMMENDATION: Monitor — borderline score, check next analysis run."
+            )
+        elif status == "TAKE PROFIT REACHED":
+            lines.append("  RECOMMENDATION: Close to lock in profit, or trail stop to let it run.")
         lines.append("")
     lines += [
         "---",
+        "View full dashboard: https://research.example.com",
         "To disable: set notifications.email.enabled: false in config.yaml",
     ]
 

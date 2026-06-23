@@ -1034,7 +1034,20 @@ def _trade_alert_job() -> None:
                 except Exception:
                     pass
 
+            # Fetch current signal so the options-guidance section has up-to-date context.
+            _current_sig = "NEUTRAL"
+            _current_sc  = 0.0
+            try:
+                from output.performance import get_current_signal as _gcs  # noqa: PLC0415
+                _sig_row = _gcs(_pt_ticker)
+                if _sig_row:
+                    _current_sig = _sig_row.get("signal") or "NEUTRAL"
+                    _current_sc  = float(_sig_row.get("confluence_score") or 0)
+            except Exception:
+                pass
+
             _price_pending.append({
+                **_pt,                             # carry all original trade fields (incl. planned_risk_gbp, fx_rate_at_entry, etc.)
                 "id":               _pt_id,
                 "ticker":           _pt_ticker,
                 "direction":        _pt_dir,
@@ -1042,9 +1055,9 @@ def _trade_alert_job() -> None:
                 "live_price":       _pt_live,
                 "unreal_pct":       _pt_unreal,
                 "entry_signal":     _pt.get("signal_type", "?"),
-                "current_signal":   "—",
+                "current_signal":   _current_sig,
                 "entry_score":      float(_pt.get("confluence_score") or 0),
-                "current_score":    float(_pt.get("confluence_score") or 0),
+                "current_score":    _current_sc,
                 "stop_loss":        _pt_sl,
                 "take_profit_price": _pt_tp,
                 "days_held":        _pt_days,
