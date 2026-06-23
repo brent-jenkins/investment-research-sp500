@@ -3980,6 +3980,106 @@ def _render_relationships_page(config: dict) -> None:
 
     st.divider()
 
+    # ── Correlation Proxy Mappings ────────────────────────────────────────────
+    st.markdown("### Correlation Proxy Mappings")
+    st.caption(
+        "Assets not directly tracked in correlation pairs inherit a partial score from "
+        "a related proxy asset. This ensures all assets receive a meaningful correlation "
+        "weight rather than defaulting to zero."
+    )
+
+    from analysis.correlations import (
+        CATEGORY_PROXY as _PROXY_MAP,
+        _ALL_PAIR_TICKERS as _DIRECT_TICKERS,
+    )
+
+    # Build ticker → display name from watchlist config
+    _wl_names: dict[str, str] = {}
+    for _grp in config.get("watchlist", {}).values():
+        if isinstance(_grp, list):
+            for _wl_e in _grp:
+                if isinstance(_wl_e, dict) and "ticker" in _wl_e:
+                    _wl_names[_wl_e["ticker"]] = _wl_e.get("name", _wl_e["ticker"])
+
+    # Proxy inheritance table — one row per CATEGORY_PROXY entry
+    _proxy_rows = [
+        {
+            "Ticker":          _pt,
+            "Name":            _wl_names.get(_pt, _pt),
+            "Proxy Ticker":    _pp,
+            "Proxy Name":      _wl_names.get(_pp, _pp),
+            "Inherited Score": f"50% of {_pp} correlation score",
+        }
+        for _pt, _pp in sorted(_PROXY_MAP.items())
+    ]
+    st.dataframe(
+        pd.DataFrame(_proxy_rows),
+        use_container_width=True,
+        hide_index=True,
+        height=38 + 35 * len(_proxy_rows),
+    )
+
+    # Coverage breakdown — every watchlist asset classified
+    st.markdown("#### Coverage — all watchlist assets")
+
+    _cov_rows = []
+    for _ct, _cn in _wl_names.items():
+        if _ct in _DIRECT_TICKERS:
+            _cov_rows.append({
+                "Ticker":   _ct,
+                "Name":     _cn,
+                "Coverage": "DIRECT",
+                "Detail":   "Appears in a tracked pair — most reliable score",
+            })
+        elif _ct in _PROXY_MAP:
+            _pp2 = _PROXY_MAP[_ct]
+            _cov_rows.append({
+                "Ticker":   _ct,
+                "Name":     _cn,
+                "Coverage": "PROXY",
+                "Detail":   f"via {_pp2} ({_wl_names.get(_pp2, _pp2)}) — 50% inherited",
+            })
+        else:
+            _cov_rows.append({
+                "Ticker":   _ct,
+                "Name":     _cn,
+                "Coverage": "NONE",
+                "Detail":   "Correlation score defaults to 0",
+            })
+
+    _cov_df = pd.DataFrame(_cov_rows)
+    _sort_key = {"DIRECT": 0, "PROXY": 1, "NONE": 2}
+    _cov_df = (
+        _cov_df.assign(_s=_cov_df["Coverage"].map(_sort_key))
+        .sort_values(["_s", "Ticker"])
+        .drop(columns="_s")
+        .reset_index(drop=True)
+    )
+
+    _n_direct = int((_cov_df["Coverage"] == "DIRECT").sum())
+    _n_proxy  = int((_cov_df["Coverage"] == "PROXY").sum())
+    _n_none   = int((_cov_df["Coverage"] == "NONE").sum())
+    st.caption(
+        f"**{_n_direct}** direct &nbsp;·&nbsp; **{_n_proxy}** proxy &nbsp;·&nbsp; "
+        f"**{_n_none}** unmapped &nbsp;·&nbsp; {len(_cov_df)} total watchlist assets"
+    )
+
+    def _style_coverage(val: str) -> str:
+        return {
+            "DIRECT": "background-color:#1a5c38;color:white;font-weight:600",
+            "PROXY":  "background-color:#78350f;color:white;font-weight:600",
+            "NONE":   "color:#6b7280",
+        }.get(val, "")
+
+    st.dataframe(
+        _cov_df.style.map(_style_coverage, subset=["Coverage"]),
+        use_container_width=True,
+        hide_index=True,
+        height=38 + 35 * len(_cov_df),
+    )
+
+    st.divider()
+
     # ── Correlation heatmap (detail view — at the bottom) ─────────────────────
     st.markdown("### Correlation Matrix (30-day window)")
     st.caption(f"Rolling 30-day pairwise correlation for all tracked assets · as of {_ts_str}")
