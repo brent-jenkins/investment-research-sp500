@@ -541,6 +541,12 @@ CATEGORY_PROXY: dict[str, str] = {
     "XLP":  "^GSPC",   # staples follow market
     "XLU":  "TLT",     # utilities follow bonds
     "XLRE": "TLT",     # real estate follows bonds
+    "COPX": "GLD",     # copper miners — commodity cycle proxy
+    "XOP":  "USO",     # oil E&P — crude oil price proxy
+    "ITB":  "TLT",     # home construction — bond/rate sensitivity proxy
+    "USDCNY=X": "FXI", # USD/CNY — China stress proxy
+    "USDINR=X": "INDA", # USD/INR — India stress proxy
+    "USDBRL=X": "EWZ", # USD/BRL — Brazil stress proxy
 }
 
 
