@@ -1173,15 +1173,18 @@ _REGIME_DESCRIPTIONS: dict[str, str] = {
     "MIXED":           "Mixed signals — ADX between thresholds, neutral positioning preferred",
 }
 
-_MACRO_LABELS: dict[str, str] = {
-    "T10Y2Y":       "Yield curve (10Y−2Y)",
-    "T10Y3M":       "Yield curve (10Y−3M)",
-    "BAMLH0A0HYM2": "High yield OAS",
-    "BAMLC0A0CM":   "Investment grade OAS",
-    "DFII10":       "10Y real yield (TIPS)",
-    "T10YIE":       "Breakeven inflation (10Y)",
-    "USSLIND":      "US leading index (Philly Fed)",
-}
+def _macro_labels(config: dict) -> dict[str, str]:
+    """Return series_id → label from config, falling back to sensible defaults."""
+    defaults = {
+        "T10Y2Y":       "Yield curve (10Y−2Y)",
+        "T10Y3M":       "Yield curve (10Y−3M)",
+        "BAMLH0A0HYM2": "High yield OAS",
+        "BAMLC0A0CM":   "Investment grade OAS",
+        "DFII10":       "10Y real yield (TIPS)",
+        "T10YIE":       "Breakeven inflation (10Y)",
+    }
+    cfg_series = config.get("macro", {}).get("fred_series", {})
+    return {sid: scfg.get("label", defaults.get(sid, sid)) for sid, scfg in cfg_series.items()}
 
 
 def _gather_weekly_data(config: dict) -> dict:
@@ -1539,7 +1542,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
         L.append(f"  {'VIX (fear gauge)':<30} {vix_now:>8.1f}  — {level}{vix_chg}")
 
     printed = False
-    for series_id, label in _MACRO_LABELS.items():
+    for series_id, label in _macro_labels(config).items():
         row = ml.get(series_id)
         if not row or row.get("value") is None:
             continue
@@ -1964,7 +1967,7 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
             f'<span style="color:{lvl_c};font-size:12px">{lvl}</span>',
         ])
 
-    for series_id, label in _MACRO_LABELS.items():
+    for series_id, label in _macro_labels(config).items():
         row = ml.get(series_id)
         if not row or row.get("value") is None:
             continue

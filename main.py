@@ -5017,10 +5017,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 unsafe_allow_html=True,
             )
 
-        # Row 3: Leading indicators (USSLIND, PERMIT)
-        usslind_val  = macro_dash.get("usslind")
-        usslind_pct  = macro_dash.get("usslind_pct1m")
-        usslind_sc   = macro_dash.get("usslind_score")
+        # Row 3: PERMIT (specialty) | Fed Rate (specialty) | first extra series (dynamic)
+        extra_series = macro_dash.get("extra_series", [])
         permit_val   = macro_dash.get("permit")
         permit_pct   = macro_dash.get("permit_pct1m")
         permit_sc    = macro_dash.get("permit_score")
@@ -5029,29 +5027,10 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         fed_rate_trend = macro_dash.get("fed_rate_trend", "unchanged")
         fed_rate_sc    = macro_dash.get("fed_rate_score")
 
-        if usslind_val is not None or permit_val is not None or fed_rate_val is not None:
+        if permit_val is not None or fed_rate_val is not None or extra_series:
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             c7, c8, c9 = st.columns(3)
             with c7:
-                usslind_c = (
-                    "#16a34a" if usslind_sc == 1 else
-                    "#ef5350" if usslind_sc == -1 else "#f59e0b"
-                )
-                if usslind_val is not None:
-                    ar  = _TREND_ARROW.get("rising" if (usslind_pct or 0) > 0 else "falling" if (usslind_pct or 0) < 0 else "flat", "→")
-                    sub = f"MoM: {usslind_pct:+.2f}%" if usslind_pct is not None else "MoM: —"
-                    st.markdown(
-                        _metric_card(
-                            "Leading Index (Philly Fed)",
-                            f"{ar} {usslind_val:+.2f}%",
-                            sub + " · predicted 6m growth",
-                            usslind_c,
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(_metric_card("Leading Index (Philly Fed)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
-            with c8:
                 permit_c = (
                     "#16a34a" if permit_sc == 1 else
                     "#ef5350" if permit_sc == -1 else "#f59e0b"
@@ -5070,7 +5049,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                     )
                 else:
                     st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
-            with c9:
+            with c8:
                 if fed_rate_val is not None:
                     _FED_TREND_LABEL = {"cut": "Rate cut ↓", "hiked": "Rate hiked ↑", "unchanged": "Unchanged →"}
                     _FED_TREND_COLOUR = {"cut": "#16a34a", "hiked": "#ef5350", "unchanged": "#6b7280"}
@@ -5087,6 +5066,41 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                     )
                 else:
                     st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
+            with c9:
+                if extra_series:
+                    es  = extra_series[0]
+                    es_c = "#16a34a" if es["score"] == 1 else "#ef5350" if es["score"] == -1 else "#f59e0b"
+                    ar  = _TREND_ARROW.get(es["trend"], "→")
+                    dv  = es["display_value"]
+                    st.markdown(
+                        _metric_card(
+                            es["label"],
+                            f"{ar} {dv}" if dv != "—" else "—",
+                            es["context"],
+                            es_c,
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+        # Remaining extra series — render in rows of 3
+        for _row_start in range(1, len(extra_series), 3):
+            _chunk = extra_series[_row_start:_row_start + 3]
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            _ecols = st.columns(3)
+            for _ec, _es in zip(_ecols, _chunk):
+                with _ec:
+                    _es_c = "#16a34a" if _es["score"] == 1 else "#ef5350" if _es["score"] == -1 else "#f59e0b"
+                    _ar   = _TREND_ARROW.get(_es["trend"], "→")
+                    _dv   = _es["display_value"]
+                    st.markdown(
+                        _metric_card(
+                            _es["label"],
+                            f"{_ar} {_dv}" if _dv != "—" else "—",
+                            _es["context"],
+                            _es_c,
+                        ),
+                        unsafe_allow_html=True,
+                    )
 
     st.divider()
 

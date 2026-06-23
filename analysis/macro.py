@@ -99,7 +99,7 @@ def _score_fred_series(
     All thresholds below treat the series in its native FRED units:
     - BAMLH0A0HYM2 / BAMLC0A0CM are in percent (1.0 = 100 bps).
     - Yield spreads (T10Y2Y, T10Y3M, DFII10, T10YIE) are in percent.
-    - USSLIND is the predicted 6-month annualised growth rate of the Philly Fed Coincident Index.
+    - CFNAI is a dimensionless composite index (Chicago Fed); > 0 = above-trend growth.
     - PERMIT is total housing permits in thousands (seasonally adjusted annual rate).
     - BOGMBASE / M2SL are billions of USD — only their pct_change matters.
     - series_meta may include _consecutive_declining (int) for momentum-based series.
@@ -170,16 +170,12 @@ def _score_fred_series(
             return -1
         return 0
 
-    if series_id == "USSLIND":
-        # Philadelphia Fed Leading Index: value = predicted 6-month annualised growth rate
-        # of the Coincident Index.  Positive = expansion expected; negative = contraction.
-        # Bearish when falling for 3+ consecutive months (momentum deterioration).
-        consec_down = int(series_meta.get("_consecutive_declining", 0))
-        if consec_down >= 3:
-            return -1
-        if (pct_30d or 0) > 0:   # rising month-over-month
+    if series_id == "CFNAI":
+        # Chicago Fed National Activity Index: composite of 85 monthly indicators.
+        # > 0 = above-trend growth; < -0.70 = increasing recession likelihood.
+        if value > 0:
             return 1
-        if value < 0:             # contraction predicted
+        if value <= -0.70:
             return -1
         return 0
 
@@ -321,18 +317,7 @@ def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str,
             std_2y  = float(raw.std())
             z_score = float((current_value - mean_2y) / std_2y) if std_2y > 0 else 0.0
 
-            # Augment config meta with computed stats for momentum-based series
             aug_meta = dict(series_meta)
-            if series_id == "USSLIND" and len(raw) >= 4:
-                diffs = raw.diff().dropna().iloc[-3:].tolist()
-                consec = 0
-                for d in reversed(diffs):
-                    if d < 0:
-                        consec += 1
-                    else:
-                        break
-                aug_meta["_consecutive_declining"] = consec
-
             score = _score_fred_series(
                 series_id, current_value, pct_chg or 0.0, z_score, aug_meta
             )
@@ -461,10 +446,49 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
     ig_oas_pct = _get("BAMLC0A0CM", "value")
     ig_oas_bps = round(ig_oas_pct * 100, 0) if ig_oas_pct is not None else None
 
-    # ── Leading indicators (USSLIND, PERMIT) ─────────────────────────────────
-    usslind_val   = _get("USSLIND", "value")
-    usslind_pct1m = _get("USSLIND", "pct_change_30d")   # 1-month for monthly series
-    usslind_score = _get("USSLIND", "score")
+    # ── Leading indicators and other non-specialty series (dynamic) ─────────────
+    # Series that have bespoke rendering in the UI; everything else → extra_series.
+    _SPECIALTY = frozenset({
+        "DFII10", "T10YIE",
+        "BAMLH0A0HYM2", "BAMLC0A0CM",
+        "T10Y2Y", "T10Y3M",
+        "DFEDTARU", "PERMIT",
+    })
+
+    fred_series_cfg = (config or {}).get("macro", {}).get("fred_series", {})
+
+    def _extra_context(sid: str, val: float, pct: Optional[float], sc: int) -> str:
+        if sid == "CFNAI":
+            if val > 0:
+                return "Above-trend growth"
+            if val > -0.70:
+                return "Below-trend growth"
+            return "Recession signal"
+        return {1: "Positive signal", -1: "Negative signal", 0: "Neutral"}.get(sc, "Neutral")
+
+    extra_series: list[dict] = []
+    for sid, scfg in fred_series_cfg.items():
+        if sid in _SPECIALTY:
+            continue
+        val  = _get(sid, "value")
+        pct  = _get(sid, "pct_change_30d")
+        sc   = int(_get(sid, "score") or 0)
+        label = scfg.get("label", sid)
+        trend = ("rising" if (pct or 0) > 0 else "falling" if (pct or 0) < 0 else "flat")
+        if val is None:
+            display_value = "—"
+        elif abs(val) > 100:
+            display_value = (f"{pct:+.1f}% MoM" if pct is not None else "—")
+        else:
+            display_value = f"{val:+.2f}"
+        extra_series.append({
+            "series_id":     sid,
+            "label":         label,
+            "display_value": display_value,
+            "trend":         trend,
+            "context":       _extra_context(sid, val, pct, sc) if val is not None else "No data",
+            "score":         sc,
+        })
 
     permit_val    = _get("PERMIT",  "value")
     permit_pct1m  = _get("PERMIT",  "pct_change_30d")
@@ -536,9 +560,9 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
     yc_shape = _yc_shape_10y2y(t10y2y)
     if yc_shape:
         parts.append(f"yield curve {yc_shape}")
-    if usslind_val is not None:
-        usslind_dir = "rising" if (usslind_pct1m or 0) > 0 else "falling" if (usslind_pct1m or 0) < 0 else "flat"
-        parts.append(f"leading index {usslind_dir} ({usslind_val:+.2f}%)")
+    cfnai_entry = next((e for e in extra_series if e["series_id"] == "CFNAI"), None)
+    if cfnai_entry and cfnai_entry["display_value"] != "—":
+        parts.append(f"CFNAI {cfnai_entry['trend']} ({cfnai_entry['display_value']}) — {cfnai_entry['context'].lower()}")
 
     if composite >= 0.25:
         env = "supportive environment for risk assets"
@@ -566,9 +590,7 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "t10y2y_shape":      _yc_shape_10y2y(t10y2y),
         "t10y3m":            t10y3m,
         "t10y3m_shape":      _yc_shape_10y3m(t10y3m),
-        "usslind":           usslind_val,
-        "usslind_pct1m":     usslind_pct1m,
-        "usslind_score":     usslind_score,
+        "extra_series":      extra_series,
         "permit":            permit_val,
         "permit_pct1m":      permit_pct1m,
         "permit_score":      permit_score,
