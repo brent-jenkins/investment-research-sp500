@@ -279,7 +279,7 @@ def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str,
         config = _load_config()
 
     macro_cfg   = config.get("macro", {})
-    fred_key    = macro_cfg.get("fred_api_key", "")
+    fred_key    = macro_cfg.get("fred_api_key", "") or os.environ.get("FRED_API_KEY", "")
     series_cfg  = macro_cfg.get("fred_series", {})
 
     if not fred_key:
