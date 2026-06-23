@@ -58,7 +58,7 @@ from output.performance import (
     log_trade,
     update_trade_plan,
 )
-from analysis.macro import get_macro_dashboard, fetch_and_store_macro_indicators
+from analysis.macro import get_macro_dashboard, fetch_and_store_macro_indicators, SIGNALS_ACTIVE
 from analysis.backtest import (
     asset_max_hold,
     delete_run,
@@ -910,7 +910,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
 
     # ---- Build compact header block ----------------------------------------
     overlay_strips = ""
-    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
+    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
         if overlay_key not in active_overlays:
             continue
         meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
@@ -4591,7 +4591,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # Active overlays (compact)
     overlay_raw     = get_metadata_str("active_overlays") or ""
     active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
-    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS"):
+    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
         if overlay_key not in active_overlays:
             continue
         meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
@@ -4669,7 +4669,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # ── Top Long / Short Opportunities ─────────────────────────────────────
     all_signals = get_latest_signals(list(watchlist.keys()))
 
-    # Tickers in equity/bond groups trigger a confidence warning under MACRO_STRESS
+    # Ticker sets for overlay confidence warnings
     _EQ_BOND_GROUPS = {"indices", "sector_etfs", "bonds", "international"}
     _eq_bond_tickers: set[str] = {
         entry["ticker"]
@@ -4678,7 +4678,29 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         for entry in group
         if isinstance(entry, dict) and "ticker" in entry
     }
-    macro_stress_active = "MACRO_STRESS" in active_overlays
+    _EQUITY_GROUPS_BROAD = {
+        "indices", "sector_etfs", "international", "uk_etfs",
+        "tech_subsectors", "financial_subsectors", "healthcare_subsectors",
+        "international_expanded",
+    }
+    _equity_tickers: set[str] = {
+        entry["ticker"]
+        for gname, group in config.get("watchlist", {}).items()
+        if gname in _EQUITY_GROUPS_BROAD and isinstance(group, list)
+        for entry in group
+        if isinstance(entry, dict) and "ticker" in entry
+    }
+    _EM_GROUPS = {"international", "international_expanded"}
+    _em_tickers: set[str] = {
+        entry["ticker"]
+        for gname, group in config.get("watchlist", {}).items()
+        if gname in _EM_GROUPS and isinstance(group, list)
+        for entry in group
+        if isinstance(entry, dict) and "ticker" in entry
+    }
+    macro_stress_active    = "MACRO_STRESS"   in active_overlays
+    recession_risk_active  = "RECESSION_RISK" in active_overlays
+    em_stress_active       = "EM_STRESS"      in active_overlays
 
     _BRIEF_MODULE_KEYS = [
         "trend_score", "mean_reversion_score", "volatility_score",
@@ -4787,6 +4809,16 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             badges += (
                 "<span style='background:#92400e;color:#fef3c7;padding:1px 6px;"
                 "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −20%</span>"
+            )
+        if direction == 1 and recession_risk_active and ticker in _equity_tickers:
+            badges += (
+                "<span style='background:#7f1d1d;color:#fee2e2;padding:1px 6px;"
+                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −25%</span>"
+            )
+        if direction == 1 and em_stress_active and ticker in _em_tickers:
+            badges += (
+                "<span style='background:#78350f;color:#fef3c7;padding:1px 6px;"
+                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −15%</span>"
             )
 
         if live_price is not None:
@@ -4937,13 +4969,23 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         def _metric_card(
             title: str, value_str: str, sub: str,
             colour: str = "#6b7280", bg_alpha: float = 0.06,
+            tag: str = "",
         ) -> str:
             bg = _hex_rgba(colour, bg_alpha)
+            tag_html = (
+                "<span style='color:#16a34a;font-size:0.58rem;margin-left:4px"
+                ";font-weight:400;text-transform:none'>✓ Signals</span>"
+                if tag == "signals" else
+                "<span style='color:#94a3b8;font-size:0.58rem;margin-left:4px"
+                ";font-weight:400;text-transform:none'>Composite</span>"
+                if tag == "composite" else ""
+            )
             return (
                 f"<div style='background:{bg};border:1px solid {colour}33;"
                 f"border-radius:8px;padding:10px 14px;min-height:72px'>"
                 f"<div style='font-size:0.72rem;font-weight:600;color:#6b7280;"
-                f"text-transform:uppercase;letter-spacing:0.05em'>{html.escape(title)}</div>"
+                f"text-transform:uppercase;letter-spacing:0.05em'>{html.escape(title)}"
+                f"{tag_html}</div>"
                 f"<div style='font-size:1.05rem;font-weight:700;color:{colour};margin:2px 0'>"
                 f"{html.escape(value_str)}</div>"
                 f"<div style='font-size:0.76rem;color:#64748b'>{html.escape(sub)}</div>"
@@ -4959,7 +5001,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             ry_c  = "#16a34a" if rt == "falling" else ("#ef5350" if rt == "rising" else "#f59e0b")
             v_str = f"{ry:+.2f}%" if ry is not None else "—"
             st.markdown(
-                _metric_card("10Y Real Yield", f"{rt_ar} {v_str}", f"Trend: {rt}", ry_c),
+                _metric_card("10Y Real Yield", f"{rt_ar} {v_str}", f"Trend: {rt}", ry_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c2:
@@ -4969,7 +5011,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             bk_c  = "#16a34a" if 1.5 <= (bk or 0) <= 2.5 else "#f59e0b"
             v_str = f"{bk:.2f}%" if bk is not None else "—"
             st.markdown(
-                _metric_card("10Y Breakeven Inflation", f"{bt_ar} {v_str}", f"Trend: {bt}", bk_c),
+                _metric_card("10Y Breakeven Inflation", f"{bt_ar} {v_str}", f"Trend: {bt}", bk_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c3:
@@ -4980,7 +5022,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             p30    = macro_dash["hy_oas_pct_30d"]
             sub    = f"Status: {cs}" + (f" | 30d: {p30:+.1f}%" if p30 is not None else "")
             st.markdown(
-                _metric_card("HY Credit Spread (OAS)", v_str, sub, cs_c),
+                _metric_card("HY Credit Spread (OAS)", v_str, sub, cs_c, tag="signals"),
                 unsafe_allow_html=True,
             )
 
@@ -4994,7 +5036,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             yc2_c = _YC_COLOUR.get(sh2y, "#6b7280")
             v_str = f"{yc2y:+.2f}%" if yc2y is not None else "—"
             st.markdown(
-                _metric_card("Yield Curve 10Y-2Y", v_str, f"Shape: {sh2y}", yc2_c),
+                _metric_card("Yield Curve 10Y-2Y", v_str, f"Shape: {sh2y}", yc2_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c5:
@@ -5003,7 +5045,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             yc3_c = _YC_COLOUR.get(sh3m, "#6b7280")
             v_str = f"{yc3m:+.2f}%" if yc3m is not None else "—"
             st.markdown(
-                _metric_card("Yield Curve 10Y-3M", v_str, f"Shape: {sh3m}", yc3_c),
+                _metric_card("Yield Curve 10Y-3M", v_str, f"Shape: {sh3m}", yc3_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c6:
@@ -5013,7 +5055,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             )
             v_str  = f"{ig_bps:.0f} bps" if ig_bps is not None else "—"
             st.markdown(
-                _metric_card("IG Credit Spread (OAS)", v_str, "Investment Grade bonds", ig_c),
+                _metric_card("IG Credit Spread (OAS)", v_str, "Investment Grade bonds", ig_c, tag="signals"),
                 unsafe_allow_html=True,
             )
 
@@ -5044,11 +5086,12 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                             f"{ar} {permit_val:.0f}k units",
                             sub + " · thousands, SA",
                             permit_c,
+                            tag="signals",
                         ),
                         unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
+                    st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#6b7280", tag="signals"), unsafe_allow_html=True)
             with c8:
                 if fed_rate_val is not None:
                     _FED_TREND_LABEL = {"cut": "Rate cut ↓", "hiked": "Rate hiked ↑", "unchanged": "Unchanged →"}
@@ -5061,23 +5104,25 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                             f"{fed_rate_val:.2f}%",
                             fr_lbl,
                             fr_c,
+                            tag="signals",
                         ),
                         unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#6b7280"), unsafe_allow_html=True)
+                    st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#6b7280", tag="signals"), unsafe_allow_html=True)
             with c9:
                 if extra_series:
-                    es  = extra_series[0]
+                    es   = extra_series[0]
                     es_c = "#16a34a" if es["score"] == 1 else "#ef5350" if es["score"] == -1 else "#f59e0b"
-                    ar  = _TREND_ARROW.get(es["trend"], "→")
-                    dv  = es["display_value"]
+                    ar   = _TREND_ARROW.get(es["trend"], "→")
+                    dv   = es["display_value"]
                     st.markdown(
                         _metric_card(
                             es["label"],
                             f"{ar} {dv}" if dv != "—" else "—",
                             es["context"],
                             es_c,
+                            tag="signals" if es["in_signals"] else "composite",
                         ),
                         unsafe_allow_html=True,
                     )
@@ -5098,6 +5143,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                             f"{_ar} {_dv}" if _dv != "—" else "—",
                             _es["context"],
                             _es_c,
+                            tag="signals" if _es["in_signals"] else "composite",
                         ),
                         unsafe_allow_html=True,
                     )

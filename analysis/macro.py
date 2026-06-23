@@ -24,6 +24,35 @@ logger = logging.getLogger(__name__)
 # self-referential logic (TLT IS bond prices; VIX IS volatility, etc.).
 _MACRO_TICKERS = frozenset({"^VIX", "TLT", "IEF", "HYG"})
 
+# Watchlist groups whose members receive the CFNAI economic-cycle adjustment.
+_EQUITY_GROUPS = frozenset({
+    "indices", "sector_etfs", "international", "uk_etfs",
+    "tech_subsectors", "financial_subsectors", "healthcare_subsectors",
+    "international_expanded",
+})
+_CRYPTO_GROUPS   = frozenset({"crypto", "crypto_expanded"})
+_RATE_BEARISH    = frozenset({"VNQ", "XLRE", "ITB", "MUB", "SHY", "BND"})
+_RATE_BULLISH    = frozenset({"KBE", "KRE", "XLF"})
+_REAL_ESTATE_SET = frozenset({"VNQ", "XLRE", "ITB"})
+_GOLD_SET        = frozenset({"GLD", "SLV"})
+
+# Series that have ticker-specific routing or overlay triggers (vs. composite-only).
+# Imported by main.py to drive 'Used in signals' dashboard tags.
+SIGNALS_ACTIVE: frozenset[str] = frozenset({
+    "DFII10", "T10YIE", "BAMLH0A0HYM2", "BAMLC0A0CM",
+    "T10Y2Y", "T10Y3M",
+    "CFNAI", "DFEDTARU", "M2SL", "PERMIT", "DTWEXBGS",
+})
+
+
+def _ticker_group(ticker: str, config: dict) -> Optional[str]:
+    for gname, entries in config.get("watchlist", {}).items():
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("ticker") == ticker:
+                    return gname
+    return None
+
 
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
@@ -499,6 +528,7 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
             "trend":         trend,
             "context":       _extra_context(sid, val, pct, sc) if val is not None else "No data",
             "score":         sc,
+            "in_signals":    sid in SIGNALS_ACTIVE,
         })
 
     permit_val    = _get("PERMIT",  "value")
@@ -686,8 +716,57 @@ def compute_macro(ticker: str, config: Optional[dict] = None) -> dict:
                 yc_regime, yc_score_fallback = _classify_yield_curve(yc_spread)
                 all_scores.append(yc_score_fallback)
 
-    # Composite score
-    avg      = sum(all_scores) / len(all_scores) if all_scores else 0.0
+    # Base composite score
+    avg   = sum(all_scores) / len(all_scores) if all_scores else 0.0
+    group = _ticker_group(ticker, config)
+
+    # Per-ticker adjustments from FRED indicators that weren't previously routed
+    ticker_adj = 0.0
+
+    # CFNAI — economic cycle modifier for equity assets
+    cfnai_val = rows.get("CFNAI", {}).get("value")
+    if cfnai_val is not None and group in _EQUITY_GROUPS:
+        if cfnai_val > 0.20:
+            ticker_adj += 0.10      # above-trend growth → bullish equities
+        elif cfnai_val < -0.70:
+            ticker_adj -= 0.20      # recession signal → strongly bearish
+        elif cfnai_val < -0.20:
+            ticker_adj -= 0.10      # below-trend → mildly bearish
+
+    # DFEDTARU — rate-sensitive asset scoring
+    dfedtaru_pct = rows.get("DFEDTARU", {}).get("pct_change_30d")
+    if dfedtaru_pct is not None:
+        if dfedtaru_pct > 2.0:      # rates rising (hike)
+            if ticker in _RATE_BEARISH:
+                ticker_adj -= 0.10
+            elif ticker in _RATE_BULLISH:
+                ticker_adj += 0.10
+        elif dfedtaru_pct < -2.0:   # rates falling (cut)
+            if ticker in _RATE_BEARISH:
+                ticker_adj += 0.10
+            elif ticker in _RATE_BULLISH:
+                ticker_adj -= 0.10
+
+    # M2SL — liquidity tailwind/headwind for crypto and gold
+    m2_pct = rows.get("M2SL", {}).get("pct_change_30d")
+    if m2_pct is not None:
+        is_crypto = group in _CRYPTO_GROUPS
+        if m2_pct > 0.5:
+            if is_crypto:
+                ticker_adj += 0.10
+            elif ticker in _GOLD_SET:
+                ticker_adj += 0.05
+        elif m2_pct < -0.5:
+            if is_crypto:
+                ticker_adj -= 0.10
+
+    # PERMIT — housing permits trend for real estate
+    permit_pct = rows.get("PERMIT", {}).get("pct_change_30d")
+    if permit_pct is not None and ticker in _REAL_ESTATE_SET:
+        if permit_pct < -5.0:
+            ticker_adj -= 0.10      # permits falling sharply → bearish real estate
+
+    avg     += ticker_adj
     combined = 1 if avg >= 0.25 else (-1 if avg <= -0.25 else 0)
 
     return {

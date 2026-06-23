@@ -196,6 +196,8 @@ def detect_overlays() -> dict[str, bool]:
         "MACRO_STRESS":     False,
         "VOL_REGIME_SHIFT": False,
         "CREDIT_STRESS":    False,
+        "RECESSION_RISK":   False,
+        "EM_STRESS":        False,
     }
 
     _PAIR_OVERLAY = [
@@ -243,6 +245,42 @@ def detect_overlays() -> dict[str, bool]:
     except Exception as exc:
         logger.warning("CREDIT_STRESS detection failed: %s", exc)
 
+    # RECESSION_RISK: CFNAI below recession threshold for 2+ consecutive months
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            cfnai_rows = conn.execute(
+                text(
+                    "SELECT value FROM macro_indicators WHERE series_id = 'CFNAI' "
+                    "ORDER BY date DESC LIMIT 2"
+                )
+            ).fetchall()
+            if len(cfnai_rows) >= 2 and all(float(r[0]) < -0.70 for r in cfnai_rows):
+                overlays["RECESSION_RISK"] = True
+                logger.info("Overlay RECESSION_RISK active: CFNAI < -0.70 for 2+ months")
+    except Exception as exc:
+        logger.warning("RECESSION_RISK detection failed: %s", exc)
+
+    # EM_STRESS: trade-weighted dollar surging > 3% in 30 days
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            dtwex_row = conn.execute(
+                text(
+                    "SELECT pct_change_30d FROM macro_indicators WHERE series_id = 'DTWEXBGS' "
+                    "ORDER BY date DESC LIMIT 1"
+                )
+            ).mappings().first()
+            if dtwex_row and dtwex_row["pct_change_30d"] is not None:
+                if float(dtwex_row["pct_change_30d"]) > 3.0:
+                    overlays["EM_STRESS"] = True
+                    logger.info(
+                        "Overlay EM_STRESS active: DTWEXBGS 30d change %.2f%%",
+                        float(dtwex_row["pct_change_30d"]),
+                    )
+    except Exception as exc:
+        logger.warning("EM_STRESS detection failed: %s", exc)
+
     # Persist so the UI can display without recomputing
     active_str = ",".join(k for k, v in overlays.items() if v)
     try:
@@ -284,6 +322,26 @@ OVERLAY_DESCRIPTIONS: dict[str, dict] = {
             "equity market stress. Falling junk bond prices relative to safe-haven bonds "
             "signal rising default-risk perception in the credit market. "
             "Buy signal confidence is reduced by 15% across all equity assets."
+        ),
+    },
+    "RECESSION_RISK": {
+        "label":  "Recession Risk",
+        "colour": "#b91c1c",
+        "text": (
+            "The Chicago Fed National Activity Index (CFNAI) has fallen below -0.70 for two "
+            "consecutive months — a historically reliable recession signal. A sustained reading "
+            "below this threshold indicates broad-based economic deterioration across the 85 "
+            "component indicators. Buy signal confidence is reduced by 25% for all equity assets."
+        ),
+    },
+    "EM_STRESS": {
+        "label":  "EM Stress",
+        "colour": "#b45309",
+        "text": (
+            "The trade-weighted US dollar (DTWEXBGS) has surged more than 3% in 30 days. "
+            "A rapidly strengthening dollar tightens financial conditions in emerging markets, "
+            "increases the cost of USD-denominated debt, and typically weighs on EM equities "
+            "and currencies. Buy signal confidence is reduced by 15% for EM assets."
         ),
     },
 }
