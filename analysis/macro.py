@@ -464,6 +464,15 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
             if val > -0.70:
                 return "Below-trend growth"
             return "Recession signal"
+        if sid == "DPCREDIT":
+            ffr = _get("DFEDTARU", "value")
+            if ffr is not None:
+                spread = val - ffr
+                if abs(spread) <= 0.25:
+                    return "At Fed Funds rate — normal conditions"
+                if spread > 0.25:
+                    return f"Above Fed Funds by {spread:.2f}% — tightening signal"
+                return f"Below Fed Funds by {abs(spread):.2f}%"
         return {1: "Positive signal", -1: "Negative signal", 0: "Neutral"}.get(sc, "Neutral")
 
     extra_series: list[dict] = []
@@ -477,6 +486,8 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         trend = ("rising" if (pct or 0) > 0 else "falling" if (pct or 0) < 0 else "flat")
         if val is None:
             display_value = "—"
+        elif sid == "DPCREDIT":
+            display_value = f"{val:.2f}%"
         elif abs(val) > 100:
             display_value = (f"{pct:+.1f}% MoM" if pct is not None else "—")
         else:
