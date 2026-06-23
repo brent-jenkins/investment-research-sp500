@@ -15,19 +15,20 @@ python -m streamlit run main.py
 
 First-run sequence: **Run Analysis** → **Generate Signals**. On the very first run with no data in the database, click Run Analysis on the Signals page; subsequent runs are fully automatic. Refresh pulls up to 10 years of OHLCV history per asset on the first load for each ticker; subsequent runs are incremental (only days since the last stored date). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
 
-After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Five APScheduler jobs fire automatically:
+After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Six APScheduler jobs fire automatically:
 
 | Schedule | Type | What it does |
 |---|---|---|
 | **Mon–Fri 07:00** | Asian EOD | `pull_incremental()` for exchanges closed before 07:00 UTC (e.g. JPX/Tokyo ~06:30), then full analysis pipeline; opens virtual trades for those tickers only |
 | **Mon–Fri 13:30** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` — no data pull, no virtual trade opens (EU mid-session, US about to open) |
+| **Mon–Fri 19:05** | FOMC reaction | Analysis-only pipeline on FOMC decision days only (`analysis/fomc.py:is_fomc_decision_day()` gates execution); silently exits on non-FOMC days |
 | **Mon–Fri 21:30** | Full refresh | `pull_incremental()` for all open exchanges, FRED macro fetch, then full analysis pipeline; opens virtual trades for all eligible tickers |
 | **Mon–Fri 00:00–21:00 + 23:00 (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS / EXIT SIGNAL — filtered per-trade by home exchange session (only alerts when the asset's market is open) |
 | **Sunday 10:00** | Weekly summary | Sends the weekly performance summary email (regime, signals, open trades, P&L, accuracy, macro, diverging pairs) |
 
 All three analysis runs execute `run_analysis()` → `generate_signals()` → `compute_all_pairs()` → `_process_virtual_trades()` and stamp `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
 
-The FRED API key lives in `config.yaml` under `macro.fred_api_key`. Without it, all FRED-sourced scoring returns 0; VIX scoring (sourced from the local `^VIX` price data) still works. FRED series tracked: T10Y2Y, T10Y3M, DFII10 (real yields), T10YIE (breakeven inflation), BAMLH0A0HYM2 (HY OAS), BAMLC0A0CM (IG OAS), M2SL, DPCREDIT (discount window), BOGMBASE, USSLIND (Philly Fed Leading Index), PERMIT (housing permits), DTWEXBGS (trade-weighted dollar). Tickers that are themselves macro instruments (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0 to avoid self-referential scoring.
+The FRED API key lives in `config.yaml` under `macro.fred_api_key`. Without it, all FRED-sourced scoring returns 0; VIX scoring (sourced from the local `^VIX` price data) still works. FRED series tracked: T10Y2Y, T10Y3M, DFII10 (real yields), T10YIE (breakeven inflation), BAMLH0A0HYM2 (HY OAS), BAMLC0A0CM (IG OAS), M2SL, DPCREDIT (discount window), BOGMBASE, USSLIND (Philly Fed Leading Index), PERMIT (housing permits), DTWEXBGS (trade-weighted dollar), DFEDTARU (Fed funds rate upper bound). Tickers that are themselves macro instruments (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0 to avoid self-referential scoring.
 
 Key config sections added since initial release:
 - `notifications.weekly_summary.enabled` — controls the Sunday 10:00 UTC weekly summary email independently of `notifications.email.enabled`.
@@ -48,7 +49,8 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
                               ├── analysis/volatility.py
                               ├── analysis/volume.py
                               ├── analysis/macro.py  (FRED + VIX from DB)
-                              └── analysis/correlations.py:compute_all_pairs()
+                              ├── analysis/correlations.py:compute_all_pairs()
+                              └── analysis/fomc.py  (FOMC calendar; gates 19:05 scheduler job)
                                           │
                                           ▼
                               indicators table + correlations table
@@ -67,7 +69,7 @@ yfinance ──► data/ingestion.py ──► SQLite (price_data table)
 
 `main.py` is the only entry point. It inserts the project root into `sys.path` so that `from data.X import ...` and `from analysis.X import ...` resolve correctly regardless of how Streamlit invokes the file.
 
-The app has eight pages toggled via a sidebar radio button (default: **Daily Briefing**). The sidebar shows Last Refresh and Last Analysis timestamps (no manual Refresh Data button — data is pulled automatically by the scheduler):
+The app has eight pages toggled via a sidebar radio button (default: **Daily Briefing**). The sidebar shows Last Refresh and Last Analysis timestamps (no manual Refresh Data button — data is pulled automatically by the scheduler). The watchlist has approximately **72 assets across 19 groups**.
 - **Daily Briefing** — compact regime/overlay/catch-up/signal-counts header card; open trade monitor with live GBP P&L, health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS), and ATR-based stop loss; top opportunities filtered to tradeable assets
 - **Signals** — compact header block (overlays + catch-up strips + regime badge + signal distribution pills + timestamp, all in one bordered card); market intelligence plain-English summary; ranked table of all assets by confluence score with module symbols; Generate Signals button
 - **Charts** — grouped asset cards landing; selecting one shows the candlestick chart, volume, and indicator panel; a "← All Assets" button returns to the landing
@@ -156,6 +158,8 @@ Per pair, the module computes: 30-day rolling correlation, 90-day rolling correl
 
 `build_correlation_matrix(window=30)` returns a square pandas DataFrame of pairwise correlations across all price-data tickers referenced in any pair (FRED series excluded) — used to render the Plotly heatmap on the Relationships page.
 
+**Proxy inheritance (`CATEGORY_PROXY`):** Tickers that do not appear directly in any `RELATIONSHIP_MAP` pair can still receive a correlation score via `CATEGORY_PROXY: dict[str, str]` — a mapping from ticker to a related pair member whose pair score is blended at 50% into the ticker's confluence score. This allows analysis-only assets like COPX (→ GLD), XOP (→ USO), ITB (→ TLT), USDCNY=X (→ FXI), USDINR=X (→ INDA), and USDBRL=X (→ EWZ) to participate in correlation scoring without requiring bespoke pairs. A proxy inheritance table is rendered at the bottom of the Relationships page. Proxies are applied inside `compute_correlations(ticker, config)` — the direct-pair path runs first; proxy only fires when no direct pair exists.
+
 The regime string is stored in both the `regime` column and the legacy `notes` column of the signals table. `get_latest_signals()` returns rows sorted by `confluence_score` descending.
 
 ### TA-Lib fallback pattern
@@ -178,7 +182,7 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 `_render_home_page()` powers both the **Status** page and the Charts landing (shown when no asset is selected). It draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
 
-**`data/scheduler.py`** registers five APScheduler jobs. All three analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → `_process_virtual_trades()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check) and stamps `last_full_refresh`. Each step is in its own `try/except` so one failure never blocks the rest.
+**`data/scheduler.py`** registers six APScheduler jobs. All three standard analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → `_process_virtual_trades()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check) and stamps `last_full_refresh`. Each step is in its own `try/except` so one failure never blocks the rest. A sixth job, `_fomc_reaction_job()`, fires at 19:05 UTC every weekday but calls `analysis/fomc.py:is_fomc_decision_day()` and immediately returns on non-FOMC days; on decision days it runs `_run_analysis_pipeline()` to capture the post-announcement market reaction before the regular 21:30 EOD run. The FOMC calendar uses a hardcoded 2025–2026 schedule plus a Fed press-release API check for real-time confirmation.
 
 `_trade_alert_job()` runs hourly 00:00–21:00 + 23:00 UTC on weekdays (covering all major market sessions). For each open trade it first checks whether the trade's home exchange is currently in session via `_is_exchange_in_session(exchange, now_utc)` — trades on closed exchanges are skipped so alerts only fire when the market is actually open. For in-session trades it fetches a live price, calls `enrich_open_trade()` to get the current health status, and emails an alert when a trade reaches STOP LOSS or EXIT SIGNAL. Deduplication: the last-alerted status per trade is stored in `system_metadata` under `trade_alert_status:{trade_id}` — the same status only triggers one email until it changes. The global `alert_cooldown_hours` setting prevents email storms.
 
@@ -346,6 +350,6 @@ Note: `analysis/correlations.py` is an exception to the pattern — it operates 
 
 ## Adding assets to the watchlist
 
-Edit `config.yaml` under `watchlist:` — add a dict with `ticker`, `name`, `exchange`, and `tradeable` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has approximately 67 assets across 19 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`, `volatility_complex`, `tech_subsectors`, `financial_subsectors`, `healthcare_subsectors`, `international_expanded`, `real_assets`, `fixed_income_expanded`, `commodities_expanded`, `crypto_expanded`, and any new groups added since. When adding a new group, also add its label to the `_GROUP_LABELS` dict in `main.py` so it appears on the Charts landing page. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.
+Edit `config.yaml` under `watchlist:` — add a dict with `ticker`, `name`, `exchange`, and `tradeable` to the appropriate group. No code changes needed; `get_all_tickers()` iterates all groups dynamically. The current watchlist has approximately 72 assets across 19 groups: `indices`, `sector_etfs`, `energy`, `commodities`, `bonds`, `volatility`, `international`, `forex`, `crypto`, `volatility_complex`, `tech_subsectors`, `financial_subsectors`, `healthcare_subsectors`, `international_expanded`, `real_assets`, `fixed_income_expanded`, `commodities_expanded`, `crypto_expanded`, `uk_etfs`, and any new groups added since. When adding a new group, also add its label to the `_GROUP_LABELS` dict in `main.py` so it appears on the Charts landing page. Forex pairs (e.g. `EURUSD=X`) return zero volume from yfinance — the volume module scores neutral for these, which is expected.
 
 Optionally add `trading212_instrument: "XAG/USD"` when the T212 instrument name differs from the yfinance ticker — this pre-fills the Platform Instrument field in the Trade Log form.

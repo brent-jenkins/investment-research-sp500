@@ -8,7 +8,7 @@ Live at [research.example.com](https://research.example.com) (password protected
 
 ## What it does
 
-The app tracks ~67 assets across 19 groups (indices, ETFs, commodities, forex, crypto, bonds, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on five scheduler jobs. Open CFD trades are monitored live with P&L in GBP, ATR-based stop losses, and automated health status. Automated email alerts fire when trades hit critical thresholds. A backtesting engine replays signal logic over up to 10 years of stored history.
+The app tracks ~72 assets across 19 groups (indices, ETFs, commodities, forex, crypto, bonds, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on six scheduler jobs. Open CFD trades are monitored live with P&L in GBP, ATR-based stop losses, and automated health status. Automated email alerts fire when trades hit critical thresholds. A backtesting engine replays signal logic over up to 10 years of stored history.
 
 ---
 
@@ -76,6 +76,8 @@ Cross-asset correlation analysis across **28 predefined pairs**. Compact header 
 
 ¹ T10Y2Y and DFII10 are FRED macro series, not price tickers — these pairs read from the `macro_indicators` table via `_get_macro_changes()`.
 
+Assets not directly in any pair inherit a correlation score via `CATEGORY_PROXY` in `analysis/correlations.py` — each proxy maps a ticker to a related pair member and blends 50% of that member's pair score into the ticker's confluence score. For example, COPX → GLD, XOP → USO, ITB → TLT, USDCNY=X → FXI. A proxy inheritance table is shown at the bottom of the Relationships page.
+
 ### 📋 Trade Log
 Full CFD trade lifecycle: log new trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name), open-position tracker with live GBP P&L and per-trade edit expanders, close-trade form, and position sizing guidance based on account balance and per-trade risk settings.
 
@@ -131,6 +133,7 @@ The macro module fetches and scores these series (stored in `macro_indicators` t
 | USSLIND | Philly Fed Leading Index | Falling 3+ consecutive months |
 | PERMIT | Housing permits (SAAR) | Falling > 1% month-over-month |
 | DTWEXBGS | Trade-weighted dollar | Rising (z-score > 0.5) |
+| DFEDTARU | Fed funds rate (upper bound) | Tracked for monetary policy context |
 
 VIX is sourced from the local `price_data` table (^VIX ticker), not FRED.
 
@@ -187,14 +190,15 @@ After 20+ closed trades, `recalculate_learned_weights()` computes per-module acc
 
 ### Automatic scheduling
 
-Five APScheduler jobs run automatically:
+Six APScheduler jobs run automatically:
 
 | Schedule | Type | What it does |
 |----------|------|--------------|
-| **Mon–Fri 07:00 UTC** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` |
-| **Mon–Fri 13:30 UTC** | Analysis only | Same — before US open |
+| **Mon–Fri 07:00 UTC** | Asian EOD | `pull_incremental()` for exchanges closed before 07:00 UTC (e.g. JPX/Tokyo), then full analysis pipeline; opens virtual trades for those tickers only |
+| **Mon–Fri 13:30 UTC** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` — before US open, no data pull |
+| **Mon–Fri 19:05 UTC** | FOMC reaction | Analysis-only pipeline on FOMC decision days only (Fed statement released ~18:00–19:00 UTC); silently skips on non-FOMC days |
 | **Mon–Fri 21:30 UTC** | Full refresh | `pull_incremental()` for open exchanges, then full analysis pipeline + FRED macro fetch |
-| **Mon–Fri 14:00–21:00 UTC (hourly)** | Trade alerts | Fetches live prices for all open trades; emails alert on STOP LOSS or EXIT SIGNAL with per-trade deduplication |
+| **Mon–Fri 00:00–21:00 + 23:00 UTC (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS or EXIT SIGNAL — filtered per-trade by home exchange session |
 | **Sunday 10:00 UTC** | Weekly summary | Sends the weekly summary email covering signals, open trades, closed P&L, accuracy progress, macro pulse, diverging pairs |
 
 All three analysis runs also call `_process_virtual_trades()` to auto-manage virtual positions.
