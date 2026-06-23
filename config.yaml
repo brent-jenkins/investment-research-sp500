@@ -431,10 +431,11 @@ macro:
     T10Y3M:
       label: "10Y-3M Yield Spread"
       category: "yield_curve"
-    # USALOLITONOSTSAM (OECD US Leading Indicator) was removed — FRED returns no
-    # data for this series.  Replaced with USSLIND (Philadelphia Fed Leading Index).
-    USSLIND:
-      label: "US Leading Index (Philadelphia Fed)"
+    # USALOLITONOSTSAM and USSLIND were removed — both discontinued by their
+    # publishers. Replaced with CFNAI (Chicago Fed National Activity Index),
+    # a composite of 85 monthly economic indicators.
+    CFNAI:
+      label: "Chicago Fed National Activity Index"
       category: "leading_indicators"
     PERMIT:
       label: "Housing Permits (Total)"
