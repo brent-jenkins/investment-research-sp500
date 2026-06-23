@@ -1,4 +1,4 @@
-# 67 assets across 19 groups
+# 72 assets across 19 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -74,6 +74,10 @@ watchlist:
       name: "United States Brent Oil Fund"
       exchange: "NYSE"
       tradeable: false
+    - ticker: "XOP"
+      name: "SPDR S&P Oil & Gas Exploration ETF"
+      exchange: "NYSE"
+      tradeable: false
     - ticker: "UNG"
       name: "United States Natural Gas Fund"
       exchange: "NYSE"
@@ -99,6 +103,10 @@ watchlist:
       tradeable: false
     - ticker: "CPER"
       name: "United States Copper Index Fund"
+      exchange: "NYSE"
+      tradeable: false
+    - ticker: "COPX"
+      name: "Global X Copper Miners ETF"
       exchange: "NYSE"
       tradeable: false
     - ticker: "PDBC"
@@ -264,6 +272,18 @@ watchlist:
       name: "iShares MSCI Brazil ETF"
       exchange: "NYSE"
       tradeable: true
+    - ticker: "USDCNY=X"
+      name: "USD/Chinese Yuan"
+      exchange: "FX"
+      tradeable: false
+    - ticker: "USDINR=X"
+      name: "USD/Indian Rupee"
+      exchange: "FX"
+      tradeable: false
+    - ticker: "USDBRL=X"
+      name: "USD/Brazilian Real"
+      exchange: "FX"
+      tradeable: false
     - ticker: "VGK"
       name: "Vanguard FTSE Europe ETF"
       exchange: "NYSE"
@@ -278,6 +298,10 @@ watchlist:
       name: "Alerian MLP ETF"
       exchange: "NYSE"
       tradeable: true
+    - ticker: "ITB"
+      name: "iShares U.S. Home Construction ETF"
+      exchange: "NYSE"
+      tradeable: false
 
   fixed_income_expanded:
     - ticker: "LQD"
