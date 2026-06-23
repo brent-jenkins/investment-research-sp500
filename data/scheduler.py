@@ -758,6 +758,12 @@ def _eod_job() -> None:
         logger.warning("Could not stamp last_full_refresh: %s", exc)
 
     try:
+        set_metadata("last_pull_rows", str(total_rows))
+        set_metadata("last_pull_ticker_count", str(len([v for v in results.values() if v > 0])))
+    except Exception as exc:
+        logger.warning("Could not stamp last_pull_rows: %s", exc)
+
+    try:
         logger.info("Fetching FRED macro indicators…")
         fetch_and_store_macro_indicators(config)
         set_metadata("last_fred_run", datetime.utcnow().isoformat())

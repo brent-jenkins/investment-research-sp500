@@ -4233,9 +4233,163 @@ def _render_trade_card(e: dict) -> None:
     )
 
 
+@st.cache_data(ttl=300)
+def _system_health_check() -> list[dict]:
+    """Check system health and return a list of alert dicts (level, message).
+
+    Cached for 5 minutes to avoid DB / subprocess overhead on every page render.
+    """
+    alerts: list[dict] = []
+    now = datetime.utcnow()
+    today = now.date()
+    is_weekday = today.weekday() < 5
+
+    # 1. Data staleness — how long since the last full EOD refresh
+    last_refresh = get_metadata("last_full_refresh")
+    if last_refresh and is_weekday:
+        age_hours = (now - last_refresh).total_seconds() / 3600
+        if age_hours > 26:
+            alerts.append({
+                "level": "red",
+                "message": (
+                    f"Data refresh overdue — last updated {age_hours:.0f}h ago. "
+                    "EOD run may have failed."
+                ),
+            })
+        elif age_hours > 8:
+            alerts.append({
+                "level": "amber",
+                "message": f"Data last refreshed {age_hours:.0f}h ago — awaiting next scheduled run.",
+            })
+
+    # 2. Forex / crypto price freshness — these instruments trade continuously and
+    #    should never go more than 2 calendar days without a new row.
+    _FC_TICKERS = ["GBPUSD=X", "USDJPY=X", "EURUSD=X", "AUDUSD=X", "BTC-USD", "ETH-USD"]
+    try:
+        params = {f"t{i}": t for i, t in enumerate(_FC_TICKERS)}
+        placeholders = ",".join(f":t{i}" for i in range(len(_FC_TICKERS)))
+        with get_engine().connect() as _conn:
+            rows = _conn.execute(
+                text(
+                    f"SELECT ticker, MAX(date) AS last_date FROM price_data "
+                    f"WHERE ticker IN ({placeholders}) GROUP BY ticker"
+                ),
+                params,
+            ).fetchall()
+        stale = [
+            r[0] for r in rows
+            if r[1] and (today - date.fromisoformat(str(r[1]))).days > 2
+        ]
+        if stale:
+            alerts.append({
+                "level": "red",
+                "message": (
+                    f"Forex/crypto data overdue for {len(stale)} ticker(s): "
+                    f"{', '.join(stale[:3])}{'…' if len(stale) > 3 else ''}."
+                ),
+            })
+    except Exception:
+        pass
+
+    # 3. Signal generation staleness
+    last_signal = get_metadata("last_analysis_run")
+    if last_signal and is_weekday:
+        sig_age = (now - last_signal).total_seconds() / 3600
+        if sig_age > 26:
+            alerts.append({
+                "level": "amber",
+                "message": (
+                    f"Signals not regenerated in {sig_age:.0f}h — analysis pipeline "
+                    "may have failed."
+                ),
+            })
+
+    # 4. EOD pull returned 0 rows — silent data failure (e.g. yfinance rate-limit)
+    last_pull_rows_str = get_metadata_str("last_pull_rows")
+    if last_pull_rows_str is not None and is_weekday and last_refresh:
+        try:
+            if int(last_pull_rows_str) == 0 and last_refresh.date() == today:
+                alerts.append({
+                    "level": "red",
+                    "message": (
+                        "Last EOD data pull returned 0 rows — refresh may have "
+                        "silently failed."
+                    ),
+                })
+        except ValueError:
+            pass
+
+    # 5. Recent ERROR lines in the systemd journal (Linux / server only)
+    try:
+        result = subprocess.run(
+            [
+                "journalctl", "-u", "investment-research",
+                "--since", "2 hours ago",
+                "--grep", "ERROR",
+                "-q", "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            error_count = len(result.stdout.strip().splitlines())
+            alerts.append({
+                "level": "amber",
+                "message": (
+                    f"{error_count} ERROR log line(s) detected in the last 2 hours."
+                ),
+            })
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    return alerts
+
+
+def _render_system_health_banner() -> None:
+    """Render dismissible amber/red system health alerts at the top of the page."""
+    alerts = _system_health_check()
+    if not alerts:
+        return
+
+    dismissed: set[str] = st.session_state.get("health_dismissed", set())
+    active = [a for a in alerts if f"{a['level']}:{a['message']}" not in dismissed]
+    if not active:
+        return
+
+    for i, alert in enumerate(active):
+        alert_key = f"{alert['level']}:{alert['message']}"
+        c_msg, c_nav, c_x = st.columns([15, 2, 1])
+        with c_msg:
+            if alert["level"] == "red":
+                st.error(f"⚠️ {alert['message']}")
+            else:
+                st.warning(f"⚠️ {alert['message']}")
+        with c_nav:
+            if st.button(
+                "View Status →",
+                key=f"health_nav_{i}",
+                use_container_width=True,
+            ):
+                st.session_state["page"] = "status"
+                st.rerun()
+        with c_x:
+            if st.button(
+                "✕",
+                key=f"health_dismiss_{i}",
+                help="Dismiss this alert for this session",
+                use_container_width=True,
+            ):
+                dismissed.add(alert_key)
+                st.session_state["health_dismissed"] = dismissed
+                st.rerun()
+
+
 def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
     """Render the Daily Briefing: market overview, open trade monitor, opportunities."""
     st.markdown("## 📅 Daily Briefing")
+
+    _render_system_health_banner()
 
     last_analysis = get_metadata("last_analysis_run")
     if last_analysis:
