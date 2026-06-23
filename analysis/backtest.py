@@ -42,6 +42,31 @@ try:
 except ImportError:
     _TALIB = False
 
+# Bond ETF tickers that use the bonds max-holding-days limit
+_BOND_TICKERS: frozenset[str] = frozenset(
+    {"TLT", "IEF", "SHY", "TIP", "HYG", "LQD", "JNK", "EMB", "MUB"}
+)
+
+
+def asset_max_hold(ticker: str, config: dict) -> int:
+    """Return the max holding days for *ticker* based on its asset class.
+
+    Detection rules (in priority order):
+      - Forex:  ticker ends with '=X'   → max_holding_days_forex
+      - Crypto: ticker ends with '-USD' → max_holding_days_crypto
+      - Bonds:  ticker in _BOND_TICKERS → max_holding_days_bonds
+      - Default                         → max_holding_days
+    """
+    bt = config.get("backtest", {})
+    default = int(bt.get("max_holding_days", 30))
+    if ticker.endswith("=X"):
+        return int(bt.get("max_holding_days_forex", default))
+    if ticker.endswith("-USD"):
+        return int(bt.get("max_holding_days_crypto", default))
+    if ticker in _BOND_TICKERS:
+        return int(bt.get("max_holding_days_bonds", default))
+    return default
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -408,7 +433,7 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
       3. Maximum holding period (config backtest.max_holding_days)
     """
     bt_cfg   = config.get("backtest", {})
-    max_hold = int(bt_cfg.get("max_holding_days", 60))
+    max_hold = asset_max_hold(ticker, config)
     atr_mult = float(bt_cfg.get("atr_stop_multiplier", 2.0))
 
     _BULL = frozenset({"BUY", "STRONG_BUY"})

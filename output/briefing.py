@@ -14,6 +14,7 @@ from typing import Optional
 import yaml
 from sqlalchemy import text
 
+from analysis.backtest import asset_max_hold as _asset_max_hold
 from data.database import clear_metadata, get_engine, get_metadata, get_metadata_str, set_metadata
 from output.performance import get_closed_trades, get_current_signal, get_open_trades
 
@@ -1478,7 +1479,6 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
 
     # ── Open Trades ───────────────────────────────────────────────────
     open_trades   = data["open_trades"]
-    _max_hold_wk  = int(config.get("backtest", {}).get("max_holding_days", 30))
     if open_trades:
         tr_rows = []
         for t in open_trades:
@@ -1494,6 +1494,7 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
                 entry_str = entry_dt.strftime("%d %b") if entry_dt else "?"
             except Exception:
                 hold_days, entry_str = 0, "?"
+            _max_hold_wk = _asset_max_hold(ticker, config)
             days_rem  = max(0, _max_hold_wk - hold_days)
             near_max  = 0 < days_rem <= 7
             hold_col  = "#f59e0b" if near_max else "#64748b"

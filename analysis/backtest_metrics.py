@@ -354,3 +354,71 @@ def regime_performance(df: pd.DataFrame) -> pd.DataFrame:
         })
 
     return pd.DataFrame(rows).set_index("regime") if rows else pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
+# Forex holding-period sensitivity
+# ---------------------------------------------------------------------------
+
+def forex_holding_sensitivity(
+    df: pd.DataFrame,
+    thresholds: list[int] | None = None,
+) -> list[dict]:
+    """Compute profit factor and win rate for forex trades at different holding caps.
+
+    Filters to trades whose ticker ends with '=X' (forex pairs), then for each
+    *threshold* shows the performance of trades that closed within that many days.
+    This approximates the effect of capping the max holding period: trades already
+    exiting via stop-loss or signal reversal within the threshold are unaffected;
+    max-hold trades that ran past the threshold are excluded (their intermediate
+    P&L is unavailable without re-running the full backtest).
+
+    Args:
+        df:         Trades DataFrame from get_run_trades().
+        thresholds: List of day caps to evaluate.  Defaults to [1, 3, 5, 7, 10, 14, 30].
+
+    Returns:
+        List of dicts: {threshold, n_trades, profit_factor, win_rate_pct, avg_return_pct}
+    """
+    if df is None or df.empty:
+        return []
+
+    if thresholds is None:
+        thresholds = [1, 3, 5, 7, 10, 14, 30]
+
+    forex = df[df["ticker"].str.endswith("=X", na=False)].copy()
+    if forex.empty:
+        return []
+
+    results = []
+    for t in thresholds:
+        sub = forex[forex["holding_days"] <= t]
+        n   = len(sub)
+        if n == 0:
+            results.append({
+                "threshold":       t,
+                "n_trades":        0,
+                "profit_factor":   None,
+                "win_rate_pct":    0.0,
+                "avg_return_pct":  0.0,
+            })
+            continue
+
+        wins   = sub[sub["is_win"] == True]["pnl_pct"]
+        losses = sub[sub["is_win"] == False]["pnl_pct"]
+        if not losses.empty and losses.sum() != 0:
+            pf = round(float(wins.sum() / abs(losses.sum())), 2)
+        elif wins.empty:
+            pf = 0.0
+        else:
+            pf = None  # no losses → infinite profit factor
+
+        results.append({
+            "threshold":      t,
+            "n_trades":       n,
+            "profit_factor":  pf,
+            "win_rate_pct":   round(float(len(wins) / n * 100), 1),
+            "avg_return_pct": round(float(sub["pnl_pct"].mean() * 100), 2),
+        })
+
+    return results

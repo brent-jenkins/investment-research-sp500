@@ -60,6 +60,7 @@ from output.performance import (
 )
 from analysis.macro import get_macro_dashboard
 from analysis.backtest import (
+    asset_max_hold,
     delete_run,
     get_all_runs,
     get_run,
@@ -71,6 +72,7 @@ from analysis.backtest_metrics import (
     MODULE_LABELS,
     compute_metrics,
     equity_curve as bt_equity_curve,
+    forex_holding_sensitivity,
     module_attribution,
     period_breakdown,
     regime_performance,
@@ -1823,6 +1825,16 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"0.50% of P&amp;L applied at close</span><br>"
                     if fx_fee_pct > 0 else ""
                 )
+                + (lambda _mh=asset_max_hold(sel_ticker, config),
+                          _ac=("Forex" if sel_ticker.endswith("=X")
+                               else "Crypto" if sel_ticker.endswith("-USD")
+                               else "Bond ETF" if sel_ticker in {"TLT","IEF","SHY","TIP","HYG","LQD","JNK","EMB","MUB"}
+                               else "Equity/ETF"):
+                   f"<span style='color:#94a3b8'>Max Hold:        </span>"
+                   f"<span style='color:{'#f59e0b' if _mh <= 7 else '#e2e8f0'}'>"
+                   f"{_mh}d</span>"
+                   f"<span style='color:#6b7280;font-size:0.72rem'> ({_ac})</span><br>"
+                )()
                 + _be_html
                 + f"</div>",
                 unsafe_allow_html=True,
@@ -4127,6 +4139,7 @@ def _render_trade_card(e: dict) -> None:
     days_held      = int(e.get("days_held") or 0)
     days_remaining = int(e.get("days_remaining") or 0)
     near_max_hold  = bool(e.get("near_max_hold"))
+    max_hold_days  = int(e.get("max_holding_days") or 30)
     acct_name      = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
 
     # ── P&L — GBP only, no raw secondary ─────────────────────────────────────
@@ -4208,7 +4221,7 @@ def _render_trade_card(e: dict) -> None:
         f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
         f"<strong style='font-size:1rem'>{ticker}</strong>"
-        f"<span style='color:#64748b;font-size:0.85rem'>{direction} · {days_held}d held</span>"
+        f"<span style='color:#64748b;font-size:0.85rem'>{direction} · Day {days_held}/{max_hold_days}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
         f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
         f"</div>"
@@ -4795,8 +4808,10 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         tickers_needed = list({t["ticker"] for t in open_trades})
         live_prices    = {t: _cached_latest_price(t) for t in tickers_needed}
 
-        _max_hold_days = int(config.get("backtest", {}).get("max_holding_days", 30))
-        enriched = [enrich_open_trade(t, live_prices.get(t["ticker"]), _max_hold_days) for t in open_trades]
+        enriched = [
+            enrich_open_trade(t, live_prices.get(t["ticker"]), asset_max_hold(t["ticker"], config))
+            for t in open_trades
+        ]
         enriched.sort(key=lambda x: x.get("status_priority", 0), reverse=True)
 
         # Compute GBP P&L for each card (primary display currency)
@@ -5250,6 +5265,33 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.markdown("#### Average Holding by Regime")
                     rh_df = pd.DataFrame(list(rh.items()), columns=["Regime", "Avg Days"])
                     st.dataframe(rh_df, use_container_width=True, hide_index=True)
+
+                # ── Forex Holding Sensitivity ─────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Forex Holding Sensitivity")
+                st.caption(
+                    "Profit factor and win rate for forex trades (tickers ending in '=X') "
+                    "at different max-hold caps — helps calibrate `max_holding_days_forex` "
+                    "in config.yaml. Trades already closed by stop-loss or signal reversal "
+                    "within the cap are included; those that ran longer are excluded."
+                )
+                _fx_sens = forex_holding_sensitivity(df)
+                if not _fx_sens:
+                    st.info("No forex trades in this backtest run (no tickers ending in '=X').")
+                else:
+                    _fx_df = pd.DataFrame(_fx_sens)
+                    _fx_df.columns = ["Max Days", "N Trades", "Profit Factor", "Win Rate %", "Avg Return %"]
+                    _fx_df["Profit Factor"] = _fx_df["Profit Factor"].apply(
+                        lambda v: "∞ (no losses)" if v is None else f"{v:.2f}"
+                    )
+                    st.dataframe(_fx_df, use_container_width=True, hide_index=True)
+
+                    # Highlight the current configured value
+                    _cfg_fx_hold = int(config.get("backtest", {}).get("max_holding_days_forex", 5))
+                    st.caption(
+                        f"Current config: `max_holding_days_forex = {_cfg_fx_hold}` · "
+                        f"Look for the row where profit factor peaks to find the optimal cap."
+                    )
 
     # ── Tab 5: Walk-Forward ───────────────────────────────────────────────────
     with tab_wf:

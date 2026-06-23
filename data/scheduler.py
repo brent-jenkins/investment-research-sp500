@@ -43,6 +43,23 @@ RUN_ANALYSIS_ONLY = "analysis_only"
 
 _scheduler: BackgroundScheduler | None = None
 
+_BOND_TICKERS: frozenset[str] = frozenset(
+    {"TLT", "IEF", "SHY", "TIP", "HYG", "LQD", "JNK", "EMB", "MUB"}
+)
+
+
+def _asset_max_hold(ticker: str, config: dict) -> int:
+    """Return the max holding days for *ticker* based on its asset class."""
+    bt = config.get("backtest", {})
+    default = int(bt.get("max_holding_days", 30))
+    if ticker.endswith("=X"):
+        return int(bt.get("max_holding_days_forex", default))
+    if ticker.endswith("-USD"):
+        return int(bt.get("max_holding_days_crypto", default))
+    if ticker in _BOND_TICKERS:
+        return int(bt.get("max_holding_days_bonds", default))
+    return default
+
 # pandas_market_calendars does not recognise all exchange shorthands used in
 # config.yaml.  Map the config name → the registered calendar name.
 _CALENDAR_ALIASES: dict[str, str] = {
@@ -268,7 +285,6 @@ def _process_virtual_trades(
     position_pct    = float(vt.get("position_pct", 0.05))
     portfolio_gbp   = float(vt.get("portfolio_size_gbp", 10000))
     atr_mult        = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
-    max_hold_days   = int(config.get("backtest", {}).get("max_holding_days", 30))
 
     tradeable: set[str] = {
         e["ticker"]
@@ -390,7 +406,7 @@ def _process_virtual_trades(
                 hold_days = (now - entry_dt_parsed).days
             except Exception:
                 pass
-        max_hold_exceeded = hold_days >= max_hold_days
+        max_hold_exceeded = hold_days >= _asset_max_hold(ticker, config)
 
         reversal_meta_key = f"weakening_since:{trade_id}"
         if stop_hit or max_hold_exceeded:
@@ -821,7 +837,6 @@ def _trade_alert_job() -> None:
 
     now_utc        = datetime.now(timezone.utc)
     ticker_exchange = _build_ticker_exchange_map(config)
-    _max_hold_days = int(config.get("backtest", {}).get("max_holding_days", 30))
 
     _ALERT_STATUSES: frozenset[str] = frozenset({"STOP LOSS", "EXIT SIGNAL"})
     pending: list[dict] = []
@@ -848,7 +863,7 @@ def _trade_alert_job() -> None:
             live_price = None
 
         try:
-            enriched = enrich_open_trade(trade, live_price, _max_hold_days)
+            enriched = enrich_open_trade(trade, live_price, _asset_max_hold(ticker, config))
         except Exception as exc:
             logger.warning("enrich_open_trade failed for %s: %s", ticker, exc)
             continue
@@ -1028,7 +1043,7 @@ def _trade_alert_job() -> None:
                 "take_profit_price": _pt_tp,
                 "days_held":        _pt_days,
                 "days_remaining":   None,
-                "max_holding_days": _max_hold_days,
+                "max_holding_days": _asset_max_hold(_pt_ticker, config),
                 "near_max_hold":    False,
                 "status":           _pt_alert,
             })

@@ -473,7 +473,10 @@ notifications:
 
 backtest:
   # Exit conditions for trade simulation
-  max_holding_days: 30           # close position after this many days regardless of signal
+  max_holding_days: 30           # default max hold — equities, ETFs, commodities
+  max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
+  max_holding_days_crypto: 14    # crypto (ticker ends with -USD) — high volatility, shorter cycles
+  max_holding_days_bonds: 45     # bond ETFs (TLT, IEF, etc.) — slow-moving, longer trend duration
   atr_stop_multiplier: 2.0       # stop loss = entry ± N × ATR (matches live system)
 
   # Walk-forward validation window settings
