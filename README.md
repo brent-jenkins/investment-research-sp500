@@ -32,7 +32,7 @@ The operational home page. Compact header block shows the active market regime, 
 
 Below the header:
 - **Open Trade Monitor** — every open position as a status card with live GBP P&L, current signal, score delta since entry, ATR-based stop loss, live R:R, and a health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS). Sorted by urgency.
-- **Top Opportunities** — STRONG BUY / STRONG SELL signals filtered to tradeable assets by default. Each card shows the rationale, live price, and a MACRO_STRESS confidence warning for equity/bond longs when that overlay is active.
+- **Top Opportunities** — STRONG BUY / STRONG SELL signals filtered to tradeable assets by default. Each card shows the rationale, live price, and overlay confidence warning badges (MACRO_STRESS −20%, CREDIT_STRESS −15%, RECESSION_RISK −25%, EM_STRESS −15%) when relevant overlays are active for that ticker.
 
 ### 📊 Signals
 Compact header block (regime badge, overlays, catch-up flags, signal distribution pills, timestamp — all in one bordered card). Market intelligence plain-English summary of signal breadth, VIX, ADX, and regime context. Full ranked signal table for all assets with module score symbols (▲ / ● / ▼) per column and signal-badge colour coding.
@@ -111,33 +111,35 @@ Each module returns a score of −1 (bearish), 0 (neutral), or +1 (bullish):
 | **Mean Reversion** | RSI (oversold/overbought), Bollinger Band %B, 52-week z-score |
 | **Volatility** | ATR%, historical volatility, Bollinger Band width regime |
 | **Volume** | Volume vs 20-day SMA, OBV trend direction |
-| **Macro** | VIX regime, yield curve, plus 9 additional FRED series (see below) |
+| **Macro** | VIX regime, yield curve, plus 12 additional FRED series with per-ticker routing (see below) |
 | **Correlation** | Cross-asset pair status for pairs involving the ticker (CONFIRMING = +1, DIVERGING = −1, NEUTRAL = 0) |
 | **Regime** | Not directly scored per ticker; determines the weights applied to the other six modules |
 
 ### FRED macro series
 
-The macro module fetches and scores these series (stored in `macro_indicators` table):
+The macro module fetches and scores these series (stored in `macro_indicators` table). Beyond the composite average score, several series apply ticker-specific adjustments inside `compute_macro()`:
 
-| Series | What it is | Bearish signal |
-|--------|-----------|---------------|
-| T10Y2Y | 10Y−2Y yield spread | Inverted (< −0.1%) |
-| T10Y3M | 10Y−3M yield spread | Inverted (< 0%) |
-| DFII10 | 10-year real yield | > 2% or z-score > 1 |
-| T10YIE | 10-year breakeven inflation | < 1% or > 3.5% |
-| BAMLH0A0HYM2 | HY credit OAS | Rapid widening or > 5% |
-| BAMLC0A0CM | IG credit OAS | > 1.5% |
-| M2SL | M2 money supply | Contracting month-over-month |
-| DPCREDIT | Fed discount window borrowing | z-score > 2 (banking stress) |
-| BOGMBASE | Monetary base | Contracting |
-| USSLIND | Philly Fed Leading Index | Falling 3+ consecutive months |
-| PERMIT | Housing permits (SAAR) | Falling > 1% month-over-month |
-| DTWEXBGS | Trade-weighted dollar | Rising (z-score > 0.5) |
-| DFEDTARU | Fed funds rate (upper bound) | Tracked for monetary policy context |
+| Series | What it is | Scoring / ticker-specific routing |
+|--------|-----------|----------------------------------|
+| T10Y2Y | 10Y−2Y yield spread | Bearish when inverted; drives regime detection |
+| T10Y3M | 10Y−3M yield spread | Bearish when inverted; drives regime detection |
+| DFII10 | 10-year real yield | Bearish when > 2% or z-score > 1 |
+| T10YIE | 10-year breakeven inflation | Bearish when < 1% or > 3.5% |
+| BAMLH0A0HYM2 | HY credit OAS | Bearish on rapid widening or > 5%; CREDIT_STRESS overlay trigger |
+| BAMLC0A0CM | IG credit OAS | Bearish when > 1.5% |
+| CFNAI | Chicago Fed National Activity Index | Equity-group boost +0.10 (> 0.20) / penalty −0.10 (< −0.20) / −0.20 (< −0.70); RECESSION_RISK overlay trigger |
+| DFEDTARU | Fed funds rate (upper bound) | Rising rates: −0.10 VNQ/XLRE/ITB/rate-bearish, +0.10 KBE/KRE/XLF; falling rates: opposite |
+| M2SL | M2 money supply | Growing > 0.5% MoM: +0.10 crypto, +0.05 gold; shrinking < −0.5%: −0.10 crypto |
+| PERMIT | Housing permits (SAAR) | Falling > 5% MoM: −0.10 penalty for VNQ, XLRE, ITB |
+| DTWEXBGS | Trade-weighted dollar | Bearish when rising (z-score > 0.5); EM_STRESS overlay trigger when 30d change > +3% |
+| DPCREDIT | Fed discount window rate | Composite score contribution; shown as rate % vs Fed Funds spread |
+| BOGMBASE | Monetary base | Composite score contribution |
 
 VIX is sourced from the local `price_data` table (^VIX ticker), not FRED.
 
 Self-referential macro tickers (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0.
+
+The Macro Dashboard tags each card: **✓ Signals** for series with ticker-specific routing or overlay triggers; **Composite** for series that contribute to the average score only.
 
 ### Regime detection
 
@@ -164,13 +166,15 @@ The ADX thresholds (> 25 for trending, < 20 for ranging) are intentionally stric
 
 ### Regime overlays
 
-Detected by `detect_overlays()` after each correlation run. Three overlays are defined:
+Detected by `detect_overlays()` after each correlation run. Five overlays are defined:
 
-| Overlay | Trigger | Effect |
-|---------|---------|--------|
-| `MACRO_STRESS` | TLT/^GSPC DIVERGING | Confidence warning on equity/bond STRONG_BUY signals |
-| `VOL_REGIME_SHIFT` | ^VIX/^GSPC DIVERGING | Informational warning on Signals and Daily Briefing |
-| `CREDIT_STRESS` | HYG/^GSPC DIVERGING | Confidence warning on equity long signals |
+| Overlay | Trigger | Confidence impact |
+|---------|---------|------------------|
+| `MACRO_STRESS` | TLT/^GSPC correlation DIVERGING (z ≥ 1.5) | −20% on equity/bond BUY signals |
+| `VOL_REGIME_SHIFT` | ^VIX/^GSPC correlation DIVERGING (z ≥ 1.5) | Informational warning only |
+| `CREDIT_STRESS` | HYG/TLT return-spread z-score < −1.0 | −15% on equity BUY signals |
+| `RECESSION_RISK` | CFNAI < −0.70 for 2 consecutive months | −25% on all equity BUY signals |
+| `EM_STRESS` | DTWEXBGS 30-day change > +3% (dollar surging) | −15% on EM asset BUY signals |
 
 ### Confluence scoring
 

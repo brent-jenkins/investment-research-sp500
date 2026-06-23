@@ -114,15 +114,17 @@ Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the six an
 
 ### Regime overlays
 
-`analysis/regime.py:detect_overlays()` runs after each `compute_all_pairs()` call. It reads the latest correlation rows for three key pairs and fires an overlay when a pair is DIVERGING (sign mismatch + z-score ≥ 1.5). Results are written to `system_metadata` under the key `active_overlays` (comma-separated key names, or `"none"`):
+`analysis/regime.py:detect_overlays()` runs after each `compute_all_pairs()` call. Results are written to `system_metadata` under the key `active_overlays` (comma-separated key names, or `"none"`):
 
-| Overlay key | Trigger pair | Meaning |
-|-------------|--------------|---------|
-| `MACRO_STRESS` | TLT / ^GSPC DIVERGING | Bonds and equities moving together — flight-to-safety relationship broken |
-| `VOL_REGIME_SHIFT` | ^VIX / ^GSPC DIVERGING | VIX and equities moving in the same direction — atypical fear gauge |
-| `CREDIT_STRESS` | HYG / ^GSPC DIVERGING | Credit and equities decoupling — credit stress may precede equity stress |
+| Overlay key | Trigger | Confidence impact |
+|-------------|---------|-------------------|
+| `MACRO_STRESS` | TLT/^GSPC correlation DIVERGING (z ≥ 1.5) | −20% on equity/bond BUY signals |
+| `VOL_REGIME_SHIFT` | ^VIX/^GSPC correlation DIVERGING (z ≥ 1.5) | Informational warning only |
+| `CREDIT_STRESS` | HYG/TLT return-spread z-score < −1.0 | −15% on equity BUY signals |
+| `RECESSION_RISK` | CFNAI < −0.70 for 2 consecutive months | −25% on all equity BUY signals |
+| `EM_STRESS` | DTWEXBGS 30-day change > +3% (dollar surging) | −15% on EM asset BUY signals |
 
-Active overlays are displayed as compact inline strips on the Signals and Daily Briefing pages. `MACRO_STRESS` also suppresses buy confidence for equity/bond signals by showing a "Confidence −20%" badge on opportunity cards. `OVERLAY_DESCRIPTIONS` in `main.py` maps each key to its UI label, colour, and descriptive text.
+Active overlays are displayed as compact inline strips on the Signals and Daily Briefing pages. Confidence badges appear on opportunity cards in the Daily Briefing for affected tickers when overlays are active. `OVERLAY_DESCRIPTIONS` in `main.py` maps each key to its UI label, colour, and descriptive text.
 
 ### Confluence scoring
 
@@ -217,7 +219,7 @@ New columns are added to existing tables via `_apply_migrations()` in `data/data
 
 Beyond the tables described above, `data/database.py` defines:
 
-- **`MacroIndicator`** (`series_id, date` unique) — stores FRED series values with `pct_change_30d` (≈ month-over-month), `z_score_2y` (value vs 2-year rolling mean/std), and a −1/0/+1 `score`. The macro module reads from this table to compute per-ticker macro scores without hitting the FRED API on every analysis run.
+- **`MacroIndicator`** (`series_id, date` unique) — stores FRED series values with `pct_change_30d` (≈ month-over-month), `z_score_2y` (value vs 2-year rolling mean/std), and a −1/0/+1 `score`. `compute_macro(ticker, config)` reads from this table (no FRED API calls at analysis time) and computes a per-ticker composite score. After averaging all stored series scores + VIX, it applies ticker-specific adjustments: CFNAI boosts/penalises equity-group tickers (±0.10/−0.20) based on economic cycle; DFEDTARU trend routes ±0.10 to rate-sensitive assets (VNQ/XLRE/ITB bearish when rising, KBE/KRE/XLF bullish); M2SL growth routes ±0.10/+0.05 to crypto/gold; PERMIT falling >5% MoM penalises real estate tickers −0.10. `SIGNALS_ACTIVE` (frozenset exported from `analysis/macro.py`) lists which series have ticker-specific routing or overlay triggers — used by the dashboard to show "✓ Signals" vs "Composite" tags.
 - **`OpportunityFlag`** (`ticker, flag_type, date` unique) — records catch-up opportunities detected when a correlation pair is DIVERGING with z-score ≥ 1.5. Fields include `z_score`, `pair_corr_30d`, `price_at_flag`, and `return_5d`/`return_20d` (populated on later runs). `get_active_opportunity_flags()` returns flags from the most recent analysis date; they are displayed as compact strips in the Signals and Daily Briefing header blocks.
 - **`Performance`** (`ticker, date` unique) — rolling performance metrics: daily return, cumulative return, drawdown, max drawdown, Sharpe, Sortino, Calmar, win rate, avg win/loss, profit factor. Currently written by the analysis pipeline but not yet surfaced in a dedicated UI view beyond the closed-trade Performance page.
 - **`BacktestRun`** (`id` PK) — metadata for each backtest run: name, created_at, start_date, end_date, tickers_json, params_json, status (running/complete/failed), error_message, and summary metrics (total_trades, win_rate, avg_return_pct, sharpe_ratio, max_drawdown_pct, total_return_pct, avg_holding_days).
