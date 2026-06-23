@@ -4233,6 +4233,36 @@ def _render_trade_card(e: dict) -> None:
     )
 
 
+def _expected_last_eod(now: datetime) -> datetime:
+    """Return the UTC datetime of the most recent EOD run that should have fired by now.
+
+    The EOD run fires at 21:30 UTC Mon–Fri.  If today's run hasn't fired yet (or today
+    is a weekend) we walk back to the previous weekday's slot.
+    """
+    eod_today = now.replace(hour=21, minute=30, second=0, microsecond=0)
+    expected = eod_today if now >= eod_today else eod_today - timedelta(days=1)
+    while expected.weekday() >= 5:
+        expected -= timedelta(days=1)
+    return expected
+
+
+def _is_refresh_overdue(last_refresh: "datetime | None") -> "tuple[bool, bool]":
+    """Return (is_warning, is_critical) based on the scheduled EOD run time.
+
+    is_warning  — last refresh missed the expected EOD by more than 1 hour
+    is_critical — last refresh missed the expected EOD by more than 25 hours (full day)
+    Both return False on weekends (no EOD run is scheduled).
+    """
+    now = datetime.utcnow()
+    if now.weekday() >= 5:
+        return False, False
+    if last_refresh is None:
+        return True, True
+    expected = _expected_last_eod(now)
+    missed_by = (expected - last_refresh).total_seconds() / 3600
+    return missed_by > 1, missed_by > 25
+
+
 @st.cache_data(ttl=300)
 def _system_health_check() -> list[dict]:
     """Check system health and return a list of alert dicts (level, message).
@@ -4244,52 +4274,56 @@ def _system_health_check() -> list[dict]:
     today = now.date()
     is_weekday = today.weekday() < 5
 
-    # 1. Data staleness — how long since the last full EOD refresh
+    # 1. Data staleness — schedule-aware check against the expected EOD run time.
+    #    A simple age_hours threshold causes false alarms because the EOD run fires at
+    #    21:30 UTC and data will naturally be 18-23 h old during the following day.
     last_refresh = get_metadata("last_full_refresh")
-    if last_refresh and is_weekday:
-        age_hours = (now - last_refresh).total_seconds() / 3600
-        if age_hours > 26:
-            alerts.append({
-                "level": "red",
-                "message": (
-                    f"Data refresh overdue — last updated {age_hours:.0f}h ago. "
-                    "EOD run may have failed."
-                ),
-            })
-        elif age_hours > 8:
-            alerts.append({
-                "level": "amber",
-                "message": f"Data last refreshed {age_hours:.0f}h ago — awaiting next scheduled run.",
-            })
+    is_warning, is_critical = _is_refresh_overdue(last_refresh)
+    if is_critical:
+        last_str = last_refresh.strftime("%Y-%m-%d %H:%M UTC") if last_refresh else "never"
+        alerts.append({
+            "level": "red",
+            "message": (
+                f"Data refresh overdue — EOD run appears to have been missed "
+                f"(last updated: {last_str})."
+            ),
+        })
+    elif is_warning:
+        alerts.append({
+            "level": "amber",
+            "message": "Data refresh missed — last EOD run did not complete as scheduled.",
+        })
 
-    # 2. Forex / crypto price freshness — these instruments trade continuously and
-    #    should never go more than 2 calendar days without a new row.
+    # 2. Forex / crypto price freshness — flag only when data predates the most recent
+    #    expected EOD run, not based on an absolute calendar-day count.
     _FC_TICKERS = ["GBPUSD=X", "USDJPY=X", "EURUSD=X", "AUDUSD=X", "BTC-USD", "ETH-USD"]
-    try:
-        params = {f"t{i}": t for i, t in enumerate(_FC_TICKERS)}
-        placeholders = ",".join(f":t{i}" for i in range(len(_FC_TICKERS)))
-        with get_engine().connect() as _conn:
-            rows = _conn.execute(
-                text(
-                    f"SELECT ticker, MAX(date) AS last_date FROM price_data "
-                    f"WHERE ticker IN ({placeholders}) GROUP BY ticker"
-                ),
-                params,
-            ).fetchall()
-        stale = [
-            r[0] for r in rows
-            if r[1] and (today - date.fromisoformat(str(r[1]))).days > 2
-        ]
-        if stale:
-            alerts.append({
-                "level": "red",
-                "message": (
-                    f"Forex/crypto data overdue for {len(stale)} ticker(s): "
-                    f"{', '.join(stale[:3])}{'…' if len(stale) > 3 else ''}."
-                ),
-            })
-    except Exception:
-        pass
+    if is_weekday:
+        try:
+            expected_date = _expected_last_eod(now).date()
+            params = {f"t{i}": t for i, t in enumerate(_FC_TICKERS)}
+            placeholders = ",".join(f":t{i}" for i in range(len(_FC_TICKERS)))
+            with get_engine().connect() as _conn:
+                rows = _conn.execute(
+                    text(
+                        f"SELECT ticker, MAX(date) AS last_date FROM price_data "
+                        f"WHERE ticker IN ({placeholders}) GROUP BY ticker"
+                    ),
+                    params,
+                ).fetchall()
+            stale = [
+                r[0] for r in rows
+                if r[1] and date.fromisoformat(str(r[1])) < expected_date
+            ]
+            if stale:
+                alerts.append({
+                    "level": "red",
+                    "message": (
+                        f"Forex/crypto data overdue for {len(stale)} ticker(s): "
+                        f"{', '.join(stale[:3])}{'…' if len(stale) > 3 else ''}."
+                    ),
+                })
+        except Exception:
+            pass
 
     # 3. Signal generation staleness
     last_signal = get_metadata("last_analysis_run")
