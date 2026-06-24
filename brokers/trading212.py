@@ -699,13 +699,12 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             )
             continue
 
-        # Clamp to instrument's allowed precision and check minimum quantity.
-        # UK/EU-listed ETFs (e.g. GBP-denominated UCITS) typically have
-        # maxQuantityPrecision=0 (whole shares only) and minTradeQuantity=1.
-        meta      = instrument_meta.get(ucits_ticker, {})
-        min_qty   = float(meta.get("minTradeQuantity", 1.0))
-        precision = int(meta.get("maxQuantityPrecision", 4))
-        quantity  = math.floor(quantity * (10 ** precision)) / (10 ** precision)
+        # All instruments in ucits_mapping are EU/UK-listed ETFs, which require
+        # whole-share quantities. T212's maxQuantityPrecision metadata is
+        # unreliable for these instruments, so always floor to an integer.
+        meta    = instrument_meta.get(ucits_ticker, {})
+        min_qty = float(meta.get("minTradeQuantity", 1.0))
+        quantity = math.floor(quantity)
         if quantity < min_qty:
             logger.warning(
                 "T212 Invest: %s (%s) qty %.4f is below instrument minimum %.4f — skipping.",

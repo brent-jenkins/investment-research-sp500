@@ -3734,19 +3734,19 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                                     )
                                     _rc_client = _T212Retry(live=_t212_live)
 
-                                    # Apply instrument precision / minimum guard
+                                    # Apply minimum-quantity guard.
+                                    # Always floor to integer — all ucits_mapping
+                                    # instruments are EU/UK ETFs requiring whole shares.
+                                    # T212's maxQuantityPrecision metadata is unreliable.
                                     _r_instruments = _rc_client.get_instruments()
                                     _r_imeta = {
                                         i["ticker"]: i
                                         for i in (_r_instruments or [])
                                         if "ticker" in i
                                     }
-                                    _r_meta  = _r_imeta.get(_fo_ucits, {})
-                                    _r_min   = float(_r_meta.get("minTradeQuantity", 1.0))
-                                    _r_prec  = int(_r_meta.get("maxQuantityPrecision", 4))
-                                    _r_qty   = (
-                                        _math.floor(_fo_qty * (10 ** _r_prec)) / (10 ** _r_prec)
-                                    )
+                                    _r_meta = _r_imeta.get(_fo_ucits, {})
+                                    _r_min  = float(_r_meta.get("minTradeQuantity", 1.0))
+                                    _r_qty  = _math.floor(_fo_qty)
 
                                     if _r_qty < _r_min:
                                         st.error(
