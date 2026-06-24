@@ -1235,7 +1235,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             "| **Macro** | FRED series (yield curve, credit spreads, VIX) | Macro backdrop supportive | Macro headwinds present |\n\n"
             "**Score** = regime-weighted average of all modules (−1 to +1). "
             "In a trending market, Trend carries more weight; in a ranging market, Mean Rev carries more weight. "
-            "STRONG BUY ≥ 0.55 · BUY ≥ 0.30 · SELL ≤ −0.30 · STRONG SELL ≤ −0.55."
+            "STRONG BUY/SELL thresholds are regime-aware (0.55–0.70); see Daily Briefing for the current value. "
+            "BUY ≥ 0.30 · SELL ≤ −0.30."
         )
 
     def _sym(val) -> str:
@@ -5244,13 +5245,14 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     opps = build_opportunities(tradeable_signals, open_tickers, active_overlays, watchlist)
 
     if not opps:
-        _buy_threshold = float(
-            config.get("confluence", {}).get("buy_threshold", 0.55)
-        )
+        # Use regime-specific thresholds (computed earlier in col_regime block)
         _near_miss = sum(
             1 for s in tradeable_signals
             if s.get("ticker") not in open_tickers
-            and 0.35 <= abs(s.get("confluence_score") or 0.0) < _buy_threshold
+            and (
+                0.35 <= (s.get("confluence_score") or 0.0) < _buy_th
+                or -_sell_th < (s.get("confluence_score") or 0.0) <= -0.35
+            )
         )
         _overlay_labels = [
             OVERLAY_DESCRIPTIONS.get(k, {}).get("label", k.replace("_", " "))
@@ -5260,8 +5262,13 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         if _overlay_labels:
             _why_parts.append(f"Active overlay{'s' if len(_overlay_labels) > 1 else ''}: **{', '.join(_overlay_labels)}**")
         if _near_miss > 0:
+            _thresh_note = (
+                f"0.35–{_buy_th:.2f}"
+                if _buy_th == _sell_th
+                else f"buy 0.35–{_buy_th:.2f} or sell 0.35–{_sell_th:.2f}"
+            )
             _why_parts.append(
-                f"**{_near_miss}** signal{'s' if _near_miss > 1 else ''} within 0.35–{_buy_threshold:.2f} "
+                f"**{_near_miss}** signal{'s' if _near_miss > 1 else ''} within {_thresh_note} "
                 f"(below STRONG threshold)"
             )
         st.info(

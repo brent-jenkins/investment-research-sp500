@@ -348,7 +348,8 @@ def compute_signal_history(
         trend_score, mean_reversion_score, volatility_score,
         volume_score, macro_score
     """
-    from analysis.regime import REGIME_WEIGHTS, Regime  # local to avoid circular
+    from analysis.regime import REGIME_WEIGHTS, Regime          # local to avoid circular
+    from analysis.confluence import get_regime_thresholds       # regime-aware thresholds
 
     if df.empty or len(df) < 210:
         return pd.DataFrame()
@@ -394,14 +395,26 @@ def compute_signal_history(
         macro_sc.astype(float) * w["macro"]
     )
 
-    def _sig(s: float) -> str:
-        if s >= 0.6:  return "STRONG_BUY"
-        if s >= 0.3:  return "BUY"
-        if s <= -0.6: return "STRONG_SELL"
-        if s <= -0.3: return "SELL"
+    # Build per-date threshold series from regime — mirrors the weight computation above
+    buy_thresh_s  = pd.Series(0.55, index=df.index, dtype=float)
+    sell_thresh_s = pd.Series(0.55, index=df.index, dtype=float)
+    for _rname in regime_aligned.unique():
+        _mask = regime_aligned == _rname
+        _bt, _st = get_regime_thresholds(_rname, config)
+        buy_thresh_s[_mask]  = _bt
+        sell_thresh_s[_mask] = _st
+
+    def _sig(score: float, buy_th: float, sell_th: float) -> str:
+        if score >= buy_th:   return "STRONG_BUY"
+        if score >= 0.3:      return "BUY"
+        if score <= -sell_th: return "STRONG_SELL"
+        if score <= -0.3:     return "SELL"
         return "NEUTRAL"
 
-    signal = confluence.apply(_sig)
+    signal = pd.Series(
+        [_sig(c, b, s) for c, b, s in zip(confluence, buy_thresh_s, sell_thresh_s)],
+        index=confluence.index,
+    )
 
     result = pd.DataFrame({
         "close":                close,
