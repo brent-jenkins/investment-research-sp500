@@ -160,6 +160,11 @@ class Trading212Client:
         r = self._request("DELETE", f"/equity/orders/{order_id}")
         return r.json()
 
+    def get_order(self, order_id: str) -> dict:
+        """Fetch a single order by ID from the T212 API."""
+        r = self._request("GET", f"/equity/orders/{order_id}")
+        return r.json()
+
     def get_quantity_for_gbp(self, ticker: str, gbp_amount: float) -> float:
         """Calculate share quantity for a given GBP order size.
 
@@ -285,6 +290,153 @@ def _log_t212_order(
             })
     except Exception as exc:
         logger.warning("Failed to log T212 order to DB: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Fill-status polling — called hourly and on Refresh Account
+# ---------------------------------------------------------------------------
+
+def poll_placed_orders(config: dict) -> int:
+    """Poll T212 API to update status of PLACED orders.
+
+    Reads all rows with status='PLACED' from t212_invest_orders, queries
+    GET /equity/orders/{id} for each, and writes the terminal status
+    (FILLED / CANCELLED / REJECTED) plus fill price back to the DB.
+
+    Called on every Refresh Account click and from the hourly trade alert job.
+    Returns the count of rows updated.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return 0
+
+    api_key    = os.environ.get("T212_API_KEY", "")
+    api_secret = os.environ.get("T212_API_SECRET", "")
+    if not api_key or not api_secret:
+        return 0
+
+    # Read PLACED orders that have a real T212 order ID
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT id, order_id, ticker, direction
+                FROM t212_invest_orders
+                WHERE status = 'PLACED'
+                  AND order_id IS NOT NULL
+                  AND order_id != ''
+                ORDER BY placed_at DESC
+                LIMIT 50
+            """)).mappings().all()
+        placed = [dict(r) for r in rows]
+    except Exception as exc:
+        logger.warning("poll_placed_orders: DB read failed — %s", exc)
+        return 0
+
+    if not placed:
+        return 0
+
+    live = t212_cfg.get("live", False)
+    try:
+        client = Trading212Client(live=live)
+    except Exception as exc:
+        logger.warning("poll_placed_orders: cannot connect — %s", exc)
+        return 0
+
+    # T212 terminal status values → our internal status
+    _TERMINAL: dict[str, str] = {
+        "FILLED":    "FILLED",
+        "CANCELLED": "CANCELLED",
+        "REJECTED":  "REJECTED",
+    }
+
+    updated = 0
+
+    for row in placed:
+        order_id = row["order_id"]
+        row_id   = row["id"]
+
+        try:
+            resp = client.get_order(order_id)
+        except Exception as exc:
+            http_status = getattr(getattr(exc, "response", None), "status_code", None)
+            if http_status == 404:
+                logger.warning(
+                    "poll_placed_orders: order %s not found (404) — marking CANCELLED.",
+                    order_id,
+                )
+                resp = {"status": "CANCELLED"}
+            else:
+                logger.debug(
+                    "poll_placed_orders: could not fetch order %s — %s", order_id, exc,
+                )
+                continue
+
+        t212_status = (resp.get("status") or "").upper()
+        new_status  = _TERMINAL.get(t212_status)
+        if not new_status:
+            continue   # still pending — nothing to update yet
+
+        # Extract fill price — T212 may use different field names across API versions
+        fill_price: Optional[float] = None
+        for _fp_key in ("fillPrice", "fill_price"):
+            _v = resp.get(_fp_key)
+            if _v is not None:
+                try:
+                    fill_price = float(_v)
+                except (TypeError, ValueError):
+                    pass
+                break
+        if fill_price is None:
+            for _nested in ("executionDetails", "fillResult"):
+                _obj = resp.get(_nested)
+                if isinstance(_obj, dict) and "price" in _obj:
+                    try:
+                        fill_price = float(_obj["price"])
+                    except (TypeError, ValueError):
+                        pass
+                    break
+
+        now_iso  = datetime.utcnow().isoformat()
+        time_mod = resp.get("timeModified") or resp.get("filledAt") or now_iso
+
+        try:
+            from sqlalchemy import text as sa_text
+            from data.database import get_engine
+            with get_engine().begin() as conn:
+                conn.execute(sa_text("""
+                    UPDATE t212_invest_orders
+                    SET status       = :status,
+                        fill_price   = COALESCE(:fill_price, fill_price),
+                        filled_at    = CASE WHEN :status = 'FILLED'
+                                       THEN :time_mod ELSE filled_at END,
+                        cancelled_at = CASE WHEN :status IN ('CANCELLED', 'REJECTED')
+                                       THEN :now ELSE cancelled_at END
+                    WHERE id = :row_id
+                """), {
+                    "status":     new_status,
+                    "fill_price": fill_price,
+                    "time_mod":   time_mod,
+                    "now":        now_iso,
+                    "row_id":     row_id,
+                })
+            updated += 1
+            logger.info(
+                "poll_placed_orders: order %s (%s %s) → %s  fill=%.4f",
+                order_id, row.get("direction", "?"), row.get("ticker", "?"),
+                new_status, fill_price or 0.0,
+            )
+        except Exception as exc:
+            logger.warning(
+                "poll_placed_orders: DB update failed for order %s — %s", order_id, exc,
+            )
+
+        time.sleep(0.2)
+
+    logger.info("poll_placed_orders: %d of %d order(s) updated.", updated, len(placed))
+    return updated
 
 
 # ---------------------------------------------------------------------------

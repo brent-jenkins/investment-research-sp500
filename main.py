@@ -3557,7 +3557,10 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 if st.button("🔄 Refresh Account", key="t212_refresh_btn"):
                     with st.spinner("Connecting to T212…"):
                         try:
-                            from brokers.trading212 import Trading212Client as _T212Client
+                            from brokers.trading212 import (  # noqa
+                                Trading212Client as _T212Client,
+                                poll_placed_orders as _poll_t212,
+                            )
                             _client = _T212Client(live=_t212_live)
                             _summary   = _client.get_account_summary()
                             _positions = _client.get_positions()
@@ -3567,6 +3570,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                                 "fetched_at": datetime.utcnow().isoformat(),
                                 "error":      None,
                             }
+                            # Update fill status for any PLACED orders before refreshing the log
+                            try:
+                                _poll_t212(config)
+                            except Exception:
+                                pass
                         except Exception as _t2e:
                             st.session_state[_t212_data_key] = {
                                 "error": str(_t2e),
@@ -3683,8 +3691,9 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             ]
             st.dataframe(
                 _ord_df.style.map(
-                    lambda v: "color:#16a34a" if v in ("FILLED", "PLACED")
-                    else ("color:#dc2626" if v == "FAILED" else ""),
+                    lambda v: "color:#16a34a" if v == "FILLED"
+                    else ("color:#d97706" if v == "PLACED"
+                    else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
                     subset=["Status"],
                 ).map(
                     lambda v: "color:#16a34a" if v in ("BUY",)

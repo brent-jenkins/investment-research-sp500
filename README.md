@@ -97,7 +97,7 @@ Replay the current signal logic over up to 10 years of stored historical price d
 ### 🖥️ Status
 System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **⚡ Run Analysis Now** (analysis + signals only) and **🔄 Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
-A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml: account value, available cash, invested amount, open position count, and an expandable positions table. A "🔄 Refresh Account" button triggers a live API call. Below this, the full order log from the `t212_invest_orders` table shows every automated order attempt (PLACED / FILLED / FAILED) with signal context.
+A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml: account value, available cash, deployed-capital progress bar, open positions (expanded by default), and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). A "🔄 Refresh Account" button fetches live account and position data, then polls `GET /equity/orders/{id}` for any orders still showing PLACED — updating status and fill price in the database in real time. An hourly background poll also runs as part of the trade alert job. A collapsible UCITS mapping table shows which research tickers map to T212 instrument IDs.
 
 ---
 

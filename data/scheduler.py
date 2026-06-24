@@ -835,6 +835,16 @@ def _trade_alert_job() -> None:
         logger.warning("VIX spike check failed: %s", _vix_exc)
     # ── End VIX spike check ────────────────────────────────────────────────
 
+    # ── T212 Invest: poll for fill status on any PLACED orders ────────────
+    try:
+        from brokers.trading212 import poll_placed_orders as _poll_t212  # noqa: PLC0415
+        _n_updated = _poll_t212(config)
+        if _n_updated:
+            logger.info("T212 order poll: %d order(s) updated to terminal status.", _n_updated)
+    except Exception as _poll_exc:
+        logger.warning("T212 order poll failed: %s", _poll_exc)
+    # ── End T212 poll ──────────────────────────────────────────────────────
+
     from output.performance import get_latest_price, get_open_trades  # noqa: PLC0415
     from output.briefing import (  # noqa: PLC0415
         enrich_open_trade,

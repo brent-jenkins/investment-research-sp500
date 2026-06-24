@@ -34,7 +34,7 @@ Key config sections added since initial release:
 - `notifications.weekly_summary.enabled` — controls the Sunday 10:00 UTC weekly summary email independently of `notifications.email.enabled`.
 - `backtest.max_holding_days`, `backtest.atr_stop_multiplier`, `backtest.walk_forward_months`, `backtest.walk_forward_step` — configure the backtesting engine.
 - `virtual_trading.enabled`, `portfolio_size_gbp`, `position_pct`, `max_open_positions`, `entry_signal` — control automated virtual trading. `entry_signal: "STRONG_BUY"` limits entries to STRONG_BUY/STRONG_SELL; `"BUY"` also accepts BUY/SELL.
-- `trading212_invest.enabled`, `live`, `max_position_gbp`, `max_total_deployed` — control T212 Invest API integration (Phase 1: read-only Status page; Phase 2: automated demo orders). Requires `T212_API_KEY` and `T212_API_SECRET` env vars. `live: false` is the hard default and is enforced in code.
+- `trading212_invest.enabled`, `live`, `max_position_gbp`, `max_total_deployed`, `entry_signal`, `exit_signal`, `ucits_mapping` — control T212 Invest API integration. `entry_signal: "BUY"` enters on BUY or STRONG_BUY; `"STRONG_BUY"` restricts to STRONG_BUY only (same pattern for `exit_signal`). `ucits_mapping` maps internal research tickers to T212 UCITS instrument IDs — only mapped tickers receive automated orders. Requires `T212_API_KEY` and `T212_API_SECRET` env vars. `live: false` is the hard default and is enforced in code.
 
 ## Architecture
 
@@ -255,19 +255,19 @@ Backtest config lives under `backtest:` in `config.yaml` (`max_holding_days`, `a
 
 **`Trading212Client`** — thin HTTP wrapper around the T212 Invest REST API (base URL switches between `demo.trading212.com` and `live.trading212.com` based on `live` flag). Authentication is HTTP Basic Auth over `T212_API_KEY:T212_API_SECRET`. All requests use `_request()` which retries up to 3 times with exponential back-off; HTTP 429 (rate-limited) gets a longer wait. Methods: `get_account_summary()`, `get_positions()`, `get_instruments()` (24-hour module-level cache), `place_market_order(ticker, quantity)` (raises `RuntimeError` if `live=True` — live trading is hard-blocked), `cancel_order(order_id)`.
 
-**`maybe_place_t212_orders(config, run_type)`** — called from `_run_analysis_pipeline()` in `data/scheduler.py` after `_process_virtual_trades()`. Places DEMO BUY market orders for STRONG_BUY signals on tickers that have a `trading212_instrument` mapping. Guards in order:
-1. `trading212_invest.enabled: true` in config — returns early if false
-2. `run_type == "full"` — only on EOD runs with fresh price data
-3. `T212_API_KEY` / `T212_API_SECRET` env vars present
-4. Deployed ratio check: total invested / account value < `max_total_deployed`
-5. Per-ticker: has a `trading212_instrument` mapping; instrument exists in T212 list; no existing T212 position; no recent order in `t212_invest_orders` (last 30 days)
-6. Per-order: free cash ≥ £10; position capped at `max_position_gbp`
+**`maybe_place_t212_orders(config, run_type)`** — called from `_run_analysis_pipeline()` in `data/scheduler.py` after `_process_virtual_trades()`. Runs two phases on every EOD (`run_type == "full"`) call when `trading212_invest.enabled: true` and credentials are present:
 
-Every order attempt (success or failure) is written to `t212_invest_orders`. API errors write to `system_metadata` under `t212_invest_error` (displayed on Status page) and stop placement for that run.
+*EXIT phase* — for each open T212 position, reverse-maps the UCITS ticker to the research ticker via `ucits_mapping`, reads the current signal, and places a SELL market order if the signal is in `exit_signals` (default: SELL or STRONG_SELL).
 
-The Status page renders a **T212 Invest Account** section. When disabled: info card. When enabled + keys present: a "🔄 Refresh Account" button fetches live `get_account_summary()` + `get_positions()` into `st.session_state["t212_account_data"]` and displays balance / cash / positions. Below this, the `t212_invest_orders` table is always shown (last 50 rows). Credentials (`T212_API_KEY`, `T212_API_SECRET`) are set in the systemd service file alongside `FRED_API_KEY`.
+*BUY phase* — for each ticker in `ucits_mapping`, checks the current signal; if it is in `entry_signals` (default: BUY or STRONG_BUY), checks that no position exists and no recent order is recorded in the DB (30-day window), then places a BUY market order sized via `get_quantity_for_gbp()`. Stops if total deployed ≥ `max_total_deployed` × account value, or free cash < £10.
 
-`T212InvestOrder` in `data/database.py` persists every order attempt: `order_id`, `ticker`, `t212_ticker`, `direction`, `quantity`, `estimated_price`, `fill_price`, `status` (PLACED/FILLED/FAILED/CANCELLED), `signal_type`, `confluence_score`, `regime`, `account_type` (DEMO/LIVE), `error_message`, timestamps.
+`entry_signal` and `exit_signal` in config control the threshold: `"BUY"` accepts BUY or STRONG_BUY; `"STRONG_BUY"` restricts to STRONG_BUY only (same pattern for exit). All order attempts (success and failure) are written to `t212_invest_orders`. API errors set `t212_invest_error` in `system_metadata`, halt the current run, and send an alert email.
+
+**`poll_placed_orders(config)`** — called from the hourly `_trade_alert_job()` and on every "Refresh Account" click. Reads all rows with `status = 'PLACED'` from `t212_invest_orders`, calls `GET /equity/orders/{id}` for each, and updates `status` / `fill_price` / `filled_at` / `cancelled_at` when a terminal state is reached (FILLED / CANCELLED / REJECTED). Handles HTTP 404 as CANCELLED. Tries multiple field names for fill price (`fillPrice`, `executionDetails.price`, `fillResult.price`) to be robust across T212 API versions.
+
+The Status page renders a **T212 Invest Account** section. When disabled: info card. When enabled + keys present: a "🔄 Refresh Account" button fetches live `get_account_summary()` + `get_positions()`, triggers `poll_placed_orders()` to update fill status, then stores everything in `st.session_state["t212_account_data"]`. Displays: 4 account metrics, a deployed-capital progress bar, open positions (expanded by default), recent orders (last 10) with colour-coded status (FILLED=green, PLACED=amber, FAILED/CANCELLED/REJECTED=red), and a UCITS mapping table. Credentials (`T212_API_KEY`, `T212_API_SECRET`) are set in the systemd service file alongside `FRED_API_KEY`.
+
+`T212InvestOrder` in `data/database.py` persists every order attempt: `order_id`, `ticker`, `t212_ticker`, `direction`, `quantity`, `estimated_price`, `estimated_value_gbp`, `fill_price`, `status` (PLACED/FILLED/FAILED/CANCELLED/REJECTED), `signal_type`, `confluence_score`, `regime`, `account_type` (DEMO/LIVE), `error_message`, timestamps.
 
 ### Email alerts
 
