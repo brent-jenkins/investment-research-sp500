@@ -3730,7 +3730,6 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                                     import math as _math
                                     from brokers.trading212 import (
                                         Trading212Client as _T212Retry,
-                                        _log_t212_order as _log_retry,
                                     )
                                     _rc_client = _T212Retry(live=_t212_live)
 
@@ -3757,25 +3756,30 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                                     else:
                                         _r_signed = _r_qty if _fo_dir == "BUY" else -_r_qty
                                         _r_resp   = _rc_client.place_market_order(_fo_ucits, _r_signed)
-                                        _log_retry(
-                                            ticker=_fo_ticker,
-                                            t212_ticker=_fo_ucits,
-                                            direction=_fo_dir,
-                                            quantity=_r_qty,
-                                            estimated_price=0.0,
-                                            estimated_value_gbp=None,
-                                            status="PLACED",
-                                            order_id=str(_r_resp.get("id", "")),
-                                            signal_type=_fo.get("signal_type") or "",
-                                            confluence_score=_fo.get("confluence_score"),
-                                            regime=_fo.get("regime"),
-                                            account_type="LIVE" if _t212_live else "DEMO",
-                                            error_message=None,
-                                        )
+                                        _r_order_id = str(_r_resp.get("id", ""))
+                                        # Update the original FAILED row in-place so it
+                                        # drops out of the retry list on next render.
+                                        from sqlalchemy import text as _sa_retry_text
+                                        with get_engine().begin() as _rc_conn:
+                                            _rc_conn.execute(_sa_retry_text("""
+                                                UPDATE t212_invest_orders
+                                                SET status        = 'PLACED',
+                                                    order_id      = :order_id,
+                                                    quantity      = :qty,
+                                                    error_message = NULL,
+                                                    placed_at     = :now
+                                                WHERE id = :row_id
+                                            """), {
+                                                "order_id": _r_order_id,
+                                                "qty":      _r_qty,
+                                                "now":      datetime.utcnow().isoformat(),
+                                                "row_id":   _fo_id,
+                                            })
                                         st.success(
                                             f"{_fo_dir} {_r_qty} × {_fo_ucits} placed. "
-                                            f"Order ID: {_r_resp.get('id', '?')}"
+                                            f"Order ID: {_r_order_id or '?'}"
                                         )
+                                        st.rerun()
                                 except Exception as _r_exc:
                                     st.error(f"Retry failed: {_r_exc}")
         else:
