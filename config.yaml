@@ -455,11 +455,8 @@ confluence:
   min_signals_required: 3
   # Total number of signal modules (regime, trend, mean_reversion, volatility, volume, macro, correlation)
   total_signal_modules: 7
-  # Score thresholds: score = agreeing_signals / total_signal_modules
-  buy_threshold: 0.55
-  sell_threshold: 0.55
-
-  # Regime-specific overrides — tighten or relax thresholds based on market context
+  # Per-regime STRONG_BUY / STRONG_SELL boundaries.
+  # BUY / SELL midpoint is fixed at ±0.30 and not regime-dependent.
   regime_thresholds:
     TRENDING_BULL:
       buy_threshold: 0.55      # trend confirmed, standard threshold
@@ -473,6 +470,9 @@ confluence:
     HIGH_VOLATILITY:
       buy_threshold: 0.70      # require very strong signal in volatile market
       sell_threshold: 0.70
+    RANGING_LOW_VOL:
+      buy_threshold: 0.55      # mean-reversion regime — standard threshold
+      sell_threshold: 0.55
 
 signals:
   # Lookback periods (trading days) used across analysis modules

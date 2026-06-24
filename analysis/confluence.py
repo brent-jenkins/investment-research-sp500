@@ -93,16 +93,15 @@ def _load_config() -> dict:
 def get_regime_thresholds(regime_name: str, config: dict) -> tuple[float, float]:
     """Return (buy_threshold, sell_threshold) for the given regime.
 
-    Falls back to the global confluence.buy_threshold / sell_threshold when no
-    regime-specific override is configured.
+    All five regimes must have entries under confluence.regime_thresholds in
+    config.yaml.  Falls back to 0.55/0.55 if a regime is missing (e.g. during
+    a config reload race), but logs a warning so the gap is visible.
     """
-    conf = config.get("confluence", {})
-    default_buy  = float(conf.get("buy_threshold",  0.55))
-    default_sell = float(conf.get("sell_threshold", 0.55))
-    regime_cfg = conf.get("regime_thresholds", {}).get(regime_name, {})
-    buy  = float(regime_cfg.get("buy_threshold",  default_buy))
-    sell = float(regime_cfg.get("sell_threshold", default_sell))
-    return buy, sell
+    regime_cfg = config.get("confluence", {}).get("regime_thresholds", {}).get(regime_name)
+    if regime_cfg is None:
+        logger.warning("No regime_thresholds entry for %s — using 0.55 default", regime_name)
+        return 0.55, 0.55
+    return float(regime_cfg["buy_threshold"]), float(regime_cfg["sell_threshold"])
 
 
 def _classify(score: float, buy_threshold: float = 0.55, sell_threshold: float = 0.55) -> str:
