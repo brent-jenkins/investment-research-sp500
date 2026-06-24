@@ -87,7 +87,7 @@ Historical analysis of all closed trades: equity curve (cumulative GBP P&L), win
 ### 🧪 Backtest
 Replay the current signal logic over up to 10 years of stored historical price data — no look-ahead bias (vectorized pandas rolling operations).
 
-- **Run & Overview** — select date range (presets: Full History / COVID Era / Bear Market / Recovery / Custom), ticker scope (tradeable-only or all assets), ATR stop multiplier, max holding days. Runs asynchronously and stores results in the database. Equity curve, full metrics strip (win rate, Sharpe, max drawdown, profit factor), and complete simulated trade table.
+- **Run & Overview** — select date range (presets: Full History / COVID Era / Bear Market / Recovery / Custom), ticker scope (tradeable-only / **T212 CFD Only** / all assets), ATR stop multiplier, max holding days. Runs asynchronously and stores results in the database. Equity curve, full metrics strip (win rate, Sharpe, max drawdown, profit factor), and complete simulated trade table. A collapsible **T212 CFD comparison** panel instantly filters any existing run's trades to only tickers with a `trading212_instrument` mapping and shows a side-by-side metrics table plus a breakdown of excluded tickers and how many trades each contributed — no re-run required.
 - **Period Analysis** — performance breakdown for COVID Crash (Feb–May 2020), 2022 Bear Market, and 2023–24 Recovery, plus per-regime win rate/return table.
 - **Module Attribution** — for each analysis module, win rate when it agreed vs disagreed with the trade direction. Shows which modules have genuine predictive edge.
 - **Signal Decay** — holding period distribution histogram, exit reason breakdown (STOP_LOSS / SIGNAL_REVERSAL / MAX_HOLDING / END_OF_DATA), average hold by regime.

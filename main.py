@@ -5389,6 +5389,15 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
         tradeable_tickers = [e["ticker"] for e in tradeable]
         all_tickers_list  = get_all_tickers(config)
 
+        # Tickers that have a Trading212 CFD instrument mapping
+        t212_tickers = [
+            e["ticker"]
+            for g in config.get("watchlist", {}).values()
+            if isinstance(g, list)
+            for e in g
+            if isinstance(e, dict) and e.get("trading212_instrument")
+        ]
+
         col_l, col_r = st.columns(2)
         with col_l:
             preset = st.selectbox("Date range preset", [
@@ -5413,8 +5422,17 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             bt_name = st.text_input("Run name (optional)", placeholder="e.g. Full history LONG-only", key="bt_name")
 
         with col_r:
-            ticker_scope = st.radio("Tickers to test", ["Tradeable assets only", "All assets"], key="bt_scope")
-            tickers_to_test = tradeable_tickers if ticker_scope == "Tradeable assets only" else all_tickers_list
+            ticker_scope = st.radio(
+                "Tickers to test",
+                ["Tradeable assets only", "T212 CFD Only", "All assets"],
+                key="bt_scope",
+            )
+            if ticker_scope == "Tradeable assets only":
+                tickers_to_test = tradeable_tickers
+            elif ticker_scope == "T212 CFD Only":
+                tickers_to_test = t212_tickers
+            else:
+                tickers_to_test = all_tickers_list
             st.caption(f"{len(tickers_to_test)} tickers selected")
 
             max_hold = st.slider("Max holding days", 10, 120, int(config.get("backtest", {}).get("max_holding_days", 60)), key="bt_maxhold")
@@ -5508,6 +5526,116 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                               .map(lambda v: f"color:{'#16a34a' if v > 0 else '#dc2626'}" if isinstance(v, (int, float)) else "", subset=["P&L %"]),
                     use_container_width=True, hide_index=True,
                 )
+
+            # ── T212 CFD Comparison ───────────────────────────────────────────
+            st.divider()
+            with st.expander("📊 T212 CFD Only — Comparison vs Full Run", expanded=False):
+                st.caption(
+                    "Filters this run's trades to only tickers that have a "
+                    "`trading212_instrument` mapping in config.yaml — i.e. assets "
+                    "actually available as CFDs on Trading212. No re-run required; "
+                    "metrics are recomputed on the filtered subset instantly."
+                )
+
+                _t212_set  = set(t212_tickers)
+                _df_full   = df
+                _df_t212   = df[df["ticker"].isin(_t212_set)].copy() if not df.empty else df
+
+                _mets_full = mets  # already computed above
+                _mets_t212 = compute_metrics(_df_t212)
+
+                def _fmt_wr(m: dict) -> str:
+                    v = m.get("win_rate") or 0
+                    return f"{round(v * 100, 1)}%"
+
+                def _fmt_pf(m: dict) -> str:
+                    v = m.get("profit_factor") or 0
+                    return "∞" if v >= 99.9 else f"{v:.2f}"
+
+                _comparison_rows = [
+                    ("Trades",         str(_mets_full.get("total_trades", 0)),       str(_mets_t212.get("total_trades", 0))),
+                    ("Win Rate",       _fmt_wr(_mets_full),                           _fmt_wr(_mets_t212)),
+                    ("Total Return",   f"{_mets_full.get('total_return_pct', 0):+.1f}%", f"{_mets_t212.get('total_return_pct', 0):+.1f}%"),
+                    ("Avg Return",     f"{_mets_full.get('avg_return_pct', 0):+.2f}%",   f"{_mets_t212.get('avg_return_pct', 0):+.2f}%"),
+                    ("Profit Factor",  _fmt_pf(_mets_full),                           _fmt_pf(_mets_t212)),
+                    ("Sharpe Ratio",   f"{_mets_full.get('sharpe_ratio', 0):.2f}",    f"{_mets_t212.get('sharpe_ratio', 0):.2f}"),
+                    ("Max Drawdown",   f"{_mets_full.get('max_drawdown_pct', 0):.1f}%", f"{_mets_t212.get('max_drawdown_pct', 0):.1f}%"),
+                    ("Avg Hold Days",  f"{_mets_full.get('avg_holding_days', 0):.0f}", f"{_mets_t212.get('avg_holding_days', 0):.0f}"),
+                    ("Max Loss Streak", str(_mets_full.get("max_loss_streak", 0)),    str(_mets_t212.get("max_loss_streak", 0))),
+                ]
+                _cmp_df = pd.DataFrame(_comparison_rows, columns=["Metric", "Full Universe", "T212 CFD Only"])
+
+                def _colour_compare(row: pd.Series) -> list[str]:
+                    styles = ["font-weight:bold", "", ""]
+                    if row["Metric"] in ("Trades", "Avg Hold Days", "Max Loss Streak"):
+                        return styles
+                    try:
+                        fv = float(str(row["Full Universe"]).replace("%", "").replace("+", "").replace("∞", "999"))
+                        tv = float(str(row["T212 CFD Only"]).replace("%", "").replace("+", "").replace("∞", "999"))
+                        better_is_higher = row["Metric"] not in ("Max Drawdown", "Max Loss Streak")
+                        t212_better = tv > fv if better_is_higher else tv < fv
+                        styles[2] = "color:#16a34a;font-weight:bold" if t212_better else "color:#dc2626"
+                    except (ValueError, TypeError):
+                        pass
+                    return styles
+
+                st.dataframe(
+                    _cmp_df.style.apply(_colour_compare, axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+
+                # ── T212 tickers caption ──────────────────────────────────────
+                st.caption(
+                    f"T212 instruments included ({len(_t212_set)}): "
+                    + ", ".join(sorted(_t212_set))
+                )
+
+                # ── Excluded tickers and their trade counts ───────────────────
+                st.markdown("#### Tickers Excluded by T212 Filter")
+                st.caption(
+                    "These tickers appear in the full run but are not available as "
+                    "T212 CFD instruments. Shows how many simulated trades each contributed."
+                )
+
+                if df.empty:
+                    st.info("No trade data available.")
+                else:
+                    _excluded_tickers = sorted(set(df["ticker"].unique()) - _t212_set)
+                    if not _excluded_tickers:
+                        st.success("All tickers in this run have T212 instruments — no exclusions.")
+                    else:
+                        # Build name lookup from config
+                        _name_lookup: dict[str, str] = {}
+                        for _g in config.get("watchlist", {}).values():
+                            if not isinstance(_g, list):
+                                continue
+                            for _e in _g:
+                                if isinstance(_e, dict) and "ticker" in _e:
+                                    _name_lookup[_e["ticker"]] = _e.get("name", _e["ticker"])
+
+                        _excl_rows = []
+                        for _tkr in _excluded_tickers:
+                            _sub = df[df["ticker"] == _tkr]
+                            _em  = compute_metrics(_sub)
+                            _excl_rows.append({
+                                "Ticker":      _tkr,
+                                "Name":        _name_lookup.get(_tkr, _tkr),
+                                "Trades":      _em.get("total_trades", 0),
+                                "Win Rate":    _fmt_wr(_em),
+                                "Avg Return":  f"{_em.get('avg_return_pct', 0):+.2f}%",
+                                "Total Return": f"{_em.get('total_return_pct', 0):+.1f}%",
+                            })
+
+                        _excl_df = pd.DataFrame(_excl_rows).sort_values("Trades", ascending=False)
+                        st.dataframe(_excl_df, use_container_width=True, hide_index=True)
+
+                        _total_excl_trades = sum(r["Trades"] for r in _excl_rows)
+                        _total_full_trades = _mets_full.get("total_trades", 0)
+                        _excl_pct = (_total_excl_trades / _total_full_trades * 100) if _total_full_trades else 0
+                        st.caption(
+                            f"{_total_excl_trades} of {_total_full_trades} trades "
+                            f"({_excl_pct:.0f}%) come from non-T212 tickers."
+                        )
 
     # ── Tab 2: Period Analysis ─────────────────────────────────────────────────
     with tab_period:
