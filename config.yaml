@@ -561,6 +561,13 @@ trading212_invest:
     INDA: IINDl_EQ    # iShares MSCI India UCITS ETF
     FXI:  LCCGl_EQ    # Lyxor China Enterprise (HSCEI) UCITS ETF
     VGK:  H4ZEd_EQ    # HSBC MSCI Europe UCITS ETF
+    SKYY: SKYEa_EQ    # First Trust Cloud Computing UCITS ETF (Acc)
+    XLI:  SXLIl_EQ    # SPDR S&P U.S. Industrials Select Sector UCITS ETF (Acc)
+    XLY:  SXLYl_EQ    # SPDR S&P U.S. Consumer Disc Select Sector UCITS ETF (Acc)
+    XLP:  SXLPl_EQ    # SPDR S&P U.S. Consumer Staples Select Sector UCITS ETF (Acc)
+    XLU:  SXLUl_EQ    # SPDR S&P U.S. Utilities Select Sector UCITS ETF (Acc)
+    XLB:  SXLBl_EQ    # SPDR S&P U.S. Materials Select Sector UCITS ETF (Acc)
+    KBE:  BNKTa_EQ    # iShares S&P US Banks UCITS ETF (Dist)
 
 learning:
   enabled: true
