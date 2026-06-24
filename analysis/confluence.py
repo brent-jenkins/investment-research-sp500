@@ -90,21 +90,34 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def _classify(score: float, config: dict | None = None) -> str:
+def get_regime_thresholds(regime_name: str, config: dict) -> tuple[float, float]:
+    """Return (buy_threshold, sell_threshold) for the given regime.
+
+    Falls back to the global confluence.buy_threshold / sell_threshold when no
+    regime-specific override is configured.
+    """
+    conf = config.get("confluence", {})
+    default_buy  = float(conf.get("buy_threshold",  0.55))
+    default_sell = float(conf.get("sell_threshold", 0.55))
+    regime_cfg = conf.get("regime_thresholds", {}).get(regime_name, {})
+    buy  = float(regime_cfg.get("buy_threshold",  default_buy))
+    sell = float(regime_cfg.get("sell_threshold", default_sell))
+    return buy, sell
+
+
+def _classify(score: float, buy_threshold: float = 0.55, sell_threshold: float = 0.55) -> str:
     """Map a weighted confluence score to a named signal classification.
 
-    The STRONG_BUY / STRONG_SELL boundary is read from config
-    (confluence.buy_threshold), defaulting to 0.55.  The BUY / SELL
-    midpoint is fixed at ±0.30.
+    STRONG_BUY / STRONG_SELL boundaries come from the regime-aware thresholds;
+    the BUY / SELL midpoint is fixed at ±0.30.
     """
-    strong = (config or {}).get("confluence", {}).get("buy_threshold", 0.55)
     mid = 0.30
     thresholds = [
-        ( strong,  1.00, "STRONG_BUY"),
-        ( mid,  strong, "BUY"),
-        (-mid,   mid,   "NEUTRAL"),
-        (-strong, -mid, "SELL"),
-        (-1.00, -strong, "STRONG_SELL"),
+        ( buy_threshold,  1.00, "STRONG_BUY"),
+        ( mid,  buy_threshold,  "BUY"),
+        (-mid,   mid,           "NEUTRAL"),
+        (-sell_threshold, -mid, "SELL"),
+        (-1.00, -sell_threshold, "STRONG_SELL"),
     ]
     for lo, hi, label in sorted(thresholds, key=lambda t: -t[0]):
         if lo <= score <= hi:
@@ -366,14 +379,15 @@ def score_ticker(
             w_score = round(w_score * 0.85, 3)
             overlay_applied.append("CREDIT_STRESS")
 
-    classification = _classify(w_score, config)
+    regime_name = regime_result["regime"].value
+    buy_threshold, sell_threshold = get_regime_thresholds(regime_name, config)
+    classification = _classify(w_score, buy_threshold, sell_threshold)
 
     # Regime direction filter: suppress counter-trend signals in strongly trending regimes,
     # but only for assets that move with the broad market (^GSPC correlation > threshold).
     # Assets with negative or low correlation (e.g. GLD, FXI) may be selling/buying for
     # independent reasons and are allowed through even in a trending regime.
     if config.get("signals", {}).get("regime_direction_filter", True):
-        regime_name = regime_result["regime"].value
         corr_threshold = float(
             config.get("signals", {}).get("regime_filter_corr_threshold", 0.5)
         )

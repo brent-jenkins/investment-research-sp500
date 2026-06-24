@@ -26,6 +26,7 @@ from analysis.confluence import (
     get_last_signal_timestamp,
     get_latest_signals,
     get_learned_weights,
+    get_regime_thresholds,
     get_weight_history,
     maybe_update_weights,
 )
@@ -4564,6 +4565,23 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             unsafe_allow_html=True,
         )
         st.caption(regime_result["description"])
+
+        _buy_th, _sell_th = get_regime_thresholds(regime.value, config)
+        _total_mods = config.get("confluence", {}).get("total_signal_modules", 7)
+        _buy_mods  = round(_buy_th  * _total_mods)
+        _sell_mods = round(_sell_th * _total_mods)
+        if _buy_th == _sell_th:
+            _thresh_label = (
+                f"Threshold: {_buy_th:.2f} ({regime.replace('_', ' ')}) "
+                f"— requires ~{_buy_mods}/{_total_mods} modules to agree"
+            )
+        else:
+            _thresh_label = (
+                f"Thresholds: Buy {_buy_th:.2f} (~{_buy_mods}/{_total_mods} modules) "
+                f"· Sell {_sell_th:.2f} (~{_sell_mods}/{_total_mods} modules) "
+                f"({regime.replace('_', ' ')})"
+            )
+        st.caption(_thresh_label)
 
     with col_macro:
         ctx    = get_macro_context()

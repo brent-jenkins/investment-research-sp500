@@ -459,6 +459,21 @@ confluence:
   buy_threshold: 0.55
   sell_threshold: 0.55
 
+  # Regime-specific overrides — tighten or relax thresholds based on market context
+  regime_thresholds:
+    TRENDING_BULL:
+      buy_threshold: 0.55      # trend confirmed, standard threshold
+      sell_threshold: 0.70     # harder to go short in bull market
+    TRENDING_BEAR:
+      buy_threshold: 0.70      # harder to go long in bear market
+      sell_threshold: 0.55     # trend confirmed, standard threshold
+    MIXED:
+      buy_threshold: 0.65      # require stronger conviction in uncertain market
+      sell_threshold: 0.65
+    HIGH_VOLATILITY:
+      buy_threshold: 0.70      # require very strong signal in volatile market
+      sell_threshold: 0.70
+
 signals:
   # Lookback periods (trading days) used across analysis modules
   short_window: 20

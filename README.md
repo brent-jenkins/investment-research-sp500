@@ -180,13 +180,23 @@ Detected by `detect_overlays()` after each correlation run. Five overlays are de
 
 `weighted_score = Σ(module_score × regime_weight)` ∈ [−1, +1]
 
-- ≥ `buy_threshold` (default 0.55) → `STRONG_BUY`
+- ≥ `buy_threshold` → `STRONG_BUY`
 - ≥ 0.30 → `BUY`
 - (−0.30, +0.30) → `NEUTRAL`
 - ≤ −0.30 → `SELL`
-- ≤ `−buy_threshold` → `STRONG_SELL`
+- ≤ `−sell_threshold` → `STRONG_SELL`
 
-The STRONG BUY/SELL boundary is configurable via `confluence.buy_threshold` in `config.yaml`.
+STRONG BUY/SELL boundaries are **regime-aware**. `confluence.regime_thresholds` in `config.yaml` overrides the global default (0.55) per regime:
+
+| Regime | Buy threshold | Sell threshold | Rationale |
+|--------|:---:|:---:|---|
+| `TRENDING_BULL` | 0.55 | 0.70 | Standard buy; harder to short in a bull |
+| `TRENDING_BEAR` | 0.70 | 0.55 | Harder to go long in a bear; standard sell |
+| `MIXED` | 0.65 | 0.65 | Require stronger conviction in uncertain conditions |
+| `HIGH_VOLATILITY` | 0.70 | 0.70 | Very strong signal required when volatility is elevated |
+| `RANGING_LOW_VOL` | 0.55 | 0.55 | Falls back to global default |
+
+The Daily Briefing shows the current effective thresholds and the approximate number of signal modules that must agree (e.g. "Threshold: 0.65 (MIXED) — requires ~5/7 modules to agree").
 
 ### Feedback learning
 
