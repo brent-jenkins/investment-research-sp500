@@ -3541,7 +3541,15 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
         if _t212_error:
-            st.warning(f"Last API error: {_t212_error}")
+            _err_col, _err_btn_col = st.columns([8, 1])
+            with _err_col:
+                st.warning(f"Last API error: {_t212_error}")
+            with _err_btn_col:
+                st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+                if st.button("✕ Clear", key="clear_t212_error"):
+                    from data.database import set_metadata as _set_meta
+                    _set_meta("t212_invest_error", "")
+                    st.rerun()
 
         if not _t212_has_key:
             st.error(
@@ -3716,13 +3724,22 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     _fo_err     = (_fo.get("error_message") or "")[:80]
                     _fo_placed  = (_fo.get("placed_at") or "")[:16].replace("T", " ")
 
-                    _rc1, _rc2 = st.columns([5, 1])
+                    _rc1, _rc2, _rc3 = st.columns([5, 1, 1])
                     with _rc1:
                         st.caption(
                             f"**{_fo_ticker}** → `{_fo_ucits}` | "
                             f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} UTC | "
                             f"_{_fo_err}_"
                         )
+                    with _rc3:
+                        if st.button("🗑 Delete", key=f"delete_order_{_fo_id}"):
+                            from sqlalchemy import text as _sa_del_text
+                            with get_engine().begin() as _del_conn:
+                                _del_conn.execute(
+                                    _sa_del_text("DELETE FROM t212_invest_orders WHERE id = :row_id"),
+                                    {"row_id": _fo_id},
+                                )
+                            st.rerun()
                     with _rc2:
                         if st.button("↻ Retry", key=f"retry_order_{_fo_id}"):
                             with st.spinner(f"Placing {_fo_dir} order for {_fo_ticker}…"):
