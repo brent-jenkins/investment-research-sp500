@@ -465,8 +465,8 @@ confluence:
       buy_threshold: 0.70      # harder to go long in bear market
       sell_threshold: 0.55     # trend confirmed, standard threshold
     MIXED:
-      buy_threshold: 0.65      # require stronger conviction in uncertain market
-      sell_threshold: 0.65
+      buy_threshold: 0.60      # require stronger conviction in uncertain market
+      sell_threshold: 0.60
     HIGH_VOLATILITY:
       buy_threshold: 0.70      # require very strong signal in volatile market
       sell_threshold: 0.70
