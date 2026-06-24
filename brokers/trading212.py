@@ -279,9 +279,11 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
 
         # ── Account safety checks ────────────────────────────────────────────
         summary    = client.get_account_summary()
-        total_val  = float(summary.get("total",    summary.get("cash", 0)) or 0)
-        invested   = float(summary.get("invested", 0) or 0)
-        free_cash  = float(summary.get("free",     summary.get("cash", 0)) or 0)
+        _s_cash    = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        _s_inv     = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_val  = float(summary.get("totalValue", 0) or 0)
+        invested   = float(_s_inv.get("currentValue", 0) or 0)
+        free_cash  = float(_s_cash.get("availableToTrade", 0) or 0)
 
         if total_val > 0 and (invested / total_val) >= max_deployed_pct:
             logger.info(

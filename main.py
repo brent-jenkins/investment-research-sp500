@@ -3585,21 +3585,19 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 _positions = _t2_data["positions"]
                 _fetched   = _t2_data.get("fetched_at", "")
 
-                # Debug: show raw API response until parsing is confirmed correct
-                with st.expander("🔍 Raw API response (debug)", expanded=True):
-                    st.json(_sum)
-
-                _cash     = _sum.get("cash", _sum)
-                if not isinstance(_cash, dict):
-                    _cash = _sum
-                _total    = float(_cash.get("total",    0) or 0)
-                _free     = float(_cash.get("free",     0) or 0)
-                _invested = float(_cash.get("invested", 0) or 0)
-                _result_raw = _cash.get("result", 0)
-                _result   = float(
-                    _result_raw.get("total", 0)
-                    if isinstance(_result_raw, dict)
-                    else (_result_raw or 0)
+                # T212 account summary structure (v0 API):
+                # {"totalValue": 5000, "currency": "GBP",
+                #  "cash": {"availableToTrade": 5000, "reservedForOrders": 0, "inPies": 0},
+                #  "investments": {"currentValue": 0, "totalCost": 0,
+                #                  "realizedProfitLoss": 0, "unrealizedProfitLoss": 0}}
+                _cash_obj  = _sum.get("cash", {}) if isinstance(_sum.get("cash"), dict) else {}
+                _inv_obj   = _sum.get("investments", {}) if isinstance(_sum.get("investments"), dict) else {}
+                _total     = float(_sum.get("totalValue", 0) or 0)
+                _free      = float(_cash_obj.get("availableToTrade", 0) or 0)
+                _invested  = float(_inv_obj.get("currentValue", 0) or 0)
+                _result    = float(
+                    (_inv_obj.get("unrealizedProfitLoss", 0) or 0) +
+                    (_inv_obj.get("realizedProfitLoss",   0) or 0)
                 )
                 _deployed = (_invested / _total * 100) if _total else 0.0
                 _pos_count = len(_positions) if isinstance(_positions, list) else 0
