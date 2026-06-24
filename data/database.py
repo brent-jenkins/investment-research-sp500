@@ -572,7 +572,8 @@ def _apply_migrations(engine) -> None:
         ("trades",     "stop_loss_price",     "FLOAT"),
         ("trades",     "take_profit_price",   "FLOAT"),
         ("trades",     "risk_reward_ratio",   "FLOAT"),
-        ("trades",     "planned_risk_gbp",    "FLOAT"),
+        ("trades",          "planned_risk_gbp",      "FLOAT"),
+        ("t212_invest_orders", "estimated_value_gbp", "FLOAT"),
     ]
     for table, column, col_type in new_columns:
         try:

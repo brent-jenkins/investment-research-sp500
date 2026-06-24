@@ -536,6 +536,29 @@ trading212_invest:
   live: false              # NEVER set true until demo-validated — place_market_order() blocks it
   max_position_gbp: 500    # Hard GBP limit per order
   max_total_deployed: 0.5  # Never deploy more than 50% of account value
+  # UCITS ETF equivalents for EU-regulated T212 Invest accounts.
+  # Key = internal research ticker; value = T212 internal instrument ticker.
+  # Only tickers listed here are eligible for automated T212 Invest orders.
+  ucits_mapping:
+    VOO:  I50Dl_EQ    # Vanguard S&P 500 UCITS ETF
+    TLT:  IDGAl_EQ    # iShares $ Treasury Bond 20+yr UCITS ETF
+    IEF:  TREXl_EQ    # iShares $ Treasury Bond 7-10yr UCITS ETF
+    HYG:  XUHEd_EQ    # iShares $ High Yield Corp Bond UCITS ETF
+    LQD:  VDCPl_EQ    # Vanguard USD Corporate Bond UCITS ETF
+    GLD:  WGLDl_EQ    # Invesco Physical Gold ETC
+    SLV:  PHAGa_EQ    # iShares Physical Silver ETC
+    XLK:  XDWTl_EQ    # Xtrackers MSCI World IT UCITS ETF
+    XLF:  STZXs_EQ    # SPDR S&P US Financials Select Sector UCITS ETF
+    XLE:  SXLEl_EQ    # SPDR S&P US Energy Select Sector UCITS ETF
+    XLV:  IUHCl_EQ    # iShares S&P 500 Health Care Sector UCITS ETF
+    SOXX: SEMGl_EQ    # iShares MSCI Global Semiconductors UCITS ETF
+    EWJ:  SGJPl_EQ    # SPDR MSCI Japan UCITS ETF
+    EWG:  VGERd_EQ    # Vanguard FTSE Developed Europe UCITS ETF
+    EEM:  JEEMd_EQ    # JPMorgan BetaBuilders EM Equity UCITS ETF
+    EWZ:  IBZLa_EQ    # iShares MSCI Brazil UCITS ETF
+    INDA: IINDl_EQ    # iShares MSCI India UCITS ETF
+    FXI:  LCCGl_EQ    # Lyxor China Enterprise (HSCEI) UCITS ETF
+    VGK:  H4ZEd_EQ    # HSBC MSCI Europe UCITS ETF
 
 learning:
   enabled: true

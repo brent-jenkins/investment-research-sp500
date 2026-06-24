@@ -3610,15 +3610,36 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 _ta4.metric("Open Positions",  str(_pos_count),
                              delta=f"P&L £{_result:+,.2f}" if _result else None)
 
+                # Deployed capital progress bar
+                _deploy_limit = float(_t212_cfg.get("max_total_deployed", 0.5))
+                _bar_pct      = min(1.0, (_invested / _total) if _total else 0.0)
+                _bar_colour   = "#dc2626" if _bar_pct >= _deploy_limit else (
+                    "#f97316" if _bar_pct >= _deploy_limit * 0.85 else "#6366f1"
+                )
+                st.markdown(
+                    f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#64748b">'
+                    f'Deployed: £{_invested:,.0f} of £{_total:,.0f} '
+                    f'(limit {int(_deploy_limit * 100)}%)</div>'
+                    f'<div style="background:#e2e8f0;border-radius:4px;height:6px">'
+                    f'<div style="background:{_bar_colour};width:{_bar_pct * 100:.1f}%;'
+                    f'height:6px;border-radius:4px"></div></div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
                 if isinstance(_positions, list) and _positions:
-                    with st.expander(f"Open positions ({_pos_count})", expanded=False):
+                    with st.expander(f"Open positions ({_pos_count})", expanded=True):
                         _pos_rows = []
                         for _p in _positions:
                             _pos_rows.append({
-                                "Instrument":    _p.get("ticker", ""),
+                                "T212 Ticker":   _p.get("ticker", ""),
                                 "Qty":           _p.get("quantity", 0),
                                 "Avg Price":     _p.get("averagePrice", 0),
                                 "Current Price": _p.get("currentPrice", 0),
+                                "Current Value": round(
+                                    float(_p.get("quantity", 0) or 0) *
+                                    float(_p.get("currentPrice", 0) or 0), 2
+                                ),
                                 "P&L":           _p.get("ppl", 0),
                             })
                         _pos_df = pd.DataFrame(_pos_rows)
@@ -3640,37 +3661,57 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             with get_engine().connect() as _t2_conn:
                 _ord_rows = _t2_conn.execute(_sa_text("""
                     SELECT ticker, t212_ticker, direction, quantity,
-                           estimated_price, status, signal_type,
+                           estimated_value_gbp, status, signal_type,
                            confluence_score, regime, account_type,
                            error_message, placed_at
                     FROM t212_invest_orders
                     ORDER BY placed_at DESC
-                    LIMIT 50
+                    LIMIT 10
                 """)).mappings().all()
             _ord_data = [dict(r) for r in _ord_rows]
         except Exception:
             _ord_data = []
 
+        st.markdown("#### Recent Orders")
         if _ord_data:
-            st.markdown("#### Order Log")
             _ord_df = pd.DataFrame(_ord_data)
             _ord_df.columns = [
-                "Ticker", "T212 Ticker", "Dir", "Qty",
-                "Est. Price", "Status", "Signal",
+                "Ticker", "UCITS Ticker", "Dir", "Qty",
+                "Est. Value (£)", "Status", "Signal",
                 "Score", "Regime", "Account",
                 "Error", "Placed At",
             ]
             st.dataframe(
                 _ord_df.style.map(
-                    lambda v: "color:#16a34a" if v == "FILLED"
-                    else ("color:#16a34a" if v == "PLACED"
-                    else ("color:#dc2626" if v == "FAILED" else "")),
+                    lambda v: "color:#16a34a" if v in ("FILLED", "PLACED")
+                    else ("color:#dc2626" if v == "FAILED" else ""),
                     subset=["Status"],
+                ).map(
+                    lambda v: "color:#16a34a" if v in ("BUY",)
+                    else ("color:#dc2626" if v == "SELL" else ""),
+                    subset=["Dir"],
                 ),
                 use_container_width=True, hide_index=True,
             )
         else:
             st.caption("No orders recorded yet.")
+
+        # ── UCITS mapping table ───────────────────────────────────────────────
+        _ucits_map = _t212_cfg.get("ucits_mapping", {})
+        if _ucits_map:
+            with st.expander(f"UCITS instrument mapping ({len(_ucits_map)} tickers)", expanded=False):
+                st.caption(
+                    "Automated T212 Invest orders are only placed for tickers listed here. "
+                    "The UCITS Ticker is the T212 internal instrument ID used in API calls."
+                )
+                _ucits_rows = [
+                    {"US Ticker": k, "T212 UCITS Ticker": v}
+                    for k, v in _ucits_map.items()
+                ]
+                st.dataframe(
+                    pd.DataFrame(_ucits_rows),
+                    use_container_width=True, hide_index=True,
+                )
 
     # ── Scheduler Health ──────────────────────────────────────────────────
     st.divider()

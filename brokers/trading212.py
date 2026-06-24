@@ -8,9 +8,14 @@ Two separate concerns live here:
     HTTP 429 (rate-limited) is treated as a retryable condition.
 
 2.  maybe_place_t212_orders(config, run_type) — called from the analysis
-    pipeline after signals are generated.  Places DEMO market orders for
-    STRONG_BUY signals on tickers that have a trading212_instrument mapping
-    in config.yaml.  Has no effect unless:
+    pipeline after signals are generated.  Handles two phases:
+
+    EXIT: closes any open T212 position whose underlying signal has moved to
+          SELL or STRONG_SELL.
+    BUY:  places new market orders for STRONG_BUY signals whose underlying
+          ticker is listed in trading212_invest.ucits_mapping in config.yaml.
+
+    Has no effect unless:
       - trading212_invest.enabled: true in config.yaml
       - run_type == "full"  (requires fresh price data from the EOD pull)
       - T212_API_KEY and T212_API_SECRET environment variables are set
@@ -18,11 +23,12 @@ Two separate concerns live here:
 Safety invariants:
   - live: false is the hard default.  Live trading is explicitly blocked:
     place_market_order() raises RuntimeError if self.live is True.
+  - Only tickers listed in ucits_mapping are eligible for new orders.
   - Every order attempt (success or failure) is written to t212_invest_orders.
   - Duplicate positions are prevented by checking the DB and the live T212
     portfolio before placing.
-  - Any API exception disables order placement for the current run and logs
-    the error to system_metadata under "t212_invest_error".
+  - Any API exception disables order placement for the current run, writes the
+    error to system_metadata under "t212_invest_error", and sends an alert email.
 """
 
 import base64
@@ -69,8 +75,8 @@ class Trading212Client:
         HTTP 429 (rate limit) is handled as a retryable condition with a
         longer wait.  Other 4xx errors are raised immediately (no retry).
         """
-        url      = f"{self.base_url}{path}"
-        timeout  = kwargs.pop("timeout", 10)
+        url     = f"{self.base_url}{path}"
+        timeout = kwargs.pop("timeout", 10)
         last_exc: Exception | None = None
 
         for attempt in range(3):
@@ -89,7 +95,7 @@ class Trading212Client:
                     time.sleep(wait)
                     continue
                 if r.status_code >= 400:
-                    r.raise_for_status()  # raises immediately, no retry on 4xx
+                    r.raise_for_status()  # raises immediately; no retry on 4xx
                 return r
             except requests.exceptions.RequestException as exc:
                 last_exc = exc
@@ -112,6 +118,13 @@ class Trading212Client:
         r = self._request("GET", "/equity/portfolio")
         return r.json()
 
+    def get_position(self, ticker: str) -> Optional[dict]:
+        """Return the open position dict for the given T212 ticker, or None."""
+        for pos in (self.get_positions() or []):
+            if pos.get("ticker") == ticker:
+                return pos
+        return None
+
     def get_instruments(self) -> list:
         """Return the full instruments list, refreshed at most once per 24 hours."""
         global _instruments_cache
@@ -126,16 +139,19 @@ class Trading212Client:
         return instruments
 
     def place_market_order(self, ticker: str, quantity: float) -> dict:
-        """Positive quantity = buy, negative = sell.
+        """Place a market order.  Positive quantity = buy, negative = sell.
 
         Raises RuntimeError if self.live is True — live trading is gated
         behind an explicit opt-in that must be set in the constructor.
+        Raises ValueError if quantity is zero.
         """
         if self.live:
             raise RuntimeError(
                 "Live trading not yet enabled — instantiate Trading212Client "
                 "with live=True only after thorough demo validation."
             )
+        if quantity == 0:
+            raise ValueError("quantity must be non-zero")
         payload = {"ticker": ticker, "quantity": quantity}
         r = self._request("POST", "/equity/orders/market", json=payload)
         return r.json()
@@ -143,6 +159,42 @@ class Trading212Client:
     def cancel_order(self, order_id: str) -> dict:
         r = self._request("DELETE", f"/equity/orders/{order_id}")
         return r.json()
+
+    def get_quantity_for_gbp(self, ticker: str, gbp_amount: float) -> float:
+        """Calculate share quantity for a given GBP order size.
+
+        Looks up the latest close price from our local price_data DB for the
+        underlying US ticker, then converts GBP to USD using the stored GBPUSD
+        rate.  Returns 0.0 if the price is unavailable.
+
+        Most T212 UCITS instruments are USD-denominated and price-track their
+        US counterpart closely enough for order-sizing purposes.
+        """
+        try:
+            from sqlalchemy import text as sa_text
+            from data.database import get_engine
+            eng = get_engine()
+            with eng.connect() as conn:
+                row = conn.execute(sa_text("""
+                    SELECT
+                        (SELECT close FROM price_data
+                         WHERE ticker = :ticker ORDER BY date DESC LIMIT 1) AS price,
+                        (SELECT close FROM price_data
+                         WHERE ticker = 'GBPUSD=X' ORDER BY date DESC LIMIT 1) AS gbpusd
+                """), {"ticker": ticker}).fetchone()
+
+            if not row or row[0] is None:
+                logger.warning("get_quantity_for_gbp: no price for %s", ticker)
+                return 0.0
+
+            price_usd = float(row[0])
+            gbpusd    = float(row[1]) if row[1] else 1.27
+            quantity  = round((gbp_amount * gbpusd) / price_usd, 4)
+            return max(0.0, quantity)
+
+        except Exception as exc:
+            logger.warning("get_quantity_for_gbp failed for %s: %s", ticker, exc)
+            return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +218,21 @@ def _clear_t212_error() -> None:
         pass
 
 
+def _send_t212_error_email(error_msg: str, config: dict) -> None:
+    """Send an alert email when T212 order placement fails."""
+    try:
+        from output.briefing import _smtp_send
+        subject   = "T212 Invest: Order Placement Error"
+        text_body = f"T212 Invest order placement failed:\n\n{error_msg}"
+        html_body = (
+            '<p style="color:#dc2626;font-weight:bold">T212 Invest order placement failed</p>'
+            f'<pre style="background:#f1f5f9;padding:12px;border-radius:4px">{error_msg}</pre>'
+        )
+        _smtp_send(subject, text_body, html_body, config)
+    except Exception as exc:
+        logger.warning("Failed to send T212 error email: %s", exc)
+
+
 def _log_t212_order(
     *,
     ticker: str,
@@ -173,6 +240,7 @@ def _log_t212_order(
     direction: str,
     quantity: float,
     estimated_price: float,
+    estimated_value_gbp: Optional[float],
     status: str,
     order_id: Optional[str],
     signal_type: str,
@@ -190,57 +258,64 @@ def _log_t212_order(
             conn.execute(sa_text("""
                 INSERT INTO t212_invest_orders (
                     order_id, ticker, t212_ticker, direction,
-                    quantity, estimated_price,
+                    quantity, estimated_price, estimated_value_gbp,
                     status, signal_type, confluence_score, regime,
                     account_type, error_message, placed_at, created_at
                 ) VALUES (
                     :order_id, :ticker, :t212_ticker, :direction,
-                    :quantity, :estimated_price,
+                    :quantity, :estimated_price, :estimated_value_gbp,
                     :status, :signal_type, :confluence_score, :regime,
                     :account_type, :error_message, :now, :now
                 )
             """), {
-                "order_id":        order_id,
-                "ticker":          ticker,
-                "t212_ticker":     t212_ticker,
-                "direction":       direction,
-                "quantity":        quantity,
-                "estimated_price": estimated_price,
-                "status":          status,
-                "signal_type":     signal_type,
-                "confluence_score": confluence_score,
-                "regime":          regime,
-                "account_type":    account_type,
-                "error_message":   error_message,
-                "now":             datetime.utcnow().isoformat(),
+                "order_id":            order_id,
+                "ticker":              ticker,
+                "t212_ticker":         t212_ticker,
+                "direction":           direction,
+                "quantity":            quantity,
+                "estimated_price":     estimated_price,
+                "estimated_value_gbp": estimated_value_gbp,
+                "status":              status,
+                "signal_type":         signal_type,
+                "confluence_score":    confluence_score,
+                "regime":              regime,
+                "account_type":        account_type,
+                "error_message":       error_message,
+                "now":                 datetime.utcnow().isoformat(),
             })
     except Exception as exc:
         logger.warning("Failed to log T212 order to DB: %s", exc)
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 — automated paper-order placement
+# Automated order placement — called from EOD pipeline
 # ---------------------------------------------------------------------------
 
 def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
-    """Place T212 Invest DEMO market orders for STRONG_BUY signals.
+    """Place T212 Invest DEMO market orders based on current signals.
+
+    Phase 1 — EXIT: closes any open T212 position whose underlying research
+    signal has moved to SELL or STRONG_SELL.
+
+    Phase 2 — BUY: places new market orders for STRONG_BUY signals on tickers
+    listed in trading212_invest.ucits_mapping in config.yaml.
 
     Entry conditions (all must be true):
       1. trading212_invest.enabled: true in config.yaml
       2. run_type == "full"  — only on EOD runs with fresh price data
       3. T212_API_KEY and T212_API_SECRET environment variables are set
+      4. ucits_mapping section present in trading212_invest config
 
-    Per-order conditions:
-      - Ticker has a trading212_instrument mapping in config.yaml
-      - T212 instrument exists in the live instruments list
-      - No existing T212 position for this instrument
+    Per-BUY-order conditions:
+      - Ticker has a ucits_mapping entry
+      - No existing T212 position for this UCITS instrument
       - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
-      - Free cash covers at least one minimum order (£10)
-      - Total deployed remains below max_total_deployed × account value
+      - Free cash covers at least £10
+      - Total deployed remains below max_total_deployed x account value
 
     All outcomes (success and failure) are written to t212_invest_orders.
-    API errors set "t212_invest_error" in system_metadata and stop placement
-    for the current run.
+    API errors set "t212_invest_error" in system_metadata, stop placement for
+    the current run, and trigger an alert email.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -257,69 +332,40 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
         return
 
+    ucits_mapping: dict[str, str] = t212_cfg.get("ucits_mapping", {})
+    if not ucits_mapping:
+        logger.info("T212 Invest: no ucits_mapping in config — nothing to do.")
+        return
+
+    reverse_ucits: dict[str, str] = {v: k for k, v in ucits_mapping.items()}
+
     live             = t212_cfg.get("live", False)
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
     max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
 
-    # Build ticker → T212 instrument name mapping
-    t212_map: dict[str, str] = {}
-    for group in config.get("watchlist", {}).values():
-        if not isinstance(group, list):
-            continue
-        for entry in group:
-            if isinstance(entry, dict) and "ticker" in entry and "trading212_instrument" in entry:
-                t212_map[entry["ticker"]] = entry["trading212_instrument"]
-
-    if not t212_map:
-        logger.info("T212 Invest: no trading212_instrument mappings in config — nothing to do.")
-        return
-
+    # ── Connect and fetch account state ─────────────────────────────────────
     try:
         client = Trading212Client(live=live)
 
-        # ── Account safety checks ────────────────────────────────────────────
-        summary    = client.get_account_summary()
-        _s_cash    = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
-        _s_inv     = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
-        total_val  = float(summary.get("totalValue", 0) or 0)
-        invested   = float(_s_inv.get("currentValue", 0) or 0)
-        free_cash  = float(_s_cash.get("availableToTrade", 0) or 0)
+        summary   = client.get_account_summary()
+        _s_cash   = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        _s_inv    = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_val = float(summary.get("totalValue", 0) or 0)
+        invested  = float(_s_inv.get("currentValue", 0) or 0)
+        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
 
-        if total_val > 0 and (invested / total_val) >= max_deployed_pct:
-            logger.info(
-                "T212 Invest: %.0f%% deployed (limit %.0f%%) — no new orders.",
-                (invested / total_val) * 100, max_deployed_pct * 100,
-            )
-            return
-
-        # ── Existing T212 positions (prevent duplicates) ─────────────────────
-        positions         = client.get_positions()
-        open_t212_tickers = {p.get("ticker", "") for p in positions}
-
-        # ── Instrument validation lookup (shortName or ticker → internal ticker) ─
-        instruments       = client.get_instruments()
-        instr_by_short: dict[str, str] = {}
-        instr_by_ticker: dict[str, str] = {}
-        for instr in instruments:
-            tk = instr.get("ticker",    "")
-            sn = instr.get("shortName", "")
-            nm = instr.get("name",      "")
-            if tk:
-                instr_by_ticker[tk] = tk
-                instr_by_short[tk]  = tk   # also index by own ticker
-            if sn:
-                instr_by_short[sn] = tk
-            if nm:
-                instr_by_short[nm] = tk
-        # Combined lookup: shortName → internal ticker
-        instrument_lookup = {**instr_by_short, **instr_by_ticker}
+        positions = client.get_positions()
+        positions_by_ucits: dict[str, dict] = {
+            p.get("ticker", ""): p for p in (positions or [])
+        }
 
     except Exception as exc:
         logger.error("T212 Invest: API error during setup — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
+        _send_t212_error_email(str(exc), config)
         return
 
-    # ── Read signals and prices from DB ─────────────────────────────────────
+    # ── Read all current signals and latest prices from DB ───────────────────
     try:
         from sqlalchemy import text as sa_text
         from data.database import get_engine
@@ -331,7 +377,6 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
                 INNER JOIN (
                     SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
                 ) latest ON s.ticker = latest.ticker AND s.date = latest.md
-                WHERE s.signal = 'STRONG_BUY'
             """)).mappings().all()
 
             price_rows = conn.execute(sa_text("""
@@ -342,7 +387,6 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
                 ) latest ON p.ticker = latest.ticker AND p.date = latest.md
             """)).mappings().all()
 
-            # Recent open/filled orders in our DB (duplicate guard)
             try:
                 order_rows = conn.execute(sa_text("""
                     SELECT DISTINCT ticker FROM t212_invest_orders
@@ -358,105 +402,164 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         _set_t212_error(f"DB read failed: {exc}")
         return
 
-    signals = [dict(r) for r in sig_rows]
-    prices  = {r["ticker"]: float(r["close"]) for r in price_rows if r["close"] is not None}
+    signals: dict[str, dict] = {r["ticker"]: dict(r) for r in sig_rows}
+    prices:  dict[str, float] = {
+        r["ticker"]: float(r["close"])
+        for r in price_rows if r["close"] is not None
+    }
+    gbpusd        = prices.get("GBPUSD=X", 1.27)
+    account_label = "LIVE" if live else "DEMO"
 
-    # Approximate GBP/USD rate for position sizing (from watchlist price data)
-    gbpusd = prices.get("GBPUSD=X", 1.27)
+    # ────────────────────────────────────────────────────────────────────────
+    # Phase 1 — EXIT: close positions where signal has reversed
+    # ────────────────────────────────────────────────────────────────────────
+    for ucits_ticker, position in positions_by_ucits.items():
+        us_ticker = reverse_ucits.get(ucits_ticker)
+        if not us_ticker:
+            continue   # not a ticker we manage — leave it alone
+
+        sig         = signals.get(us_ticker, {})
+        sig_type    = sig.get("signal", "NEUTRAL")
+        current_qty = float(position.get("quantity", 0) or 0)
+
+        if sig_type not in ("SELL", "STRONG_SELL") or current_qty <= 0:
+            continue
+
+        logger.info(
+            "T212 Invest: exiting %s (%s) — signal is %s, qty=%.4f",
+            us_ticker, ucits_ticker, sig_type, current_qty,
+        )
+
+        status     = "FAILED"
+        order_id   = None
+        error_msg  = None
+        live_price = prices.get(us_ticker, 0.0)
+
+        try:
+            response = client.place_market_order(ucits_ticker, -current_qty)
+            order_id = str(response.get("id", ""))
+            status   = "PLACED"
+            logger.info(
+                "T212 Invest: SELL %s qty=%.4f id=%s", ucits_ticker, current_qty, order_id,
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            logger.error("T212 Invest: sell order failed for %s: %s", us_ticker, exc)
+            _set_t212_error(f"Sell order failed for {us_ticker}: {error_msg}")
+            _send_t212_error_email(error_msg, config)
+
+        est_gbp = (live_price / gbpusd) * current_qty if live_price and gbpusd else None
+        _log_t212_order(
+            ticker=us_ticker,
+            t212_ticker=ucits_ticker,
+            direction="SELL",
+            quantity=current_qty,
+            estimated_price=live_price,
+            estimated_value_gbp=est_gbp,
+            status=status,
+            order_id=order_id,
+            signal_type=sig_type,
+            confluence_score=sig.get("confluence_score"),
+            regime=sig.get("regime"),
+            account_type=account_label,
+            error_message=error_msg,
+        )
+
+        if status == "FAILED":
+            logger.warning("T212 Invest: halting after sell-order failure.")
+            return
+
+        time.sleep(0.5)
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Phase 2 — BUY: open new positions for STRONG_BUY signals
+    # ────────────────────────────────────────────────────────────────────────
+    if total_val > 0 and (invested / total_val) >= max_deployed_pct:
+        logger.info(
+            "T212 Invest: %.0f%% deployed (limit %.0f%%) — no new orders.",
+            (invested / total_val) * 100, max_deployed_pct * 100,
+        )
+        return
 
     orders_placed = 0
 
-    for sig in signals:
-        ticker    = sig["ticker"]
-        t212_name = t212_map.get(ticker)
-        if not t212_name:
-            continue  # no T212 mapping
+    for us_ticker, ucits_ticker in ucits_mapping.items():
+        sig      = signals.get(us_ticker, {})
+        sig_type = sig.get("signal", "NEUTRAL")
 
-        # Resolve to T212 internal ticker
-        t212_internal = instrument_lookup.get(t212_name)
-        if not t212_internal:
-            logger.warning(
-                "T212 Invest: '%s' (for %s) not found in instruments — check trading212_instrument value.",
-                t212_name, ticker,
-            )
+        if sig_type != "STRONG_BUY":
             continue
 
         # Duplicate guards
-        if t212_internal in open_t212_tickers:
-            logger.debug("T212 Invest: %s already has an open T212 position — skipping.", ticker)
+        if ucits_ticker in positions_by_ucits:
+            logger.debug("T212 Invest: %s already held — skipping.", us_ticker)
             continue
-        if ticker in open_order_tickers:
-            logger.debug("T212 Invest: %s has a recent order in DB — skipping.", ticker)
-            continue
-
-        # Position sizing
-        live_price = prices.get(ticker)
-        if not live_price or live_price <= 0:
-            logger.warning("T212 Invest: no price for %s — skipping.", ticker)
+        if us_ticker in open_order_tickers:
+            logger.debug("T212 Invest: %s has a recent order in DB — skipping.", us_ticker)
             continue
 
+        # Position sizing: cap at max_position_gbp and 25% of available cash per order
         position_gbp = min(max_position_gbp, free_cash * 0.25)
         if position_gbp < 10:
             logger.warning(
-                "T212 Invest: insufficient free cash (£%.2f) — stopping.", free_cash,
+                "T212 Invest: insufficient free cash (£%.2f) — stopping new orders.", free_cash,
             )
             break
 
-        # Convert GBP to native currency to get quantity
-        # Simple: if the price is in USD (most US ETFs), convert via GBPUSD
-        # T212 Invest handles FX internally; we pass the share quantity.
-        price_in_usd_equiv = live_price  # assume USD-denominated for sizing
-        native_amount = position_gbp * gbpusd
-        quantity = round(native_amount / price_in_usd_equiv, 4)
+        quantity = client.get_quantity_for_gbp(us_ticker, position_gbp)
         if quantity <= 0:
+            logger.warning(
+                "T212 Invest: could not calculate quantity for %s — skipping.", us_ticker,
+            )
             continue
 
-        # Place order
-        status    = "FAILED"
-        order_id  = None
-        error_msg = None
+        live_price = prices.get(us_ticker, 0.0)
+        status     = "FAILED"
+        order_id   = None
+        error_msg  = None
 
         try:
-            response  = client.place_market_order(t212_internal, quantity)
+            response  = client.place_market_order(ucits_ticker, quantity)
             order_id  = str(response.get("id", ""))
             status    = "PLACED"
             free_cash -= position_gbp
             orders_placed += 1
             logger.info(
-                "T212 Invest: placed BUY %s (%s) qty=%.4f ≈£%.0f  id=%s",
-                ticker, t212_internal, quantity, position_gbp, order_id,
+                "T212 Invest: BUY %s (%s) qty=%.4f approx £%.0f  id=%s",
+                us_ticker, ucits_ticker, quantity, position_gbp, order_id,
             )
         except Exception as order_exc:
             error_msg = str(order_exc)
-            logger.error("T212 Invest: order failed for %s: %s", ticker, order_exc)
-            _set_t212_error(f"Order failed for {ticker}: {error_msg}")
+            logger.error("T212 Invest: buy order failed for %s: %s", us_ticker, order_exc)
+            _set_t212_error(f"Buy order failed for {us_ticker}: {error_msg}")
+            _send_t212_error_email(error_msg, config)
 
         _log_t212_order(
-            ticker=ticker,
-            t212_ticker=t212_internal,
+            ticker=us_ticker,
+            t212_ticker=ucits_ticker,
             direction="BUY",
             quantity=quantity,
             estimated_price=live_price,
+            estimated_value_gbp=position_gbp if status == "PLACED" else None,
             status=status,
             order_id=order_id,
-            signal_type=sig["signal"],
+            signal_type=sig_type,
             confluence_score=sig.get("confluence_score"),
             regime=sig.get("regime"),
-            account_type="LIVE" if live else "DEMO",
+            account_type=account_label,
             error_message=error_msg,
         )
 
         if status == "FAILED":
-            logger.warning("T212 Invest: halting placement after order failure.")
+            logger.warning("T212 Invest: halting placement after buy-order failure.")
             break
 
-        # Courtesy delay between orders to respect rate limits
         time.sleep(0.5)
 
     if orders_placed > 0:
         _clear_t212_error()
 
     logger.info(
-        "T212 Invest: pipeline complete — %d order(s) placed, free cash ≈ £%.0f.",
+        "T212 Invest: pipeline complete — %d order(s) placed, free cash approx £%.0f.",
         orders_placed, free_cash,
     )
