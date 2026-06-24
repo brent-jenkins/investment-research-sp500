@@ -425,6 +425,7 @@ class T212InvestOrder(Base):
     quantity         = Column(Float)                # shares ordered
     estimated_price  = Column(Float)                # price at time of order (from our DB)
     fill_price       = Column(Float)                # actual fill price (if later confirmed)
+    filled_quantity  = Column(Float)               # actual quantity filled (may differ from ordered)
     status           = Column(String(20))           # PLACED / FILLED / FAILED / CANCELLED
     signal_type      = Column(String(15))           # STRONG_BUY / STRONG_SELL
     confluence_score = Column(Float)
@@ -574,6 +575,7 @@ def _apply_migrations(engine) -> None:
         ("trades",     "risk_reward_ratio",   "FLOAT"),
         ("trades",          "planned_risk_gbp",      "FLOAT"),
         ("t212_invest_orders", "estimated_value_gbp", "FLOAT"),
+        ("t212_invest_orders", "filled_quantity",     "FLOAT"),
     ]
     for table, column, col_type in new_columns:
         try:

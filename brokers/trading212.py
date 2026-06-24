@@ -399,6 +399,17 @@ def poll_placed_orders(config: dict) -> int:
                         pass
                     break
 
+        # Extract filled quantity (may differ from ordered quantity on partial fills)
+        filled_qty: Optional[float] = None
+        for _fq_key in ("filledQuantity", "filled_quantity", "executedQuantity"):
+            _v = resp.get(_fq_key)
+            if _v is not None:
+                try:
+                    filled_qty = float(_v)
+                except (TypeError, ValueError):
+                    pass
+                break
+
         now_iso  = datetime.utcnow().isoformat()
         time_mod = resp.get("timeModified") or resp.get("filledAt") or now_iso
 
@@ -408,25 +419,28 @@ def poll_placed_orders(config: dict) -> int:
             with get_engine().begin() as conn:
                 conn.execute(sa_text("""
                     UPDATE t212_invest_orders
-                    SET status       = :status,
-                        fill_price   = COALESCE(:fill_price, fill_price),
-                        filled_at    = CASE WHEN :status = 'FILLED'
-                                       THEN :time_mod ELSE filled_at END,
-                        cancelled_at = CASE WHEN :status IN ('CANCELLED', 'REJECTED')
-                                       THEN :now ELSE cancelled_at END
+                    SET status          = :status,
+                        fill_price      = COALESCE(:fill_price, fill_price),
+                        filled_quantity = COALESCE(:filled_qty, filled_quantity),
+                        filled_at       = CASE WHEN :status = 'FILLED'
+                                          THEN :time_mod ELSE filled_at END,
+                        cancelled_at    = CASE WHEN :status IN ('CANCELLED', 'REJECTED')
+                                          THEN :now ELSE cancelled_at END
                     WHERE id = :row_id
                 """), {
                     "status":     new_status,
                     "fill_price": fill_price,
+                    "filled_qty": filled_qty,
                     "time_mod":   time_mod,
                     "now":        now_iso,
                     "row_id":     row_id,
                 })
             updated += 1
             logger.info(
-                "poll_placed_orders: order %s (%s %s) → %s  fill=%.4f",
+                "poll_placed_orders: order %s (%s %s) → %s  fill=%.4f  qty=%s",
                 order_id, row.get("direction", "?"), row.get("ticker", "?"),
                 new_status, fill_price or 0.0,
+                f"{filled_qty:.4f}" if filled_qty is not None else "?",
             )
         except Exception as exc:
             logger.warning(
