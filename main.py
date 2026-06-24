@@ -3585,10 +3585,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 _positions = _t2_data["positions"]
                 _fetched   = _t2_data.get("fetched_at", "")
 
-                # T212 account summary nests figures under a "cash" sub-object:
-                # {"cash": {"total": 5000, "free": 4800, "invested": 200,
-                #           "result": {"total": 5.0}, "ppl": 5.0}, ...}
-                _cash     = _sum.get("cash", _sum)   # fall back to top-level if flat
+                # Debug: show raw API response until parsing is confirmed correct
+                with st.expander("🔍 Raw API response (debug)", expanded=True):
+                    st.json(_sum)
+
+                _cash     = _sum.get("cash", _sum)
                 if not isinstance(_cash, dict):
                     _cash = _sum
                 _total    = float(_cash.get("total",    0) or 0)
