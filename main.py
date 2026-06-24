@@ -3512,6 +3512,156 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.session_state["_weekly_summary_confirm"] = False
                     st.rerun()
 
+    # ── T212 Invest Account ───────────────────────────────────────────────
+    st.divider()
+    st.markdown("### T212 Invest Account")
+
+    _t212_cfg     = config.get("trading212_invest", {})
+    _t212_enabled = _t212_cfg.get("enabled", False)
+    _t212_live    = _t212_cfg.get("live", False)
+    _t212_error   = get_metadata_str("t212_invest_error")
+    _t212_has_key = bool(os.environ.get("T212_API_KEY", "")) and bool(os.environ.get("T212_API_SECRET", ""))
+
+    if not _t212_enabled:
+        st.info(
+            "T212 Invest integration is **disabled**. "
+            "Set `trading212_invest.enabled: true` in config.yaml (on the server) to activate. "
+            "Add `T212_API_KEY` and `T212_API_SECRET` to the systemd service environment first."
+        )
+    else:
+        _env_label  = "DEMO" if not _t212_live else "⚠️ LIVE"
+        _env_colour = "#f97316" if _t212_live else "#6366f1"
+        st.markdown(
+            f'<span style="background:{_env_colour};color:#fff;padding:2px 8px;'
+            f'border-radius:4px;font-size:0.78rem;font-weight:600">{_env_label}</span> '
+            f'max £{_t212_cfg.get("max_position_gbp", 500):,.0f}/order · '
+            f'max {int(float(_t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed',
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+
+        if _t212_error:
+            st.warning(f"Last API error: {_t212_error}")
+
+        if not _t212_has_key:
+            st.error(
+                "API credentials not found. Set `T212_API_KEY` and `T212_API_SECRET` "
+                "in the systemd service file and restart the service."
+            )
+        else:
+            # ── Live account data (fetched on button click, cached in session_state) ──
+            _t212_data_key = "t212_account_data"
+
+            _t2_col_status, _t2_col_btn = st.columns([3, 1])
+            with _t2_col_btn:
+                if st.button("🔄 Refresh Account", key="t212_refresh_btn"):
+                    with st.spinner("Connecting to T212…"):
+                        try:
+                            from brokers.trading212 import Trading212Client as _T212Client
+                            _client = _T212Client(live=_t212_live)
+                            _summary   = _client.get_account_summary()
+                            _positions = _client.get_positions()
+                            st.session_state[_t212_data_key] = {
+                                "summary":    _summary,
+                                "positions":  _positions,
+                                "fetched_at": datetime.utcnow().isoformat(),
+                                "error":      None,
+                            }
+                        except Exception as _t2e:
+                            st.session_state[_t212_data_key] = {
+                                "error": str(_t2e),
+                                "fetched_at": datetime.utcnow().isoformat(),
+                            }
+
+            _t2_data = st.session_state.get(_t212_data_key)
+
+            if _t2_data is None:
+                with _t2_col_status:
+                    st.caption("Click **Refresh Account** to load live account data.")
+            elif _t2_data.get("error"):
+                st.error(f"Connection failed: {_t2_data['error']}")
+            else:
+                _sum       = _t2_data["summary"]
+                _positions = _t2_data["positions"]
+                _fetched   = _t2_data.get("fetched_at", "")
+
+                _total    = float(_sum.get("total",    _sum.get("cash", 0)) or 0)
+                _free     = float(_sum.get("free",     _sum.get("cash", 0)) or 0)
+                _invested = float(_sum.get("invested", 0) or 0)
+                _result   = float(_sum.get("result",   0) or 0)
+                _deployed = (_invested / _total * 100) if _total else 0.0
+                _pos_count = len(_positions) if isinstance(_positions, list) else 0
+
+                _ta1, _ta2, _ta3, _ta4 = st.columns(4)
+                _ta1.metric("Account Value",   f"£{_total:,.2f}")
+                _ta2.metric("Available Cash",  f"£{_free:,.2f}")
+                _ta3.metric("Invested",        f"£{_invested:,.2f}",
+                             delta=f"{_deployed:.0f}% deployed")
+                _ta4.metric("Open Positions",  str(_pos_count),
+                             delta=f"P&L £{_result:+,.2f}" if _result else None)
+
+                if isinstance(_positions, list) and _positions:
+                    with st.expander(f"Open positions ({_pos_count})", expanded=False):
+                        _pos_rows = []
+                        for _p in _positions:
+                            _pos_rows.append({
+                                "Instrument":    _p.get("ticker", ""),
+                                "Qty":           _p.get("quantity", 0),
+                                "Avg Price":     _p.get("averagePrice", 0),
+                                "Current Price": _p.get("currentPrice", 0),
+                                "P&L":           _p.get("ppl", 0),
+                            })
+                        _pos_df = pd.DataFrame(_pos_rows)
+                        st.dataframe(
+                            _pos_df.style.map(
+                                lambda v: "color:#16a34a" if isinstance(v, (int, float)) and v > 0
+                                else ("color:#dc2626" if isinstance(v, (int, float)) and v < 0 else ""),
+                                subset=["P&L"],
+                            ),
+                            use_container_width=True, hide_index=True,
+                        )
+
+                if _fetched:
+                    st.caption(f"Fetched at {_fetched[:16].replace('T', ' ')} UTC")
+
+        # ── Recent T212 orders from our DB ────────────────────────────────────
+        try:
+            from sqlalchemy import text as _sa_text
+            with get_engine().connect() as _t2_conn:
+                _ord_rows = _t2_conn.execute(_sa_text("""
+                    SELECT ticker, t212_ticker, direction, quantity,
+                           estimated_price, status, signal_type,
+                           confluence_score, regime, account_type,
+                           error_message, placed_at
+                    FROM t212_invest_orders
+                    ORDER BY placed_at DESC
+                    LIMIT 50
+                """)).mappings().all()
+            _ord_data = [dict(r) for r in _ord_rows]
+        except Exception:
+            _ord_data = []
+
+        if _ord_data:
+            st.markdown("#### Order Log")
+            _ord_df = pd.DataFrame(_ord_data)
+            _ord_df.columns = [
+                "Ticker", "T212 Ticker", "Dir", "Qty",
+                "Est. Price", "Status", "Signal",
+                "Score", "Regime", "Account",
+                "Error", "Placed At",
+            ]
+            st.dataframe(
+                _ord_df.style.map(
+                    lambda v: "color:#16a34a" if v == "FILLED"
+                    else ("color:#16a34a" if v == "PLACED"
+                    else ("color:#dc2626" if v == "FAILED" else "")),
+                    subset=["Status"],
+                ),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.caption("No orders recorded yet.")
+
     # ── Scheduler Health ──────────────────────────────────────────────────
     st.divider()
     st.markdown("### Scheduler Health")

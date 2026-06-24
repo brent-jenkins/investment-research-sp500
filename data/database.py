@@ -408,6 +408,35 @@ class BacktestTrade(Base):
     is_win = Column(Boolean)
 
 
+class T212InvestOrder(Base):
+    """Record of every T212 Invest API order attempt (demo and live).
+
+    Written by brokers/trading212.py:_log_t212_order() regardless of whether
+    the order succeeded or failed — provides a full audit trail.
+    """
+
+    __tablename__ = "t212_invest_orders"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    order_id         = Column(String(64))           # T212 API order ID; null if failed before placement
+    ticker           = Column(String(20), nullable=False, index=True)  # internal ticker
+    t212_ticker      = Column(String(64))           # T212 internal instrument ticker
+    direction        = Column(String(5))            # BUY / SELL
+    quantity         = Column(Float)                # shares ordered
+    estimated_price  = Column(Float)                # price at time of order (from our DB)
+    fill_price       = Column(Float)                # actual fill price (if later confirmed)
+    status           = Column(String(20))           # PLACED / FILLED / FAILED / CANCELLED
+    signal_type      = Column(String(15))           # STRONG_BUY / STRONG_SELL
+    confluence_score = Column(Float)
+    regime           = Column(String(20))
+    account_type     = Column(String(10))           # DEMO / LIVE
+    error_message    = Column(Text)
+    placed_at        = Column(DateTime, default=datetime.utcnow)
+    filled_at        = Column(DateTime)
+    cancelled_at     = Column(DateTime)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -703,7 +732,7 @@ def _purge_unlisted_tickers(engine) -> None:
     _CONFIG_SECTIONS: frozenset[str] = frozenset({
         "watchlist", "virtual_trading", "signals", "scheduler",
         "notifications", "macro", "learning", "database", "data",
-        "confluence", "backtest", "accounts",
+        "confluence", "backtest", "accounts", "trading212_invest",
     })
 
     try:

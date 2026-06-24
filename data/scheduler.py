@@ -640,6 +640,12 @@ def _run_analysis_pipeline(
     except Exception as exc:
         logger.error("Virtual trading automation failed: %s", exc, exc_info=True)
 
+    try:
+        from brokers.trading212 import maybe_place_t212_orders  # noqa: PLC0415
+        maybe_place_t212_orders(config, run_type)
+    except Exception as exc:
+        logger.error("T212 Invest order placement failed: %s", exc, exc_info=True)
+
     logger.info("Analysis pipeline complete (run_type=%s).", run_type)
 
 

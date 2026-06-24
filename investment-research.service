@@ -25,6 +25,10 @@ Environment=HOME=/root
 # or override these lines directly after running setup.sh, then: systemctl daemon-reload && systemctl restart investment-research
 Environment=FRED_API_KEY=
 Environment=SMTP_PASSWORD=
+# Trading212 Invest API credentials (get from T212 → Settings → API)
+# Required for the T212 Invest account integration (trading212_invest.enabled in config.yaml)
+Environment=T212_API_KEY=
+Environment=T212_API_SECRET=
 
 # Logging: send stdout/stderr to the systemd journal
 # View with: journalctl -u investment-research -f

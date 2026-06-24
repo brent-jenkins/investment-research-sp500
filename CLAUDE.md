@@ -34,6 +34,7 @@ Key config sections added since initial release:
 - `notifications.weekly_summary.enabled` — controls the Sunday 10:00 UTC weekly summary email independently of `notifications.email.enabled`.
 - `backtest.max_holding_days`, `backtest.atr_stop_multiplier`, `backtest.walk_forward_months`, `backtest.walk_forward_step` — configure the backtesting engine.
 - `virtual_trading.enabled`, `portfolio_size_gbp`, `position_pct`, `max_open_positions`, `entry_signal` — control automated virtual trading. `entry_signal: "STRONG_BUY"` limits entries to STRONG_BUY/STRONG_SELL; `"BUY"` also accepts BUY/SELL.
+- `trading212_invest.enabled`, `live`, `max_position_gbp`, `max_total_deployed` — control T212 Invest API integration (Phase 1: read-only Status page; Phase 2: automated demo orders). Requires `T212_API_KEY` and `T212_API_SECRET` env vars. `live: false` is the hard default and is enforced in code.
 
 ## Architecture
 
@@ -77,7 +78,7 @@ The app has eight pages toggled via a sidebar radio button (default: **Daily Bri
 - **Trade Log** — log new CFD trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name); open-position tracker with live GBP P&L and per-trade edit expanders; close-trade form; position sizing guidance
 - **Performance** — equity curve, win rate by signal type and regime, indicator hit-rate table, closed trades list; all sections respect an optional exit-date filter
 - **Backtest** — 6-tab page: Run & Overview (date range presets, ticker scope — tradeable-only / T212 CFD Only / all assets; equity curve, metrics, trade table; collapsible T212 CFD comparison panel that filters any existing run to `trading212_instrument` tickers and shows side-by-side metrics + excluded-ticker trade counts without re-running), Period Analysis (COVID Crash / 2022 Bear / 2023–24 Recovery + per-regime breakdown), Module Attribution (win rate when each module agreed vs disagreed with trade direction), Signal Decay (holding period histogram, exit reason distribution, avg hold by regime), Walk-Forward (rolling 6-month windows), Virtual Trading (open/closed virtual positions)
-- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section with two buttons: "⚡ Run Analysis Now" (analysis + signals only, no data pull) and "🔄 Refresh Data + Analysis" (price pull + FRED macro fetch + analysis + signals, matching the full EOD scheduler job); Send Test Email button and Send Weekly Summary Now button side by side
+- **Status** — system status grid (deployment, uptime, DB size, last refresh/analysis, next scheduled run); Manual Controls section with two buttons: "⚡ Run Analysis Now" (analysis + signals only, no data pull) and "🔄 Refresh Data + Analysis" (price pull + FRED macro fetch + analysis + signals, matching the full EOD scheduler job); Send Test Email button and Send Weekly Summary Now button side by side; **T212 Invest Account** section (connection status, balance, positions, order log — "Refresh Account" button fetches live data from the T212 API; shows order log from `t212_invest_orders` table); Scheduler Health grid
 
 ### Configuration
 
@@ -247,6 +248,26 @@ The `correlations` table uses column names `divergence` (CONFIRMING/DIVERGING/NE
 - `regime_performance(df)` → win rate and return broken down by regime at entry.
 
 Backtest config lives under `backtest:` in `config.yaml` (`max_holding_days`, `atr_stop_multiplier`, `walk_forward_months`, `walk_forward_step`). The `_render_backtest_page(config, watchlist)` function in `main.py` implements all six UI tabs.
+
+### Broker integration — Trading212 Invest
+
+`brokers/trading212.py` contains two concerns:
+
+**`Trading212Client`** — thin HTTP wrapper around the T212 Invest REST API (base URL switches between `demo.trading212.com` and `live.trading212.com` based on `live` flag). Authentication is HTTP Basic Auth over `T212_API_KEY:T212_API_SECRET`. All requests use `_request()` which retries up to 3 times with exponential back-off; HTTP 429 (rate-limited) gets a longer wait. Methods: `get_account_summary()`, `get_positions()`, `get_instruments()` (24-hour module-level cache), `place_market_order(ticker, quantity)` (raises `RuntimeError` if `live=True` — live trading is hard-blocked), `cancel_order(order_id)`.
+
+**`maybe_place_t212_orders(config, run_type)`** — called from `_run_analysis_pipeline()` in `data/scheduler.py` after `_process_virtual_trades()`. Places DEMO BUY market orders for STRONG_BUY signals on tickers that have a `trading212_instrument` mapping. Guards in order:
+1. `trading212_invest.enabled: true` in config — returns early if false
+2. `run_type == "full"` — only on EOD runs with fresh price data
+3. `T212_API_KEY` / `T212_API_SECRET` env vars present
+4. Deployed ratio check: total invested / account value < `max_total_deployed`
+5. Per-ticker: has a `trading212_instrument` mapping; instrument exists in T212 list; no existing T212 position; no recent order in `t212_invest_orders` (last 30 days)
+6. Per-order: free cash ≥ £10; position capped at `max_position_gbp`
+
+Every order attempt (success or failure) is written to `t212_invest_orders`. API errors write to `system_metadata` under `t212_invest_error` (displayed on Status page) and stop placement for that run.
+
+The Status page renders a **T212 Invest Account** section. When disabled: info card. When enabled + keys present: a "🔄 Refresh Account" button fetches live `get_account_summary()` + `get_positions()` into `st.session_state["t212_account_data"]` and displays balance / cash / positions. Below this, the `t212_invest_orders` table is always shown (last 50 rows). Credentials (`T212_API_KEY`, `T212_API_SECRET`) are set in the systemd service file alongside `FRED_API_KEY`.
+
+`T212InvestOrder` in `data/database.py` persists every order attempt: `order_id`, `ticker`, `t212_ticker`, `direction`, `quantity`, `estimated_price`, `fill_price`, `status` (PLACED/FILLED/FAILED/CANCELLED), `signal_type`, `confluence_score`, `regime`, `account_type` (DEMO/LIVE), `error_message`, timestamps.
 
 ### Email alerts
 
