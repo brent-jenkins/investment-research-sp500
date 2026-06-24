@@ -3668,7 +3668,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             from sqlalchemy import text as _sa_text
             with get_engine().connect() as _t2_conn:
                 _ord_rows = _t2_conn.execute(_sa_text("""
-                    SELECT ticker, t212_ticker, direction, quantity,
+                    SELECT id, ticker, t212_ticker, direction, quantity,
                            estimated_value_gbp, status, signal_type,
                            confluence_score, regime, account_type,
                            error_message, placed_at
@@ -3682,7 +3682,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
         st.markdown("#### Recent Orders")
         if _ord_data:
-            _ord_df = pd.DataFrame(_ord_data)
+            _ord_df = pd.DataFrame([{k: v for k, v in r.items() if k != "id"} for r in _ord_data])
             _ord_df.columns = [
                 "Ticker", "UCITS Ticker", "Dir", "Qty",
                 "Est. Value (£)", "Status", "Signal",
@@ -3702,6 +3702,82 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 ),
                 use_container_width=True, hide_index=True,
             )
+
+            # ── Retry buttons for FAILED orders ──────────────────────────────
+            _failed_orders = [r for r in _ord_data if r.get("status") == "FAILED"]
+            if _failed_orders and _t212_has_key:
+                st.markdown("**Retry failed orders**")
+                for _fo in _failed_orders:
+                    _fo_id      = _fo["id"]
+                    _fo_ticker  = _fo["ticker"]
+                    _fo_ucits   = _fo["t212_ticker"]
+                    _fo_dir     = _fo["direction"]
+                    _fo_qty     = float(_fo["quantity"] or 0)
+                    _fo_err     = (_fo.get("error_message") or "")[:80]
+                    _fo_placed  = (_fo.get("placed_at") or "")[:16].replace("T", " ")
+
+                    _rc1, _rc2 = st.columns([5, 1])
+                    with _rc1:
+                        st.caption(
+                            f"**{_fo_ticker}** → `{_fo_ucits}` | "
+                            f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} UTC | "
+                            f"_{_fo_err}_"
+                        )
+                    with _rc2:
+                        if st.button("↻ Retry", key=f"retry_order_{_fo_id}"):
+                            with st.spinner(f"Placing {_fo_dir} order for {_fo_ticker}…"):
+                                try:
+                                    import math as _math
+                                    from brokers.trading212 import (
+                                        Trading212Client as _T212Retry,
+                                        _log_t212_order as _log_retry,
+                                    )
+                                    _rc_client = _T212Retry(live=_t212_live)
+
+                                    # Apply instrument precision / minimum guard
+                                    _r_instruments = _rc_client.get_instruments()
+                                    _r_imeta = {
+                                        i["ticker"]: i
+                                        for i in (_r_instruments or [])
+                                        if "ticker" in i
+                                    }
+                                    _r_meta  = _r_imeta.get(_fo_ucits, {})
+                                    _r_min   = float(_r_meta.get("minTradeQuantity", 1.0))
+                                    _r_prec  = int(_r_meta.get("maxQuantityPrecision", 4))
+                                    _r_qty   = (
+                                        _math.floor(_fo_qty * (10 ** _r_prec)) / (10 ** _r_prec)
+                                    )
+
+                                    if _r_qty < _r_min:
+                                        st.error(
+                                            f"Quantity {_r_qty} is below the instrument "
+                                            f"minimum of {_r_min} for {_fo_ucits}. "
+                                            f"Original qty {_fo_qty:.4f} was floored to {_r_qty}."
+                                        )
+                                    else:
+                                        _r_signed = _r_qty if _fo_dir == "BUY" else -_r_qty
+                                        _r_resp   = _rc_client.place_market_order(_fo_ucits, _r_signed)
+                                        _log_retry(
+                                            ticker=_fo_ticker,
+                                            t212_ticker=_fo_ucits,
+                                            direction=_fo_dir,
+                                            quantity=_r_qty,
+                                            estimated_price=0.0,
+                                            estimated_value_gbp=None,
+                                            status="PLACED",
+                                            order_id=str(_r_resp.get("id", "")),
+                                            signal_type=_fo.get("signal_type") or "",
+                                            confluence_score=_fo.get("confluence_score"),
+                                            regime=_fo.get("regime"),
+                                            account_type="LIVE" if _t212_live else "DEMO",
+                                            error_message=None,
+                                        )
+                                        st.success(
+                                            f"{_fo_dir} {_r_qty} × {_fo_ucits} placed. "
+                                            f"Order ID: {_r_resp.get('id', '?')}"
+                                        )
+                                except Exception as _r_exc:
+                                    st.error(f"Retry failed: {_r_exc}")
         else:
             st.caption("No orders recorded yet.")
 

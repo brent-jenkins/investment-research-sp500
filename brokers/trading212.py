@@ -33,6 +33,7 @@ Safety invariants:
 
 import base64
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -95,7 +96,14 @@ class Trading212Client:
                     time.sleep(wait)
                     continue
                 if r.status_code >= 400:
-                    r.raise_for_status()  # raises immediately; no retry on 4xx
+                    try:
+                        body = r.json()
+                    except Exception:
+                        body = r.text or "(no body)"
+                    raise requests.exceptions.HTTPError(
+                        f"{r.status_code} {r.reason} for url: {r.url} — T212: {body}",
+                        response=r,
+                    )
                 return r
             except requests.exceptions.RequestException as exc:
                 last_exc = exc
@@ -530,6 +538,13 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             p.get("ticker", ""): p for p in (positions or [])
         }
 
+        instruments = client.get_instruments()
+        instrument_meta: dict[str, dict] = {
+            inst["ticker"]: inst
+            for inst in (instruments or [])
+            if "ticker" in inst
+        }
+
     except Exception as exc:
         logger.error("T212 Invest: API error during setup — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
@@ -681,6 +696,20 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         if quantity <= 0:
             logger.warning(
                 "T212 Invest: could not calculate quantity for %s — skipping.", us_ticker,
+            )
+            continue
+
+        # Clamp to instrument's allowed precision and check minimum quantity.
+        # UK/EU-listed ETFs (e.g. GBP-denominated UCITS) typically have
+        # maxQuantityPrecision=0 (whole shares only) and minTradeQuantity=1.
+        meta      = instrument_meta.get(ucits_ticker, {})
+        min_qty   = float(meta.get("minTradeQuantity", 1.0))
+        precision = int(meta.get("maxQuantityPrecision", 4))
+        quantity  = math.floor(quantity * (10 ** precision)) / (10 ** precision)
+        if quantity < min_qty:
+            logger.warning(
+                "T212 Invest: %s (%s) qty %.4f is below instrument minimum %.4f — skipping.",
+                us_ticker, ucits_ticker, quantity, min_qty,
             )
             continue
 
