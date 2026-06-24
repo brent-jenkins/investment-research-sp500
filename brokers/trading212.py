@@ -343,6 +343,11 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
     max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
 
+    _entry_cfg   = t212_cfg.get("entry_signal", "STRONG_BUY")
+    _exit_cfg    = t212_cfg.get("exit_signal",  "SELL")
+    entry_signals = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
+    exit_signals  = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
+
     # ── Connect and fetch account state ─────────────────────────────────────
     try:
         client = Trading212Client(live=live)
@@ -422,7 +427,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         sig_type    = sig.get("signal", "NEUTRAL")
         current_qty = float(position.get("quantity", 0) or 0)
 
-        if sig_type not in ("SELL", "STRONG_SELL") or current_qty <= 0:
+        if sig_type not in exit_signals or current_qty <= 0:
             continue
 
         logger.info(
@@ -487,7 +492,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         sig      = signals.get(us_ticker, {})
         sig_type = sig.get("signal", "NEUTRAL")
 
-        if sig_type != "STRONG_BUY":
+        if sig_type not in entry_signals:
             continue
 
         # Duplicate guards
