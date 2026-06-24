@@ -186,7 +186,7 @@ Detected by `detect_overlays()` after each correlation run. Five overlays are de
 - ≤ −0.30 → `SELL`
 - ≤ `−sell_threshold` → `STRONG_SELL`
 
-STRONG BUY/SELL boundaries are **regime-aware**. `confluence.regime_thresholds` in `config.yaml` overrides the global default (0.55) per regime:
+STRONG BUY/SELL boundaries are **regime-aware**. All five regimes have explicit entries under `confluence.regime_thresholds` in `config.yaml` — there is no separate global default:
 
 | Regime | Buy threshold | Sell threshold | Rationale |
 |--------|:---:|:---:|---|
@@ -194,7 +194,9 @@ STRONG BUY/SELL boundaries are **regime-aware**. `confluence.regime_thresholds` 
 | `TRENDING_BEAR` | 0.70 | 0.55 | Harder to go long in a bear; standard sell |
 | `MIXED` | 0.65 | 0.65 | Require stronger conviction in uncertain conditions |
 | `HIGH_VOLATILITY` | 0.70 | 0.70 | Very strong signal required when volatility is elevated |
-| `RANGING_LOW_VOL` | 0.55 | 0.55 | Falls back to global default |
+| `RANGING_LOW_VOL` | 0.55 | 0.55 | Mean-reversion regime — standard threshold |
+
+The backtest engine applies the same per-date regime thresholds. All downstream consumers (email alerts, virtual trading, trade health status) read the stored `signal` classification from the database — no re-classification from raw scores occurs outside `generate_signals()`.
 
 The Daily Briefing shows the current effective thresholds and the approximate number of signal modules that must agree (e.g. "Threshold: 0.65 (MIXED) — requires ~5/7 modules to agree").
 
