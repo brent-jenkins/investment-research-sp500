@@ -3585,10 +3585,21 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 _positions = _t2_data["positions"]
                 _fetched   = _t2_data.get("fetched_at", "")
 
-                _total    = float(_sum.get("total",    _sum.get("cash", 0)) or 0)
-                _free     = float(_sum.get("free",     _sum.get("cash", 0)) or 0)
-                _invested = float(_sum.get("invested", 0) or 0)
-                _result   = float(_sum.get("result",   0) or 0)
+                # T212 account summary nests figures under a "cash" sub-object:
+                # {"cash": {"total": 5000, "free": 4800, "invested": 200,
+                #           "result": {"total": 5.0}, "ppl": 5.0}, ...}
+                _cash     = _sum.get("cash", _sum)   # fall back to top-level if flat
+                if not isinstance(_cash, dict):
+                    _cash = _sum
+                _total    = float(_cash.get("total",    0) or 0)
+                _free     = float(_cash.get("free",     0) or 0)
+                _invested = float(_cash.get("invested", 0) or 0)
+                _result_raw = _cash.get("result", 0)
+                _result   = float(
+                    _result_raw.get("total", 0)
+                    if isinstance(_result_raw, dict)
+                    else (_result_raw or 0)
+                )
                 _deployed = (_invested / _total * 100) if _total else 0.0
                 _pos_count = len(_positions) if isinstance(_positions, list) else 0
 
