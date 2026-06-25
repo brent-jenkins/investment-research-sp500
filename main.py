@@ -2415,6 +2415,88 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                                 st.info("System Learning: indicator weights recalculated from trade history.")
                             st.rerun()
 
+    # ---- T212 Invest open positions -----------------------------------------
+    _tl_t212_cfg = config.get("trading212_invest", {})
+    if _tl_t212_cfg.get("enabled", False) and os.environ.get("T212_API_KEY", ""):
+        st.divider()
+        st.markdown("### T212 Invest Positions")
+
+        _tl_invest_cards = _get_t212_invest_brief_cards(config)
+
+        if not _tl_invest_cards:
+            st.info("No open T212 Invest positions.")
+        else:
+            _ucits_map = _tl_t212_cfg.get("ucits_mapping", {})
+
+            # Get T212 positions for raw price data
+            _tl_t2_data = st.session_state.get("t212_account_data") or {}
+            _tl_pos_by_ucits = {
+                p.get("ticker", ""): p
+                for p in (_tl_t2_data.get("positions") or [])
+            }
+
+            _inv_rows = []
+            for _ic in _tl_invest_cards:
+                _r_ticker  = _ic["ticker"]
+                _ucits_tk  = _ucits_map.get(_r_ticker, "—")
+                _t2pos     = _tl_pos_by_ucits.get(_ucits_tk, {})
+                _curr_val  = round(
+                    float(_t2pos.get("quantity") or 0) *
+                    float(_t2pos.get("currentPrice") or 0), 2
+                )
+                _inv_rows.append({
+                    "Ticker":          _r_ticker,
+                    "UCITS Ticker":    _ucits_tk,
+                    "Qty":             _ic["quantity"],
+                    "Avg Price":       _ic["entry_price"],
+                    "Current Price":   _ic["live_price"],
+                    "Current Value £": _curr_val,
+                    "P&L £":           _ic["unreal_pnl_gbp"],
+                    "P&L %":           _ic["unreal_pct"],
+                    "Days":            _ic["days_held"],
+                    "Signal":          _ic["current_signal"].replace("_", " "),
+                    "Status":          _ic["status"],
+                })
+
+            _inv_df = pd.DataFrame(_inv_rows)
+
+            def _tl_style_pnl(v):
+                if not isinstance(v, (int, float)): return ""
+                return "color:#16a34a;font-weight:bold" if v > 0 else ("color:#dc2626;font-weight:bold" if v < 0 else "")
+
+            def _tl_style_signal(v):
+                _sc = {"STRONG BUY": "#16a34a", "BUY": "#4ade80",
+                       "STRONG SELL": "#dc2626", "SELL": "#f87171", "NEUTRAL": "#94a3b8"}
+                return f"color:{_sc.get(v, '#94a3b8')};font-weight:bold" if isinstance(v, str) else ""
+
+            def _tl_style_status(v):
+                _sc = {"ON TRACK": "#16a34a", "WEAKENING": "#f97316",
+                       "EXIT SIGNAL": "#dc2626", "STOP LOSS": "#dc2626"}
+                return f"color:{_sc.get(v, '#94a3b8')};font-weight:bold" if isinstance(v, str) else ""
+
+            _inv_fmt = {
+                "Qty":             "{:.4f}",
+                "Avg Price":       "{:,.4f}",
+                "Current Price":   "{:,.4f}",
+                "Current Value £": "£{:,.2f}",
+                "P&L £":           lambda v: f"£{v:+.2f}" if isinstance(v, float) else "—",
+                "P&L %":           lambda v: f"{v:+.2f}%" if isinstance(v, float) else "—",
+            }
+            _inv_styler = (
+                _inv_df.style
+                .map(_tl_style_pnl,    subset=["P&L £", "P&L %"])
+                .map(_tl_style_signal, subset=["Signal"])
+                .map(_tl_style_status, subset=["Status"])
+                .format(_inv_fmt)
+            )
+            st.dataframe(_inv_styler, use_container_width=True, hide_index=True,
+                         height=38 + 35 * len(_inv_rows))
+            st.caption(
+                "T212 Invest positions are managed automatically by the EOD pipeline. "
+                "P&L is sourced from the T212 API. Exits are placed when the research "
+                "signal reaches SELL or STRONG SELL."
+            )
+
 
 # ---------------------------------------------------------------------------
 # Performance page
@@ -3681,30 +3763,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 )
                 st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
-                if isinstance(_positions, list) and _positions:
-                    with st.expander(f"Open positions ({_pos_count})", expanded=True):
-                        _pos_rows = []
-                        for _p in _positions:
-                            _pos_rows.append({
-                                "T212 Ticker":   _p.get("ticker", ""),
-                                "Qty":           _p.get("quantity", 0),
-                                "Avg Price":     _p.get("averagePrice", 0),
-                                "Current Price": _p.get("currentPrice", 0),
-                                "Current Value": round(
-                                    float(_p.get("quantity", 0) or 0) *
-                                    float(_p.get("currentPrice", 0) or 0), 2
-                                ),
-                                "P&L":           _p.get("ppl", 0),
-                            })
-                        _pos_df = pd.DataFrame(_pos_rows)
-                        st.dataframe(
-                            _pos_df.style.map(
-                                lambda v: "color:#16a34a" if isinstance(v, (int, float)) and v > 0
-                                else ("color:#dc2626" if isinstance(v, (int, float)) and v < 0 else ""),
-                                subset=["P&L"],
-                            ),
-                            use_container_width=True, hide_index=True,
-                        )
+                st.caption("Open positions are shown in the **Trade Log** and **Daily Briefing** pages.")
 
                 if _fetched:
                     st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC · auto-refreshes every 60s")
