@@ -2428,29 +2428,22 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         else:
             _ucits_map = _tl_t212_cfg.get("ucits_mapping", {})
 
-            # Get T212 positions for raw price data
-            _tl_t2_data = st.session_state.get("t212_account_data") or {}
-            _tl_pos_by_ucits = {
-                p.get("ticker", ""): p
-                for p in (_tl_t2_data.get("positions") or [])
-            }
-
             _inv_rows = []
             for _ic in _tl_invest_cards:
                 _r_ticker  = _ic["ticker"]
-                _ucits_tk  = _ucits_map.get(_r_ticker, "—")
-                _t2pos     = _tl_pos_by_ucits.get(_ucits_tk, {})
-                _curr_val  = round(
-                    float(_t2pos.get("quantity") or 0) *
-                    float(_t2pos.get("currentPrice") or 0), 2
+                _ucits_raw = _ucits_map.get(_r_ticker, "—")
+                _ucits_tk  = (
+                    _ucits_raw.get("ticker", "—") if isinstance(_ucits_raw, dict)
+                    else str(_ucits_raw)
                 )
                 _inv_rows.append({
                     "Ticker":          _r_ticker,
                     "UCITS Ticker":    _ucits_tk,
+                    "Ccy":             _ic.get("currency", "USD"),
                     "Qty":             _ic["quantity"],
                     "Avg Price":       _ic["entry_price"],
                     "Current Price":   _ic["live_price"],
-                    "Current Value £": _curr_val,
+                    "Current Value £": _ic.get("current_value_gbp", 0),
                     "P&L £":           _ic["unreal_pnl_gbp"],
                     "P&L %":           _ic["unreal_pct"],
                     "Days":            _ic["days_held"],
@@ -3907,10 +3900,10 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     "Automated T212 Invest orders are only placed for tickers listed here. "
                     "The UCITS Ticker is the T212 internal instrument ID used in API calls."
                 )
-                _ucits_rows = [
-                    {"US Ticker": k, "T212 UCITS Ticker": v}
-                    for k, v in _ucits_map.items()
-                ]
+                _ucits_rows = []
+                for _uk, _uv in _ucits_map.items():
+                    _ut, _uc = _ucits_entry(_uv)
+                    _ucits_rows.append({"US Ticker": _uk, "T212 UCITS Ticker": _ut, "Currency": _uc})
                 st.dataframe(
                     pd.DataFrame(_ucits_rows),
                     use_container_width=True, hide_index=True,
@@ -4937,6 +4930,34 @@ def _render_system_health_banner() -> None:
                 st.rerun()
 
 
+def _ucits_entry(raw) -> "tuple[str, str]":
+    """Extract (ucits_ticker, currency) from a ucits_mapping value.
+
+    Handles both the legacy flat-string format ("I50Dl_EQ") and the new
+    nested-dict format ({"ticker": "I50Dl_EQ", "currency": "USD"}).
+    Defaults currency to "USD" for backward-compat with old configs.
+    """
+    if isinstance(raw, dict):
+        return raw.get("ticker", ""), raw.get("currency", "USD")
+    return str(raw), "USD"
+
+
+def _t212_ccy_to_gbp(amount: float, currency: str) -> float:
+    """Convert *amount* from the instrument's trading currency to GBP.
+
+    Uses _get_fx_rate() for USD/EUR; GBX is handled as pence (÷100).
+    Falls back to 1:1 when the rate is unavailable.
+    """
+    if not currency or currency == "GBP":
+        return amount
+    if currency == "GBX":
+        return amount / 100.0
+    rate, _ = _get_fx_rate(currency, "GBP")
+    if rate and rate > 0:
+        return amount / rate
+    return amount  # fallback: return unconverted rather than zero
+
+
 def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     """Return enriched trade-card dicts for open T212 Invest positions.
 
@@ -4951,7 +4972,13 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         return []
 
     ucits_map     = t212_cfg.get("ucits_mapping", {})
-    reverse_ucits = {v: k for k, v in ucits_map.items()}
+    # Build reverse map and currency lookup, supporting both old and new mapping formats.
+    reverse_ucits: dict[str, str] = {}
+    ucits_currencies: dict[str, str] = {}
+    for _rt, _raw in ucits_map.items():
+        _ut, _ccy = _ucits_entry(_raw)
+        reverse_ucits[_ut] = _rt
+        ucits_currencies[_ut] = _ccy
     if not reverse_ucits:
         return []
 
@@ -4985,13 +5012,13 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     # Build a lookup: ucits_ticker → position dict (for O(1) access)
     pos_by_ucits = {p.get("ticker", ""): p for p in (t2_positions or [])}
 
-    # Load entry info (signal, score, fill date) from t212_invest_orders in one query
+    # Load entry info (signal, score, fill date, currency) from t212_invest_orders
     try:
         from data.database import get_engine as _get_eng  # noqa: PLC0415
         from sqlalchemy import text as _sa_t              # noqa: PLC0415
         with _get_eng().connect() as _tc:
             _entry_rows = _tc.execute(_sa_t("""
-                SELECT t212_ticker, signal_type, confluence_score, filled_at
+                SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code
                 FROM t212_invest_orders
                 WHERE direction = 'BUY' AND status = 'FILLED'
                 ORDER BY filled_at ASC
@@ -5014,7 +5041,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         avg_price     = float(pos.get("averagePrice") or 0)
         qty           = float(pos.get("quantity")     or 0)
         current_price = float(pos.get("currentPrice") or 0)
-        ppl           = float(pos.get("ppl")          or 0)  # T212-computed GBP P&L
+        ppl           = float(pos.get("ppl")          or 0)
 
         if qty <= 0 or avg_price <= 0:
             continue
@@ -5024,6 +5051,15 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         entry_info    = entry_by_ucits.get(ucits_ticker, {})
         entry_signal  = entry_info.get("signal_type")  or "NEUTRAL"
         entry_score   = float(entry_info.get("confluence_score") or 0)
+
+        # Resolve instrument currency: prefer DB-stored value (set at order time from T212 API),
+        # then fall back to config ucits_mapping currency field.
+        _db_ccy  = entry_info.get("currency_code")
+        currency = _db_ccy or ucits_currencies.get(ucits_ticker, "USD")
+
+        # Convert position value and P&L from instrument currency to GBP.
+        current_value_gbp = round(_t212_ccy_to_gbp(qty * current_price, currency), 2)
+        pnl_gbp           = round(_t212_ccy_to_gbp(ppl, currency), 2)
         filled_at_str = entry_info.get("filled_at")
 
         entry_dt: datetime | None = None
@@ -5079,30 +5115,32 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         status_priority = {"STOP LOSS": 3, "EXIT SIGNAL": 2, "WEAKENING": 1, "ON TRACK": 0}[status]
 
         cards.append({
-            "ticker":          research_ticker,
-            "direction":       "LONG",
-            "entry_price":     avg_price,
-            "quantity":        qty,
-            "entry_date":      entry_dt.isoformat() if entry_dt else None,
-            "days_held":       days_held,
-            "days_remaining":  days_remaining,
-            "near_max_hold":   near_max_hold,
-            "max_holding_days": _t212_max_hold,
-            "live_price":      current_price,
-            "unreal_pnl":      ppl,
-            "unreal_pnl_gbp":  ppl,       # T212 Invest account is GBP-denominated
-            "unreal_pct":      unreal_pct,
+            "ticker":            research_ticker,
+            "direction":         "LONG",
+            "entry_price":       avg_price,
+            "quantity":          qty,
+            "entry_date":        entry_dt.isoformat() if entry_dt else None,
+            "days_held":         days_held,
+            "days_remaining":    days_remaining,
+            "near_max_hold":     near_max_hold,
+            "max_holding_days":  _t212_max_hold,
+            "live_price":        current_price,
+            "currency":          currency,
+            "current_value_gbp": current_value_gbp,
+            "unreal_pnl":        ppl,
+            "unreal_pnl_gbp":    pnl_gbp,
+            "unreal_pct":        unreal_pct,
             "price_unavailable": current_price == 0,
-            "current_signal":  current_signal,
-            "current_score":   current_score,
-            "entry_signal":    entry_signal,
-            "entry_score":     entry_score,
-            "status":          status,
-            "status_priority": status_priority,
-            "account_name":    "T212 Invest",
-            "account_type":    "T212_INVEST",
-            "stop_loss_price": None,
-            "stop_loss":       None,
+            "current_signal":    current_signal,
+            "current_score":     current_score,
+            "entry_signal":      entry_signal,
+            "entry_score":       entry_score,
+            "status":            status,
+            "status_priority":   status_priority,
+            "account_name":      "T212 Invest",
+            "account_type":      "T212_INVEST",
+            "stop_loss_price":   None,
+            "stop_loss":         None,
             "take_profit_price": None,
         })
 

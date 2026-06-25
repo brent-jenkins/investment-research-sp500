@@ -542,35 +542,37 @@ trading212_invest:
   exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs
   time_limit_as_backstop: true  # Time limit is a backstop only, not the primary exit
   # UCITS ETF equivalents for EU-regulated T212 Invest accounts.
-  # Key = internal research ticker; value = T212 internal instrument ticker.
+  # Key = internal research ticker; value = {ticker: T212 instrument ID, currency: ISO 4217}.
   # Only tickers listed here are eligible for automated T212 Invest orders.
+  # currency is used for GBP conversion in the dashboard; it is overridden by the
+  # currencyCode field from the T212 instruments API when a new order is placed.
   ucits_mapping:
-    VOO:  I50Dl_EQ    # Vanguard S&P 500 UCITS ETF
-    TLT:  IDGAl_EQ    # iShares $ Treasury Bond 20+yr UCITS ETF
-    IEF:  TREXl_EQ    # iShares $ Treasury Bond 7-10yr UCITS ETF
-    HYG:  XUHEd_EQ    # iShares $ High Yield Corp Bond UCITS ETF
-    LQD:  VDCPl_EQ    # Vanguard USD Corporate Bond UCITS ETF
-    GLD:  WGLDl_EQ    # Invesco Physical Gold ETC
-    SLV:  PHAGa_EQ    # iShares Physical Silver ETC
-    XLK:  XDWTl_EQ    # Xtrackers MSCI World IT UCITS ETF
-    XLF:  STZXs_EQ    # SPDR S&P US Financials Select Sector UCITS ETF
-    XLE:  SXLEl_EQ    # SPDR S&P US Energy Select Sector UCITS ETF
-    XLV:  IUHCl_EQ    # iShares S&P 500 Health Care Sector UCITS ETF
-    SOXX: SEMGl_EQ    # iShares MSCI Global Semiconductors UCITS ETF
-    EWJ:  SGJPl_EQ    # SPDR MSCI Japan UCITS ETF
-    EWG:  VGERd_EQ    # Vanguard FTSE Developed Europe UCITS ETF
-    EEM:  JEEMd_EQ    # JPMorgan BetaBuilders EM Equity UCITS ETF
-    EWZ:  IBZLa_EQ    # iShares MSCI Brazil UCITS ETF
-    INDA: IINDl_EQ    # iShares MSCI India UCITS ETF
-    FXI:  LCCGl_EQ    # Lyxor China Enterprise (HSCEI) UCITS ETF
-    VGK:  H4ZEd_EQ    # HSBC MSCI Europe UCITS ETF
-    SKYY: SKYEa_EQ    # First Trust Cloud Computing UCITS ETF (Acc)
-    XLI:  SXLIl_EQ    # SPDR S&P U.S. Industrials Select Sector UCITS ETF (Acc)
-    XLY:  SXLYl_EQ    # SPDR S&P U.S. Consumer Disc Select Sector UCITS ETF (Acc)
-    XLP:  SXLPl_EQ    # SPDR S&P U.S. Consumer Staples Select Sector UCITS ETF (Acc)
-    XLU:  SXLUl_EQ    # SPDR S&P U.S. Utilities Select Sector UCITS ETF (Acc)
-    XLB:  SXLBl_EQ    # SPDR S&P U.S. Materials Select Sector UCITS ETF (Acc)
-    KBE:  BNKTa_EQ    # iShares S&P US Banks UCITS ETF (Dist)
+    VOO:  {ticker: I50Dl_EQ,  currency: USD}  # Vanguard S&P 500 UCITS ETF
+    TLT:  {ticker: IDGAl_EQ,  currency: USD}  # iShares $ Treasury Bond 20+yr UCITS ETF
+    IEF:  {ticker: TREXl_EQ,  currency: USD}  # iShares $ Treasury Bond 7-10yr UCITS ETF
+    HYG:  {ticker: XUHEd_EQ,  currency: USD}  # iShares $ High Yield Corp Bond UCITS ETF
+    LQD:  {ticker: VDCPl_EQ,  currency: USD}  # Vanguard USD Corporate Bond UCITS ETF
+    GLD:  {ticker: WGLDl_EQ,  currency: USD}  # Invesco Physical Gold ETC
+    SLV:  {ticker: PHAGa_EQ,  currency: USD}  # iShares Physical Silver ETC
+    XLK:  {ticker: XDWTl_EQ,  currency: USD}  # Xtrackers MSCI World IT UCITS ETF
+    XLF:  {ticker: STZXs_EQ,  currency: USD}  # SPDR S&P US Financials Select Sector UCITS ETF
+    XLE:  {ticker: SXLEl_EQ,  currency: USD}  # SPDR S&P US Energy Select Sector UCITS ETF
+    XLV:  {ticker: IUHCl_EQ,  currency: USD}  # iShares S&P 500 Health Care Sector UCITS ETF
+    SOXX: {ticker: SEMGl_EQ,  currency: USD}  # iShares MSCI Global Semiconductors UCITS ETF
+    EWJ:  {ticker: SGJPl_EQ,  currency: USD}  # SPDR MSCI Japan UCITS ETF
+    EWG:  {ticker: VGERd_EQ,  currency: EUR}  # Vanguard FTSE Developed Europe UCITS ETF
+    EEM:  {ticker: JEEMd_EQ,  currency: USD}  # JPMorgan BetaBuilders EM Equity UCITS ETF
+    EWZ:  {ticker: IBZLa_EQ,  currency: USD}  # iShares MSCI Brazil UCITS ETF
+    INDA: {ticker: IINDl_EQ,  currency: USD}  # iShares MSCI India UCITS ETF
+    FXI:  {ticker: LCCGl_EQ,  currency: EUR}  # Lyxor China Enterprise (HSCEI) UCITS ETF
+    VGK:  {ticker: H4ZEd_EQ,  currency: EUR}  # HSBC MSCI Europe UCITS ETF
+    SKYY: {ticker: SKYEa_EQ,  currency: USD}  # First Trust Cloud Computing UCITS ETF (Acc)
+    XLI:  {ticker: SXLIl_EQ,  currency: USD}  # SPDR S&P U.S. Industrials Select Sector UCITS ETF (Acc)
+    XLY:  {ticker: SXLYl_EQ,  currency: USD}  # SPDR S&P U.S. Consumer Disc Select Sector UCITS ETF (Acc)
+    XLP:  {ticker: SXLPl_EQ,  currency: USD}  # SPDR S&P U.S. Consumer Staples Select Sector UCITS ETF (Acc)
+    XLU:  {ticker: SXLUl_EQ,  currency: USD}  # SPDR S&P U.S. Utilities Select Sector UCITS ETF (Acc)
+    XLB:  {ticker: SXLBl_EQ,  currency: USD}  # SPDR S&P U.S. Materials Select Sector UCITS ETF (Acc)
+    KBE:  {ticker: BNKTa_EQ,  currency: USD}  # iShares S&P US Banks UCITS ETF (Dist)
 
 learning:
   enabled: true

@@ -431,6 +431,7 @@ class T212InvestOrder(Base):
     confluence_score = Column(Float)
     regime           = Column(String(20))
     account_type     = Column(String(10))           # DEMO / LIVE
+    currency_code    = Column(String(10))           # instrument currency (USD, EUR, GBX, …)
     error_message    = Column(Text)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     filled_at        = Column(DateTime)
@@ -576,6 +577,7 @@ def _apply_migrations(engine) -> None:
         ("trades",          "planned_risk_gbp",      "FLOAT"),
         ("t212_invest_orders", "estimated_value_gbp", "FLOAT"),
         ("t212_invest_orders", "filled_quantity",     "FLOAT"),
+        ("t212_invest_orders", "currency_code",       "TEXT"),
     ]
     for table, column, col_type in new_columns:
         try:

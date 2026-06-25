@@ -246,6 +246,18 @@ def _send_t212_error_email(error_msg: str, config: dict) -> None:
         logger.warning("Failed to send T212 error email: %s", exc)
 
 
+def _ucits_entry(raw) -> "tuple[str, str]":
+    """Extract (ucits_ticker, currency) from a ucits_mapping value.
+
+    Handles both the legacy flat-string format ("I50Dl_EQ") and the new
+    nested-dict format ({"ticker": "I50Dl_EQ", "currency": "USD"}).
+    Defaults currency to "USD" for backward-compat with old configs.
+    """
+    if isinstance(raw, dict):
+        return raw.get("ticker", ""), raw.get("currency", "USD")
+    return str(raw), "USD"
+
+
 def _log_t212_order(
     *,
     ticker: str,
@@ -260,6 +272,7 @@ def _log_t212_order(
     confluence_score: Optional[float],
     regime: Optional[str],
     account_type: str,
+    currency_code: Optional[str] = None,
     error_message: Optional[str],
 ) -> None:
     """Insert one row into t212_invest_orders (best-effort; never raises)."""
@@ -273,12 +286,12 @@ def _log_t212_order(
                     order_id, ticker, t212_ticker, direction,
                     quantity, estimated_price, estimated_value_gbp,
                     status, signal_type, confluence_score, regime,
-                    account_type, error_message, placed_at, created_at
+                    account_type, currency_code, error_message, placed_at, created_at
                 ) VALUES (
                     :order_id, :ticker, :t212_ticker, :direction,
                     :quantity, :estimated_price, :estimated_value_gbp,
                     :status, :signal_type, :confluence_score, :regime,
-                    :account_type, :error_message, :now, :now
+                    :account_type, :currency_code, :error_message, :now, :now
                 )
             """), {
                 "order_id":            order_id,
@@ -293,6 +306,7 @@ def _log_t212_order(
                 "confluence_score":    confluence_score,
                 "regime":              regime,
                 "account_type":        account_type,
+                "currency_code":       currency_code,
                 "error_message":       error_message,
                 "now":                 datetime.utcnow().isoformat(),
             })
@@ -506,12 +520,19 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
         return
 
-    ucits_mapping: dict[str, str] = t212_cfg.get("ucits_mapping", {})
+    ucits_mapping: dict = t212_cfg.get("ucits_mapping", {})
     if not ucits_mapping:
         logger.info("T212 Invest: no ucits_mapping in config — nothing to do.")
         return
 
-    reverse_ucits: dict[str, str] = {v: k for k, v in ucits_mapping.items()}
+    # Build reverse map (ucits_ticker → research_ticker) and currency lookup,
+    # handling both the legacy flat-string format and the new nested-dict format.
+    reverse_ucits: dict[str, str] = {}
+    ucits_currencies: dict[str, str] = {}  # ucits_ticker → instrument currency
+    for _rt, _raw in ucits_mapping.items():
+        _ut, _ccy = _ucits_entry(_raw)
+        reverse_ucits[_ut] = _rt
+        ucits_currencies[_ut] = _ccy
 
     live             = t212_cfg.get("live", False)
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
@@ -736,6 +757,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             confluence_score=sig.get("confluence_score"),
             regime=sig.get("regime"),
             account_type=account_label,
+            currency_code=ucits_currencies.get(ucits_ticker),
             error_message=error_msg,
         )
 
@@ -757,7 +779,8 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
 
     orders_placed = 0
 
-    for us_ticker, ucits_ticker in ucits_mapping.items():
+    for us_ticker, ucits_raw in ucits_mapping.items():
+        ucits_ticker, instrument_currency = _ucits_entry(ucits_raw)
         sig      = signals.get(us_ticker, {})
         sig_type = sig.get("signal", "NEUTRAL")
 
@@ -821,6 +844,9 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             _set_t212_error(f"Buy order failed for {us_ticker}: {error_msg}")
             _send_t212_error_email(error_msg, config)
 
+        # Prefer the live currencyCode from T212 instruments API; fall back to config.
+        _api_ccy = instrument_meta.get(ucits_ticker, {}).get("currencyCode")
+        _ccy_to_log = _api_ccy or instrument_currency or None
         _log_t212_order(
             ticker=us_ticker,
             t212_ticker=ucits_ticker,
@@ -834,6 +860,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             confluence_score=sig.get("confluence_score"),
             regime=sig.get("regime"),
             account_type=account_label,
+            currency_code=_ccy_to_log,
             error_message=error_msg,
         )
 
