@@ -27,6 +27,9 @@ set -e
 cd ${APP_DIR}
 
 echo "  Pulling latest code..."
+# Discard any local edits to the service template — the real installed file
+# lives in /etc/systemd/system/, not in the repo directory.
+git checkout -- investment-research.service 2>/dev/null || true
 git pull origin main
 
 echo "  Installing any new Python packages..."
