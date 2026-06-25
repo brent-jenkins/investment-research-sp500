@@ -2,6 +2,8 @@
 Description=Investment Research Dashboard (Streamlit)
 Documentation=https://github.com/YOUR/investment-research
 After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -11,12 +13,9 @@ WorkingDirectory=/root/investment-research
 
 ExecStart=/usr/local/bin/streamlit run /root/investment-research/main.py
 
-# Restart policy: always restart, with a 10-second backoff, up to 5 times
-# before systemd considers the service failed
+# Restart policy: always restart, with a 10-second backoff
 Restart=always
 RestartSec=10
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
 # Environment
 Environment=PYTHONUNBUFFERED=1

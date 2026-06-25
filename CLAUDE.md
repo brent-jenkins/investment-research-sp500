@@ -326,7 +326,7 @@ bash deploy.sh          # Git Bash — VM_IP is hardcoded in the script
 .\deploy.ps1            # PowerShell — gitignored, local-only; SSH key at ssh-keys\
 ```
 
-Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall any new packages via `python3.11 -m pip install -r requirements.txt --quiet`, and `systemctl restart` the service.
+Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall any new packages via `python3.11 -m pip install -r requirements.txt --quiet`, and `systemctl restart` the service. `deploy.sh` additionally copies `investment-research.service` from the repo to `/etc/systemd/system/` and runs `systemctl daemon-reload` before the restart, keeping the installed service file in sync with the repo template.
 
 ### Git hooks
 

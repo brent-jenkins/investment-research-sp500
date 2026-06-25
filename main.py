@@ -3673,6 +3673,9 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 if _t2_data and "fetched_at" in _t2_data else None
             )
             _t2_is_stale = _t2_data is None or (
+                not _t2_data.get("error")
+                and "summary" not in _t2_data
+            ) or (
                 _t2_fetched_at is not None
                 and not _t2_data.get("error")
                 and _t2_fetched_at < datetime.utcnow() - timedelta(seconds=_T212_REFRESH_SECS)

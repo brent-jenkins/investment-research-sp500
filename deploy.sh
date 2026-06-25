@@ -34,6 +34,10 @@ python3.11 -m pip install -r requirements.txt --quiet
 # TA-Lib (Linux) is already installed; re-running is a no-op
 python3.11 -m pip install TA-Lib --quiet 2>/dev/null || true
 
+echo "  Updating service file..."
+cp ${APP_DIR}/investment-research.service /etc/systemd/system/${SERVICE}.service
+systemctl daemon-reload
+
 echo "  Restarting service..."
 systemctl restart ${SERVICE}
 

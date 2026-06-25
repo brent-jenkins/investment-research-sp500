@@ -393,7 +393,7 @@ bash setup-hooks.sh   # install pre-push deploy hook (run once)
 git push origin main  # triggers automatic deploy
 ```
 
-Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored).
+Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored). `deploy.sh` also copies `investment-research.service` to `/etc/systemd/system/` and runs `systemctl daemon-reload` so the installed service file stays in sync with the repo.
 
 ### Useful server commands
 
