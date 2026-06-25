@@ -3591,9 +3591,47 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
             _t2_data = st.session_state.get(_t212_data_key)
 
+            # Auto-fetch on first load or when cached data is older than 60 seconds
+            _T212_REFRESH_SECS = 60
+            _t2_fetched_at = (
+                datetime.fromisoformat(_t2_data["fetched_at"])
+                if _t2_data and "fetched_at" in _t2_data else None
+            )
+            _t2_is_stale = _t2_data is None or (
+                _t2_fetched_at is not None
+                and not _t2_data.get("error")
+                and _t2_fetched_at < datetime.utcnow() - timedelta(seconds=_T212_REFRESH_SECS)
+            )
+            if _t2_is_stale:
+                try:
+                    from brokers.trading212 import (  # noqa
+                        Trading212Client as _T212Client,
+                        poll_placed_orders as _poll_t212,
+                    )
+                    _client = _T212Client(live=_t212_live)
+                    _summary   = _client.get_account_summary()
+                    _positions = _client.get_positions()
+                    st.session_state[_t212_data_key] = {
+                        "summary":    _summary,
+                        "positions":  _positions,
+                        "fetched_at": datetime.utcnow().isoformat(),
+                        "error":      None,
+                    }
+                    try:
+                        _poll_t212(config)
+                    except Exception:
+                        pass
+                    _t2_data = st.session_state[_t212_data_key]
+                except Exception as _t2e:
+                    st.session_state[_t212_data_key] = {
+                        "error": str(_t2e),
+                        "fetched_at": datetime.utcnow().isoformat(),
+                    }
+                    _t2_data = st.session_state[_t212_data_key]
+
             if _t2_data is None:
                 with _t2_col_status:
-                    st.caption("Click **Refresh Account** to load live account data.")
+                    st.caption("Connecting to T212…")
             elif _t2_data.get("error"):
                 st.error(f"Connection failed: {_t2_data['error']}")
             else:
@@ -3669,7 +3707,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                         )
 
                 if _fetched:
-                    st.caption(f"Fetched at {_fetched[:16].replace('T', ' ')} UTC")
+                    st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC · auto-refreshes every 60s")
 
         # ── Recent T212 orders from our DB ────────────────────────────────────
         try:
@@ -4076,6 +4114,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         import time as _time_mod  # noqa: PLC0415
         _time_mod.sleep(30)
         st.rerun()
+    elif _t212_enabled and _t212_has_key:
+        _t2_cached = st.session_state.get("t212_account_data")
+        if _t2_cached and not _t2_cached.get("error"):
+            time.sleep(60)
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
