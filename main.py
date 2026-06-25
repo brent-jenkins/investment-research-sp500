@@ -5042,13 +5042,40 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
             current_signal = "NEUTRAL"
             current_score  = 0.0
 
-        # Simplified status for buy-and-hold ETF: no stop loss, signal-driven only
-        if current_signal == "STRONG_SELL":
+        # Status for buy-and-hold ETF — mirrors the exit logic in maybe_place_t212_orders:
+        # immediate exits (SELL/STRONG_SELL), confirmed NEUTRAL, and backstop time limit.
+        _t212_max_hold   = int(t212_cfg.get("max_holding_days", 90))
+        _exit_on_signal  = t212_cfg.get("exit_on_signal", True)
+        _conf_runs       = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
+        _conf_hours      = _conf_runs * 3
+        _neutral_key     = f"t212_neutral_since:{ucits_ticker}"
+
+        if current_signal in ("SELL", "STRONG_SELL"):
             status = "EXIT SIGNAL"
-        elif current_signal == "SELL":
-            status = "WEAKENING"
+        elif _exit_on_signal and current_signal not in ("BUY", "STRONG_BUY"):
+            # NEUTRAL — check whether the confirmation timer has elapsed
+            try:
+                from data.database import get_metadata_str as _gms  # noqa: PLC0415
+                _first_neutral = _gms(_neutral_key)
+            except Exception:
+                _first_neutral = None
+            if _first_neutral is not None:
+                try:
+                    _hours = (
+                        datetime.utcnow() - datetime.fromisoformat(_first_neutral)
+                    ).total_seconds() / 3600
+                    status = "EXIT SIGNAL" if _hours >= _conf_hours else "WEAKENING"
+                except Exception:
+                    status = "WEAKENING"
+            else:
+                status = "WEAKENING"   # timer not yet started (first NEUTRAL run)
+        elif days_held >= _t212_max_hold:
+            status = "EXIT SIGNAL"     # backstop time limit
         else:
             status = "ON TRACK"
+
+        days_remaining = max(0, _t212_max_hold - days_held)
+        near_max_hold  = 0 < days_remaining <= 7
         status_priority = {"STOP LOSS": 3, "EXIT SIGNAL": 2, "WEAKENING": 1, "ON TRACK": 0}[status]
 
         cards.append({
@@ -5058,9 +5085,9 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
             "quantity":        qty,
             "entry_date":      entry_dt.isoformat() if entry_dt else None,
             "days_held":       days_held,
-            "days_remaining":  99999,
-            "near_max_hold":   False,
-            "max_holding_days": None,     # no max hold for invest positions
+            "days_remaining":  days_remaining,
+            "near_max_hold":   near_max_hold,
+            "max_holding_days": _t212_max_hold,
             "live_price":      current_price,
             "unreal_pnl":      ppl,
             "unreal_pnl_gbp":  ppl,       # T212 Invest account is GBP-denominated

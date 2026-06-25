@@ -517,10 +517,15 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
     max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
 
-    _entry_cfg   = t212_cfg.get("entry_signal", "STRONG_BUY")
-    _exit_cfg    = t212_cfg.get("exit_signal",  "SELL")
-    entry_signals = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
-    exit_signals  = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
+    _entry_cfg        = t212_cfg.get("entry_signal", "STRONG_BUY")
+    _exit_cfg         = t212_cfg.get("exit_signal",  "SELL")
+    entry_signals     = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
+    immediate_exits   = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
+    exit_on_signal    = bool(t212_cfg.get("exit_on_signal", True))
+    time_limit_backstop = bool(t212_cfg.get("time_limit_as_backstop", True))
+    max_holding_days  = int(t212_cfg.get("max_holding_days", 90))
+    confirmation_runs = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
+    confirmation_hours = confirmation_runs * 3
 
     # ── Connect and fetch account state ─────────────────────────────────────
     try:
@@ -583,6 +588,25 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             except Exception:
                 open_order_tickers = set()
 
+            try:
+                fill_rows = conn.execute(sa_text("""
+                    SELECT t212_ticker, MIN(filled_at) AS first_fill
+                    FROM t212_invest_orders
+                    WHERE direction = 'BUY' AND status = 'FILLED'
+                    GROUP BY t212_ticker
+                """)).mappings().all()
+                first_fill_dates: dict[str, datetime] = {}
+                for _fr in fill_rows:
+                    if _fr["first_fill"]:
+                        try:
+                            first_fill_dates[_fr["t212_ticker"]] = datetime.fromisoformat(
+                                str(_fr["first_fill"])
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                first_fill_dates = {}
+
     except Exception as exc:
         logger.error("T212 Invest: DB read error — %s", exc, exc_info=True)
         _set_t212_error(f"DB read failed: {exc}")
@@ -597,8 +621,21 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     account_label = "LIVE" if live else "DEMO"
 
     # ────────────────────────────────────────────────────────────────────────
-    # Phase 1 — EXIT: close positions where signal has reversed
+    # Phase 1 — EXIT
+    #
+    # Trigger priority:
+    #   1. Immediate: SELL or STRONG_SELL signal
+    #   2. Confirmed: signal drops to NEUTRAL for confirmation_runs × 3 h
+    #      (tracked per position in system_metadata as t212_neutral_since:<ucits>)
+    #   3. Backstop: position held > max_holding_days (only when
+    #      time_limit_as_backstop: true; overrides confirmed-only logic)
     # ────────────────────────────────────────────────────────────────────────
+    from data.database import (  # noqa: PLC0415
+        set_metadata as _sm_set,
+        get_metadata_str as _sm_get,
+        clear_metadata as _sm_clear,
+    )
+
     for ucits_ticker, position in positions_by_ucits.items():
         us_ticker = reverse_ucits.get(ucits_ticker)
         if not us_ticker:
@@ -608,12 +645,63 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         sig_type    = sig.get("signal", "NEUTRAL")
         current_qty = float(position.get("quantity", 0) or 0)
 
-        if sig_type not in exit_signals or current_qty <= 0:
+        if current_qty <= 0:
+            continue
+
+        should_exit  = False
+        exit_reason  = ""
+        neutral_key  = f"t212_neutral_since:{ucits_ticker}"
+
+        # 1. Immediate exit on strong sell signals
+        if sig_type in immediate_exits:
+            should_exit = True
+            exit_reason = f"signal={sig_type}"
+            _sm_clear(neutral_key)  # reset any NEUTRAL timer
+
+        # 2. Confirmed NEUTRAL exit (primary signal-driven exit)
+        elif exit_on_signal and sig_type not in ("BUY", "STRONG_BUY"):
+            first_neutral_str = _sm_get(neutral_key)
+            if first_neutral_str is None:
+                _sm_set(neutral_key, datetime.utcnow().isoformat())
+                logger.info(
+                    "T212 Invest: %s signal is %s — started NEUTRAL confirmation timer",
+                    us_ticker, sig_type,
+                )
+            else:
+                try:
+                    hours_neutral = (
+                        datetime.utcnow() - datetime.fromisoformat(first_neutral_str)
+                    ).total_seconds() / 3600
+                    if hours_neutral >= confirmation_hours:
+                        should_exit = True
+                        exit_reason = (
+                            f"signal={sig_type} confirmed after "
+                            f"{hours_neutral:.1f}h ({confirmation_runs} runs)"
+                        )
+                except Exception:
+                    pass
+
+        else:
+            # Signal is BUY/STRONG_BUY — clear any pending NEUTRAL timer
+            _sm_clear(neutral_key)
+
+        # 3. Backstop time limit (fires regardless of signal, if enabled)
+        if not should_exit and time_limit_backstop and max_holding_days > 0:
+            first_fill = first_fill_dates.get(ucits_ticker)
+            if first_fill is not None:
+                days_held = (datetime.utcnow() - first_fill).days
+                if days_held >= max_holding_days:
+                    should_exit = True
+                    exit_reason = (
+                        f"backstop time limit: {days_held}d >= {max_holding_days}d"
+                    )
+
+        if not should_exit:
             continue
 
         logger.info(
-            "T212 Invest: exiting %s (%s) — signal is %s, qty=%.4f",
-            us_ticker, ucits_ticker, sig_type, current_qty,
+            "T212 Invest: exiting %s (%s) — %s, qty=%.4f",
+            us_ticker, ucits_ticker, exit_reason, current_qty,
         )
 
         status     = "FAILED"

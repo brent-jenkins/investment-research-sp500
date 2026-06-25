@@ -538,6 +538,9 @@ trading212_invest:
   max_total_deployed: 0.5  # Never deploy more than 50% of account value
   entry_signal: BUY        # BUY = enter on BUY or STRONG_BUY; STRONG_BUY = STRONG_BUY only
   exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
+  max_holding_days: 90     # Backstop time limit (3× CFD limit — no leverage/swap costs)
+  exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs
+  time_limit_as_backstop: true  # Time limit is a backstop only, not the primary exit
   # UCITS ETF equivalents for EU-regulated T212 Invest accounts.
   # Key = internal research ticker; value = T212 internal instrument ticker.
   # Only tickers listed here are eligible for automated T212 Invest orders.
