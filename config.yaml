@@ -573,6 +573,12 @@ trading212_invest:
     XLU:  {ticker: SXLUl_EQ,  currency: USD}  # SPDR S&P U.S. Utilities Select Sector UCITS ETF (Acc)
     XLB:  {ticker: SXLBl_EQ,  currency: USD}  # SPDR S&P U.S. Materials Select Sector UCITS ETF (Acc)
     KBE:  {ticker: BNKTa_EQ,  currency: USD}  # iShares S&P US Banks UCITS ETF (Dist)
+    PDBC: {ticker: XCMCd_EQ,  currency: EUR}  # Xtrackers Bloomberg Commodity Swap (Acc)
+    EMB:  {ticker: IEMBl_EQ,  currency: USD}  # iShares J.P. Morgan USD EM Bond (Dist)
+    TIP:  {ticker: IBC5d_EQ,  currency: EUR}  # iShares USD TIPS (Acc)
+    AMLP: {ticker: SMLPd_EQ,  currency: EUR}  # Invesco Morningstar US Energy Infrastructure MLP (Acc)
+    MUB:  {ticker: MUNIl_EQ,  currency: USD}  # Invesco US Municipal Bond (Dist)
+    IBB:  {ticker: FBTUl_EQ,  currency: USD}  # First Trust NYSE Arca Biotechnology (Acc)
 
 learning:
   enabled: true
