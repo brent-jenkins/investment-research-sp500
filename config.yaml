@@ -173,6 +173,10 @@ watchlist:
       name: "Invesco DB US Dollar Index Bullish Fund"
       exchange: "NYSE"
       tradeable: false
+    # Forex pairs (=X suffix) are CFD-only instruments — they cannot be held in
+    # a T212 Invest cash account. trading212_instrument here is for CFD trade
+    # logging only; maybe_place_t212_orders() explicitly skips any ticker ending
+    # in =X even if it appears in ucits_mapping.
     - ticker: "EURUSD=X"
       name: "EUR/USD"
       exchange: "FX"
@@ -215,7 +219,7 @@ watchlist:
       name: "ProShares VIX Short-Term Futures"
       exchange: "NYSE"
       tradeable: true
-      trading212_instrument: "VXX"
+      trading212_instrument: "VXX"  # VXX (iPath S&P 500 VIX Short-Term Futures ETN) is the T212-available proxy for VIXY — VIXY is not directly tradeable on T212. Both track the same VIX short-term futures index; VXX has larger AUM and tighter liquidity but is otherwise a close substitute.
     - ticker: "^VVIX"
       name: "CBOE VVIX Index"
       exchange: "NYSE"

@@ -801,6 +801,15 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     orders_placed = 0
 
     for us_ticker, ucits_raw in ucits_mapping.items():
+        # Forex pairs (yfinance tickers ending in =X) are CFD-only instruments
+        # and cannot be held in a T212 Invest cash account.
+        if us_ticker.endswith("=X"):
+            logger.debug(
+                "T212 Invest: %s is a forex pair (=X suffix) — skipping (CFD-only).",
+                us_ticker,
+            )
+            continue
+
         ucits_ticker, instrument_currency = _ucits_entry(ucits_raw)
         sig      = signals.get(us_ticker, {})
         sig_type = sig.get("signal", "NEUTRAL")
