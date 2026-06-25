@@ -386,6 +386,27 @@ caddy hash-password && nano /etc/caddy/Caddyfile   # replace REPLACE_WITH_HASH
 systemctl reload caddy
 ```
 
+### Managing server credentials
+
+API keys and passwords are kept in a systemd drop-in override file that is never touched by deploys:
+
+```bash
+mkdir -p /etc/systemd/system/investment-research.service.d/
+nano /etc/systemd/system/investment-research.service.d/secrets.conf
+```
+
+```ini
+[Service]
+Environment=FRED_API_KEY=your_fred_key
+Environment=SMTP_PASSWORD=your_smtp_password
+Environment=T212_API_KEY=your_t212_key
+Environment=T212_API_SECRET=your_t212_secret
+```
+
+After creating or editing the file: `systemctl daemon-reload && systemctl restart investment-research`
+
+The `investment-research.service` template in the repo has blank placeholders for these variables. Never fill in real values there — the drop-in file takes precedence and survives all future deploys.
+
 ### Deploying updates
 
 ```bash

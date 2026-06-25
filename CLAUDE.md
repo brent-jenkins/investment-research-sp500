@@ -314,6 +314,24 @@ nano /etc/caddy/Caddyfile    # replace REPLACE_WITH_HASH (and 'admin' if desired
 systemctl reload caddy
 ```
 
+### Managing server credentials
+
+API keys and passwords live in a systemd drop-in override file that is never touched by deploys:
+
+```
+/etc/systemd/system/investment-research.service.d/secrets.conf
+```
+
+```ini
+[Service]
+Environment=FRED_API_KEY=...
+Environment=SMTP_PASSWORD=...
+Environment=T212_API_KEY=...
+Environment=T212_API_SECRET=...
+```
+
+After editing: `systemctl daemon-reload && systemctl restart investment-research`. The `investment-research.service` template in the repo has blank placeholders — never put real values there. The drop-in takes precedence and is unaffected by `deploy.sh` or `git pull`.
+
 ### Ongoing deploys (from Windows)
 
 The easiest path is a plain `git push origin main` — the pre-push hook calls `deploy.ps1` automatically (see [Git hooks](#git-hooks) below). To deploy without that hook, or from a machine where it isn't installed:
