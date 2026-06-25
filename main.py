@@ -4596,7 +4596,8 @@ def _render_trade_card(e: dict) -> None:
     days_held      = int(e.get("days_held") or 0)
     days_remaining = int(e.get("days_remaining") or 0)
     near_max_hold  = bool(e.get("near_max_hold"))
-    max_hold_days  = int(e.get("max_holding_days") or 30)
+    _raw_max       = e.get("max_holding_days")
+    max_hold_days  = int(_raw_max) if _raw_max is not None else None
     acct_name      = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
 
     # ── P&L — GBP only, no raw secondary ─────────────────────────────────────
@@ -4678,7 +4679,8 @@ def _render_trade_card(e: dict) -> None:
         f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
         f"<strong style='font-size:1rem'>{ticker}</strong>"
-        f"<span style='color:#64748b;font-size:0.85rem'>{direction} · Day {days_held}/{max_hold_days}</span>"
+        f"<span style='color:#64748b;font-size:0.85rem'>{direction} · "
+        f"{'Day ' + str(days_held) + '/' + str(max_hold_days) if max_hold_days is not None else 'Day ' + str(days_held)}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
         f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
         f"</div>"
@@ -4874,6 +4876,151 @@ def _render_system_health_banner() -> None:
                 dismissed.add(alert_key)
                 st.session_state["health_dismissed"] = dismissed
                 st.rerun()
+
+
+def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
+    """Return enriched trade-card dicts for open T212 Invest positions.
+
+    Positions come from session state (populated by the Status page auto-refresh)
+    or, if stale/absent, from a fresh API call.  Only positions whose UCITS ticker
+    appears in ucits_mapping are included — unmanaged holdings are ignored.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return []
+    if not (os.environ.get("T212_API_KEY", "") and os.environ.get("T212_API_SECRET", "")):
+        return []
+
+    ucits_map     = t212_cfg.get("ucits_mapping", {})
+    reverse_ucits = {v: k for k, v in ucits_map.items()}
+    if not reverse_ucits:
+        return []
+
+    # Use cached positions from session state if fresh enough (< 5 min old)
+    t2_session  = st.session_state.get("t212_account_data")
+    t2_positions: list | None = None
+    if t2_session and not t2_session.get("error"):
+        try:
+            fetched_at = datetime.fromisoformat(t2_session.get("fetched_at", "2000-01-01"))
+            if fetched_at > datetime.utcnow() - timedelta(minutes=5):
+                t2_positions = t2_session.get("positions", [])
+        except Exception:
+            pass
+
+    if t2_positions is None:
+        try:
+            from brokers.trading212 import Trading212Client as _T212BriefClient  # noqa: PLC0415
+            _client = _T212BriefClient(live=t212_cfg.get("live", False))
+            t2_positions = _client.get_positions() or []
+            # Cache so the Status page picks it up without a duplicate fetch
+            _existing = st.session_state.get("t212_account_data") or {}
+            st.session_state["t212_account_data"] = {
+                **_existing,
+                "positions":  t2_positions,
+                "fetched_at": datetime.utcnow().isoformat(),
+                "error":      None,
+            }
+        except Exception:
+            return []
+
+    # Build a lookup: ucits_ticker → position dict (for O(1) access)
+    pos_by_ucits = {p.get("ticker", ""): p for p in (t2_positions or [])}
+
+    # Load entry info (signal, score, fill date) from t212_invest_orders in one query
+    try:
+        from data.database import get_engine as _get_eng  # noqa: PLC0415
+        from sqlalchemy import text as _sa_t              # noqa: PLC0415
+        with _get_eng().connect() as _tc:
+            _entry_rows = _tc.execute(_sa_t("""
+                SELECT t212_ticker, signal_type, confluence_score, filled_at
+                FROM t212_invest_orders
+                WHERE direction = 'BUY' AND status = 'FILLED'
+                ORDER BY filled_at ASC
+            """)).mappings().all()
+        # Keep only the earliest fill per UCITS ticker (= opening entry)
+        entry_by_ucits: dict[str, dict] = {}
+        for _r in _entry_rows:
+            _u = _r["t212_ticker"]
+            if _u not in entry_by_ucits:
+                entry_by_ucits[_u] = dict(_r)
+    except Exception:
+        entry_by_ucits = {}
+
+    cards: list[dict] = []
+    for ucits_ticker, research_ticker in reverse_ucits.items():
+        pos = pos_by_ucits.get(ucits_ticker)
+        if not pos:
+            continue  # no open position for this mapping
+
+        avg_price     = float(pos.get("averagePrice") or 0)
+        qty           = float(pos.get("quantity")     or 0)
+        current_price = float(pos.get("currentPrice") or 0)
+        ppl           = float(pos.get("ppl")          or 0)  # T212-computed GBP P&L
+
+        if qty <= 0 or avg_price <= 0:
+            continue
+
+        unreal_pct = round((current_price - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0.0
+
+        entry_info    = entry_by_ucits.get(ucits_ticker, {})
+        entry_signal  = entry_info.get("signal_type")  or "NEUTRAL"
+        entry_score   = float(entry_info.get("confluence_score") or 0)
+        filled_at_str = entry_info.get("filled_at")
+
+        entry_dt: datetime | None = None
+        if filled_at_str:
+            try:
+                entry_dt = datetime.fromisoformat(str(filled_at_str))
+            except Exception:
+                pass
+        days_held = max(0, (datetime.utcnow() - entry_dt).days) if entry_dt else 0
+
+        try:
+            sig_row       = get_current_signal(research_ticker)
+            current_signal = sig_row.get("signal") or "NEUTRAL"
+            current_score  = float(sig_row.get("confluence_score") or 0)
+        except Exception:
+            current_signal = "NEUTRAL"
+            current_score  = 0.0
+
+        # Simplified status for buy-and-hold ETF: no stop loss, signal-driven only
+        if current_signal == "STRONG_SELL":
+            status = "EXIT SIGNAL"
+        elif current_signal == "SELL":
+            status = "WEAKENING"
+        else:
+            status = "ON TRACK"
+        status_priority = {"STOP LOSS": 3, "EXIT SIGNAL": 2, "WEAKENING": 1, "ON TRACK": 0}[status]
+
+        cards.append({
+            "ticker":          research_ticker,
+            "direction":       "LONG",
+            "entry_price":     avg_price,
+            "quantity":        qty,
+            "entry_date":      entry_dt.isoformat() if entry_dt else None,
+            "days_held":       days_held,
+            "days_remaining":  99999,
+            "near_max_hold":   False,
+            "max_holding_days": None,     # no max hold for invest positions
+            "live_price":      current_price,
+            "unreal_pnl":      ppl,
+            "unreal_pnl_gbp":  ppl,       # T212 Invest account is GBP-denominated
+            "unreal_pct":      unreal_pct,
+            "price_unavailable": current_price == 0,
+            "current_signal":  current_signal,
+            "current_score":   current_score,
+            "entry_signal":    entry_signal,
+            "entry_score":     entry_score,
+            "status":          status,
+            "status_priority": status_priority,
+            "account_name":    "T212 Invest",
+            "account_type":    "T212_INVEST",
+            "stop_loss_price": None,
+            "stop_loss":       None,
+            "take_profit_price": None,
+        })
+
+    return cards
 
 
 def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
@@ -5522,46 +5669,52 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # ── Section 3: Open Trade Monitor ──────────────────────────────────────
     st.markdown("### 👀 Open Trade Monitor")
 
-    open_trades = get_open_trades()
+    open_trades       = get_open_trades()
+    t212_invest_cards = _get_t212_invest_brief_cards(config)
 
-    if not open_trades:
+    if not open_trades and not t212_invest_cards:
         st.info("No open trades. Log a trade on the **Trade Log** page.")
     else:
-        tickers_needed = list({t["ticker"] for t in open_trades})
-        live_prices    = {t: _cached_latest_price(t) for t in tickers_needed}
+        enriched: list[dict] = []
+        if open_trades:
+            tickers_needed = list({t["ticker"] for t in open_trades})
+            live_prices    = {t: _cached_latest_price(t) for t in tickers_needed}
 
-        enriched = [
-            enrich_open_trade(t, live_prices.get(t["ticker"]), asset_max_hold(t["ticker"], config))
-            for t in open_trades
-        ]
-        enriched.sort(key=lambda x: x.get("status_priority", 0), reverse=True)
+            enriched = [
+                enrich_open_trade(t, live_prices.get(t["ticker"]), asset_max_hold(t["ticker"], config))
+                for t in open_trades
+            ]
 
-        # Compute GBP P&L for each card (primary display currency)
-        _brief_gbpusd = _cached_latest_price("GBPUSD=X")
-        _brief_usdjpy = _cached_latest_price("USDJPY=X")
-        for _e in enriched:
-            _upnl   = _e.get("unreal_pnl")
-            _etick  = _e.get("ticker", "")
-            _quote  = FOREX_QUOTE_CCY.get(_etick)
-            _e_ccy  = _e.get("currency") or "GBP"
-            _e_acct = _e.get("account_currency") or "GBP"
-            _e_fx   = float(_e.get("fx_rate_at_entry") or 1.0)
-            _pgbp   = None
-            try:
-                if _upnl is not None:
-                    if _quote == "JPY":
-                        if (_brief_usdjpy and _brief_gbpusd
-                                and _brief_usdjpy > 0 and _brief_gbpusd > 0):
-                            _pgbp = (_upnl / _brief_usdjpy) / _brief_gbpusd
-                    elif _quote == "GBP" or (_e_ccy == "GBP" and _e_acct == "GBP" and _quote is None):
-                        _pgbp = _upnl
-                    elif _brief_gbpusd and _brief_gbpusd > 0:
-                        _pgbp = _upnl / _brief_gbpusd
-                    elif _e_fx > 0:
-                        _pgbp = _upnl / _e_fx
-            except Exception:
-                pass
-            _e["unreal_pnl_gbp"] = _pgbp
+            # Compute GBP P&L for each CFD/virtual card (primary display currency)
+            _brief_gbpusd = _cached_latest_price("GBPUSD=X")
+            _brief_usdjpy = _cached_latest_price("USDJPY=X")
+            for _e in enriched:
+                _upnl   = _e.get("unreal_pnl")
+                _etick  = _e.get("ticker", "")
+                _quote  = FOREX_QUOTE_CCY.get(_etick)
+                _e_ccy  = _e.get("currency") or "GBP"
+                _e_acct = _e.get("account_currency") or "GBP"
+                _e_fx   = float(_e.get("fx_rate_at_entry") or 1.0)
+                _pgbp   = None
+                try:
+                    if _upnl is not None:
+                        if _quote == "JPY":
+                            if (_brief_usdjpy and _brief_gbpusd
+                                    and _brief_usdjpy > 0 and _brief_gbpusd > 0):
+                                _pgbp = (_upnl / _brief_usdjpy) / _brief_gbpusd
+                        elif _quote == "GBP" or (_e_ccy == "GBP" and _e_acct == "GBP" and _quote is None):
+                            _pgbp = _upnl
+                        elif _brief_gbpusd and _brief_gbpusd > 0:
+                            _pgbp = _upnl / _brief_gbpusd
+                        elif _e_fx > 0:
+                            _pgbp = _upnl / _e_fx
+                except Exception:
+                    pass
+                _e["unreal_pnl_gbp"] = _pgbp
+
+        # Merge T212 Invest positions and sort all cards by urgency
+        all_cards = enriched + t212_invest_cards
+        all_cards.sort(key=lambda x: x.get("status_priority", 0), reverse=True)
 
         alerts = [e for e in enriched if e["status"] in ("EXIT SIGNAL", "STOP LOSS")]
         if alerts and should_send_alert(config):
@@ -5569,7 +5722,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             if ok:
                 st.toast(f"Alert email sent: {msg}", icon="📧")
 
-        for e in enriched:
+        for e in all_cards:
             _render_trade_card(e)
 
         if alerts:
@@ -5590,7 +5743,10 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # ── Section 4: Today's Opportunities ───────────────────────────────────
     st.markdown("### 🎯 Today's Opportunities")
 
-    open_tickers = {t["ticker"] for t in open_trades} if open_trades else set()
+    open_tickers = (
+        {t["ticker"] for t in open_trades} |
+        {c["ticker"] for c in t212_invest_cards}
+    )
     tradeable_signals = [s for s in all_signals if s.get("ticker") in tradeable_set]
     opps = build_opportunities(tradeable_signals, open_tickers, active_overlays, watchlist)
 
