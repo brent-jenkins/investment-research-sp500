@@ -535,6 +535,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         ucits_currencies[_ut] = _ccy
 
     live             = t212_cfg.get("live", False)
+    long_only        = bool(t212_cfg.get("long_only", True))  # T212 Invest is cash-only
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
     max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
 
@@ -642,7 +643,11 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     account_label = "LIVE" if live else "DEMO"
 
     # ────────────────────────────────────────────────────────────────────────
-    # Phase 1 — EXIT
+    # Phase 1 — EXIT (close existing long positions only)
+    #
+    # T212 Invest is a cash account — no shorting.  This loop iterates ONLY
+    # over positions we currently hold (positions_by_ucits), so every sell
+    # order is a position close, never a naked short.
     #
     # Trigger priority:
     #   1. Immediate: SELL or STRONG_SELL signal
@@ -720,9 +725,20 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         if not should_exit:
             continue
 
+        # Long-only safety: current_qty must be positive (we hold shares).
+        # current_qty <= 0 is caught above, but re-check before sending the
+        # close order so we never accidentally place a naked short.
+        close_qty = abs(current_qty)
+        if close_qty <= 0:
+            logger.warning(
+                "T212 Invest: %s close skipped — quantity %.4f is not positive.",
+                us_ticker, current_qty,
+            )
+            continue
+
         logger.info(
             "T212 Invest: exiting %s (%s) — %s, qty=%.4f",
-            us_ticker, ucits_ticker, exit_reason, current_qty,
+            us_ticker, ucits_ticker, exit_reason, close_qty,
         )
 
         status     = "FAILED"
@@ -731,7 +747,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         live_price = prices.get(us_ticker, 0.0)
 
         try:
-            response = client.place_market_order(ucits_ticker, -current_qty)
+            response = client.place_market_order(ucits_ticker, -close_qty)
             order_id = str(response.get("id", ""))
             status   = "PLACED"
             logger.info(
@@ -743,12 +759,12 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             _set_t212_error(f"Sell order failed for {us_ticker}: {error_msg}")
             _send_t212_error_email(error_msg, config)
 
-        est_gbp = (live_price / gbpusd) * current_qty if live_price and gbpusd else None
+        est_gbp = (live_price / gbpusd) * close_qty if live_price and gbpusd else None
         _log_t212_order(
             ticker=us_ticker,
             t212_ticker=ucits_ticker,
             direction="SELL",
-            quantity=current_qty,
+            quantity=close_qty,
             estimated_price=live_price,
             estimated_value_gbp=est_gbp,
             status=status,
@@ -768,7 +784,12 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         time.sleep(0.5)
 
     # ────────────────────────────────────────────────────────────────────────
-    # Phase 2 — BUY: open new positions for STRONG_BUY signals
+    # Phase 2 — BUY: open new long positions for BUY/STRONG_BUY signals
+    #
+    # T212 Invest is a cash account — no shorting.  Tickers with SELL or
+    # STRONG_SELL signals are skipped here; the account simply holds cash
+    # during bearish regimes rather than going net short.  Short-side signal
+    # validation is handled by the virtual trading system instead.
     # ────────────────────────────────────────────────────────────────────────
     if total_val > 0 and (invested / total_val) >= max_deployed_pct:
         logger.info(
@@ -820,6 +841,14 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             logger.warning(
                 "T212 Invest: %s (%s) qty %.4f is below instrument minimum %.4f — skipping.",
                 us_ticker, ucits_ticker, quantity, min_qty,
+            )
+            continue
+
+        # Long-only safety: quantity must be strictly positive for a BUY order.
+        if quantity <= 0:
+            logger.warning(
+                "T212 Invest: %s BUY skipped — quantity %.4f is not positive.",
+                us_ticker, quantity,
             )
             continue
 
