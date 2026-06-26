@@ -344,7 +344,8 @@ def poll_placed_orders(config: dict) -> int:
         eng = get_engine()
         with eng.connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT id, order_id, ticker, t212_ticker, direction, quantity
+                SELECT id, order_id, ticker, t212_ticker, direction,
+                       quantity, currency_code
                 FROM t212_invest_orders
                 WHERE status = 'PLACED'
                   AND order_id IS NOT NULL
@@ -353,12 +354,39 @@ def poll_placed_orders(config: dict) -> int:
                 LIMIT 50
             """)).mappings().all()
         placed = [dict(r) for r in rows]
+
+        # Fetch FX rates for converting instrument-currency fill values to GBP.
+        fx_rows = conn.execute(sa_text("""
+            SELECT p.ticker, p.close
+            FROM price_data p
+            INNER JOIN (
+                SELECT ticker, MAX(date) AS md FROM price_data
+                WHERE ticker IN ('GBPUSD=X', 'EURUSD=X')
+                GROUP BY ticker
+            ) latest ON p.ticker = latest.ticker AND p.date = latest.md
+        """)).mappings().all()
+        _fx = {r["ticker"]: float(r["close"]) for r in fx_rows if r["close"]}
     except Exception as exc:
         logger.warning("poll_placed_orders: DB read failed — %s", exc)
         return 0
 
     if not placed:
         return 0
+
+    _gbpusd = _fx.get("GBPUSD=X", 1.27)
+    _eurusd = _fx.get("EURUSD=X", 1.08)
+
+    def _native_to_gbp(amount: float, ccy: Optional[str]) -> float:
+        """Convert *amount* in instrument-native currency to GBP."""
+        if not ccy or ccy == "GBP":
+            return amount
+        if ccy == "GBX":          # pence
+            return amount / 100.0
+        if ccy == "USD":
+            return amount / _gbpusd
+        if ccy == "EUR":
+            return amount * _eurusd / _gbpusd
+        return amount              # unknown — return unconverted
 
     live = t212_cfg.get("live", False)
     try:
@@ -484,13 +512,15 @@ def poll_placed_orders(config: dict) -> int:
         now_iso  = datetime.utcnow().isoformat()
         time_mod = resp.get("timeModified") or resp.get("filledAt") or now_iso
 
-        # Compute actual position value (fill price × qty) so estimated_value_gbp
-        # reflects the real cost basis rather than the intended position size.
+        # Compute actual position value in GBP (fill price × qty converted from
+        # the instrument's native currency) so estimated_value_gbp reflects the
+        # real cost basis rather than the intended position size.
         # Use filled_qty first; fall back to the ordered quantity stored in the DB.
         effective_qty = filled_qty or (float(row.get("quantity") or 0) or None)
         actual_value: Optional[float] = None
         if new_status == "FILLED" and fill_price and effective_qty:
-            actual_value = round(fill_price * effective_qty, 2)
+            ccy = row.get("currency_code") or "USD"
+            actual_value = round(_native_to_gbp(fill_price * effective_qty, ccy), 2)
 
         try:
             from sqlalchemy import text as sa_text
