@@ -27,20 +27,20 @@ Add your FRED API key to `config.yaml` under `macro.fred_api_key` (free at [fred
 
 ## Pages
 
-### 📅 Daily Briefing (default page)
-The operational home page. Compact header block shows the active market regime, all key stats (^GSPC vs SMA200, ADX, VIX, yield spread, USD trend), any active regime overlays or catch-up opportunity flags, signal distribution counts, and the last-updated timestamp — all in one dense card.
+### Daily Briefing (default page)
+The operational home page. A single compact status bar shows the active market regime, key stats (^GSPC vs SMA200, ADX, VIX, yield spread, USD trend), and any active regime overlay pills — all in one bordered row. The regime description and signal-threshold caption appear below it. Active overlay detail strips follow with their full descriptions. FOMC key-event pills and signal distribution counts (all assets / tradeable-only) complete the header block.
 
 Below the header:
 - **Open Trade Monitor** — CFD/virtual trades and T212 Invest positions combined into a single list, sorted by urgency. Each card shows live GBP P&L, current signal, score delta since entry, ATR-based stop loss, live R:R, and a health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS). Tickers with an open T212 Invest position are excluded from Today's Opportunities to avoid duplicate signals.
 - **Top Opportunities** — STRONG BUY / STRONG SELL signals filtered to tradeable assets by default. Each card shows the rationale, live price, and overlay confidence warning badges (MACRO_STRESS −20%, CREDIT_STRESS −15%, RECESSION_RISK −25%, EM_STRESS −15%) when relevant overlays are active for that ticker.
 
-### 📊 Signals
+### Signals
 Compact header block (regime badge, overlays, catch-up flags, signal distribution pills, timestamp — all in one bordered card). Market intelligence plain-English summary of signal breadth, VIX, ADX, and regime context. Full ranked signal table for all assets with module score symbols (▲ / ● / ▼) per column and signal-badge colour coding.
 
-### 📈 Charts
+### Charts
 Asset-group landing page with group cards. Clicking through shows a candlestick + volume chart, indicator panel (RSI, Bollinger Bands, MACD, ADX, SMA20/50/200), and raw indicator values for the most recent date.
 
-### 🔗 Relationships
+### Relationships
 Cross-asset correlation analysis across **28 predefined pairs**. Compact header shows the pair count and last-computed timestamp (read dynamically from `RELATIONSHIP_MAP`). 30-day correlation matrix heatmap across all price-data tickers (FRED series such as T10Y2Y and DFII10 are excluded from the heatmap). Pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), and plain-English divergence narratives. Correlations are recomputed automatically on every analysis run.
 
 | Pair | Expected direction |
@@ -78,13 +78,13 @@ Cross-asset correlation analysis across **28 predefined pairs**. Compact header 
 
 Assets not directly in any pair inherit a correlation score via `CATEGORY_PROXY` in `analysis/correlations.py` — each proxy maps a ticker to a related pair member and blends 50% of that member's pair score into the ticker's confluence score. For example, COPX → GLD, XOP → USO, ITB → TLT, USDCNY=X → FXI. A proxy inheritance table is shown at the bottom of the Relationships page.
 
-### 📋 Trade Log
+### Trade Log
 Full CFD trade lifecycle: log new trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name), open-position tracker with live GBP P&L and per-trade edit expanders, close-trade form, and position sizing guidance based on account balance and per-trade risk settings. A **T212 Invest Positions** table below the CFD tracker shows all open automated ETF positions (ticker, UCITS ID, qty, avg/current price, current value £, P&L £/%, days held, current signal, status) — read-only, auto-managed by the EOD pipeline.
 
-### 🏆 Performance
+### Performance
 Historical analysis of all closed trades: equity curve (cumulative GBP P&L), win rate by signal type and by regime, indicator hit-rate table, closed trades list. All sections filter to a selected date range.
 
-### 🧪 Backtest
+### Backtest
 Replay the current signal logic over up to 10 years of stored historical price data — no look-ahead bias (vectorized pandas rolling operations).
 
 - **Run & Overview** — select date range (presets: Full History / COVID Era / Bear Market / Recovery / Custom), ticker scope (tradeable-only / **T212 CFD Only** / all assets), ATR stop multiplier, max holding days. Runs asynchronously and stores results in the database. Equity curve, full metrics strip (win rate, Sharpe, max drawdown, profit factor), and complete simulated trade table. A collapsible **T212 CFD comparison** panel instantly filters any existing run's trades to only tickers with a `trading212_instrument` mapping and shows a side-by-side metrics table plus a breakdown of excluded tickers and how many trades each contributed — no re-run required.
@@ -94,10 +94,14 @@ Replay the current signal logic over up to 10 years of stored historical price d
 - **Walk-Forward** — rolling 6-month performance windows in 1-month steps. Consistent win rates across windows indicate the signal logic has stable edge.
 - **Virtual Trading** — view open/closed virtual positions and weekly virtual P&L (requires virtual trading enabled in config).
 
-### 🖥️ Status
-System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **⚡ Run Analysis Now** (analysis + signals only) and **🔄 Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
+### Status
+System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **Run Analysis Now** (analysis + signals only) and **Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
-A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml: account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). Account data loads automatically when the Status page opens and **auto-refreshes every 60 seconds** — no manual click needed. The "🔄 Refresh Account" button is still available for an immediate on-demand refresh; it also polls `GET /equity/orders/{id}` for any orders still showing PLACED, updating status, fill price, filled quantity, and the actual GBP cost basis in the database. An hourly background poll runs the same order-fill check as part of the trade alert job. **Note:** T212 removes filled market orders from the orders endpoint once they become open positions — a 404 response does not mean cancelled. The poller checks for an active position on 404; if one exists the order is marked FILLED with `averagePrice` from the position (derived as `currentPrice − ppl/quantity` if `averagePrice` is null), and `estimated_value_gbp` is updated with `fill_price × quantity` converted to GBP using live FX rates — T212 returns prices in the instrument's native currency (USD, EUR, or GBP) so conversion is required for correct cost basis. Only if no position is found is the order marked CANCELLED. Open positions are displayed on the **Daily Briefing** (as trade cards alongside CFD positions) and the **Trade Log** (as a dedicated table) rather than on the Status page. Position data shown on the Daily Briefing is cached for 90 seconds so closed positions clear within two Status page refresh cycles. A collapsible UCITS mapping table shows which research tickers map to T212 instrument IDs. When FAILED orders are present, a **Retry failed orders** list appears below the order table — each row shows the ticker, direction, quantity, and error, with a **↻ Retry** button that applies the instrument precision/minimum-quantity guard and re-submits the order.
+A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml. It is split into two tabs:
+- **Account tab** — account value, available cash, deployed-capital progress bar (auto-refreshes every 60 s, "Refresh Account" button for immediate on-demand refresh), and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). When FAILED orders are present a **Retry failed orders** list appears — each row shows the ticker, direction, quantity, and error with a **Retry** and **Delete** button. The Retry button applies the instrument precision/minimum-quantity guard and re-submits.
+- **Mapping tab** — UCITS instrument mapping table (which research tickers map to T212 instrument IDs).
+
+**Note:** T212 removes filled market orders from the orders endpoint once they become open positions — a 404 response does not mean cancelled. The poller checks for an active position on 404; if one exists the order is marked FILLED with `averagePrice` from the position (derived as `currentPrice − ppl/quantity` if `averagePrice` is null), and `estimated_value_gbp` is updated with `fill_price × quantity` converted to GBP using live FX rates — T212 returns prices in the instrument's native currency (USD, EUR, or GBP) so conversion is required for correct cost basis. Only if no position is found is the order marked CANCELLED. Open positions are displayed on the **Daily Briefing** and **Trade Log** pages, not here.
 
 > **Forex pairs excluded by design:** Tickers ending in `=X` (e.g. `GBPUSD=X`, `EURUSD=X`) are never automated through T212 Invest. T212 Invest is a cash/equity account that supports stocks and ETFs only — forex is CFD-only, and the T212 CFD account has no public API. All forex trades remain manual CFD positions logged in the Trade Log.
 >
