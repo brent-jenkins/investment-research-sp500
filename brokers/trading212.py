@@ -353,19 +353,19 @@ def poll_placed_orders(config: dict) -> int:
                 ORDER BY placed_at DESC
                 LIMIT 50
             """)).mappings().all()
-        placed = [dict(r) for r in rows]
+            placed = [dict(r) for r in rows]
 
-        # Fetch FX rates for converting instrument-currency fill values to GBP.
-        fx_rows = conn.execute(sa_text("""
-            SELECT p.ticker, p.close
-            FROM price_data p
-            INNER JOIN (
-                SELECT ticker, MAX(date) AS md FROM price_data
-                WHERE ticker IN ('GBPUSD=X', 'EURUSD=X')
-                GROUP BY ticker
-            ) latest ON p.ticker = latest.ticker AND p.date = latest.md
-        """)).mappings().all()
-        _fx = {r["ticker"]: float(r["close"]) for r in fx_rows if r["close"]}
+            # Fetch FX rates for converting instrument-currency fill values to GBP.
+            fx_rows = conn.execute(sa_text("""
+                SELECT p.ticker, p.close
+                FROM price_data p
+                INNER JOIN (
+                    SELECT ticker, MAX(date) AS md FROM price_data
+                    WHERE ticker IN ('GBPUSD=X', 'EURUSD=X')
+                    GROUP BY ticker
+                ) latest ON p.ticker = latest.ticker AND p.date = latest.md
+            """)).mappings().all()
+            _fx = {r["ticker"]: float(r["close"]) for r in fx_rows if r["close"]}
     except Exception as exc:
         logger.warning("poll_placed_orders: DB read failed — %s", exc)
         return 0
