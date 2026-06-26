@@ -630,7 +630,8 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         eng = get_engine()
         with eng.connect() as conn:
             sig_rows = conn.execute(sa_text("""
-                SELECT s.ticker, s.signal, s.confluence_score, s.regime
+                SELECT s.ticker, s.signal, s.confluence_score,
+                       COALESCE(s.regime, s.notes) AS regime
                 FROM signals s
                 INNER JOIN (
                     SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
