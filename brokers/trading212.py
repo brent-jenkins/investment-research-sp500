@@ -937,7 +937,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             direction="BUY",
             quantity=quantity,
             estimated_price=live_price,
-            estimated_value_gbp=position_gbp if status == "PLACED" else None,
+            estimated_value_gbp=position_gbp,
             status=status,
             order_id=order_id,
             signal_type=sig_type,
