@@ -344,7 +344,7 @@ def poll_placed_orders(config: dict) -> int:
         eng = get_engine()
         with eng.connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT id, order_id, ticker, t212_ticker, direction
+                SELECT id, order_id, ticker, t212_ticker, direction, quantity
                 FROM t212_invest_orders
                 WHERE status = 'PLACED'
                   AND order_id IS NOT NULL
@@ -427,7 +427,11 @@ def poll_placed_orders(config: dict) -> int:
                         order_id, t212_ticker,
                         f"{avg_price:.4f}" if avg_price is not None else "unknown",
                     )
-                    resp = {"status": "FILLED", "fillPrice": avg_price}
+                    resp = {
+                        "status":         "FILLED",
+                        "fillPrice":      avg_price,
+                        "filledQuantity": position.get("quantity"),
+                    }
                 else:
                     logger.warning(
                         "poll_placed_orders: order %s not found (404) and no position"
@@ -480,27 +484,37 @@ def poll_placed_orders(config: dict) -> int:
         now_iso  = datetime.utcnow().isoformat()
         time_mod = resp.get("timeModified") or resp.get("filledAt") or now_iso
 
+        # Compute actual position value (fill price × qty) so estimated_value_gbp
+        # reflects the real cost basis rather than the intended position size.
+        # Use filled_qty first; fall back to the ordered quantity stored in the DB.
+        effective_qty = filled_qty or (float(row.get("quantity") or 0) or None)
+        actual_value: Optional[float] = None
+        if new_status == "FILLED" and fill_price and effective_qty:
+            actual_value = round(fill_price * effective_qty, 2)
+
         try:
             from sqlalchemy import text as sa_text
             from data.database import get_engine
             with get_engine().begin() as conn:
                 conn.execute(sa_text("""
                     UPDATE t212_invest_orders
-                    SET status          = :status,
-                        fill_price      = COALESCE(:fill_price, fill_price),
-                        filled_quantity = COALESCE(:filled_qty, filled_quantity),
-                        filled_at       = CASE WHEN :status = 'FILLED'
-                                          THEN :time_mod ELSE filled_at END,
-                        cancelled_at    = CASE WHEN :status IN ('CANCELLED', 'REJECTED')
-                                          THEN :now ELSE cancelled_at END
+                    SET status              = :status,
+                        fill_price          = COALESCE(:fill_price, fill_price),
+                        filled_quantity     = COALESCE(:filled_qty, filled_quantity),
+                        estimated_value_gbp = COALESCE(:actual_value, estimated_value_gbp),
+                        filled_at           = CASE WHEN :status = 'FILLED'
+                                              THEN :time_mod ELSE filled_at END,
+                        cancelled_at        = CASE WHEN :status IN ('CANCELLED', 'REJECTED')
+                                              THEN :now ELSE cancelled_at END
                     WHERE id = :row_id
                 """), {
-                    "status":     new_status,
-                    "fill_price": fill_price,
-                    "filled_qty": filled_qty,
-                    "time_mod":   time_mod,
-                    "now":        now_iso,
-                    "row_id":     row_id,
+                    "status":       new_status,
+                    "fill_price":   fill_price,
+                    "filled_qty":   filled_qty,
+                    "actual_value": actual_value,
+                    "time_mod":     time_mod,
+                    "now":          now_iso,
+                    "row_id":       row_id,
                 })
             updated += 1
             logger.info(
