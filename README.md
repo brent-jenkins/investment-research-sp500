@@ -99,6 +99,10 @@ System status grid (Last Deployment, Service Uptime, Database Size, Last Data Re
 
 A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml: account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). Account data loads automatically when the Status page opens and **auto-refreshes every 60 seconds** — no manual click needed. The "🔄 Refresh Account" button is still available for an immediate on-demand refresh; it also polls `GET /equity/orders/{id}` for any orders still showing PLACED, updating status and fill price in the database. An hourly background poll runs the same order-fill check as part of the trade alert job. Open positions are displayed on the **Daily Briefing** (as trade cards alongside CFD positions) and the **Trade Log** (as a dedicated table) rather than on the Status page. A collapsible UCITS mapping table shows which research tickers map to T212 instrument IDs. When FAILED orders are present, a **Retry failed orders** list appears below the order table — each row shows the ticker, direction, quantity, and error, with a **↻ Retry** button that applies the instrument precision/minimum-quantity guard and re-submits the order.
 
+> **Forex pairs excluded by design:** Tickers ending in `=X` (e.g. `GBPUSD=X`, `EURUSD=X`) are never automated through T212 Invest. T212 Invest is a cash/equity account that supports stocks and ETFs only — forex is CFD-only, and the T212 CFD account has no public API. All forex trades remain manual CFD positions logged in the Trade Log.
+>
+> **Ticker substitutions in `ucits_mapping`:** Some research tickers are mapped to a different T212 instrument where T212 doesn't carry the exact fund. For example, `VIXY` maps to `VXX` — VXX (iPath S&P 500 VIX Short-Term Futures ETN) is the T212-available equivalent, tracking the same VIX short-term futures index. Each substitution is documented as an inline comment on the relevant `ucits_mapping` entry in `config.yaml`.
+
 ---
 
 ## Analysis pipeline
@@ -336,7 +340,10 @@ notifications:
     enabled: true         # set false to disable without touching email.enabled
 
 backtest:
-  max_holding_days: 60           # exit after N days regardless of signal
+  max_holding_days: 30           # default max hold — equities, ETFs, commodities
+  max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
+  max_holding_days_crypto: 14    # crypto (ticker ends with -USD) — high volatility, shorter cycles
+  max_holding_days_bonds: 45     # bond ETFs (TLT, IEF, etc.) — slow-moving, longer trend duration
   atr_stop_multiplier: 2.0       # stop loss = entry ± N × ATR
   walk_forward_months: 6
   walk_forward_step: 1
