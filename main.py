@@ -984,7 +984,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     # ---- Generate Signals button (top of page, right of header) -----------
     _gs_col, _ = st.columns([2, 5])
     with _gs_col:
-        if st.button("⚡ Generate Signals", key="signals_gen_btn", use_container_width=True):
+        if st.button("⚡ Generate Signals", key="signals_gen_btn", width="stretch"):
             with st.spinner("Regenerating signals…"):
                 try:
                     _tickers = get_all_tickers(config)
@@ -1295,7 +1295,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     header_px     = 38
     st.dataframe(
         styler,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=header_px + row_height_px * len(records),
     )
@@ -1733,11 +1733,14 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         )
 
         # FX conversion fee — auto-filled to 0.50% for forex pairs, 0% otherwise.
+        # Re-initialise when the ticker changes so the default tracks the new selection.
         _fx_fee_default = 0.50 if sel_ticker in FOREX_QUOTE_CCY else 0.0
+        if st.session_state.get("_log_fx_fee_ticker") != sel_ticker:
+            st.session_state["log_fx_fee_pct"] = _fx_fee_default
+            st.session_state["_log_fx_fee_ticker"] = sel_ticker
         fx_fee_pct = st.number_input(
             "FX Conversion Fee (%)",
             min_value=0.0, max_value=5.0,
-            value=float(st.session_state.get("log_fx_fee_pct", _fx_fee_default)),
             step=0.01, format="%.2f",
             help="T212 charges 0.50% on currency conversion for forex and cross-currency CFDs.",
             key="log_fx_fee_pct",
@@ -2334,7 +2337,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 format="%.0f%%",
             )
 
-        st.dataframe(_styler, use_container_width=True, hide_index=True,
+        st.dataframe(_styler, width="stretch", hide_index=True,
                      height=38 + 35 * len(rows),
                      column_config=_col_cfg if _col_cfg else None)
         st.caption(
@@ -2482,7 +2485,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 .map(_tl_style_status, subset=["Status"])
                 .format(_inv_fmt)
             )
-            st.dataframe(_inv_styler, use_container_width=True, hide_index=True,
+            st.dataframe(_inv_styler, width="stretch", hide_index=True,
                          height=38 + 35 * len(_inv_rows))
             st.caption(
                 "T212 Invest positions are managed automatically by the EOD pipeline. "
@@ -2628,7 +2631,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 yaxis_title="Cumulative P&L (pts)",
                 legend=dict(x=0.01, y=0.99),
             )
-            st.plotly_chart(fig_curve, use_container_width=True)
+            st.plotly_chart(fig_curve, width="stretch")
         else:
             st.caption("No closed trades to plot yet.")
     else:
@@ -2658,7 +2661,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 xaxis_title="Exit Date",
                 yaxis_title="Cumulative P&L (pts)",
             )
-            st.plotly_chart(fig_curve, use_container_width=True)
+            st.plotly_chart(fig_curve, width="stretch")
 
     st.divider()
 
@@ -2733,7 +2736,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                     yaxis=dict(title="Win Rate (%)", range=[0, 110]),
                     showlegend=False,
                 )
-                st.plotly_chart(fig_sig, use_container_width=True)
+                st.plotly_chart(fig_sig, width="stretch")
 
         if not reg_df.empty:
             with ch2:
@@ -2754,7 +2757,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                     yaxis=dict(title="Win Rate (%)", range=[0, 110]),
                     showlegend=False,
                 )
-                st.plotly_chart(fig_reg, use_container_width=True)
+                st.plotly_chart(fig_reg, width="stretch")
 
         st.divider()
 
@@ -2780,7 +2783,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
             .map(_style_hit, subset=["Hit Rate"])
             .format({"Hit Rate": lambda v: f"{v:.0%}" if isinstance(v, float) else "—"})
         )
-        st.dataframe(ind_styler, use_container_width=True, hide_index=True,
+        st.dataframe(ind_styler, width="stretch", hide_index=True,
                      height=38 + 35 * len(ind_df))
 
     st.divider()
@@ -2833,7 +2836,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
         )
         if show_acct_col:
             ct_styler = ct_styler.map(_style_acct_col, subset=["Account"])
-        st.dataframe(ct_styler, use_container_width=True, hide_index=True,
+        st.dataframe(ct_styler, width="stretch", hide_index=True,
                      height=38 + 35 * len(ct_rows))
 
     # ---- R:R Analysis -------------------------------------------------------
@@ -2899,7 +2902,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
                 "Actual R:R":   lambda v: f"{v:+.2f}:1" if isinstance(v, float) else "—",
             })
         )
-        st.dataframe(_rr_styler, use_container_width=True, hide_index=True,
+        st.dataframe(_rr_styler, width="stretch", hide_index=True,
                      height=38 + 35 * len(_rr_rows))
 
         # Summary stats
@@ -3017,7 +3020,7 @@ def _render_learning_dashboard(config: dict) -> None:
                 "Win Rate":         lambda v: f"{v:.0%}" if isinstance(v, float) and not pd.isna(v) else "—",
             })
         )
-        st.dataframe(wt_styler, use_container_width=True, hide_index=True,
+        st.dataframe(wt_styler, width="stretch", hide_index=True,
                      height=38 + 35 * len(wt_df))
 
         st.divider()
@@ -3053,7 +3056,7 @@ def _render_learning_dashboard(config: dict) -> None:
                         yaxis=dict(title="Win Rate (%)", range=[0, 115]),
                         showlegend=False,
                     )
-                    st.plotly_chart(fig_band, use_container_width=True)
+                    st.plotly_chart(fig_band, width="stretch")
 
             if not class_df.empty:
                 with bl2:
@@ -3072,7 +3075,7 @@ def _render_learning_dashboard(config: dict) -> None:
                         yaxis=dict(title="Win Rate (%)", range=[0, 115]),
                         showlegend=False,
                     )
-                    st.plotly_chart(fig_cls, use_container_width=True)
+                    st.plotly_chart(fig_cls, width="stretch")
 
             st.divider()
 
@@ -3106,7 +3109,7 @@ def _render_learning_dashboard(config: dict) -> None:
                 yaxis=dict(title="Weight (%)"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_hist, width="stretch")
             st.divider()
 
         # ── Plain-English summary ────────────────────────────────────────────
@@ -3490,7 +3493,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     _mc1, _mc2 = st.columns(2)
 
     with _mc1:
-        if st.button("⚡ Run Analysis Now", use_container_width=True, type="primary",
+        if st.button("⚡ Run Analysis Now", width="stretch", type="primary",
                      key="status_run_analysis"):
             _cfg     = _load_config()
             _tickers = get_all_tickers(_cfg)
@@ -3507,7 +3510,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.error(f"Analysis failed: {_exc}")
 
     with _mc2:
-        if st.button("🔄 Refresh Data + Analysis", use_container_width=True,
+        if st.button("🔄 Refresh Data + Analysis", width="stretch",
                      key="status_full_refresh"):
             _cfg     = _load_config()
             _tickers = get_all_tickers(_cfg)
@@ -3801,7 +3804,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     else ("color:#dc2626" if v == "SELL" else ""),
                     subset=["Dir"],
                 ),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
             # ── Retry buttons for FAILED orders ──────────────────────────────
@@ -3909,7 +3912,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     _ucits_rows.append({"US Ticker": _uk, "T212 UCITS Ticker": _ut, "Currency": _uc})
                 st.dataframe(
                     pd.DataFrame(_ucits_rows),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
 
     # ── Scheduler Health ──────────────────────────────────────────────────
@@ -4385,7 +4388,7 @@ def _render_relationships_page(config: dict) -> None:
         )
         st.dataframe(
             styler,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=38 + 35 * len(records),
         )
@@ -4426,7 +4429,7 @@ def _render_relationships_page(config: dict) -> None:
     ]
     st.dataframe(
         pd.DataFrame(_proxy_rows),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=38 + 35 * len(_proxy_rows),
     )
@@ -4485,7 +4488,7 @@ def _render_relationships_page(config: dict) -> None:
 
     st.dataframe(
         _cov_df.style.map(_style_coverage, subset=["Coverage"]),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=38 + 35 * len(_cov_df),
     )
@@ -4529,7 +4532,7 @@ def _render_relationships_page(config: dict) -> None:
             xaxis=dict(side="bottom", tickangle=-45),
             yaxis=dict(autorange="reversed"),
         )
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat, width="stretch")
 
 
 # ---------------------------------------------------------------------------
@@ -4627,7 +4630,7 @@ def _render_charts_landing(config: dict) -> None:
                 if st.button(
                     f"**{ticker}**  \n{name}  \n{_sym}{_chg_str}",
                     key=f"cl_{ticker}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state["selected_ticker"] = ticker
                     st.rerun()
@@ -4917,7 +4920,7 @@ def _render_system_health_banner() -> None:
             if st.button(
                 "View Status →",
                 key=f"health_nav_{i}",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state["page"] = "status"
                 st.rerun()
@@ -4926,7 +4929,7 @@ def _render_system_health_banner() -> None:
                 "✕",
                 key=f"health_dismiss_{i}",
                 help="Dismiss this alert for this session",
-                use_container_width=True,
+                width="stretch",
             ):
                 dismissed.add(alert_key)
                 st.session_state["health_dismissed"] = dismissed
@@ -5975,7 +5978,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             return ""
 
         styler = opp_df.style.map(_style_opp_sig, subset=["Signal"]).format({"Score": "{:+.3f}"})
-        st.dataframe(styler, use_container_width=True, hide_index=True,
+        st.dataframe(styler, width="stretch", hide_index=True,
                      height=38 + 35 * len(opp_rows))
         st.caption(
             "Sug. SL = entry ± 2×ATR based on yfinance reference price. "
@@ -6141,7 +6144,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                         height=350, margin=dict(l=0, r=0, t=40, b=0),
                         yaxis=dict(tickformat=".2f"),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Trades table
                 st.markdown("#### Simulated Trades")
@@ -6159,7 +6162,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 st.dataframe(
                     show_df.style.map(lambda v: "color:#16a34a" if v is True else ("color:#dc2626" if v is False else ""), subset=["Win"])
                               .map(lambda v: f"color:{'#16a34a' if v > 0 else '#dc2626'}" if isinstance(v, (int, float)) else "", subset=["P&L %"]),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
 
             # ── T212 CFD Comparison ───────────────────────────────────────────
@@ -6216,7 +6219,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
 
                 st.dataframe(
                     _cmp_df.style.apply(_colour_compare, axis=1),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
 
                 # ── T212 tickers caption ──────────────────────────────────────
@@ -6262,7 +6265,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                             })
 
                         _excl_df = pd.DataFrame(_excl_rows).sort_values("Trades", ascending=False)
-                        st.dataframe(_excl_df, use_container_width=True, hide_index=True)
+                        st.dataframe(_excl_df, width="stretch", hide_index=True)
 
                         _total_excl_trades = sum(r["Trades"] for r in _excl_rows)
                         _total_full_trades = _mets_full.get("total_trades", 0)
@@ -6304,7 +6307,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             st.markdown("### Performance by Regime")
             rp = regime_performance(df)
             if not rp.empty:
-                st.dataframe(rp, use_container_width=True)
+                st.dataframe(rp, width="stretch")
 
     # ── Tab 3: Module Attribution ─────────────────────────────────────────────
     with tab_attr:
@@ -6345,7 +6348,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     yaxis_title="Win Rate %", height=350,
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Detailed table
                 st.markdown("#### Module Detail")
@@ -6358,7 +6361,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     "agreement_pct":          "Agreement %",
                     "n_trades":               "N Trades",
                 })
-                st.dataframe(show, use_container_width=True, hide_index=True)
+                st.dataframe(show, width="stretch", hide_index=True)
 
     # ── Tab 4: Signal Decay ───────────────────────────────────────────────────
     with tab_decay:
@@ -6398,14 +6401,14 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                         xaxis_title="Days Held", yaxis_title="Number of Trades",
                         height=300, margin=dict(l=0, r=0, t=40, b=0),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Avg hold by regime
                 rh = decay.get("regime_holds", {})
                 if rh:
                     st.markdown("#### Average Holding by Regime")
                     rh_df = pd.DataFrame(list(rh.items()), columns=["Regime", "Avg Days"])
-                    st.dataframe(rh_df, use_container_width=True, hide_index=True)
+                    st.dataframe(rh_df, width="stretch", hide_index=True)
 
                 # ── Forex Holding Sensitivity ─────────────────────────────────
                 st.markdown("---")
@@ -6425,7 +6428,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     _fx_df["Profit Factor"] = _fx_df["Profit Factor"].apply(
                         lambda v: "∞ (no losses)" if v is None else f"{v:.2f}"
                     )
-                    st.dataframe(_fx_df, use_container_width=True, hide_index=True)
+                    st.dataframe(_fx_df, width="stretch", hide_index=True)
 
                     # Highlight the current configured value
                     _cfg_fx_hold = int(config.get("backtest", {}).get("max_holding_days_forex", 5))
@@ -6467,7 +6470,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     xaxis_title="Window Start", yaxis_title="Win Rate %",
                     height=320, margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Avg return line
                 fig2 = go.Figure()
@@ -6483,14 +6486,14 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     xaxis_title="Window Start", yaxis_title="Avg Return %",
                     height=280, margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width="stretch")
 
                 st.markdown("#### Window Detail")
                 show_wf = wf_df.copy()
                 show_wf["win_rate"] = (show_wf["win_rate"] * 100).round(1)
                 show_wf.columns = ["Window Start", "Window End", "Win Rate %",
                                     "Avg Return %", "N Trades", "Sharpe", "Max DD %"]
-                st.dataframe(show_wf, use_container_width=True, hide_index=True)
+                st.dataframe(show_wf, width="stretch", hide_index=True)
 
     # ── Tab 6: Virtual Trading ────────────────────────────────────────────────
     with tab_vt:
@@ -6622,7 +6625,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 plot_bgcolor="rgba(0,0,0,0)",
                 showlegend=False,
             )
-            st.plotly_chart(_fig_vt, use_container_width=True)
+            st.plotly_chart(_fig_vt, width="stretch")
 
             # ── Attribution breakdowns ────────────────────────────────────────
             _attr1, _attr2 = st.columns(2)
@@ -6640,7 +6643,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 _by_regime.columns = ["Regime", "Trades", "Win %", "P&L (£)"]
                 _by_regime["Win %"]   = _by_regime["Win %"].round(0).astype(int)
                 _by_regime["P&L (£)"] = _by_regime["P&L (£)"].round(2)
-                st.dataframe(_by_regime, use_container_width=True, hide_index=True)
+                st.dataframe(_by_regime, width="stretch", hide_index=True)
 
             with _attr2:
                 st.markdown("**By signal type**")
@@ -6655,7 +6658,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 _by_sig.columns = ["Signal", "Trades", "Win %", "P&L (£)"]
                 _by_sig["Win %"]   = _by_sig["Win %"].round(0).astype(int)
                 _by_sig["P&L (£)"] = _by_sig["P&L (£)"].round(2)
-                st.dataframe(_by_sig, use_container_width=True, hide_index=True)
+                st.dataframe(_by_sig, width="stretch", hide_index=True)
 
         else:
             st.info("No closed virtual trades yet — portfolio metrics will appear once the first trade closes.")
@@ -6673,7 +6676,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             _open_disp["quantity"]      = pd.to_numeric(_open_disp["quantity"],      errors="coerce").round(4)
             _open_disp["stop_loss_price"] = pd.to_numeric(_open_disp["stop_loss_price"], errors="coerce").round(4)
             _open_disp.columns = ["Ticker", "Dir", "Entry Date", "Entry Price", "Units", "Signal", "Regime", "Stop Loss"]
-            st.dataframe(_open_disp, use_container_width=True, hide_index=True)
+            st.dataframe(_open_disp, width="stretch", hide_index=True)
         else:
             st.caption("No open virtual positions.")
 
@@ -6690,7 +6693,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             _closed_disp["pnl_pct"]    = (pd.to_numeric(_closed_disp["pnl_pct"], errors="coerce") * 100).round(2)
             _closed_disp.columns = ["Ticker", "Dir", "Entry", "Exit", "Entry $", "Exit $", "P&L %", "Signal", "Regime"]
             _closed_disp = _closed_disp.sort_values("Exit", ascending=False)
-            st.dataframe(_closed_disp, use_container_width=True, hide_index=True)
+            st.dataframe(_closed_disp, width="stretch", hide_index=True)
         else:
             st.caption("No closed virtual trades yet.")
 
@@ -6888,10 +6891,10 @@ def main() -> None:
     col4.metric("Volume", f"{latest['volume']:,.0f}")
 
     # Price chart
-    st.plotly_chart(_candlestick_chart(df, selected, name), use_container_width=True)
+    st.plotly_chart(_candlestick_chart(df, selected, name), width="stretch")
 
     # Volume chart
-    st.plotly_chart(_volume_bar_chart(df), use_container_width=True)
+    st.plotly_chart(_volume_bar_chart(df), width="stretch")
 
     # Indicator panel
     _render_indicator_panel(selected)
@@ -6902,7 +6905,7 @@ def main() -> None:
         display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
         st.dataframe(
             display_df.sort_values("date", ascending=False).reset_index(drop=True),
-            use_container_width=True,
+            width="stretch",
         )
 
 
