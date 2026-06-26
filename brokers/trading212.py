@@ -344,7 +344,7 @@ def poll_placed_orders(config: dict) -> int:
         eng = get_engine()
         with eng.connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT id, order_id, ticker, direction
+                SELECT id, order_id, ticker, t212_ticker, direction
                 FROM t212_invest_orders
                 WHERE status = 'PLACED'
                   AND order_id IS NOT NULL
@@ -385,11 +385,32 @@ def poll_placed_orders(config: dict) -> int:
         except Exception as exc:
             http_status = getattr(getattr(exc, "response", None), "status_code", None)
             if http_status == 404:
-                logger.warning(
-                    "poll_placed_orders: order %s not found (404) — marking CANCELLED.",
-                    order_id,
-                )
-                resp = {"status": "CANCELLED"}
+                # T212 removes filled market orders from the orders endpoint once
+                # they become positions — 404 does NOT necessarily mean cancelled.
+                # Check for an active position before deciding the terminal status.
+                t212_ticker = row.get("t212_ticker") or ""
+                position = None
+                if t212_ticker:
+                    try:
+                        position = client.get_position(t212_ticker)
+                    except Exception:
+                        pass
+                if position:
+                    avg_price = position.get("averagePrice") or position.get("currentPrice")
+                    fill_price_from_pos = float(avg_price) if avg_price is not None else None
+                    logger.info(
+                        "poll_placed_orders: order %s not found (404) but position exists"
+                        " for %s — marking FILLED at %.4f.",
+                        order_id, t212_ticker, fill_price_from_pos or 0.0,
+                    )
+                    resp = {"status": "FILLED", "fillPrice": fill_price_from_pos}
+                else:
+                    logger.warning(
+                        "poll_placed_orders: order %s not found (404) and no position"
+                        " for %s — marking CANCELLED.",
+                        order_id, t212_ticker or row.get("ticker", "?"),
+                    )
+                    resp = {"status": "CANCELLED"}
             else:
                 logger.debug(
                     "poll_placed_orders: could not fetch order %s — %s", order_id, exc,
