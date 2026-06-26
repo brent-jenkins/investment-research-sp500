@@ -4985,13 +4985,15 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     if not reverse_ucits:
         return []
 
-    # Use cached positions from session state if fresh enough (< 5 min old)
+    # Use cached positions from session state if fresh enough (< 90 s old).
+    # 90 s matches the Status page auto-refresh cycle so closed positions
+    # are never shown for more than two refresh intervals.
     t2_session  = st.session_state.get("t212_account_data")
     t2_positions: list | None = None
     if t2_session and not t2_session.get("error"):
         try:
             fetched_at = datetime.fromisoformat(t2_session.get("fetched_at", "2000-01-01"))
-            if fetched_at > datetime.utcnow() - timedelta(minutes=5):
+            if fetched_at > datetime.utcnow() - timedelta(seconds=90):
                 t2_positions = t2_session.get("positions", [])
         except Exception:
             pass
