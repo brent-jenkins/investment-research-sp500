@@ -396,14 +396,38 @@ def poll_placed_orders(config: dict) -> int:
                     except Exception:
                         pass
                 if position:
-                    avg_price = position.get("averagePrice") or position.get("currentPrice")
-                    fill_price_from_pos = float(avg_price) if avg_price is not None else None
+                    logger.debug(
+                        "poll_placed_orders: position dict for %s: %s", t212_ticker, position,
+                    )
+                    # Primary: T212 averagePrice (cost basis per unit)
+                    avg_price: Optional[float] = None
+                    for _ap_key in ("averagePrice", "avgPrice", "avg_price"):
+                        _v = position.get(_ap_key)
+                        if _v is not None and float(_v) != 0:
+                            avg_price = float(_v)
+                            break
+                    # Fallback: derive from currentPrice − ppl/quantity
+                    if avg_price is None:
+                        _cp  = position.get("currentPrice")
+                        _ppl = position.get("ppl")
+                        _qty = position.get("quantity")
+                        if _cp is not None and _ppl is not None and _qty:
+                            try:
+                                avg_price = float(_cp) - float(_ppl) / float(_qty)
+                            except (TypeError, ZeroDivisionError, ValueError):
+                                pass
+                    # Last resort: current price
+                    if avg_price is None:
+                        _cp = position.get("currentPrice")
+                        if _cp is not None:
+                            avg_price = float(_cp)
                     logger.info(
                         "poll_placed_orders: order %s not found (404) but position exists"
-                        " for %s — marking FILLED at %.4f.",
-                        order_id, t212_ticker, fill_price_from_pos or 0.0,
+                        " for %s — marking FILLED at %s.",
+                        order_id, t212_ticker,
+                        f"{avg_price:.4f}" if avg_price is not None else "unknown",
                     )
-                    resp = {"status": "FILLED", "fillPrice": fill_price_from_pos}
+                    resp = {"status": "FILLED", "fillPrice": avg_price}
                 else:
                     logger.warning(
                         "poll_placed_orders: order %s not found (404) and no position"
