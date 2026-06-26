@@ -855,7 +855,7 @@ _SCORE_SYMBOL: dict[int, str] = {1: "▲", 0: "●", -1: "▼"}
 def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str]) -> None:
     """Render the Signals page: regime card, generate button, ranked table."""
 
-    st.markdown("## 📊 Market Signals")
+    st.markdown("## Market Signals")
 
     # ---- Opportunity flags & regime overlays (top of page) ----------------
     catch_up_flags  = get_active_opportunity_flags()
@@ -967,7 +967,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         + (f"<div style='margin-bottom:5px'>{intel_strips}</div>" if intel_strips else "")
         + f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px'>"
         + f"<span style='background:{colour};color:#fff;padding:2px 10px;border-radius:12px;"
-        + f"font-size:0.82rem;font-weight:700'>⚡ {regime.replace('_', ' ')}</span>"
+        + f"font-size:0.82rem;font-weight:700'>{regime.replace('_', ' ')}</span>"
         + f"<span style='color:#6b7280;font-size:0.79rem'>^GSPC {html.escape(price_pct)}</span>"
         + f"<span style='color:#6b7280;font-size:0.79rem'>{adx_str}</span>"
         + f"<span style='color:#6b7280;font-size:0.79rem'>{vix_str}</span>"
@@ -984,7 +984,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     # ---- Generate Signals button (top of page, right of header) -----------
     _gs_col, _ = st.columns([2, 5])
     with _gs_col:
-        if st.button("⚡ Generate Signals", key="signals_gen_btn", width="stretch"):
+        if st.button("Generate Signals", key="signals_gen_btn", width="stretch"):
             with st.spinner("Regenerating signals…"):
                 try:
                     _tickers = get_all_tickers(config)
@@ -1204,8 +1204,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
                 unsafe_allow_html=True,
             )
 
-    _pick_card(lc, long_picks,  "🟢 Top Long Opportunities",  "#16a34a")
-    _pick_card(sc, short_picks, "🔴 Top Short Opportunities", "#ef5350")
+    _pick_card(lc, long_picks,  "Top Long Opportunities",  "#16a34a")
+    _pick_card(sc, short_picks, "Top Short Opportunities", "#ef5350")
 
     st.divider()
 
@@ -1313,12 +1313,12 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
 # ---------------------------------------------------------------------------
 
 def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
-    st.markdown("## 📋 Trade Log")
+    st.markdown("## Trade Log")
 
     accounts = config.get("accounts", [])
 
     # ---- Log New Trade -----------------------------------------------------
-    with st.expander("➕ Log New Trade", expanded=True):
+    with st.expander("Log New Trade", expanded=True):
         # Account selector (outside form so it can affect the badge display)
         if accounts:
             _acct_ids    = [a["id"] for a in accounts]
@@ -1523,7 +1523,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                 unsafe_allow_html=True,
             )
 
-            with st.expander("💡 Why this size?"):
+            with st.expander("Why this size?"):
                 _why: list[str] = [
                     f"Based on your {_acct_ccy_ps} {_acct_balance:,.0f} "
                     f"{'practice' if _acct_type_log == 'PRACTICE' else 'live'} balance, "
@@ -2363,7 +2363,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             _cur_tp = _t.get("take_profit_price")
             _cur_rr = _t.get("risk_reward_ratio")
 
-            with st.expander(f"✏ #{_tid}  {_ttk}  {_tdir}", expanded=False):
+            with st.expander(f"Edit #{_tid}  {_ttk}  {_tdir}", expanded=False):
                 with st.form(f"edit_trade_plan_{_tid}"):
                     _ec1, _ec2, _ec3 = st.columns(3)
                     _new_sl = _ec1.number_input(
@@ -2394,7 +2394,7 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                         st.success(f"Trade #{_tid} plan updated.")
                         st.rerun()
 
-            with st.expander(f"🔴 Close #{_tid}  {_ttk}  {_tdir}", expanded=False):
+            with st.expander(f"Close #{_tid}  {_ttk}  {_tdir}", expanded=False):
                 with st.form(f"close_trade_{_tid}"):
                     _exit_px = st.number_input(
                         "Exit Price",
@@ -2507,7 +2507,7 @@ def _pnl_colour(val: float) -> str:
 
 
 def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
-    st.markdown("## 🏆 Performance")
+    st.markdown("## Performance")
 
     # ---- Account filter ----------------------------------------------------
     acct_filter = st.radio(
@@ -2521,7 +2521,7 @@ def _render_performance_page(config: dict, watchlist: dict[str, str]) -> None:
     st.divider()
 
     # ---- Date range filter -------------------------------------------------
-    with st.expander("📅 Date range filter", expanded=False):
+    with st.expander("Date range filter", expanded=False):
         fc1, fc2 = st.columns(2)
         from_date: date | None = fc1.date_input("From (exit date)", value=None)
         to_date:   date | None = fc2.date_input("To (exit date)",   value=None)
@@ -2928,7 +2928,7 @@ def _render_learning_dashboard(config: dict) -> None:
 
     st.divider()
 
-    with st.expander("🧠 System Learning", expanded=False):
+    with st.expander("System Learning", expanded=False):
         learning_cfg  = config.get("learning", {})
         min_trades    = learning_cfg.get("min_trades_before_adjustment", 20)
         freq          = learning_cfg.get("weight_update_frequency", 10)
@@ -3205,7 +3205,7 @@ def _pipeline_row(
 def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     """System status panel — rendered as the Status page and as the Charts landing."""
     st.cache_data.clear()
-    st.markdown("## 🖥️ System Status")
+    st.markdown("## System Status")
 
     # ── Collect data needed for both status rows ──────────────────────────
     deploy_ts, deploy_msg = _git_log_info()
@@ -3493,7 +3493,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     _mc1, _mc2 = st.columns(2)
 
     with _mc1:
-        if st.button("⚡ Run Analysis Now", width="stretch", type="primary",
+        if st.button("Run Analysis Now", width="stretch", type="primary",
                      key="status_run_analysis"):
             _cfg     = _load_config()
             _tickers = get_all_tickers(_cfg)
@@ -3510,7 +3510,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.error(f"Analysis failed: {_exc}")
 
     with _mc2:
-        if st.button("🔄 Refresh Data + Analysis", width="stretch",
+        if st.button("Refresh Data + Analysis", width="stretch",
                      key="status_full_refresh"):
             _cfg     = _load_config()
             _tickers = get_all_tickers(_cfg)
@@ -3554,7 +3554,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     )
     _btn_col1, _btn_col2 = st.columns(2)
     with _btn_col1:
-        if st.button("📧 Send Test Email", key="status_send_test_email"):
+        if st.button("Send Test Email", key="status_send_test_email"):
             _regime_str = detect_regime().get("regime", "MIXED")
             _open_count = len(get_open_trades())
             with st.spinner("Sending…"):
@@ -3566,7 +3566,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         st.caption("Confirms SMTP delivery is working.")
     with _btn_col2:
         if not st.session_state.get("_weekly_summary_confirm"):
-            if st.button("📊 Send Weekly Summary Now", key="status_send_weekly"):
+            if st.button("Send Weekly Summary Now", key="status_send_weekly"):
                 st.session_state["_weekly_summary_confirm"] = True
                 st.rerun()
             st.caption("Sends the full weekly summary immediately — useful for testing.")
@@ -3577,7 +3577,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             st.warning(f"This will send the weekly summary email to **{notif_to}** now.")
             _wc1, _wc2 = st.columns(2)
             with _wc1:
-                if st.button("✅ Confirm Send", type="primary", key="status_weekly_confirm_yes"):
+                if st.button("Confirm Send", type="primary", key="status_weekly_confirm_yes"):
                     st.session_state["_weekly_summary_confirm"] = False
                     with st.spinner("Gathering data and sending…"):
                         _ok, _msg = send_weekly_summary_email(config)
@@ -3607,7 +3607,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             "Add `T212_API_KEY` and `T212_API_SECRET` to the systemd service environment first."
         )
     else:
-        _env_label  = "DEMO" if not _t212_live else "⚠️ LIVE"
+        _env_label  = "DEMO" if not _t212_live else "LIVE"
         _env_colour = "#f97316" if _t212_live else "#6366f1"
         st.markdown(
             f'<span style="background:{_env_colour};color:#fff;padding:2px 8px;'
@@ -3624,7 +3624,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 st.warning(f"Last API error: {_t212_error}")
             with _err_btn_col:
                 st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
-                if st.button("✕ Clear", key="clear_t212_error"):
+                if st.button("Clear", key="clear_t212_error"):
                     from data.database import set_metadata as _set_meta
                     _set_meta("t212_invest_error", "")
                     st.rerun()
@@ -3635,286 +3635,290 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 "in the systemd service file and restart the service."
             )
         else:
-            # ── Live account data (fetched on button click, cached in session_state) ──
-            _t212_data_key = "t212_account_data"
+            _tab_account, _tab_mapping = st.tabs(["Account", "Mapping"])
 
-            _t2_col_status, _t2_col_btn = st.columns([3, 1])
-            with _t2_col_btn:
-                if st.button("🔄 Refresh Account", key="t212_refresh_btn"):
-                    with st.spinner("Connecting to T212…"):
-                        try:
-                            from brokers.trading212 import (  # noqa
-                                Trading212Client as _T212Client,
-                                poll_placed_orders as _poll_t212,
-                            )
-                            _client = _T212Client(live=_t212_live)
-                            _summary   = _client.get_account_summary()
-                            _positions = _client.get_positions()
-                            st.session_state[_t212_data_key] = {
-                                "summary":    _summary,
-                                "positions":  _positions,
-                                "fetched_at": datetime.utcnow().isoformat(),
-                                "error":      None,
-                            }
-                            # Update fill status for any PLACED orders before refreshing the log
+            with _tab_account:
+                # ── Live account data (fetched on button click, cached in session_state) ──
+                _t212_data_key = "t212_account_data"
+
+                _t2_col_status, _t2_col_btn = st.columns([3, 1])
+                with _t2_col_btn:
+                    if st.button("Refresh Account", key="t212_refresh_btn"):
+                        with st.spinner("Connecting to T212…"):
                             try:
-                                _poll_t212(config)
-                            except Exception:
-                                pass
-                        except Exception as _t2e:
-                            st.session_state[_t212_data_key] = {
-                                "error": str(_t2e),
-                                "fetched_at": datetime.utcnow().isoformat(),
-                            }
-
-            _t2_data = st.session_state.get(_t212_data_key)
-
-            # Auto-fetch on first load or when cached data is older than 60 seconds
-            _T212_REFRESH_SECS = 60
-            _t2_fetched_at = (
-                datetime.fromisoformat(_t2_data["fetched_at"])
-                if _t2_data and "fetched_at" in _t2_data else None
-            )
-            _t2_is_stale = _t2_data is None or (
-                not _t2_data.get("error")
-                and "summary" not in _t2_data
-            ) or (
-                _t2_fetched_at is not None
-                and not _t2_data.get("error")
-                and _t2_fetched_at < datetime.utcnow() - timedelta(seconds=_T212_REFRESH_SECS)
-            )
-            if _t2_is_stale:
-                try:
-                    from brokers.trading212 import (  # noqa
-                        Trading212Client as _T212Client,
-                        poll_placed_orders as _poll_t212,
-                    )
-                    _client = _T212Client(live=_t212_live)
-                    _summary   = _client.get_account_summary()
-                    _positions = _client.get_positions()
-                    st.session_state[_t212_data_key] = {
-                        "summary":    _summary,
-                        "positions":  _positions,
-                        "fetched_at": datetime.utcnow().isoformat(),
-                        "error":      None,
-                    }
-                    try:
-                        _poll_t212(config)
-                    except Exception:
-                        pass
-                    _t2_data = st.session_state[_t212_data_key]
-                except Exception as _t2e:
-                    st.session_state[_t212_data_key] = {
-                        "error": str(_t2e),
-                        "fetched_at": datetime.utcnow().isoformat(),
-                    }
-                    _t2_data = st.session_state[_t212_data_key]
-
-            if _t2_data is None:
-                with _t2_col_status:
-                    st.caption("Connecting to T212…")
-            elif _t2_data.get("error"):
-                st.error(f"Connection failed: {_t2_data['error']}")
-            else:
-                _sum       = _t2_data["summary"]
-                _positions = _t2_data["positions"]
-                _fetched   = _t2_data.get("fetched_at", "")
-
-                # T212 account summary structure (v0 API):
-                # {"totalValue": 5000, "currency": "GBP",
-                #  "cash": {"availableToTrade": 5000, "reservedForOrders": 0, "inPies": 0},
-                #  "investments": {"currentValue": 0, "totalCost": 0,
-                #                  "realizedProfitLoss": 0, "unrealizedProfitLoss": 0}}
-                _cash_obj  = _sum.get("cash", {}) if isinstance(_sum.get("cash"), dict) else {}
-                _inv_obj   = _sum.get("investments", {}) if isinstance(_sum.get("investments"), dict) else {}
-                _total     = float(_sum.get("totalValue", 0) or 0)
-                _free      = float(_cash_obj.get("availableToTrade", 0) or 0)
-                _invested  = float(_inv_obj.get("currentValue", 0) or 0)
-                _result    = float(
-                    (_inv_obj.get("unrealizedProfitLoss", 0) or 0) +
-                    (_inv_obj.get("realizedProfitLoss",   0) or 0)
-                )
-                _deployed = (_invested / _total * 100) if _total else 0.0
-                _pos_count = len(_positions) if isinstance(_positions, list) else 0
-
-                _ta1, _ta2, _ta3, _ta4 = st.columns(4)
-                _ta1.metric("Account Value",   f"£{_total:,.2f}")
-                _ta2.metric("Available Cash",  f"£{_free:,.2f}")
-                _ta3.metric("Invested",        f"£{_invested:,.2f}",
-                             delta=f"{_deployed:.0f}% deployed")
-                _ta4.metric("Open Positions",  str(_pos_count),
-                             delta=f"P&L £{_result:+,.2f}" if _result else None)
-
-                # Deployed capital progress bar
-                _deploy_limit = float(_t212_cfg.get("max_total_deployed", 0.5))
-                _bar_pct      = min(1.0, (_invested / _total) if _total else 0.0)
-                _bar_colour   = "#dc2626" if _bar_pct >= _deploy_limit else (
-                    "#f97316" if _bar_pct >= _deploy_limit * 0.85 else "#6366f1"
-                )
-                st.markdown(
-                    f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#64748b">'
-                    f'Deployed: £{_invested:,.0f} of £{_total:,.0f} '
-                    f'(limit {int(_deploy_limit * 100)}%)</div>'
-                    f'<div style="background:#e2e8f0;border-radius:4px;height:6px">'
-                    f'<div style="background:{_bar_colour};width:{_bar_pct * 100:.1f}%;'
-                    f'height:6px;border-radius:4px"></div></div>',
-                    unsafe_allow_html=True,
-                )
-                st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
-
-                st.caption("Open positions are shown in the **Trade Log** and **Daily Briefing** pages.")
-
-                if _fetched:
-                    st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC · auto-refreshes every 60s")
-
-        # ── Recent T212 orders from our DB ────────────────────────────────────
-        try:
-            from sqlalchemy import text as _sa_text
-            with get_engine().connect() as _t2_conn:
-                _ord_rows = _t2_conn.execute(_sa_text("""
-                    SELECT id, ticker, t212_ticker, direction, quantity,
-                           estimated_value_gbp, status, signal_type,
-                           confluence_score, regime, account_type,
-                           error_message, placed_at
-                    FROM t212_invest_orders
-                    ORDER BY placed_at DESC
-                    LIMIT 10
-                """)).mappings().all()
-            _ord_data = [dict(r) for r in _ord_rows]
-        except Exception:
-            _ord_data = []
-
-        st.markdown("#### Recent Orders")
-        if _ord_data:
-            _ord_df = pd.DataFrame([{k: v for k, v in r.items() if k != "id"} for r in _ord_data])
-            _ord_df.columns = [
-                "Ticker", "UCITS Ticker", "Dir", "Qty",
-                "Est. Value (£)", "Status", "Signal",
-                "Score", "Regime", "Account",
-                "Error", "Placed At",
-            ]
-            st.dataframe(
-                _ord_df.style.map(
-                    lambda v: "color:#16a34a" if v == "FILLED"
-                    else ("color:#d97706" if v == "PLACED"
-                    else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
-                    subset=["Status"],
-                ).map(
-                    lambda v: "color:#16a34a" if v in ("BUY",)
-                    else ("color:#dc2626" if v == "SELL" else ""),
-                    subset=["Dir"],
-                ),
-                width="stretch", hide_index=True,
-            )
-
-            # ── Retry buttons for FAILED orders ──────────────────────────────
-            _failed_orders = [r for r in _ord_data if r.get("status") == "FAILED"]
-            if _failed_orders and _t212_has_key:
-                st.markdown("**Retry failed orders**")
-                for _fo in _failed_orders:
-                    _fo_id      = _fo["id"]
-                    _fo_ticker  = _fo["ticker"]
-                    _fo_ucits   = _fo["t212_ticker"]
-                    _fo_dir     = _fo["direction"]
-                    _fo_qty     = float(_fo["quantity"] or 0)
-                    _fo_err     = (_fo.get("error_message") or "")[:80]
-                    _fo_placed  = (_fo.get("placed_at") or "")[:16].replace("T", " ")
-
-                    _rc1, _rc2, _rc3 = st.columns([5, 1, 1])
-                    with _rc1:
-                        st.caption(
-                            f"**{_fo_ticker}** → `{_fo_ucits}` | "
-                            f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} UTC | "
-                            f"_{_fo_err}_"
-                        )
-                    with _rc3:
-                        if st.button("🗑 Delete", key=f"delete_order_{_fo_id}"):
-                            from sqlalchemy import text as _sa_del_text
-                            with get_engine().begin() as _del_conn:
-                                _del_conn.execute(
-                                    _sa_del_text("DELETE FROM t212_invest_orders WHERE id = :row_id"),
-                                    {"row_id": _fo_id},
+                                from brokers.trading212 import (  # noqa
+                                    Trading212Client as _T212Client,
+                                    poll_placed_orders as _poll_t212,
                                 )
-                            st.rerun()
-                    with _rc2:
-                        if st.button("↻ Retry", key=f"retry_order_{_fo_id}"):
-                            with st.spinner(f"Placing {_fo_dir} order for {_fo_ticker}…"):
+                                _client = _T212Client(live=_t212_live)
+                                _summary   = _client.get_account_summary()
+                                _positions = _client.get_positions()
+                                st.session_state[_t212_data_key] = {
+                                    "summary":    _summary,
+                                    "positions":  _positions,
+                                    "fetched_at": datetime.utcnow().isoformat(),
+                                    "error":      None,
+                                }
+                                # Update fill status for any PLACED orders before refreshing the log
                                 try:
-                                    import math as _math
-                                    from brokers.trading212 import (
-                                        Trading212Client as _T212Retry,
-                                    )
-                                    _rc_client = _T212Retry(live=_t212_live)
+                                    _poll_t212(config)
+                                except Exception:
+                                    pass
+                            except Exception as _t2e:
+                                st.session_state[_t212_data_key] = {
+                                    "error": str(_t2e),
+                                    "fetched_at": datetime.utcnow().isoformat(),
+                                }
 
-                                    # Apply minimum-quantity guard.
-                                    # Always floor to integer — all ucits_mapping
-                                    # instruments are EU/UK ETFs requiring whole shares.
-                                    # T212's maxQuantityPrecision metadata is unreliable.
-                                    _r_instruments = _rc_client.get_instruments()
-                                    _r_imeta = {
-                                        i["ticker"]: i
-                                        for i in (_r_instruments or [])
-                                        if "ticker" in i
-                                    }
-                                    _r_meta = _r_imeta.get(_fo_ucits, {})
-                                    _r_min  = float(_r_meta.get("minTradeQuantity", 1.0))
-                                    _r_qty  = _math.floor(_fo_qty)
+                _t2_data = st.session_state.get(_t212_data_key)
 
-                                    if _r_qty < _r_min:
-                                        st.error(
-                                            f"Quantity {_r_qty} is below the instrument "
-                                            f"minimum of {_r_min} for {_fo_ucits}. "
-                                            f"Original qty {_fo_qty:.4f} was floored to {_r_qty}."
-                                        )
-                                    else:
-                                        _r_signed = _r_qty if _fo_dir == "BUY" else -_r_qty
-                                        _r_resp   = _rc_client.place_market_order(_fo_ucits, _r_signed)
-                                        _r_order_id = str(_r_resp.get("id", ""))
-                                        # Update the original FAILED row in-place so it
-                                        # drops out of the retry list on next render.
-                                        from sqlalchemy import text as _sa_retry_text
-                                        with get_engine().begin() as _rc_conn:
-                                            _rc_conn.execute(_sa_retry_text("""
-                                                UPDATE t212_invest_orders
-                                                SET status        = 'PLACED',
-                                                    order_id      = :order_id,
-                                                    quantity      = :qty,
-                                                    error_message = NULL,
-                                                    placed_at     = :now
-                                                WHERE id = :row_id
-                                            """), {
-                                                "order_id": _r_order_id,
-                                                "qty":      _r_qty,
-                                                "now":      datetime.utcnow().isoformat(),
-                                                "row_id":   _fo_id,
-                                            })
-                                        st.success(
-                                            f"{_fo_dir} {_r_qty} × {_fo_ucits} placed. "
-                                            f"Order ID: {_r_order_id or '?'}"
-                                        )
-                                        st.rerun()
-                                except Exception as _r_exc:
-                                    st.error(f"Retry failed: {_r_exc}")
-        else:
-            st.caption("No orders recorded yet.")
-
-        # ── UCITS mapping table ───────────────────────────────────────────────
-        _ucits_map = _t212_cfg.get("ucits_mapping", {})
-        if _ucits_map:
-            with st.expander(f"UCITS instrument mapping ({len(_ucits_map)} tickers)", expanded=False):
-                st.caption(
-                    "Automated T212 Invest orders are only placed for tickers listed here. "
-                    "The UCITS Ticker is the T212 internal instrument ID used in API calls."
+                # Auto-fetch on first load or when cached data is older than 60 seconds
+                _T212_REFRESH_SECS = 60
+                _t2_fetched_at = (
+                    datetime.fromisoformat(_t2_data["fetched_at"])
+                    if _t2_data and "fetched_at" in _t2_data else None
                 )
-                _ucits_rows = []
-                for _uk, _uv in _ucits_map.items():
-                    _ut, _uc = _ucits_entry(_uv)
-                    _ucits_rows.append({"US Ticker": _uk, "T212 UCITS Ticker": _ut, "Currency": _uc})
-                st.dataframe(
-                    pd.DataFrame(_ucits_rows),
-                    width="stretch", hide_index=True,
+                _t2_is_stale = _t2_data is None or (
+                    not _t2_data.get("error")
+                    and "summary" not in _t2_data
+                ) or (
+                    _t2_fetched_at is not None
+                    and not _t2_data.get("error")
+                    and _t2_fetched_at < datetime.utcnow() - timedelta(seconds=_T212_REFRESH_SECS)
                 )
+                if _t2_is_stale:
+                    try:
+                        from brokers.trading212 import (  # noqa
+                            Trading212Client as _T212Client,
+                            poll_placed_orders as _poll_t212,
+                        )
+                        _client = _T212Client(live=_t212_live)
+                        _summary   = _client.get_account_summary()
+                        _positions = _client.get_positions()
+                        st.session_state[_t212_data_key] = {
+                            "summary":    _summary,
+                            "positions":  _positions,
+                            "fetched_at": datetime.utcnow().isoformat(),
+                            "error":      None,
+                        }
+                        try:
+                            _poll_t212(config)
+                        except Exception:
+                            pass
+                        _t2_data = st.session_state[_t212_data_key]
+                    except Exception as _t2e:
+                        st.session_state[_t212_data_key] = {
+                            "error": str(_t2e),
+                            "fetched_at": datetime.utcnow().isoformat(),
+                        }
+                        _t2_data = st.session_state[_t212_data_key]
 
+                if _t2_data is None:
+                    with _t2_col_status:
+                        st.caption("Connecting to T212…")
+                elif _t2_data.get("error"):
+                    st.error(f"Connection failed: {_t2_data['error']}")
+                else:
+                    _sum       = _t2_data["summary"]
+                    _positions = _t2_data["positions"]
+                    _fetched   = _t2_data.get("fetched_at", "")
+
+                    # T212 account summary structure (v0 API):
+                    # {"totalValue": 5000, "currency": "GBP",
+                    #  "cash": {"availableToTrade": 5000, "reservedForOrders": 0, "inPies": 0},
+                    #  "investments": {"currentValue": 0, "totalCost": 0,
+                    #                  "realizedProfitLoss": 0, "unrealizedProfitLoss": 0}}
+                    _cash_obj  = _sum.get("cash", {}) if isinstance(_sum.get("cash"), dict) else {}
+                    _inv_obj   = _sum.get("investments", {}) if isinstance(_sum.get("investments"), dict) else {}
+                    _total     = float(_sum.get("totalValue", 0) or 0)
+                    _free      = float(_cash_obj.get("availableToTrade", 0) or 0)
+                    _invested  = float(_inv_obj.get("currentValue", 0) or 0)
+                    _result    = float(
+                        (_inv_obj.get("unrealizedProfitLoss", 0) or 0) +
+                        (_inv_obj.get("realizedProfitLoss",   0) or 0)
+                    )
+                    _deployed = (_invested / _total * 100) if _total else 0.0
+                    _pos_count = len(_positions) if isinstance(_positions, list) else 0
+
+                    _ta1, _ta2, _ta3, _ta4 = st.columns(4)
+                    _ta1.metric("Account Value",   f"£{_total:,.2f}")
+                    _ta2.metric("Available Cash",  f"£{_free:,.2f}")
+                    _ta3.metric("Invested",        f"£{_invested:,.2f}",
+                                 delta=f"{_deployed:.0f}% deployed")
+                    _ta4.metric("Open Positions",  str(_pos_count),
+                                 delta=f"P&L £{_result:+,.2f}" if _result else None)
+
+                    # Deployed capital progress bar
+                    _deploy_limit = float(_t212_cfg.get("max_total_deployed", 0.5))
+                    _bar_pct      = min(1.0, (_invested / _total) if _total else 0.0)
+                    _bar_colour   = "#dc2626" if _bar_pct >= _deploy_limit else (
+                        "#f97316" if _bar_pct >= _deploy_limit * 0.85 else "#6366f1"
+                    )
+                    st.markdown(
+                        f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#64748b">'
+                        f'Deployed: £{_invested:,.0f} of £{_total:,.0f} '
+                        f'(limit {int(_deploy_limit * 100)}%)</div>'
+                        f'<div style="background:#e2e8f0;border-radius:4px;height:6px">'
+                        f'<div style="background:{_bar_colour};width:{_bar_pct * 100:.1f}%;'
+                        f'height:6px;border-radius:4px"></div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+                    st.caption("Open positions are shown in the **Trade Log** and **Daily Briefing** pages.")
+
+                    if _fetched:
+                        st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC · auto-refreshes every 60s")
+
+                # ── Recent T212 orders from our DB ────────────────────────────────────
+                try:
+                    from sqlalchemy import text as _sa_text
+                    with get_engine().connect() as _t2_conn:
+                        _ord_rows = _t2_conn.execute(_sa_text("""
+                            SELECT id, ticker, t212_ticker, direction, quantity,
+                                   estimated_value_gbp, status, signal_type,
+                                   confluence_score, regime, account_type,
+                                   error_message, placed_at
+                            FROM t212_invest_orders
+                            ORDER BY placed_at DESC
+                            LIMIT 10
+                        """)).mappings().all()
+                    _ord_data = [dict(r) for r in _ord_rows]
+                except Exception:
+                    _ord_data = []
+
+                st.markdown("#### Recent Orders")
+                if _ord_data:
+                    _ord_df = pd.DataFrame([{k: v for k, v in r.items() if k != "id"} for r in _ord_data])
+                    _ord_df.columns = [
+                        "Ticker", "UCITS Ticker", "Dir", "Qty",
+                        "Est. Value (£)", "Status", "Signal",
+                        "Score", "Regime", "Account",
+                        "Error", "Placed At",
+                    ]
+                    st.dataframe(
+                        _ord_df.style.map(
+                            lambda v: "color:#16a34a" if v == "FILLED"
+                            else ("color:#d97706" if v == "PLACED"
+                            else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
+                            subset=["Status"],
+                        ).map(
+                            lambda v: "color:#16a34a" if v in ("BUY",)
+                            else ("color:#dc2626" if v == "SELL" else ""),
+                            subset=["Dir"],
+                        ),
+                        width="stretch", hide_index=True,
+                    )
+
+                    # ── Retry buttons for FAILED orders ──────────────────────────────
+                    _failed_orders = [r for r in _ord_data if r.get("status") == "FAILED"]
+                    if _failed_orders and _t212_has_key:
+                        st.markdown("**Retry failed orders**")
+                        for _fo in _failed_orders:
+                            _fo_id      = _fo["id"]
+                            _fo_ticker  = _fo["ticker"]
+                            _fo_ucits   = _fo["t212_ticker"]
+                            _fo_dir     = _fo["direction"]
+                            _fo_qty     = float(_fo["quantity"] or 0)
+                            _fo_err     = (_fo.get("error_message") or "")[:80]
+                            _fo_placed  = (_fo.get("placed_at") or "")[:16].replace("T", " ")
+
+                            _rc1, _rc2, _rc3 = st.columns([5, 1, 1])
+                            with _rc1:
+                                st.caption(
+                                    f"**{_fo_ticker}** → `{_fo_ucits}` | "
+                                    f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} UTC | "
+                                    f"_{_fo_err}_"
+                                )
+                            with _rc3:
+                                if st.button("Delete", key=f"delete_order_{_fo_id}"):
+                                    from sqlalchemy import text as _sa_del_text
+                                    with get_engine().begin() as _del_conn:
+                                        _del_conn.execute(
+                                            _sa_del_text("DELETE FROM t212_invest_orders WHERE id = :row_id"),
+                                            {"row_id": _fo_id},
+                                        )
+                                    st.rerun()
+                            with _rc2:
+                                if st.button("Retry", key=f"retry_order_{_fo_id}"):
+                                    with st.spinner(f"Placing {_fo_dir} order for {_fo_ticker}…"):
+                                        try:
+                                            import math as _math
+                                            from brokers.trading212 import (
+                                                Trading212Client as _T212Retry,
+                                            )
+                                            _rc_client = _T212Retry(live=_t212_live)
+
+                                            # Apply minimum-quantity guard.
+                                            # Always floor to integer — all ucits_mapping
+                                            # instruments are EU/UK ETFs requiring whole shares.
+                                            # T212's maxQuantityPrecision metadata is unreliable.
+                                            _r_instruments = _rc_client.get_instruments()
+                                            _r_imeta = {
+                                                i["ticker"]: i
+                                                for i in (_r_instruments or [])
+                                                if "ticker" in i
+                                            }
+                                            _r_meta = _r_imeta.get(_fo_ucits, {})
+                                            _r_min  = float(_r_meta.get("minTradeQuantity", 1.0))
+                                            _r_qty  = _math.floor(_fo_qty)
+
+                                            if _r_qty < _r_min:
+                                                st.error(
+                                                    f"Quantity {_r_qty} is below the instrument "
+                                                    f"minimum of {_r_min} for {_fo_ucits}. "
+                                                    f"Original qty {_fo_qty:.4f} was floored to {_r_qty}."
+                                                )
+                                            else:
+                                                _r_signed = _r_qty if _fo_dir == "BUY" else -_r_qty
+                                                _r_resp   = _rc_client.place_market_order(_fo_ucits, _r_signed)
+                                                _r_order_id = str(_r_resp.get("id", ""))
+                                                # Update the original FAILED row in-place so it
+                                                # drops out of the retry list on next render.
+                                                from sqlalchemy import text as _sa_retry_text
+                                                with get_engine().begin() as _rc_conn:
+                                                    _rc_conn.execute(_sa_retry_text("""
+                                                        UPDATE t212_invest_orders
+                                                        SET status        = 'PLACED',
+                                                            order_id      = :order_id,
+                                                            quantity      = :qty,
+                                                            error_message = NULL,
+                                                            placed_at     = :now
+                                                        WHERE id = :row_id
+                                                    """), {
+                                                        "order_id": _r_order_id,
+                                                        "qty":      _r_qty,
+                                                        "now":      datetime.utcnow().isoformat(),
+                                                        "row_id":   _fo_id,
+                                                    })
+                                                st.success(
+                                                    f"{_fo_dir} {_r_qty} × {_fo_ucits} placed. "
+                                                    f"Order ID: {_r_order_id or '?'}"
+                                                )
+                                                st.rerun()
+                                        except Exception as _r_exc:
+                                            st.error(f"Retry failed: {_r_exc}")
+                else:
+                    st.caption("No orders recorded yet.")
+
+
+            with _tab_mapping:
+                _ucits_map = _t212_cfg.get("ucits_mapping", {})
+                if _ucits_map:
+                    st.caption(
+                        "Automated T212 Invest orders are only placed for tickers listed here. "
+                        "The UCITS Ticker is the T212 internal instrument ID used in API calls."
+                    )
+                    _ucits_rows = []
+                    for _uk, _uv in _ucits_map.items():
+                        _ut, _uc = _ucits_entry(_uv)
+                        _ucits_rows.append({"US Ticker": _uk, "T212 UCITS Ticker": _ut, "Currency": _uc})
+                    st.dataframe(
+                        pd.DataFrame(_ucits_rows),
+                        width="stretch", hide_index=True,
+                    )
+                else:
+                    st.caption("No UCITS mapping configured.")
     # ── Scheduler Health ──────────────────────────────────────────────────
     st.divider()
     st.markdown("### Scheduler Health")
@@ -4251,7 +4255,7 @@ def _render_relationships_page(config: dict) -> None:
     _ts_str   = _fmt_uk(_corr_ts, "%Y-%m-%d %H:%M") if _corr_ts else "pending"
     _n_pairs  = len(_REL_MAP)
     st.caption(
-        f"🔗 **Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; "
+        f"**Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; "
         f"Last computed: {_ts_str} &nbsp;·&nbsp; "
         f"Updates: {_uk_sched_time(7,0)} / {_uk_sched_time(13,30)} / {_uk_sched_time(21,30)}"
     )
@@ -4567,7 +4571,7 @@ def _render_charts_landing(config: dict) -> None:
     from sqlalchemy import text as sa_text
     from data.database import get_engine
 
-    st.markdown("## 📈 Charts")
+    st.markdown("## Charts")
     st.caption("Select an asset to view its price chart and indicators.")
 
     # Build signal lookup for badges
@@ -5157,7 +5161,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
 
 def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
     """Render the Daily Briefing: market overview, open trade monitor, opportunities."""
-    st.markdown("## 📅 Daily Briefing")
+    st.markdown("## Daily Briefing")
 
     _render_system_health_banner()
 
@@ -5170,75 +5174,84 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     else:
         st.caption("No analysis run yet — updates run automatically on weekdays.")
 
-    # ── Section 1: Market Overview ──────────────────────────────────────────
-    st.markdown("### 🌍 Market Overview")
+    # ── Market Overview (compact status bar) ────────────────────────────────
+    regime_result = detect_regime()
+    regime  = regime_result["regime"]
+    colour  = regime_result["colour"]
+    details = regime_result["details"]
+    price   = details.get("price")
+    sma_200 = details.get("sma_200")
+    adx     = details.get("adx")
+    price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
+    adx_str   = f"ADX {adx:.1f}" if adx else ""
 
-    col_regime, col_macro = st.columns([3, 2])
-    with col_regime:
-        regime_result = detect_regime()
-        regime  = regime_result["regime"]
-        colour  = regime_result["colour"]
-        details = regime_result["details"]
-        price   = details.get("price")
-        sma_200 = details.get("sma_200")
-        adx     = details.get("adx")
-        price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
-        adx_str   = f"ADX {adx:.1f}" if adx else ""
-        st.markdown(
-            f'<div style="display:inline-flex;align-items:center;gap:12px;flex-wrap:wrap;'
-            f'background:{colour}18;border:1px solid {colour}44;'
-            f'padding:6px 14px;border-radius:20px;margin-bottom:4px">'
-            f'<span style="color:{colour};font-weight:700">⚡ {regime.replace("_", " ")}</span>'
-            f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>'
-            f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(regime_result["description"])
+    ctx     = get_macro_context()
+    vix_v   = ctx.get("vix")
+    vix_col = (
+        "#dc2626" if vix_v and vix_v > 30 else
+        "#f59e0b" if vix_v and vix_v > 20 else
+        "#16a34a"
+    )
+    vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
+    ys      = ctx.get("yield_spread")
+    yr      = (ctx.get("yield_regime") or "—").lower()
+    ys_str  = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
+    dp      = ctx.get("dollar_pct")
+    dt      = ctx.get("dollar_trend") or "—"
+    usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
 
-        _buy_th, _sell_th = get_regime_thresholds(regime.value, config)
-        _total_mods = config.get("confluence", {}).get("total_signal_modules", 7)
-        _buy_mods  = round(_buy_th  * _total_mods)
-        _sell_mods = round(_sell_th * _total_mods)
-        if _buy_th == _sell_th:
-            _thresh_label = (
-                f"Threshold: {_buy_th:.2f} ({regime.replace('_', ' ')}) "
-                f"— requires ~{_buy_mods}/{_total_mods} modules to agree"
-            )
-        else:
-            _thresh_label = (
-                f"Thresholds: Buy {_buy_th:.2f} (~{_buy_mods}/{_total_mods} modules) "
-                f"· Sell {_sell_th:.2f} (~{_sell_mods}/{_total_mods} modules) "
-                f"({regime.replace('_', ' ')})"
-            )
-        st.caption(_thresh_label)
-
-    with col_macro:
-        ctx    = get_macro_context()
-        vix_v  = ctx.get("vix")
-        vix_col = (
-            "#dc2626" if vix_v and vix_v > 30 else
-            "#f59e0b" if vix_v and vix_v > 20 else
-            "#16a34a"
-        )
-        vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
-        ys  = ctx.get("yield_spread")
-        yr  = (ctx.get("yield_regime") or "—").lower()
-        ys_str = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
-        dp  = ctx.get("dollar_pct")
-        dt  = ctx.get("dollar_trend") or "—"
-        usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
-        st.markdown(
-            f"<div style='font-size:0.85rem;margin-top:10px'>"
-            f"<span style='color:{vix_col};font-weight:600'>{html.escape(vix_str)}</span>"
-            f" &nbsp;·&nbsp; {html.escape(ys_str)} &nbsp;·&nbsp; {html.escape(usd_str)}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # Active overlays (compact)
     overlay_raw     = get_metadata_str("active_overlays") or ""
     active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
+
+    _overlay_pills_html = ""
+    for _ok in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
+        if _ok not in active_overlays:
+            continue
+        _om = OVERLAY_DESCRIPTIONS.get(_ok, {})
+        _oc = _om.get("colour", "#6b7280")
+        _overlay_pills_html += (
+            f'<span style="background:{_oc}20;border:1px solid {_oc}55;color:{_oc};'
+            f'padding:1px 7px;border-radius:3px;font-size:0.72rem;font-weight:700;'
+            f'white-space:nowrap">'
+            f'{html.escape(_om.get("label", _ok.replace("_", " ")))}</span>'
+        )
+
+    st.markdown(
+        f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;'
+        f'border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px;margin-bottom:4px">'
+        f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
+        f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
+        f'{regime.replace("_", " ")}</span>'
+        + (f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
+        + (f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
+        + f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>'
+        f'<span style="color:{vix_col};font-size:0.82rem;font-weight:600">{html.escape(vix_str)}</span>'
+        f'<span style="color:#6b7280;font-size:0.82rem">{html.escape(ys_str)}</span>'
+        f'<span style="color:#6b7280;font-size:0.82rem">{html.escape(usd_str)}</span>'
+        + (f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>{_overlay_pills_html}' if _overlay_pills_html else '')
+        + f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(regime_result["description"])
+
+    _buy_th, _sell_th = get_regime_thresholds(regime.value, config)
+    _total_mods = config.get("confluence", {}).get("total_signal_modules", 7)
+    _buy_mods  = round(_buy_th  * _total_mods)
+    _sell_mods = round(_sell_th * _total_mods)
+    if _buy_th == _sell_th:
+        _thresh_label = (
+            f"Threshold: {_buy_th:.2f} ({regime.replace('_', ' ')}) "
+            f"— requires ~{_buy_mods}/{_total_mods} modules to agree"
+        )
+    else:
+        _thresh_label = (
+            f"Thresholds: Buy {_buy_th:.2f} (~{_buy_mods}/{_total_mods} modules) "
+            f"· Sell {_sell_th:.2f} (~{_sell_mods}/{_total_mods} modules) "
+            f"({regime.replace('_', ' ')})"
+        )
+    st.caption(_thresh_label)
+
+    # Active overlay detail strips
     for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
         if overlay_key not in active_overlays:
             continue
@@ -5295,7 +5308,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             'padding:6px 0 4px">'
             '<span style="font-size:0.75rem;font-weight:700;color:#94a3b8;'
             'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">'
-            '📅 Key Events</span> '
+            'Key Events</span> '
             + " ".join(_ev_parts)
             + "</div>"
         )
@@ -5509,7 +5522,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
     with lc:
         n_long = len(long_picks)
-        st.markdown(f"**🟢 Long Opportunities** ({n_long})" if n_long else "**🟢 Long Opportunities**")
+        st.markdown(f"**Long Opportunities** ({n_long})" if n_long else "**Long Opportunities**")
         if long_picks:
             for sig in long_picks:
                 lp = _opp_prices.get(sig.get("ticker", ""))
@@ -5519,7 +5532,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
     with rc:
         n_short = len(short_picks)
-        st.markdown(f"**🔴 Short Opportunities** ({n_short})" if n_short else "**🔴 Short Opportunities**")
+        st.markdown(f"**Short Opportunities** ({n_short})" if n_short else "**Short Opportunities**")
         if short_picks:
             for sig in short_picks:
                 lp = _opp_prices.get(sig.get("ticker", ""))
@@ -5555,7 +5568,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     st.divider()
 
     # ── Section 2: Macro Dashboard ─────────────────────────────────────────
-    st.markdown("### 📊 Macro Dashboard")
+    st.markdown("### Macro Dashboard")
 
     macro_dash = get_macro_dashboard(config)
 
@@ -5799,7 +5812,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     st.divider()
 
     # ── Section 3: Open Trade Monitor ──────────────────────────────────────
-    st.markdown("### 👀 Open Trade Monitor")
+    st.markdown("### Open Trade Monitor")
 
     open_trades       = get_open_trades()
     t212_invest_cards = _get_t212_invest_brief_cards(config)
@@ -5873,7 +5886,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     st.divider()
 
     # ── Section 4: Today's Opportunities ───────────────────────────────────
-    st.markdown("### 🎯 Today's Opportunities")
+    st.markdown("### Today's Opportunities")
 
     open_tickers = (
         {t["ticker"] for t in open_trades} |
@@ -5993,7 +6006,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 # ---------------------------------------------------------------------------
 
 def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
-    st.markdown("## 🧪 Backtest")
+    st.markdown("## Backtest")
     st.caption(
         "Replay the current signal logic over historical price data. "
         "Uses vectorized pandas — no look-ahead bias. "
@@ -6003,10 +6016,10 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
 
     tab_run, tab_period, tab_attr, tab_decay, tab_wf, tab_vt = st.tabs([
         "▶ Run & Overview",
-        "📅 Period Analysis",
+        "Period Analysis",
         "🎯 Module Attribution",
         "⏱ Signal Decay",
-        "📈 Walk-Forward",
+        "Walk-Forward",
         "🤖 Virtual Trading",
     ])
 
@@ -6078,7 +6091,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
 
         bt_config = {**config, "backtest": {**config.get("backtest", {}), "max_holding_days": max_hold, "atr_stop_multiplier": atr_mult}}
 
-        if st.button("▶ Run Backtest", type="primary", key="bt_run"):
+        if st.button("Run Backtest", type="primary", key="bt_run"):
             with st.spinner(f"Running backtest for {len(tickers_to_test)} tickers ({sd.date()} → {ed.date()})…"):
                 try:
                     new_id = run_backtest(tickers_to_test, sd, ed, bt_config, name=bt_name)
@@ -6103,8 +6116,8 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             mets = compute_metrics(df)
 
             # Delete button
-            with st.expander("⚙ Manage run"):
-                if st.button(f"🗑 Delete run #{sel_id}", key="bt_del"):
+            with st.expander("Manage run"):
+                if st.button(f"Delete run #{sel_id}", key="bt_del"):
                     delete_run(sel_id)
                     st.success("Run deleted.")
                     st.rerun()
@@ -6762,20 +6775,20 @@ def main() -> None:
 
     # ---- Sidebar -------------------------------------------------------
     with st.sidebar:
-        st.title("📈 Investment Research")
+        st.title("Investment Research")
         st.divider()
 
         # Page navigation
-        _PAGES = ["📅 Daily Briefing", "📊 Signals", "📈 Charts", "🔗 Relationships", "📋 Trade Log", "🏆 Performance", "🧪 Backtest", "🖥️ Status"]
+        _PAGES = ["Daily Briefing", "Signals", "Charts", "Relationships", "Trade Log", "Performance", "Backtest", "Status"]
         _PAGE_KEYS = {
-            "📅 Daily Briefing": "briefing",
-            "📊 Signals":       "signals",
-            "📈 Charts":        "charts",
-            "🔗 Relationships": "relationships",
-            "📋 Trade Log":     "trade_log",
-            "🏆 Performance":   "performance",
-            "🧪 Backtest":      "backtest",
-            "🖥️ Status":        "status",
+            "Daily Briefing": "briefing",
+            "Signals":       "signals",
+            "Charts":        "charts",
+            "Relationships": "relationships",
+            "Trade Log":     "trade_log",
+            "Performance":   "performance",
+            "Backtest":      "backtest",
+            "Status":        "status",
         }
         current_key = st.session_state.get("page", "briefing")
         default_idx = next(
