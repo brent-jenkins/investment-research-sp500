@@ -301,7 +301,7 @@ P&L on close: `(exit − entry) × qty × leverage` converted to GBP via `fx_rat
 
 ## Database schema
 
-SQLite via SQLAlchemy, WAL mode. All writes are upserts keyed on `(ticker, date)`.
+SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `with conn:` block gets a fresh connection, safe for Streamlit's multi-threaded reruns). All writes are upserts keyed on `(ticker, date)`.
 
 | Table | Purpose |
 |-------|---------|

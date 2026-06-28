@@ -171,7 +171,7 @@ Every analysis module tries `import talib` and sets `_TALIB_AVAILABLE`. All comp
 
 ### Database writes
 
-All writes use `sqlite_insert(...).on_conflict_do_update(...)` (upsert) so every operation is idempotent. The unique constraint is `(ticker, date)` on every table. `get_session()` returns a new session each call — callers must close it (use `try/finally`). The engine is created fresh each call; SQLite WAL mode and `check_same_thread=False` handle Streamlit's threading.
+All writes use `sqlite_insert(...).on_conflict_do_update(...)` (upsert) so every operation is idempotent. The unique constraint is `(ticker, date)` on every table. `get_session()` returns a new session each call — callers must close it (use `try/finally`). The engine is created fresh each call using `NullPool` (no connection pooling) so every `with conn:` block always receives a brand-new DBAPI connection — this avoids stale-pool errors in Streamlit's multi-threaded rerun environment. WAL mode and `PRAGMA foreign_keys=ON` are applied via a SQLAlchemy `"connect"` event listener on every new connection, so they are always active without a separate setup query.
 
 For **reading** indicator data in the UI, use raw SQL via `get_engine().connect()` rather than ORM queries — the ORM mapper can silently return `None` when the live schema has columns the mapper hasn't seen. See `_render_indicator_panel()` in `main.py` for the pattern.
 

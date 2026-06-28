@@ -1301,7 +1301,7 @@ def _gather_weekly_data(config: dict) -> dict:
         "curr_signals":   [dict(r) for r in curr_sig_rows],
         "week_signals":   [dict(r) for r in week_sig_rows],
         "current_prices": current_prices,
-        "vix_prev":       float(vix_prev_row[0]) if vix_prev_row else None,
+        "vix_prev":       float(vix_prev_row[0]) if vix_prev_row and vix_prev_row[0] is not None else None,
         "macro_latest":   {r["series_id"]: dict(r) for r in macro_latest_rows},
         "macro_prev":     {r["series_id"]: float(r["value"]) for r in macro_prev_rows if r["value"] is not None},
         "active_overlays": [o.strip() for o in (get_metadata_str("active_overlays") or "none").split(",")

@@ -19,6 +19,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 
 def _load_config() -> dict:
@@ -43,11 +44,18 @@ def get_engine():
     engine = create_engine(
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
+        poolclass=NullPool,
     )
-    # Enable WAL mode for better concurrent read performance
-    with engine.connect() as conn:
-        conn.execute(text("PRAGMA journal_mode=WAL"))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
+
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     return engine
 
 
