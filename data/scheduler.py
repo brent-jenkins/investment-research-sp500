@@ -1194,6 +1194,12 @@ def _trade_alert_job() -> None:
                     "Could not stamp alert status for trade %s: %s", _eid, exc,
                 )
 
+    # Refresh T212 account/positions snapshot once per hour alongside trade alerts.
+    try:
+        _fetch_t212_snapshot(config)
+    except Exception as exc:
+        logger.error("Hourly T212 snapshot refresh failed: %s", exc)
+
 
 def _weekly_summary_job() -> None:
     """Every Sunday at 10:00 UTC — send the weekly performance summary email."""
