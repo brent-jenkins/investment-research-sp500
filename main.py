@@ -3739,7 +3739,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.caption("Open positions are shown in the **Trade Log** and **Daily Briefing** pages.")
 
                     if _fetched:
-                        st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC · auto-refreshes every 60s")
+                        st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC")
 
                 # ── Recent T212 orders from our DB ────────────────────────────────────
                 try:
