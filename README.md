@@ -106,6 +106,8 @@ A **T212 Invest Account** panel shows the live connection state when `trading212
 > **Forex pairs excluded by design:** Tickers ending in `=X` (e.g. `GBPUSD=X`, `EURUSD=X`) are never automated through T212 Invest. T212 Invest is a cash/equity account that supports stocks and ETFs only — forex is CFD-only, and the T212 CFD account has no public API. All forex trades remain manual CFD positions logged in the Trade Log.
 >
 > **Ticker substitutions in `ucits_mapping`:** Some research tickers are mapped to a different T212 instrument where T212 doesn't carry the exact fund. For example, `VIXY` maps to `VXX` — VXX (iPath S&P 500 VIX Short-Term Futures ETN) is the T212-available equivalent, tracking the same VIX short-term futures index. Each substitution is documented as an inline comment on the relevant `ucits_mapping` entry in `config.yaml`.
+>
+> **Tradeable assets without a `ucits_mapping` entry:** `SHY`, `JNK`, and `XLRE` are `tradeable: true` in the watchlist so they generate signals, appear in opportunities, and can be logged as manual CFD trades — but they have no `ucits_mapping` entry and therefore cannot receive automated T212 Invest orders. `JNK`'s omission is intentional: `HYG` is already mapped and covers essentially the same US high-yield bond exposure (adding JNK would open a duplicate position in the same index). `SHY` and `XLRE` are likely gaps — UCITS equivalents exist for both (iShares $ Treasury Bond 1-3yr ETF; SPDR S&P U.S. Real Estate Select Sector UCITS ETF), and their absence is inconsistent with the pattern of TLT/IEF/TIP being mapped and all other major SPDR sector ETFs being mapped. Consider adding their T212 instrument IDs to `ucits_mapping` in `config.yaml`.
 
 ---
 
@@ -347,7 +349,7 @@ backtest:
   max_holding_days: 30           # default max hold — equities, ETFs, commodities
   max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
   max_holding_days_crypto: 14    # crypto (ticker ends with -USD) — high volatility, shorter cycles
-  max_holding_days_bonds: 45     # bond ETFs (TLT, IEF, etc.) — slow-moving, longer trend duration
+  max_holding_days_bonds: 45     # bond ETFs (TLT, IEF, SHY, TIP) — slow-moving, longer trend duration
   atr_stop_multiplier: 2.0       # stop loss = entry ± N × ATR
   walk_forward_months: 6
   walk_forward_step: 1
@@ -358,6 +360,7 @@ virtual_trading:
   position_pct: 0.05             # 5% per trade
   max_open_positions: 10
   entry_signal: "STRONG_BUY"    # STRONG_BUY = strict; BUY = looser
+  max_theme_positions: 3        # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 learning:
   enabled: true
