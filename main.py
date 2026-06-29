@@ -4171,16 +4171,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 key="log_dl_7d",
             )
 
-    # Auto-refresh: sleep after rendering so the user sees the content first.
+    # Auto-refresh for log viewer only (opt-in via toggle).
     if _log_auto_refresh:
         import time as _time_mod  # noqa: PLC0415
         _time_mod.sleep(30)
         st.rerun()
-    elif _t212_enabled and _t212_has_key:
-        _t2_cached = st.session_state.get("t212_account_data")
-        if _t2_cached and not _t2_cached.get("error"):
-            time.sleep(60)
-            st.rerun()
 
 
 # ---------------------------------------------------------------------------
