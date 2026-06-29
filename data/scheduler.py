@@ -14,13 +14,19 @@ All three analysis runs execute the complete analysis pipeline:
   compute_all_pairs()  → correlations table
 
 Metadata keys written to system_metadata:
-  last_full_refresh         — UTC timestamp of the last successful data pull (EOD run or manual)
-  last_analysis_run         — UTC timestamp of the last completed analysis (any run type)
-  last_run_type             — 'full' or 'analysis_only'
-  trade_alert_status:{id}   — last health status for which an alert email was sent per trade
+  last_full_refresh          — UTC timestamp of the last successful data pull (EOD run or manual)
+  last_analysis_run          — UTC timestamp of the last completed analysis (any run type)
+  last_run_type              — 'full' or 'analysis_only'
+  trade_alert_status:{id}    — last health status for which an alert email was sent per trade
+  t212_account_snapshot      — JSON of latest T212 account summary (written by _fetch_t212_snapshot)
+  t212_positions_snapshot    — JSON of latest T212 positions list (written by _fetch_t212_snapshot)
+  t212_snapshot_fetched_at   — UTC ISO timestamp of last successful T212 fetch
+  pending_t212_fetch         — "1" when the UI has requested a refresh; cleared by _dispatch_pending_jobs
 """
 
+import json
 import logging
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -28,6 +34,7 @@ import pandas_market_calendars as mcal
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
@@ -608,6 +615,59 @@ def _process_virtual_trades(
     )
 
 
+def _fetch_t212_snapshot(config: dict) -> None:
+    """Fetch T212 account summary + positions and persist as JSON in system_metadata.
+
+    Called by the 60-second dispatcher (on-demand UI requests) and by the EOD job
+    so the snapshot stays reasonably fresh without manual refresh.  All T212 API
+    calls are centralised here — the UI only reads from the DB.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return
+    if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
+        return
+
+    live = t212_cfg.get("live", False)
+    try:
+        from brokers.trading212 import (  # noqa: PLC0415
+            Trading212Client,
+            poll_placed_orders as _poll,
+        )
+        client    = Trading212Client(live=live)
+        summary   = client.get_account_summary()
+        positions = client.get_positions()
+        set_metadata("t212_account_snapshot",  json.dumps(summary))
+        set_metadata("t212_positions_snapshot", json.dumps(positions or []))
+        set_metadata("t212_snapshot_fetched_at", datetime.utcnow().isoformat())
+        n_pos = len(positions) if isinstance(positions, list) else 0
+        logger.info("T212 account snapshot updated (%d position(s)).", n_pos)
+    except Exception as exc:
+        logger.error("T212 snapshot fetch failed: %s", exc)
+        set_metadata("t212_invest_error", str(exc))
+        return
+
+    try:
+        _poll(config)
+    except Exception as exc:
+        logger.warning("T212 order poll failed after snapshot: %s", exc)
+
+
+def _dispatch_pending_jobs() -> None:
+    """60-second job: execute any pending tasks queued by the UI.
+
+    Currently handles a single flag: ``pending_t212_fetch``.  The flag is
+    cleared *before* the fetch so a second UI click while a fetch is in
+    progress queues another one rather than being silently swallowed.
+    """
+    config = _load_config()
+
+    if get_metadata_str("pending_t212_fetch"):
+        set_metadata("pending_t212_fetch", "")
+        logger.info("Dispatching pending T212 snapshot fetch (UI-requested)…")
+        _fetch_t212_snapshot(config)
+
+
 def _run_analysis_pipeline(
     config: dict,
     all_tickers: list[str],
@@ -777,6 +837,11 @@ def _eod_job() -> None:
         logger.error("FRED macro indicator fetch failed: %s", exc, exc_info=True)
 
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
+
+    try:
+        _fetch_t212_snapshot(config)
+    except Exception as exc:
+        logger.error("T212 snapshot fetch after EOD failed: %s", exc)
 
 
 def _trade_alert_job() -> None:
@@ -1267,6 +1332,15 @@ def start_scheduler() -> BackgroundScheduler:
             "Scheduled '%s' job at %02d:%02d %s on weekdays.",
             run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz,
         )
+
+    # 60-second dispatcher: executes pending UI-requested jobs (e.g. T212 refresh).
+    _scheduler.add_job(
+        _dispatch_pending_jobs,
+        trigger=IntervalTrigger(seconds=60),
+        id="job_dispatcher",
+        replace_existing=True,
+    )
+    logger.info("Scheduled 60-second job dispatcher.")
 
     # Hourly trade alert check across all major market sessions (weekdays only).
     # Hour range covers: Asian (00-08 UTC), European (08-17 UTC), US (14-21 UTC),

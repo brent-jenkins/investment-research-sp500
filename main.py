@@ -3638,84 +3638,55 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             _tab_account, _tab_mapping = st.tabs(["Account", "Mapping"])
 
             with _tab_account:
-                # ── Live account data (fetched on button click, cached in session_state) ──
-                _t212_data_key = "t212_account_data"
+                # ── Account data from scheduler snapshot (reads DB; no direct API calls) ──
+                import json as _json  # noqa: PLC0415
+                _snap_raw      = get_metadata_str("t212_account_snapshot")
+                _pos_raw       = get_metadata_str("t212_positions_snapshot")
+                _snap_fetched  = get_metadata_str("t212_snapshot_fetched_at")
+                _pending_fetch = get_metadata_str("pending_t212_fetch")
 
                 _t2_col_status, _t2_col_btn = st.columns([3, 1])
                 with _t2_col_btn:
                     if st.button("Refresh Account", key="t212_refresh_btn"):
-                        with st.spinner("Connecting to T212…"):
-                            try:
-                                from brokers.trading212 import (  # noqa
-                                    Trading212Client as _T212Client,
-                                    poll_placed_orders as _poll_t212,
-                                )
-                                _client = _T212Client(live=_t212_live)
-                                _summary   = _client.get_account_summary()
-                                _positions = _client.get_positions()
-                                st.session_state[_t212_data_key] = {
-                                    "summary":    _summary,
-                                    "positions":  _positions,
-                                    "fetched_at": datetime.utcnow().isoformat(),
-                                    "error":      None,
-                                }
-                                # Update fill status for any PLACED orders before refreshing the log
-                                try:
-                                    _poll_t212(config)
-                                except Exception:
-                                    pass
-                            except Exception as _t2e:
-                                st.session_state[_t212_data_key] = {
-                                    "error": str(_t2e),
-                                    "fetched_at": datetime.utcnow().isoformat(),
-                                }
+                        from data.database import set_metadata as _set_meta_t2  # noqa: PLC0415
+                        _set_meta_t2("pending_t212_fetch", "1")
+                        st.rerun()
 
-                _t2_data = st.session_state.get(_t212_data_key)
-
-                # Auto-fetch on first load or when cached data is older than 60 seconds
-                _T212_REFRESH_SECS = 60
-                _t2_fetched_at = (
-                    datetime.fromisoformat(_t2_data["fetched_at"])
-                    if _t2_data and "fetched_at" in _t2_data else None
-                )
-                _t2_is_stale = _t2_data is None or (
-                    not _t2_data.get("error")
-                    and "summary" not in _t2_data
-                ) or (
-                    _t2_fetched_at is not None
-                    and not _t2_data.get("error")
-                    and _t2_fetched_at < datetime.utcnow() - timedelta(seconds=_T212_REFRESH_SECS)
-                )
-                if _t2_is_stale:
+                # Build _t2_data from stored JSON blobs
+                _t2_data = None
+                if _snap_raw:
                     try:
-                        from brokers.trading212 import (  # noqa
-                            Trading212Client as _T212Client,
-                            poll_placed_orders as _poll_t212,
-                        )
-                        _client = _T212Client(live=_t212_live)
-                        _summary   = _client.get_account_summary()
-                        _positions = _client.get_positions()
-                        st.session_state[_t212_data_key] = {
-                            "summary":    _summary,
-                            "positions":  _positions,
-                            "fetched_at": datetime.utcnow().isoformat(),
+                        _t2_data = {
+                            "summary":    _json.loads(_snap_raw),
+                            "positions":  _json.loads(_pos_raw) if _pos_raw else [],
+                            "fetched_at": _snap_fetched or "",
                             "error":      None,
                         }
+                    except Exception as _je:
+                        _t2_data = {
+                            "error":      f"Snapshot parse error: {_je}",
+                            "fetched_at": _snap_fetched or "",
+                        }
+
+                with _t2_col_status:
+                    if _pending_fetch:
+                        st.info("Refresh requested — updating within 60s.")
+                    elif _snap_fetched:
                         try:
-                            _poll_t212(config)
+                            _age_s = (
+                                datetime.utcnow() - datetime.fromisoformat(_snap_fetched)
+                            ).total_seconds()
+                            _age_str = (
+                                f"{int(_age_s / 3600)}h ago" if _age_s >= 3600
+                                else f"{int(_age_s / 60)}m ago" if _age_s >= 60
+                                else f"{int(_age_s)}s ago"
+                            )
+                            st.caption(f"Last updated: {_age_str}")
                         except Exception:
                             pass
-                        _t2_data = st.session_state[_t212_data_key]
-                    except Exception as _t2e:
-                        st.session_state[_t212_data_key] = {
-                            "error": str(_t2e),
-                            "fetched_at": datetime.utcnow().isoformat(),
-                        }
-                        _t2_data = st.session_state[_t212_data_key]
 
                 if _t2_data is None:
-                    with _t2_col_status:
-                        st.caption("Connecting to T212…")
+                    st.caption("No account data yet — click Refresh Account to fetch.")
                 elif _t2_data.get("error"):
                     st.error(f"Connection failed: {_t2_data['error']}")
                 else:
@@ -4966,9 +4937,10 @@ def _t212_ccy_to_gbp(amount: float, currency: str) -> float:
 def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     """Return enriched trade-card dicts for open T212 Invest positions.
 
-    Positions come from session state (populated by the Status page auto-refresh)
-    or, if stale/absent, from a fresh API call.  Only positions whose UCITS ticker
-    appears in ucits_mapping are included — unmanaged holdings are ignored.
+    Reads the scheduler-maintained ``t212_positions_snapshot`` from system_metadata
+    (written by ``_fetch_t212_snapshot`` in the scheduler).  No direct T212 API
+    calls are made here — the scheduler owns all outbound requests.  Only positions
+    whose UCITS ticker appears in ucits_mapping are included.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -4987,34 +4959,18 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     if not reverse_ucits:
         return []
 
-    # Use cached positions from session state if fresh enough (< 90 s old).
-    # 90 s matches the Status page auto-refresh cycle so closed positions
-    # are never shown for more than two refresh intervals.
-    t2_session  = st.session_state.get("t212_account_data")
+    # Read positions from the scheduler-maintained DB snapshot (no direct API calls).
+    import json as _json_brief  # noqa: PLC0415
+    _pos_raw_brief = get_metadata_str("t212_positions_snapshot")
     t2_positions: list | None = None
-    if t2_session and not t2_session.get("error"):
+    if _pos_raw_brief:
         try:
-            fetched_at = datetime.fromisoformat(t2_session.get("fetched_at", "2000-01-01"))
-            if fetched_at > datetime.utcnow() - timedelta(seconds=90):
-                t2_positions = t2_session.get("positions", [])
+            t2_positions = _json_brief.loads(_pos_raw_brief) or []
         except Exception:
             pass
 
     if t2_positions is None:
-        try:
-            from brokers.trading212 import Trading212Client as _T212BriefClient  # noqa: PLC0415
-            _client = _T212BriefClient(live=t212_cfg.get("live", False))
-            t2_positions = _client.get_positions() or []
-            # Cache so the Status page picks it up without a duplicate fetch
-            _existing = st.session_state.get("t212_account_data") or {}
-            st.session_state["t212_account_data"] = {
-                **_existing,
-                "positions":  t2_positions,
-                "fetched_at": datetime.utcnow().isoformat(),
-                "error":      None,
-            }
-        except Exception:
-            return []
+        return []
 
     # Build a lookup: ucits_ticker → position dict (for O(1) access)
     pos_by_ucits = {p.get("ticker", ""): p for p in (t2_positions or [])}
