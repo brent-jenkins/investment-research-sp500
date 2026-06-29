@@ -1312,6 +1312,11 @@ def start_scheduler() -> BackgroundScheduler:
 
     _scheduler = BackgroundScheduler(timezone=tz)
 
+    # Suppress APScheduler's per-job "Running job / executed successfully" INFO spam.
+    # Errors and warnings from job functions still surface via the root logger.
+    logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
+
     _JOB_FNS = {
         "pre_market": _pre_market_job,
         "us_open":    _us_open_job,
