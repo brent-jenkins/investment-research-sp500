@@ -218,18 +218,21 @@ After 20+ closed trades, `recalculate_learned_weights()` computes per-module acc
 
 ### Automatic scheduling
 
-Six APScheduler jobs run automatically:
+Seven APScheduler jobs run automatically from a **standalone scheduler daemon** (`scheduler_daemon.py`) managed by `investment-research-scheduler.service`. The daemon starts at boot and fires jobs on their UTC schedule regardless of whether anyone has visited the dashboard — no browser connection required.
 
 | Schedule | Type | What it does |
 |----------|------|--------------|
+| **Every 60 seconds** | Job dispatcher | Writes `scheduler_heartbeat` to `system_metadata`; checks `pending_t212_fetch` flag and, when set, calls `_fetch_t212_snapshot()` to refresh the T212 account/positions snapshot |
 | **Mon–Fri 07:00 UTC** | Asian EOD | `pull_incremental()` for exchanges closed before 07:00 UTC (e.g. JPX/Tokyo), then full analysis pipeline; opens virtual trades for those tickers only |
 | **Mon–Fri 13:30 UTC** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` — before US open, no data pull |
 | **Mon–Fri 19:05 UTC** | FOMC reaction | Analysis-only pipeline on FOMC decision days only (Fed statement released ~18:00–19:00 UTC); silently skips on non-FOMC days |
 | **Mon–Fri 21:30 UTC** | Full refresh | `pull_incremental()` for open exchanges, then full analysis pipeline + FRED macro fetch |
-| **Mon–Fri 00:00–21:00 + 23:00 UTC (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS or EXIT SIGNAL — filtered per-trade by home exchange session; refreshes the T212 account/positions snapshot at the end of each run |
+| **Mon–Fri 00:00–21:00 + 23:00 UTC (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS or EXIT SIGNAL — filtered per-trade by home exchange session; refreshes the T212 account/positions snapshot unconditionally on each run |
 | **Sunday 10:00 UTC** | Weekly summary | Sends the weekly summary email covering signals, open trades, closed P&L, accuracy progress, macro pulse, diverging pairs |
 
 All three analysis runs also call `_process_virtual_trades()` to auto-manage virtual positions.
+
+The Streamlit web UI (`investment-research.service`) also starts an in-process scheduler as a fallback, but checks the `scheduler_heartbeat` key in `system_metadata` first — if the heartbeat is less than 90 seconds old the daemon is active and the in-process scheduler is skipped, preventing duplicate job execution.
 
 ---
 
@@ -383,7 +386,7 @@ Each watchlist entry has a `tradeable: true/false` flag. Assets with `tradeable:
 | OS | Ubuntu 22.04 LTS |
 | Python | 3.11 system-wide (no virtualenv) |
 | Proxy | Caddy (automatic TLS + basic auth) |
-| Process manager | systemd (`investment-research.service`) |
+| Process manager | systemd (`investment-research.service` + `investment-research-scheduler.service`) |
 
 ### First-time setup
 
@@ -417,9 +420,11 @@ Environment=T212_API_KEY=your_t212_key
 Environment=T212_API_SECRET=your_t212_secret
 ```
 
-After creating or editing the file: `systemctl daemon-reload && systemctl restart investment-research`
+After creating or editing the file: `systemctl daemon-reload && systemctl restart investment-research && systemctl restart investment-research-scheduler`
 
 The `investment-research.service` template in the repo has blank placeholders for these variables. Never fill in real values there — the drop-in file takes precedence and survives all future deploys.
+
+The scheduler daemon automatically inherits the same credentials: `setup.sh` and both deploy scripts create a symlink at `/etc/systemd/system/investment-research-scheduler.service.d/secrets.conf` pointing to the same drop-in file, so you only need to manage one secrets file.
 
 ### Deploying updates
 
@@ -428,14 +433,17 @@ bash setup-hooks.sh   # install pre-push deploy hook (run once)
 git push origin main  # triggers automatic deploy
 ```
 
-Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored). `deploy.sh` also copies `investment-research.service` to `/etc/systemd/system/` and runs `systemctl daemon-reload` so the installed service file stays in sync with the repo.
+Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored). Both scripts copy both service files to `/etc/systemd/system/`, ensure the secrets symlink exists, run `systemctl daemon-reload`, and restart both `investment-research` and `investment-research-scheduler`.
 
 ### Useful server commands
 
 ```bash
-journalctl -u investment-research -f   # live logs
+journalctl -u investment-research -f              # web UI live logs
+journalctl -u investment-research-scheduler -f   # scheduler daemon live logs
 systemctl status investment-research
+systemctl status investment-research-scheduler
 systemctl restart investment-research
+systemctl restart investment-research-scheduler
 ```
 
 ---

@@ -184,9 +184,11 @@ The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.ma
 
 `main.py:_initialise()` is called on every Streamlit session start. On the **first** request of a session it checks `_has_price_data()` (a lightweight `SELECT 1 FROM price_data LIMIT 1`). If price data exists it synchronously runs `run_analysis()` then `generate_signals()` for the full watchlist and stores a completion message in `st.session_state["_startup_msg"]`. The main render loop pops that key and calls `st.toast()` so the user sees a non-intrusive notification.
 
+**Scheduler startup:** `_start_scheduler_at_startup()` is a `@st.cache_resource` function called at module level in `main.py` (executes once per Streamlit server process). It reads `scheduler_heartbeat` from `system_metadata` — if a heartbeat was written less than 90 seconds ago the standalone daemon is active and the function returns immediately, preventing double job execution. If no recent heartbeat is found it calls `start_scheduler()` to start an in-process APScheduler as a fallback (for local dev or if the daemon is not running). The Scheduler Health card on the Status page shows one of three states: "RUNNING (daemon · heartbeat Xs ago)", "RUNNING (in-process)", or "STOPPED".
+
 `_render_home_page()` powers both the **Status** page and the Charts landing (shown when no asset is selected). It draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
 
-**`data/scheduler.py`** registers seven APScheduler jobs. All three standard analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → `_process_virtual_trades()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check), stamps `last_full_refresh`, and calls `_fetch_t212_snapshot(config)` to keep the account/positions snapshot current. Each step is in its own `try/except` so one failure never blocks the rest. A `_dispatch_pending_jobs()` job runs every 60 seconds; it checks `system_metadata` for `pending_t212_fetch` and, when set, calls `_fetch_t212_snapshot()` — this is how the UI Refresh button triggers an out-of-band T212 data fetch without making direct API calls from the Streamlit thread. A seventh job, `_fomc_reaction_job()`, fires at 19:05 UTC every weekday but calls `analysis/fomc.py:is_fomc_decision_day()` and immediately returns on non-FOMC days; on decision days it runs `_run_analysis_pipeline()` to capture the post-announcement market reaction before the regular 21:30 EOD run. The FOMC calendar uses a hardcoded 2025–2026 schedule plus a Fed press-release API check for real-time confirmation.
+**`data/scheduler.py`** registers seven APScheduler jobs. All three standard analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → `_process_virtual_trades()` → stamps `last_run_type`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check), stamps `last_full_refresh`, and calls `_fetch_t212_snapshot(config)` to keep the account/positions snapshot current. Each step is in its own `try/except` so one failure never blocks the rest. A `_dispatch_pending_jobs()` job runs every 60 seconds; it writes the current UTC time to `system_metadata` under `scheduler_heartbeat` (used by `_start_scheduler_at_startup()` to detect a live daemon), then checks `pending_t212_fetch` and, when set, calls `_fetch_t212_snapshot()` — this is how the UI Refresh button triggers an out-of-band T212 data fetch without making direct API calls from the Streamlit thread. A seventh job, `_fomc_reaction_job()`, fires at 19:05 UTC every weekday but calls `analysis/fomc.py:is_fomc_decision_day()` and immediately returns on non-FOMC days; on decision days it runs `_run_analysis_pipeline()` to capture the post-announcement market reaction before the regular 21:30 EOD run. The FOMC calendar uses a hardcoded 2025–2026 schedule plus a Fed press-release API check for real-time confirmation.
 
 `_trade_alert_job()` runs hourly 00:00–21:00 + 23:00 UTC on weekdays (covering all major market sessions). For each open trade it first checks whether the trade's home exchange is currently in session via `_is_exchange_in_session(exchange, now_utc)` — trades on closed exchanges are skipped so alerts only fire when the market is actually open. For in-session trades it fetches a live price, calls `enrich_open_trade()` to get the current health status, and emails an alert when a trade reaches STOP LOSS or EXIT SIGNAL. Deduplication: the last-alerted status per trade is stored in `system_metadata` under `trade_alert_status:{trade_id}` — the same status only triggers one email until it changes. The global `alert_cooldown_hours` setting prevents email storms.
 
@@ -309,7 +311,7 @@ cd /root/investment-research
 bash setup.sh research.yourdomain.com
 ```
 
-`setup.sh` installs Python 3.11, compiles the TA-Lib C library from source, installs Caddy, installs all packages system-wide via `python3.11 -m pip`, writes `.streamlit/config.toml`, and registers `investment-research.service` with systemd. There is no virtualenv — packages are installed at the system level.
+`setup.sh` installs Python 3.11, compiles the TA-Lib C library from source, installs Caddy, installs all packages system-wide via `python3.11 -m pip`, writes `.streamlit/config.toml`, and registers both `investment-research.service` (Streamlit web UI) and `investment-research-scheduler.service` (standalone scheduler daemon) with systemd. It also creates a symlink so the scheduler daemon inherits credentials from the same secrets drop-in file as the web UI service. There is no virtualenv — packages are installed at the system level.
 
 ### Password-protecting the dashboard
 
@@ -337,7 +339,9 @@ Environment=T212_API_KEY=...
 Environment=T212_API_SECRET=...
 ```
 
-After editing: `systemctl daemon-reload && systemctl restart investment-research`. The `investment-research.service` template in the repo has blank placeholders — never put real values there. The drop-in takes precedence and is unaffected by `deploy.sh` or `git pull`.
+After editing: `systemctl daemon-reload && systemctl restart investment-research && systemctl restart investment-research-scheduler`. The `investment-research.service` template in the repo has blank placeholders — never put real values there. The drop-in takes precedence and is unaffected by `deploy.sh` or `git pull`.
+
+The scheduler daemon inherits the same credentials automatically. `setup.sh` and both deploy scripts create `/etc/systemd/system/investment-research-scheduler.service.d/secrets.conf` as a symlink pointing at the web UI drop-in — only one secrets file to manage.
 
 ### Ongoing deploys (from Windows)
 
@@ -351,7 +355,7 @@ bash deploy.sh          # Git Bash — VM_IP is hardcoded in the script
 .\deploy.ps1            # PowerShell — gitignored, local-only; SSH key at ssh-keys\
 ```
 
-Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall any new packages via `python3.11 -m pip install -r requirements.txt --quiet`, and `systemctl restart` the service. `deploy.sh` additionally copies `investment-research.service` from the repo to `/etc/systemd/system/` and runs `systemctl daemon-reload` before the restart, keeping the installed service file in sync with the repo template.
+Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall any new packages, copy both service files to `/etc/systemd/system/`, ensure the secrets symlink exists for the scheduler service, run `systemctl daemon-reload`, and restart both `investment-research` and `investment-research-scheduler`. Service file changes in the repo take effect automatically on the next deploy.
 
 ### Git hooks
 
@@ -368,7 +372,9 @@ The hook SSHes directly into the server after a 15-second background delay, so g
 | File | Purpose |
 |---|---|
 | `setup.sh` | One-time server bootstrap (no virtualenv; installs packages system-wide) |
-| `investment-research.service` | systemd unit; ExecStart uses `/usr/local/bin/streamlit` directly |
+| `investment-research.service` | systemd unit for the Streamlit web UI |
+| `investment-research-scheduler.service` | systemd unit for the standalone scheduler daemon (fires jobs at boot, no browser required) |
+| `scheduler_daemon.py` | Entry point for the scheduler daemon — calls `init_db()` + `start_scheduler()` then sleeps in a heartbeat loop |
 | `Caddyfile` | Caddy reverse-proxy template (gitignored — contains domain/hash) |
 | `.streamlit/config.toml.example` | Reference for the server config created by `setup.sh` (actual file is gitignored) |
 | `deploy.sh` | Git Bash deploy script (VM_IP hardcoded; SSH key at `ssh-keys/`) |
@@ -383,9 +389,12 @@ The hook SSHes directly into the server after a 15-second background delay, so g
 ### Useful server commands
 
 ```bash
-journalctl -u investment-research -f   # live app logs
-systemctl status investment-research   # service health
-systemctl reload caddy                 # apply Caddyfile changes without downtime
+journalctl -u investment-research -f              # web UI live logs
+journalctl -u investment-research-scheduler -f   # scheduler daemon live logs
+systemctl status investment-research             # web UI service health
+systemctl status investment-research-scheduler   # scheduler daemon health
+systemctl restart investment-research-scheduler  # restart scheduler (e.g. after config change)
+systemctl reload caddy                           # apply Caddyfile changes without downtime
 ```
 
 ## Adding a new analysis module
