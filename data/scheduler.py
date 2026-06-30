@@ -908,7 +908,9 @@ def _trade_alert_job() -> None:
         logger.warning("VIX spike check failed: %s", _vix_exc)
     # ── End VIX spike check ────────────────────────────────────────────────
 
-    # ── T212 Invest: poll for fill status on any PLACED orders ────────────
+    # ── T212 Invest: poll orders + refresh account snapshot ───────────────
+    # These run unconditionally every hour regardless of alert state, so the
+    # Status page snapshot stays current even when there are no new alerts.
     try:
         from brokers.trading212 import poll_placed_orders as _poll_t212  # noqa: PLC0415
         _n_updated = _poll_t212(config)
@@ -916,7 +918,12 @@ def _trade_alert_job() -> None:
             logger.info("T212 order poll: %d order(s) updated to terminal status.", _n_updated)
     except Exception as _poll_exc:
         logger.warning("T212 order poll failed: %s", _poll_exc)
-    # ── End T212 poll ──────────────────────────────────────────────────────
+
+    try:
+        _fetch_t212_snapshot(config)
+    except Exception as exc:
+        logger.error("Hourly T212 snapshot refresh failed: %s", exc)
+    # ── End T212 ───────────────────────────────────────────────────────────
 
     from output.performance import get_latest_price, get_open_trades  # noqa: PLC0415
     from output.briefing import (  # noqa: PLC0415
@@ -1202,11 +1209,6 @@ def _trade_alert_job() -> None:
                     "Could not stamp alert status for trade %s: %s", _eid, exc,
                 )
 
-    # Refresh T212 account/positions snapshot once per hour alongside trade alerts.
-    try:
-        _fetch_t212_snapshot(config)
-    except Exception as exc:
-        logger.error("Hourly T212 snapshot refresh failed: %s", exc)
 
 
 def _weekly_summary_job() -> None:
