@@ -9,7 +9,7 @@ User=root
 Group=root
 WorkingDirectory=/root/investment-research
 
-ExecStart=/usr/local/bin/python3.11 /root/investment-research/scheduler_daemon.py
+ExecStart=/usr/bin/python3.11 /root/investment-research/scheduler_daemon.py
 
 # Restart aggressively — a missed job is worse than a brief restart delay.
 Restart=always
