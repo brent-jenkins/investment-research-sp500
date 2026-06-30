@@ -140,6 +140,24 @@ def _uk_sched_time(hour: int, minute: int) -> str:
 init_db()
 
 
+@st.cache_resource
+def _start_scheduler_at_startup() -> None:
+    """Start the APScheduler background thread once per server process lifetime.
+
+    st.cache_resource persists across all user sessions, so this runs when the
+    Streamlit server first loads main.py — not on the first page visit. Without
+    this, a restart with no subsequent page visits causes all scheduled jobs to
+    be missed until someone opens the dashboard.
+    """
+    try:
+        start_scheduler()
+    except Exception as exc:
+        logger.warning("Scheduler could not start at server startup: %s", exc)
+
+
+_start_scheduler_at_startup()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -4156,25 +4174,21 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 def _initialise() -> None:
-    """Ensure the DB schema is current and start the background scheduler once.
+    """Ensure the DB schema is current and run any first-session setup.
 
     init_db() is called on every render because it is idempotent — create_all()
     is a no-op when tables exist and _apply_migrations() skips columns that are
     already present. This guarantees schema changes are picked up immediately
     after a code update without requiring a Streamlit session restart.
 
-    The scheduler is started once per session (guarded by session_state).
-    Analysis is only triggered on startup on the very first run (no prior
-    last_analysis_run recorded) — all subsequent page loads return instantly
-    and rely on the scheduler for freshness.
+    The scheduler is started at module load via _start_scheduler_at_startup()
+    (a st.cache_resource call), so jobs fire even if nobody has visited the
+    page since the last server restart. This function handles only the
+    once-per-session setup that requires session_state (FX pre-fetch, startup
+    analysis on fresh installs).
     """
     init_db()
     if "app_initialised" not in st.session_state:
-        try:
-            start_scheduler()
-        except Exception as exc:
-            logger.warning("Scheduler could not start: %s", exc)
-
         try:
             _prefetch_fx_rates()
         except Exception as exc:
