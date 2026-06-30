@@ -723,6 +723,22 @@ def _apply_data_fixes(engine) -> None:
         except Exception:
             pass
 
+    # --- purge_zero_close_price_rows ---
+    # Delete price_data rows where close is NULL or 0.  These are incomplete
+    # intraday bars stored by an earlier version of _upsert_price_rows that
+    # did not filter them out.  A single bad row in the rolling window breaks
+    # the SMA line on the chart for all subsequent dates in the window.
+    # Not keyed via _migration_applied because new bad rows can appear after
+    # any incremental pull; the DELETE is a no-op when no bad rows exist so
+    # it is safe to run on every startup.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "DELETE FROM price_data WHERE close IS NULL OR close <= 0"
+            ))
+    except Exception:
+        pass
+
 
 def _purge_unlisted_tickers(engine) -> None:
     """Delete rows for tickers no longer present in config.yaml watchlist.

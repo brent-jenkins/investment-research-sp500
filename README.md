@@ -320,7 +320,7 @@ SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `wit
 | `backtest_trades` | Simulated trades from each backtest run with full entry/exit/P&L detail |
 | `system_metadata` | Key-value store for operational state (timestamps, learned weights, alert status) |
 
-Schema migrations (`_apply_migrations()`) run on every startup. One-time data fixes (`_apply_data_fixes()`) are guarded by value-based conditions. Stale tickers are purged from all tables on every startup via `_purge_unlisted_tickers()`.
+Schema migrations (`_apply_migrations()`) run on every startup. One-time data fixes (`_apply_data_fixes()`) are guarded by value-based conditions. Stale tickers are purged from all tables on every startup via `_purge_unlisted_tickers()`. Rows with a null or zero close price are also purged from `price_data` on every startup — these are incomplete intraday bars that yfinance occasionally returns for sessions that hadn't closed at fetch time, and a single such row breaks the rolling-mean SMA line on the chart for the following 20–50 trading days. The ingestion layer (`_upsert_price_rows`) now also skips these rows before they reach the database.
 
 ---
 

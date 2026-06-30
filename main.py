@@ -688,13 +688,15 @@ def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
         )
     )
 
-    # Overlay 20- and 50-day SMAs
+    # Overlay 20- and 50-day SMAs — compute on valid rows only so a single
+    # NaN/zero close (e.g. an incomplete intraday bar) does not break the line.
+    df_valid = df[df["close"].notna() & (df["close"] > 0)]
     for window, colour in ((20, "#f59e0b"), (50, "#6366f1")):
-        if len(df) >= window:
-            sma = df["close"].rolling(window).mean()
+        if len(df_valid) >= window:
+            sma = df_valid["close"].rolling(window).mean()
             fig.add_trace(
                 go.Scatter(
-                    x=df["date"],
+                    x=df_valid["date"],
                     y=sma,
                     mode="lines",
                     name=f"SMA {window}",

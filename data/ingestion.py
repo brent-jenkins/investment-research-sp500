@@ -1,6 +1,7 @@
 """Fetch daily OHLCV data from yfinance and persist it to SQLite."""
 
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -106,6 +107,15 @@ def _upsert_price_rows(df: pd.DataFrame, ticker: str) -> int:
     for date_idx, row in df.iterrows():
         # yfinance may return a MultiIndex when downloading a single ticker
         date_val = date_idx if isinstance(date_idx, datetime) else pd.Timestamp(date_idx).to_pydatetime()
+        close_raw = row.get("Close", None)
+        # Skip rows where yfinance returned NaN or zero close — these are
+        # incomplete intraday bars or data gaps that break rolling-mean SMAs.
+        try:
+            close_val = float(close_raw)
+        except (TypeError, ValueError):
+            close_val = 0.0
+        if close_val <= 0 or math.isnan(close_val):
+            continue
         rows.append(
             {
                 "ticker": ticker,
@@ -113,8 +123,8 @@ def _upsert_price_rows(df: pd.DataFrame, ticker: str) -> int:
                 "open": float(row.get("Open", 0) or 0),
                 "high": float(row.get("High", 0) or 0),
                 "low": float(row.get("Low", 0) or 0),
-                "close": float(row.get("Close", 0) or 0),
-                "adj_close": float(row.get("Adj Close", row.get("Close", 0)) or 0),
+                "close": close_val,
+                "adj_close": float(row.get("Adj Close", close_raw) or close_val),
                 "volume": float(row.get("Volume", 0) or 0),
             }
         )
