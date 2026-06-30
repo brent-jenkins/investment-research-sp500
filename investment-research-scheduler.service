@@ -1,0 +1,33 @@
+[Unit]
+Description=Investment Research Scheduler Daemon
+Documentation=https://github.com/YOUR/investment-research
+After=network.target investment-research.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/investment-research
+
+ExecStart=/usr/local/bin/python3.11 /root/investment-research/scheduler_daemon.py
+
+# Restart aggressively — a missed job is worse than a brief restart delay.
+Restart=always
+RestartSec=10
+
+# Inherit secrets from the same drop-in used by the main service.
+# Create /etc/systemd/system/investment-research-scheduler.service.d/secrets.conf
+# (or symlink it) with the same content as investment-research.service.d/secrets.conf.
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/root
+Environment=FRED_API_KEY=
+Environment=SMTP_PASSWORD=
+Environment=T212_API_KEY=
+Environment=T212_API_SECRET=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=investment-research-scheduler
+
+[Install]
+WantedBy=multi-user.target

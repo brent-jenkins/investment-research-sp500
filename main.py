@@ -142,17 +142,37 @@ init_db()
 
 @st.cache_resource
 def _start_scheduler_at_startup() -> None:
-    """Start the APScheduler background thread once per server process lifetime.
+    """Start the in-process scheduler unless the standalone daemon is already running.
 
-    st.cache_resource persists across all user sessions, so this runs when the
-    Streamlit server first loads main.py — not on the first page visit. Without
-    this, a restart with no subsequent page visits causes all scheduled jobs to
-    be missed until someone opens the dashboard.
+    The standalone daemon (scheduler_daemon.py / investment-research-scheduler.service)
+    writes a heartbeat to system_metadata every 60 seconds. If that heartbeat is
+    fresh (< 90 seconds old), the daemon owns scheduling and we skip the in-process
+    scheduler to avoid double-firing jobs. If no fresh heartbeat exists (local dev,
+    or daemon not installed), we start the in-process scheduler as a fallback.
+
+    Note: st.cache_resource is process-wide but is only invoked when the Streamlit
+    script first runs (i.e. on first page visit). This function therefore serves as
+    a fallback for environments where the standalone daemon is not running.
     """
+    try:
+        heartbeat_str = get_metadata_str("scheduler_heartbeat")
+        if heartbeat_str:
+            heartbeat_dt = datetime.fromisoformat(heartbeat_str)
+            age_s = (datetime.utcnow() - heartbeat_dt).total_seconds()
+            if age_s < 90:
+                logger.info(
+                    "Standalone scheduler daemon detected (heartbeat %ds ago) "
+                    "— skipping in-process scheduler.",
+                    int(age_s),
+                )
+                return
+    except Exception:
+        pass
+
     try:
         start_scheduler()
     except Exception as exc:
-        logger.warning("Scheduler could not start at server startup: %s", exc)
+        logger.warning("In-process scheduler could not start: %s", exc)
 
 
 _start_scheduler_at_startup()
@@ -3922,6 +3942,19 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         _aps        = None
         _aps_running = False
 
+    # Check for the standalone daemon heartbeat (written every 60s by the
+    # scheduler daemon process via _dispatch_pending_jobs).
+    _daemon_active = False
+    _daemon_age_s: float = float("inf")
+    try:
+        _hb_str = get_metadata_str("scheduler_heartbeat")
+        if _hb_str:
+            _hb_dt = datetime.fromisoformat(_hb_str)
+            _daemon_age_s = (datetime.utcnow() - _hb_dt).total_seconds()
+            _daemon_active = _daemon_age_s < 90
+    except Exception:
+        pass
+
     _JOB_LABELS: dict[str, tuple[str, str]] = {
         "scheduled_pre_market": ("Pre-Market",    "07:00 UTC · Mon–Fri"),
         "scheduled_us_open":    ("US Open",       "13:30 UTC · Mon–Fri"),
@@ -3929,19 +3962,33 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
         "weekly_summary":       ("Weekly Summary","10:00 UTC · Sunday"),
         "fomc_reaction":        ("FOMC Reaction", "19:05 UTC · Mon–Fri (FOMC days only)"),
+        "job_dispatcher":       ("job_dispatcher","—"),
     }
 
-    _aps_colour = "#16a34a" if _aps_running else "#dc2626"
-    _aps_label  = "RUNNING" if _aps_running else "STOPPED"
+    if _daemon_active:
+        _aps_label  = "RUNNING"
+        _mode_note  = f"(daemon · heartbeat {int(_daemon_age_s)}s ago)"
+        _aps_colour = "#16a34a"
+    elif _aps_running:
+        _aps_label  = "RUNNING"
+        _mode_note  = "(in-process)"
+        _aps_colour = "#16a34a"
+    else:
+        _aps_label  = "STOPPED"
+        _mode_note  = ""
+        _aps_colour = "#dc2626"
+
     st.markdown(
         f'<div style="margin-bottom:10px">'
         f'<span style="font-size:0.82rem;color:#64748b">Scheduler: </span>'
         f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
-        f'</div>',
+        + (f'<span style="font-size:0.75rem;color:#94a3b8;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
+        + "</div>",
         unsafe_allow_html=True,
     )
 
     if _aps_running and _aps is not None:
+        # In-process scheduler: show live next-run times from APScheduler.
         _aps_jobs   = _aps.get_jobs()
         _now_utc_tz = datetime.now(timezone.utc)
         _sh_rows: list[str] = []
@@ -3991,9 +4038,87 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             '</div>'
         )
         st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
+    elif _daemon_active:
+        # Daemon mode: show static schedule from config; next-run times computed
+        # via APScheduler trigger objects (no running scheduler required).
+        from apscheduler.triggers.cron import CronTrigger as _CronTrigger  # noqa: PLC0415
+        from apscheduler.triggers.interval import IntervalTrigger as _ItvTrigger  # noqa: PLC0415
+        _cfg_s  = _load_config()["scheduler"]
+        _tz_s   = _cfg_s["timezone"]
+        _now_tz = datetime.now(timezone.utc)
+
+        # Static job definitions mirroring scheduler.py
+        _static_jobs: list[tuple[str, str, str, object]] = []
+        for _rn, _rc in _cfg_s.get("runs", {}).items():
+            _sid = f"scheduled_{_rn}"
+            _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
+            _trigger = _CronTrigger(
+                hour=_rc["hour"], minute=_rc["minute"],
+                day_of_week="mon-fri", timezone=_tz_s,
+            )
+            _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
+
+        _extra_static = [
+            ("job_dispatcher",    "job_dispatcher",    "—",                          _ItvTrigger(seconds=60)),
+            ("trade_alert_check", "Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri", _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
+            ("weekly_summary",    "Weekly Summary",    "10:00 UTC · Sunday",         _CronTrigger(hour=10, minute=0, day_of_week="sun", timezone=_tz_s)),
+            ("fomc_reaction",     "FOMC Reaction",     "19:05 UTC · Mon–Fri (FOMC days only)", _CronTrigger(hour=19, minute=5, day_of_week="mon-fri", timezone=_tz_s)),
+        ]
+        _static_jobs.extend(_extra_static)
+
+        _sh_rows_d: list[str] = []
+        for _sid, _jlabel, _jsched, _trigger in _static_jobs:
+            if _jlabel == "job_dispatcher":
+                continue  # internal — don't show
+            try:
+                _nrt = _trigger.get_next_fire_time(None, _now_tz)
+            except Exception:
+                _nrt = None
+            if _nrt is None:
+                _nrt_str, _until_str = "—", "—"
+            else:
+                _d = (_nrt - _now_tz).total_seconds()
+                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
+                _until_str = (
+                    f"{int(_d / 60)}m"  if _d < 3600
+                    else f"{_d / 3600:.1f}h" if _d < 86400
+                    else f"{_d / 86400:.1f}d"
+                )
+            _dot, _badge = "#16a34a", "OK"
+            if _sid == "scheduled_eod":
+                _ref_age2 = (
+                    (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
+                    if last_refresh else float("inf")
+                )
+                if _ref_age2 > 26 and datetime.utcnow().weekday() < 5:
+                    _dot, _badge = "#dc2626", "OVERDUE"
+
+            _sh_rows_d.append(
+                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #f1f5f9;'
+                f'align-items:center;font-size:0.78rem">'
+                f'<div style="flex:0 0 22%;font-weight:600">{html.escape(_jlabel)}</div>'
+                f'<div style="flex:0 0 28%;color:#64748b;font-size:0.73rem">{html.escape(_jsched)}</div>'
+                f'<div style="flex:0 0 25%">{html.escape(_nrt_str)}</div>'
+                f'<div style="flex:0 0 12%;color:#64748b">{html.escape(_until_str)}</div>'
+                f'<div style="flex:0 0 13%;color:{_dot};font-weight:700">{html.escape(_badge)}</div>'
+                f'</div>'
+            )
+        _sh_head_d = (
+            '<div style="font-size:0.82rem">'
+            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #e2e8f0;'
+            'color:#94a3b8;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
+            '<div style="flex:0 0 22%">Job</div>'
+            '<div style="flex:0 0 28%">Schedule</div>'
+            '<div style="flex:0 0 25%">Next Run</div>'
+            '<div style="flex:0 0 12%">In</div>'
+            '<div style="flex:0 0 13%">Status</div>'
+            '</div>'
+        )
+        st.markdown(_sh_head_d + "".join(_sh_rows_d) + "</div>", unsafe_allow_html=True)
     else:
         st.warning(
-            "Scheduler is not running — scheduled jobs will not fire until the service restarts."
+            "Scheduler is not running — scheduled jobs will not fire until the service restarts. "
+            "On the server, ensure investment-research-scheduler.service is enabled and running."
         )
 
     # ── Log Viewer ─────────────────────────────────────────────────────────

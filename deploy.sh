@@ -27,9 +27,9 @@ set -e
 cd ${APP_DIR}
 
 echo "  Pulling latest code..."
-# Discard any local edits to the service template — the real installed file
-# lives in /etc/systemd/system/, not in the repo directory.
-git checkout -- investment-research.service 2>/dev/null || true
+# Discard any local edits to the service templates — the real installed files
+# live in /etc/systemd/system/, not in the repo directory.
+git checkout -- investment-research.service investment-research-scheduler.service 2>/dev/null || true
 git pull origin main
 
 echo "  Installing any new Python packages..."
@@ -37,15 +37,25 @@ python3.11 -m pip install -r requirements.txt --quiet
 # TA-Lib (Linux) is already installed; re-running is a no-op
 python3.11 -m pip install TA-Lib --quiet 2>/dev/null || true
 
-echo "  Updating service file..."
+echo "  Updating service files..."
 cp ${APP_DIR}/investment-research.service /etc/systemd/system/${SERVICE}.service
+cp ${APP_DIR}/investment-research-scheduler.service /etc/systemd/system/${SERVICE}-scheduler.service
+# Ensure the secrets symlink exists (non-fatal if secrets.conf not yet created)
+mkdir -p /etc/systemd/system/${SERVICE}-scheduler.service.d
+ln -sf \
+    /etc/systemd/system/${SERVICE}.service.d/secrets.conf \
+    /etc/systemd/system/${SERVICE}-scheduler.service.d/secrets.conf \
+    2>/dev/null || true
 systemctl daemon-reload
 
-echo "  Restarting service..."
+echo "  Restarting services..."
 systemctl restart ${SERVICE}
+systemctl enable ${SERVICE}-scheduler 2>/dev/null || true
+systemctl restart ${SERVICE}-scheduler
 
 echo "  Service status:"
 systemctl status ${SERVICE} --no-pager -l
+systemctl status ${SERVICE}-scheduler --no-pager -l
 REMOTE
 
 echo ""

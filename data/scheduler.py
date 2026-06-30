@@ -659,7 +659,15 @@ def _dispatch_pending_jobs() -> None:
     Currently handles a single flag: ``pending_t212_fetch``.  The flag is
     cleared *before* the fetch so a second UI click while a fetch is in
     progress queues another one rather than being silently swallowed.
+
+    Also writes a heartbeat timestamp so the Streamlit UI can detect whether
+    the standalone scheduler daemon is running (vs. the in-process scheduler).
     """
+    try:
+        set_metadata("scheduler_heartbeat", datetime.utcnow().isoformat())
+    except Exception:
+        pass
+
     config = _load_config()
 
     if get_metadata_str("pending_t212_fetch"):
@@ -1407,6 +1415,14 @@ def start_scheduler() -> BackgroundScheduler:
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))
+
+    # Write an immediate heartbeat so the Streamlit UI detects a running
+    # scheduler straight away (the dispatcher job writes subsequent heartbeats
+    # every 60 seconds, but takes up to 60s to fire for the first time).
+    try:
+        set_metadata("scheduler_heartbeat", datetime.utcnow().isoformat())
+    except Exception:
+        pass
 
     # Check for missed EOD runs after starting, so the scheduler is already
     # accepting jobs before we potentially queue a catch-up run.

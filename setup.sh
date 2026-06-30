@@ -148,14 +148,34 @@ echo ""
 echo "    3. Reload Caddy:  systemctl reload caddy"
 echo ""
 
-# ── 7. Systemd service ────────────────────────────────────────────────────────
+# ── 7. Systemd services ───────────────────────────────────────────────────────
 
-echo ">>> [7/7] Installing and starting systemd service..."
+echo ">>> [7/7] Installing and starting systemd services..."
+
+# Main Streamlit web UI
 cp "$APP_DIR/investment-research.service" /etc/systemd/system/
+
+# Standalone scheduler daemon (fires jobs even when nobody visits the dashboard)
+cp "$APP_DIR/investment-research-scheduler.service" /etc/systemd/system/
+
+# Symlink the secrets drop-in so both services share the same credentials file.
+# Users only need to create one drop-in (investment-research.service.d/secrets.conf)
+# and the scheduler daemon automatically inherits the same env vars.
+mkdir -p /etc/systemd/system/investment-research-scheduler.service.d
+ln -sf \
+    /etc/systemd/system/investment-research.service.d/secrets.conf \
+    /etc/systemd/system/investment-research-scheduler.service.d/secrets.conf \
+    2>/dev/null || true   # non-fatal if secrets.conf doesn't exist yet
+
 systemctl daemon-reload
+
 systemctl enable investment-research
 systemctl start investment-research
 echo "    investment-research service enabled and started."
+
+systemctl enable investment-research-scheduler
+systemctl start investment-research-scheduler
+echo "    investment-research-scheduler service enabled and started."
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
@@ -166,9 +186,13 @@ echo ""
 echo "  Service status:"
 systemctl status investment-research --no-pager -l || true
 echo ""
+systemctl status investment-research-scheduler --no-pager -l || true
+echo ""
 echo "  Useful commands:"
-echo "    journalctl -u investment-research -f    # live logs"
-echo "    systemctl restart investment-research   # restart app"
-echo "    systemctl reload caddy                  # reload Caddy config"
+echo "    journalctl -u investment-research -f            # web UI live logs"
+echo "    journalctl -u investment-research-scheduler -f  # scheduler live logs"
+echo "    systemctl restart investment-research           # restart web UI"
+echo "    systemctl restart investment-research-scheduler # restart scheduler"
+echo "    systemctl reload caddy                          # reload Caddy config"
 echo "============================================================"
 echo ""
