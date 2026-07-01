@@ -1,4 +1,7 @@
-"""Tests for entry_signal_overrides gating in analysis/backtest.py:simulate_trades().
+"""Tests for entry_signal_overrides gating in analysis/backtest.py:simulate_trades(),
+and for the config-driven settings (max holding days, ATR stop multiplier,
+exit_signal) that make the backtest mirror the live system rather than
+accepting independent runtime override parameters.
 
 simulate_trades() takes a pre-built signal DataFrame (as produced by
 compute_signal_history()) and a plain config dict — it never touches the DB,
@@ -6,9 +9,12 @@ yfinance, or any broker API, so these tests build the signal history
 directly with pandas.
 """
 
+import inspect
+
 import pandas as pd
 
-from analysis.backtest import simulate_trades
+from analysis.backtest import run_backtest, simulate_trades
+from analysis.regime import get_max_holding_days
 
 _CONFIG = {
     "backtest": {
@@ -173,4 +179,162 @@ def test_open_trade_still_exits_normally_after_regime_becomes_blocked():
     trades = simulate_trades(df, "TESTX", _GATED_CONFIG)
     assert len(trades) == 1
     assert trades[0]["regime_at_entry"] == "TRENDING_BULL"
+    assert trades[0]["exit_reason"] == "SIGNAL_REVERSAL"
+
+
+# ---------------------------------------------------------------------------
+# get_max_holding_days() — per-ticker asset-class holding limits, the single
+# source of truth used by both simulate_trades() (here) and
+# _process_virtual_trades() (data/scheduler.py) so backtested and live
+# holding-period limits always agree.
+# ---------------------------------------------------------------------------
+
+_HOLD_CONFIG = {
+    "backtest": {
+        "max_holding_days": 30,
+        "max_holding_days_forex": 5,
+        "max_holding_days_crypto": 14,
+        "max_holding_days_bonds": 45,
+    },
+    "trading212_invest": {
+        "max_holding_days": 90,
+        "ucits_mapping": {
+            "VOO": {"ticker": "I50Dl_EQ", "currency": "USD"},
+            "TLT": {"ticker": "IDGAl_EQ", "currency": "USD"},
+        },
+    },
+    "trading212_stocks": {
+        "max_holding_days": 30,
+    },
+    "watchlist": {
+        "us_large_cap": [
+            {"ticker": "AAPL", "name": "Apple", "exchange": "NYSE", "tradeable": True},
+        ],
+    },
+}
+
+
+def test_get_max_holding_days_returns_90_for_ucits_mapping_etf():
+    """A ticker in trading212_invest.ucits_mapping uses the ETF backstop
+    (90 days), the same limit maybe_place_t212_orders() applies live — even
+    though TLT is also in the bond-ETF set, ucits_mapping takes priority."""
+    assert get_max_holding_days("VOO", _HOLD_CONFIG) == 90
+    assert get_max_holding_days("TLT", _HOLD_CONFIG) == 90
+
+
+def test_get_max_holding_days_returns_30_for_us_large_cap_stock():
+    """A ticker in watchlist.us_large_cap (and not in ucits_mapping) uses the
+    trading212_stocks backstop (30 days) — the stricter individual-stock limit."""
+    assert get_max_holding_days("AAPL", _HOLD_CONFIG) == 30
+
+
+def test_get_max_holding_days_returns_45_for_bond_etf_not_in_ucits_mapping():
+    """SHY has no ucits_mapping entry (a documented gap — see CLAUDE.md) and
+    isn't a us_large_cap stock, so it falls through to the bond-ETF bucket."""
+    assert get_max_holding_days("SHY", _HOLD_CONFIG) == 45
+
+
+def test_get_max_holding_days_returns_5_for_forex():
+    assert get_max_holding_days("GBPUSD=X", _HOLD_CONFIG) == 5
+
+
+def test_get_max_holding_days_returns_14_for_crypto():
+    assert get_max_holding_days("BTC-USD", _HOLD_CONFIG) == 14
+
+
+def test_get_max_holding_days_falls_back_to_default_for_everything_else():
+    assert get_max_holding_days("XOM", _HOLD_CONFIG) == 30
+
+
+def test_simulate_trades_applies_per_ticker_hold_limit_not_the_flat_default():
+    """A ucits_mapping ETF held past the flat 30-day default but under its
+    real 90-day ETF limit must NOT be forced out by MAX_HOLDING — proving
+    simulate_trades() is using get_max_holding_days() per-ticker, not a
+    single global backtest.max_holding_days value."""
+    rows = [_signal_row("MIXED", "STRONG_BUY", 100.0)] + [
+        _signal_row("MIXED", "NEUTRAL", 100.0 + i) for i in range(1, 40)
+    ]
+    df = _signal_df(rows)
+    cfg = {
+        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
+        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+        "trading212_invest": {
+            "max_holding_days": 90,
+            "ucits_mapping": {"VOO": {"ticker": "I50Dl_EQ", "currency": "USD"}},
+        },
+    }
+    trades = simulate_trades(df, "VOO", cfg)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] != "MAX_HOLDING"
+
+
+# ---------------------------------------------------------------------------
+# ATR stop multiplier and exit_signal — read from config, not accepted as
+# independent override parameters.
+# ---------------------------------------------------------------------------
+
+def test_run_backtest_signature_has_no_atr_or_max_hold_override_params():
+    """run_backtest() must read atr_stop_multiplier and max_holding_days from
+    the config dict it's given, not accept them as separate parameters that
+    would duplicate (and could drift from) config.yaml. Only date range,
+    ticker scope, and run name are genuinely runtime-controlled."""
+    params = set(inspect.signature(run_backtest).parameters)
+    assert "atr_stop_multiplier" not in params
+    assert "max_holding_days" not in params
+    assert params == {"tickers", "start_date", "end_date", "config", "name"}
+
+
+def test_simulate_trades_stop_loss_uses_atr_multiplier_from_config():
+    """The stop-loss exit price must be entry_price - atr_stop_multiplier * ATR,
+    using whatever multiplier is in config['backtest']['atr_stop_multiplier'] —
+    proving the multiplier is read from config, not hardcoded or passed
+    separately."""
+    cfg = {
+        "backtest": {"atr_stop_multiplier": 3.0, "max_holding_days": 30},
+        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+    }
+    rows = [_signal_row("MIXED", "STRONG_BUY", 100.0)] + [
+        {**_signal_row("MIXED", "NEUTRAL", 100.0 - 3.0 * 1.0), "atr": 1.0}
+    ]
+    df = _signal_df(rows)
+    trades = simulate_trades(df, "TESTX", cfg)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "STOP_LOSS"
+    assert trades[0]["exit_price"] == 100.0 - 3.0 * 1.0
+
+
+def test_simulate_trades_exit_signal_strong_sell_only_ignores_plain_sell():
+    """trading212_invest.exit_signal = 'STRONG_SELL' must restrict signal-
+    reversal exits to STRONG_SELL only — a plain SELL must not close the
+    position, mirroring the live exit_signal threshold."""
+    cfg = {
+        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
+        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+        "trading212_invest": {"exit_signal": "STRONG_SELL"},
+    }
+    rows = (
+        [_signal_row("MIXED", "STRONG_BUY", 100.0)]
+        + [_signal_row("MIXED", "SELL", 100.0 + i) for i in range(1, 5)]
+    )
+    df = _signal_df(rows)
+    trades = simulate_trades(df, "TESTX", cfg)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] != "SIGNAL_REVERSAL"
+
+
+def test_simulate_trades_exit_signal_defaults_to_sell_when_unset():
+    """With no trading212_invest.exit_signal key, the default is 'SELL' —
+    a plain SELL signal must close a LONG position, matching current/prior
+    (pre-config-gating) behaviour exactly."""
+    cfg = {
+        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
+        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+    }
+    rows = (
+        [_signal_row("MIXED", "STRONG_BUY", 100.0)]
+        + [_signal_row("MIXED", "SELL", 100.0 + i) for i in range(1, 5)]
+    )
+    df = _signal_df(rows)
+    trades = simulate_trades(df, "TESTX", cfg)
+    assert len(trades) == 1
     assert trades[0]["exit_reason"] == "SIGNAL_REVERSAL"

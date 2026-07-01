@@ -147,18 +147,17 @@ def test_is_entry_allowed_returns_false_for_ranging_low_vol():
 
 def test_is_entry_allowed_returns_false_for_trending_bear():
     """A full 10-year backtest (2019-present, tradeable assets) showed
-    TRENDING_BEAR has a profit factor of 0.10 for long-only positions — for
-    every £1 made, £10 is lost. The system is long-only, so bear-regime
-    entries have no demonstrable edge and are deliberately excluded from
-    allowed_entry_regimes, same as MIXED and RANGING_LOW_VOL."""
+    TRENDING_BEAR has a profit factor of only 1.09 (avg return +0.19%,
+    barely above breakeven) versus TRENDING_BULL's 1.78 — no meaningful
+    edge, so it is deliberately excluded from allowed_entry_regimes, same
+    as MIXED and RANGING_LOW_VOL."""
     assert is_entry_allowed(_GATE_CFG, "TRENDING_BEAR", "virtual_trading") is False
 
 
 def test_is_entry_allowed_returns_false_for_high_volatility():
     """HIGH_VOLATILITY is excluded on the same 'no demonstrable edge' basis as
-    every other regime except TRENDING_BULL, which is the only regime that
-    has actually shown a positive profit factor (0.613) in the full-history
-    backtest."""
+    every other regime except TRENDING_BULL, which is the standout regime
+    (profit factor 1.78, +1.14% avg return) in the full-history backtest."""
     assert is_entry_allowed(_GATE_CFG, "HIGH_VOLATILITY", "virtual_trading") is False
 
 

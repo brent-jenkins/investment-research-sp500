@@ -42,32 +42,6 @@ try:
 except ImportError:
     _TALIB = False
 
-# Bond ETF tickers that use the bonds max-holding-days limit
-_BOND_TICKERS: frozenset[str] = frozenset(
-    {"TLT", "IEF", "SHY", "TIP", "HYG", "LQD", "JNK", "EMB", "MUB"}
-)
-
-
-def asset_max_hold(ticker: str, config: dict) -> int:
-    """Return the max holding days for *ticker* based on its asset class.
-
-    Detection rules (in priority order):
-      - Forex:  ticker ends with '=X'   → max_holding_days_forex
-      - Crypto: ticker ends with '-USD' → max_holding_days_crypto
-      - Bonds:  ticker in _BOND_TICKERS → max_holding_days_bonds
-      - Default                         → max_holding_days
-    """
-    bt = config.get("backtest", {})
-    default = int(bt.get("max_holding_days", 30))
-    if ticker.endswith("=X"):
-        return int(bt.get("max_holding_days_forex", default))
-    if ticker.endswith("-USD"):
-        return int(bt.get("max_holding_days_crypto", default))
-    if ticker in _BOND_TICKERS:
-        return int(bt.get("max_holding_days_bonds", default))
-    return default
-
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -481,21 +455,32 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
     Exit (in priority order, unaffected by either entry gate — an open
     position always continues to be monitored and closed regardless of what
     the regime does next):
-      1. ATR stop loss (entry ± 2 × ATR at entry date)
-      2. Signal reversal (SELL/STRONG_SELL for LONG; BUY/STRONG_BUY for SHORT)
-      3. Maximum holding period (config backtest.max_holding_days)
+      1. ATR stop loss (entry ± backtest.atr_stop_multiplier × ATR at entry date)
+      2. Signal reversal, gated by trading212_invest.exit_signal — "SELL"
+         (default) reverses on SELL/STRONG_SELL for LONG (BUY/STRONG_BUY for
+         SHORT); "STRONG_SELL" requires the strong variant only. Mirrors the
+         live exit_signal threshold used by maybe_place_t212_orders() so the
+         backtest's exit behaviour matches production.
+      3. Maximum holding period — per-ticker via
+         analysis.regime.get_max_holding_days(), the same helper
+         _process_virtual_trades() uses live (ETF/stock/bond/forex/crypto
+         asset-class limits read from config).
     """
-    from analysis.regime import is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
+    from analysis.regime import get_max_holding_days, is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
 
     bt_cfg   = config.get("backtest", {})
     vt_cfg   = config.get("virtual_trading", {})
-    max_hold = asset_max_hold(ticker, config)
+    max_hold = get_max_holding_days(ticker, config)
     atr_mult = float(bt_cfg.get("atr_stop_multiplier", 2.0))
 
     _BULL   = frozenset({"BUY", "STRONG_BUY"})
     _BEAR   = frozenset({"SELL", "STRONG_SELL"})
     _STRONG = frozenset({"STRONG_BUY", "STRONG_SELL"})
     _ALL    = _BULL | _BEAR
+
+    exit_threshold = config.get("trading212_invest", {}).get("exit_signal", "SELL")
+    _EXIT_BEAR = _BEAR if exit_threshold == "SELL" else frozenset({"STRONG_SELL"})
+    _EXIT_BULL = _BULL if exit_threshold == "SELL" else frozenset({"STRONG_BUY"})
 
     trades: list[dict] = []
     open_trade: Optional[dict] = None
@@ -546,10 +531,10 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
         elif direction == "SHORT" and price >= stop_price:
             exit_reason = "STOP_LOSS"
             exit_price  = stop_price
-        # 2. Signal reversal
-        elif direction == "LONG"  and sig in _BEAR:
+        # 2. Signal reversal (gated by trading212_invest.exit_signal)
+        elif direction == "LONG"  and sig in _EXIT_BEAR:
             exit_reason = "SIGNAL_REVERSAL"
-        elif direction == "SHORT" and sig in _BULL:
+        elif direction == "SHORT" and sig in _EXIT_BULL:
             exit_reason = "SIGNAL_REVERSAL"
         # 3. Max holding period
         elif holding_days >= max_hold:

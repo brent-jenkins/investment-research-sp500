@@ -220,6 +220,57 @@ def resolve_entry_signal(cfg: dict, regime_name: Optional[str]) -> str:
     return default
 
 
+# Bond ETF tickers that use the bonds max-holding-days limit (checked after
+# ucits_mapping and us_large_cap below, since several of these — TLT, IEF,
+# HYG, LQD, TIP, EMB, MUB — are also ETF automation instruments and should
+# use the ETF backstop instead; SHY and JNK have no ucits_mapping entry and
+# fall through to this bucket).
+_BOND_TICKERS: frozenset[str] = frozenset(
+    {"TLT", "IEF", "SHY", "TIP", "LQD", "JNK", "EMB", "MUB", "HYG"}
+)
+
+
+def get_max_holding_days(ticker: str, config: dict) -> int:
+    """Return the max holding days for *ticker*, matching live automation limits.
+
+    Priority order (first match wins):
+      1. ticker in trading212_invest.ucits_mapping → trading212_invest.max_holding_days
+         (ETF backstop, e.g. 90 — no leverage/swap costs, held longer)
+      2. ticker in watchlist.us_large_cap           → trading212_stocks.max_holding_days
+         (individual-stock backstop, e.g. 30 — higher idiosyncratic risk than an ETF)
+      3. ticker in the bond-ETF set                 → backtest.max_holding_days_bonds
+         (e.g. 45 — slow-moving, longer trend duration)
+      4. ticker ends with '=X'   (forex)             → backtest.max_holding_days_forex
+         (e.g. 5 — swap costs make long holds expensive)
+      5. ticker ends with '-USD' (crypto)            → backtest.max_holding_days_crypto
+         (e.g. 14 — high volatility, shorter cycles)
+      6. everything else                             → backtest.max_holding_days (default)
+
+    This is the single source of truth for per-asset holding limits, used by
+    both simulate_trades() (analysis/backtest.py) and _process_virtual_trades()
+    (data/scheduler.py) so the backtest and live virtual trading always apply
+    the same limit for the same ticker.
+    """
+    bt_cfg = config.get("backtest", {})
+    default = int(bt_cfg.get("max_holding_days", 30))
+
+    ucits_mapping = config.get("trading212_invest", {}).get("ucits_mapping") or {}
+    if ticker in ucits_mapping:
+        return int(config.get("trading212_invest", {}).get("max_holding_days", default))
+
+    us_large_cap = config.get("watchlist", {}).get("us_large_cap") or []
+    if any(isinstance(e, dict) and e.get("ticker") == ticker for e in us_large_cap):
+        return int(config.get("trading212_stocks", {}).get("max_holding_days", default))
+
+    if ticker in _BOND_TICKERS:
+        return int(bt_cfg.get("max_holding_days_bonds", default))
+    if ticker.endswith("=X"):
+        return int(bt_cfg.get("max_holding_days_forex", default))
+    if ticker.endswith("-USD"):
+        return int(bt_cfg.get("max_holding_days_crypto", default))
+    return default
+
+
 def is_entry_allowed(config: dict, regime_name: Optional[str], section: str) -> bool:
     """Return True if new entries are allowed in *regime_name* for config[section].
 

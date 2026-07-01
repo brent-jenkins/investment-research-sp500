@@ -43,6 +43,7 @@ from analysis.regime import (
     REGIME_DESCRIPTIONS,
     Regime,
     detect_regime,
+    get_max_holding_days,
     is_entry_allowed,
     resolve_entry_signal,
 )
@@ -68,7 +69,6 @@ from output.performance import (
 )
 from analysis.macro import get_macro_dashboard, fetch_and_store_macro_indicators, SIGNALS_ACTIVE
 from analysis.backtest import (
-    asset_max_hold,
     delete_run,
     get_all_runs,
     get_run,
@@ -1887,10 +1887,12 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     f"0.50% of P&amp;L applied at close</span><br>"
                     if fx_fee_pct > 0 else ""
                 )
-                + (lambda _mh=asset_max_hold(sel_ticker, config),
-                          _ac=("Forex" if sel_ticker.endswith("=X")
-                               else "Crypto" if sel_ticker.endswith("-USD")
+                + (lambda _mh=get_max_holding_days(sel_ticker, config),
+                          _ac=("T212 ETF" if sel_ticker in (config.get("trading212_invest", {}).get("ucits_mapping") or {})
+                               else "T212 Stock" if sel_ticker in {e.get("ticker") for e in config.get("watchlist", {}).get("us_large_cap", []) if isinstance(e, dict)}
                                else "Bond ETF" if sel_ticker in {"TLT","IEF","SHY","TIP","HYG","LQD","JNK","EMB","MUB"}
+                               else "Forex" if sel_ticker.endswith("=X")
+                               else "Crypto" if sel_ticker.endswith("-USD")
                                else "Equity/ETF"):
                    f"<span style='color:#94a3b8'>Max Hold:        </span>"
                    f"<span style='color:{'#f59e0b' if _mh <= 7 else '#e2e8f0'}'>"
@@ -6081,7 +6083,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             live_prices    = {t: _cached_latest_price(t) for t in tickers_needed}
 
             enriched = [
-                enrich_open_trade(t, live_prices.get(t["ticker"]), asset_max_hold(t["ticker"], config))
+                enrich_open_trade(t, live_prices.get(t["ticker"]), get_max_holding_days(t["ticker"], config))
                 for t in open_trades
             ]
 
@@ -6287,6 +6289,11 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
     # ── Tab 1: Run & Overview ─────────────────────────────────────────────────
     with tab_run:
         st.markdown("### Configure & Run")
+        st.caption(
+            "The backtest uses the same settings as the live system to show what "
+            "would have happened under current configuration. To test different "
+            "parameters, adjust config.yaml and re-run."
+        )
 
         tradeable = [t for g in config.get("watchlist", {}).values()
                      if isinstance(g, list)
@@ -6341,15 +6348,25 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 tickers_to_test = all_tickers_list
             st.caption(f"{len(tickers_to_test)} tickers selected")
 
-            max_hold = st.slider("Max holding days", 10, 120, int(config.get("backtest", {}).get("max_holding_days", 60)), key="bt_maxhold")
-            atr_mult = st.slider("ATR stop multiplier", 1.0, 4.0, float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0)), step=0.5, key="bt_atrmult")
-
-        bt_config = {**config, "backtest": {**config.get("backtest", {}), "max_holding_days": max_hold, "atr_stop_multiplier": atr_mult}}
+        _bt_cfg  = config.get("backtest", {})
+        _vt_cfg  = config.get("virtual_trading", {})
+        _etf_max_hold   = config.get("trading212_invest", {}).get("max_holding_days", 90)
+        _stock_max_hold = config.get("trading212_stocks", {}).get("max_holding_days", 30)
+        _bond_max_hold  = _bt_cfg.get("max_holding_days_bonds", 45)
+        _atr_mult       = _bt_cfg.get("atr_stop_multiplier", 2.0)
+        _entry_signal   = _vt_cfg.get("entry_signal", "STRONG_BUY")
+        _allowed_regimes = _vt_cfg.get("allowed_entry_regimes")
+        _regime_note = f"{'/'.join(_allowed_regimes)} only" if _allowed_regimes else "all regimes"
+        st.caption(
+            f"Using live config: ETF max hold {_etf_max_hold}d · "
+            f"Stock max hold {_stock_max_hold}d · Bond max hold {_bond_max_hold}d · "
+            f"ATR stop {_atr_mult:.1f}× · entry {_entry_signal} · {_regime_note}"
+        )
 
         if st.button("Run Backtest", type="primary", key="bt_run"):
             with st.spinner(f"Running backtest for {len(tickers_to_test)} tickers ({sd.date()} → {ed.date()})…"):
                 try:
-                    new_id = run_backtest(tickers_to_test, sd, ed, bt_config, name=bt_name)
+                    new_id = run_backtest(tickers_to_test, sd, ed, config, name=bt_name)
                     st.success(f"Backtest #{new_id} complete.")
                     st.session_state["bt_selected_run"] = new_id
                     st.rerun()

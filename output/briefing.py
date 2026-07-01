@@ -14,7 +14,7 @@ from typing import Optional
 import yaml
 from sqlalchemy import text
 
-from analysis.backtest import asset_max_hold as _asset_max_hold
+from analysis.regime import get_max_holding_days as _asset_max_hold
 from data.database import clear_metadata, get_engine, get_metadata, get_metadata_str, set_metadata
 from output.performance import get_closed_trades, get_current_signal, get_open_trades
 

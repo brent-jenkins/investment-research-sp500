@@ -1,4 +1,4 @@
-# 98 assets across 20 groups
+# 104 assets across 20 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -22,6 +22,10 @@ watchlist:
       exchange: "NYSE"
       tradeable: true
       trading212_instrument: "VOO"
+    - ticker: "IWM"
+      name: "iShares Russell 2000 ETF"
+      exchange: "NYSE"
+      tradeable: true
 
   sector_etfs:
     - ticker: "XLE"
@@ -360,18 +364,21 @@ watchlist:
     - {ticker: "NVDA",  name: "NVIDIA",                    exchange: "NYSE", tradeable: true}
     - {ticker: "AMZN",  name: "Amazon",                    exchange: "NYSE", tradeable: true}
     - {ticker: "ADBE",  name: "Adobe",                     exchange: "NYSE", tradeable: true}
+    - {ticker: "CRM",   name: "Salesforce",                exchange: "NYSE", tradeable: true}
     # Financials
     - {ticker: "JPM",   name: "JP Morgan Chase",           exchange: "NYSE", tradeable: true}
     - {ticker: "GS",    name: "Goldman Sachs",             exchange: "NYSE", tradeable: true}
     - {ticker: "BAC",   name: "Bank of America",           exchange: "NYSE", tradeable: true}
     - {ticker: "V",     name: "Visa",                      exchange: "NYSE", tradeable: true}
     - {ticker: "MA",    name: "Mastercard",                exchange: "NYSE", tradeable: true}
+    - {ticker: "SPGI",  name: "S&P Global",                exchange: "NYSE", tradeable: true}
     # Healthcare
     - {ticker: "LLY",   name: "Eli Lilly",                 exchange: "NYSE", tradeable: true}
     - {ticker: "UNH",   name: "UnitedHealth Group",        exchange: "NYSE", tradeable: true}
     - {ticker: "JNJ",   name: "Johnson & Johnson",         exchange: "NYSE", tradeable: true}
     - {ticker: "PFE",   name: "Pfizer",                    exchange: "NYSE", tradeable: true}
     - {ticker: "MRK",   name: "Merck",                     exchange: "NYSE", tradeable: true}
+    - {ticker: "TMO",   name: "Thermo Fisher Scientific",  exchange: "NYSE", tradeable: true}
     # Semiconductors
     - {ticker: "AMD",   name: "Advanced Micro Devices",    exchange: "NYSE", tradeable: true}
     - {ticker: "AVGO",  name: "Broadcom",                  exchange: "NYSE", tradeable: true}
@@ -379,6 +386,9 @@ watchlist:
     # Consumer Staples
     - {ticker: "COST",  name: "Costco",                    exchange: "NYSE", tradeable: true}
     - {ticker: "WMT",   name: "Walmart",                   exchange: "NYSE", tradeable: true}
+    - {ticker: "PG",    name: "Procter & Gamble",          exchange: "NYSE", tradeable: true}
+    # Consumer Discretionary
+    - {ticker: "HD",    name: "Home Depot",                exchange: "NYSE", tradeable: true}
     # Energy
     - {ticker: "XOM",   name: "ExxonMobil",                exchange: "NYSE", tradeable: true}
     - {ticker: "CVX",   name: "Chevron",                   exchange: "NYSE", tradeable: true}
@@ -608,19 +618,22 @@ virtual_trading:
   # Regime entry gate — checked before entry_signal_overrides, not instead of it.
   # Only TRENDING_BULL is allowed; every other regime is blocked because none of
   # them has demonstrated edge in a full 10-year backtest (2019-present, tradeable
-  # assets):
-  #   - TRENDING_BULL: profit factor 0.613, +1.14% avg return — the only regime
-  #     with a positive profit factor and meaningful edge. The only one allowed.
-  #   - TRENDING_BEAR: profit factor 0.10 for long-only positions — for every £1
-  #     made, £10 is lost. The system is long-only, so bear-regime entries have
-  #     no demonstrable edge and are blocked by design (this used to be allowed —
-  #     removed once the full-history backtest showed the real number).
+  # assets, 404 trades under the pre-gate TRENDING_BULL/TRENDING_BEAR/HIGH_VOLATILITY
+  # config — re-verified on production after this gate shipped):
+  #   - TRENDING_BULL: profit factor 1.78, +1.14% avg return, -35.1% max drawdown —
+  #     the standout regime by a wide margin on every metric. The only one allowed.
+  #   - TRENDING_BEAR: profit factor 1.09, +0.19% avg return (barely above
+  #     breakeven), -46.9% max drawdown — no meaningful edge next to TRENDING_BULL,
+  #     so bear-regime entries are blocked by design.
   #   - MIXED: 56.8% of all regime-days over 10 years but only a 37.5% win rate
   #     and -91.26% max drawdown — no demonstrable edge.
-  #   - RANGING_LOW_VOL: only 1 trade of backtest data — too little to trust
+  #   - RANGING_LOW_VOL: only 1-2 trades of backtest data — too little to trust
   #     either way, treated as unknown rather than "safe by omission".
   #   - HIGH_VOLATILITY: excluded on the same "not proven" basis — no evidence of
   #     edge, and TRENDING_BULL is the only regime that has actually shown one.
+  # (Earlier notes here cited profit factor 0.613/0.10 for TRENDING_BULL/BEAR —
+  # those numbers were wrong; the 1.78/1.09 figures above are the verified ones
+  # from re-running run_backtest() against production data.)
   # A regime not in this list is blocked; if allowed_entry_regimes is absent
   # entirely, all regimes are allowed (matches pre-this-feature behaviour). The
   # exit phase is never affected by this gate — open positions always continue
@@ -647,10 +660,10 @@ trading212_invest:
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
   # Regime entry gate — same rationale and keys as virtual_trading.allowed_entry_regimes
-  # above, kept in sync (only TRENDING_BULL — TRENDING_BEAR's 0.10 profit factor for
-  # long-only positions means bear-regime entries have no demonstrable edge). Checked
-  # before entry_signal_overrides; the exit phase is never affected — existing T212
-  # positions continue to exit normally in any regime.
+  # above, kept in sync (only TRENDING_BULL — TRENDING_BEAR's profit factor of 1.09 has
+  # no meaningful edge next to TRENDING_BULL's 1.78). Checked before entry_signal_overrides;
+  # the exit phase is never affected — existing T212 positions continue to exit normally
+  # in any regime.
   allowed_entry_regimes:
     - TRENDING_BULL
   exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
@@ -695,6 +708,7 @@ trading212_invest:
     AMLP: {ticker: SMLPd_EQ,  currency: EUR}  # Invesco Morningstar US Energy Infrastructure MLP (Acc)
     MUB:  {ticker: MUNIl_EQ,  currency: USD}  # Invesco US Municipal Bond (Dist)
     IBB:  {ticker: FBTUl_EQ,  currency: USD}  # First Trust NYSE Arca Biotechnology (Acc)
+    IWM:  {ticker: RU2Kl_EQ,  currency: GBP}  # iShares Russell 2000 UCITS ETF (Swap, Acc)
 
 # Separate automation path for direct US stock trading (watchlist.us_large_cap), alongside
 # the UCITS ETF automation above. Kept as its own config block — not folded into
