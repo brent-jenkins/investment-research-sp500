@@ -229,9 +229,11 @@ def is_entry_allowed(config: dict, regime_name: Optional[str], section: str) -> 
     absent from config[section], every regime is allowed — this is the
     backwards-compatible default for configs written before this gate existed.
 
-    section is "trading212_invest" or "virtual_trading" — both use the same
-    allowed_entry_regimes shape. This gate only affects new entries; existing
-    positions always continue to exit normally regardless of regime.
+    section is "trading212_invest", "trading212_stocks", or "virtual_trading" —
+    all three use the same allowed_entry_regimes shape (currently kept in sync
+    at ["TRENDING_BULL"] across all three — see config.yaml for the per-regime
+    backtest rationale). This gate only affects new entries; existing positions
+    always continue to exit normally regardless of regime.
     """
     section_cfg = config.get(section, {})
     allowed = section_cfg.get("allowed_entry_regimes")

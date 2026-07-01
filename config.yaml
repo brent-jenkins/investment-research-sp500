@@ -606,20 +606,27 @@ virtual_trading:
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
   # Regime entry gate — checked before entry_signal_overrides, not instead of it.
-  # MIXED is 56.8% of all regime-days over 10 years but only a 37.5% win rate and
-  # -91.26% max drawdown — no demonstrable edge, so no new positions are opened at
-  # all while the regime is MIXED, regardless of signal strength. RANGING_LOW_VOL
-  # has only 1 trade of backtest data — too little to trust either way, so it's
-  # excluded too (treated as unknown, not as "safe by omission"). HIGH_VOLATILITY
-  # is kept for now — insufficient data to exclude it, but revisit once more
-  # HIGH_VOLATILITY trades have accumulated. A regime not in this list is blocked;
-  # if allowed_entry_regimes is absent entirely, all regimes are allowed (matches
-  # pre-this-feature behaviour). The exit phase is never affected by this gate —
-  # open positions always continue to be monitored and closed normally.
+  # Only TRENDING_BULL is allowed; every other regime is blocked because none of
+  # them has demonstrated edge in a full 10-year backtest (2019-present, tradeable
+  # assets):
+  #   - TRENDING_BULL: profit factor 0.613, +1.14% avg return — the only regime
+  #     with a positive profit factor and meaningful edge. The only one allowed.
+  #   - TRENDING_BEAR: profit factor 0.10 for long-only positions — for every £1
+  #     made, £10 is lost. The system is long-only, so bear-regime entries have
+  #     no demonstrable edge and are blocked by design (this used to be allowed —
+  #     removed once the full-history backtest showed the real number).
+  #   - MIXED: 56.8% of all regime-days over 10 years but only a 37.5% win rate
+  #     and -91.26% max drawdown — no demonstrable edge.
+  #   - RANGING_LOW_VOL: only 1 trade of backtest data — too little to trust
+  #     either way, treated as unknown rather than "safe by omission".
+  #   - HIGH_VOLATILITY: excluded on the same "not proven" basis — no evidence of
+  #     edge, and TRENDING_BULL is the only regime that has actually shown one.
+  # A regime not in this list is blocked; if allowed_entry_regimes is absent
+  # entirely, all regimes are allowed (matches pre-this-feature behaviour). The
+  # exit phase is never affected by this gate — open positions always continue
+  # to be monitored and closed normally.
   allowed_entry_regimes:
     - TRENDING_BULL
-    - TRENDING_BEAR
-    - HIGH_VOLATILITY  # kept for now — insufficient data to exclude
   max_theme_positions: 3         # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 trading212_invest:
@@ -640,12 +647,12 @@ trading212_invest:
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
   # Regime entry gate — same rationale and keys as virtual_trading.allowed_entry_regimes
-  # above, kept in sync. Checked before entry_signal_overrides; the exit phase is
-  # never affected — existing T212 positions continue to exit normally in any regime.
+  # above, kept in sync (only TRENDING_BULL — TRENDING_BEAR's 0.10 profit factor for
+  # long-only positions means bear-regime entries have no demonstrable edge). Checked
+  # before entry_signal_overrides; the exit phase is never affected — existing T212
+  # positions continue to exit normally in any regime.
   allowed_entry_regimes:
     - TRENDING_BULL
-    - TRENDING_BEAR
-    - HIGH_VOLATILITY  # kept for now — insufficient data to exclude
   exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
   max_holding_days: 90     # Backstop time limit (3× CFD limit — no leverage/swap costs)
   exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs
@@ -712,10 +719,9 @@ trading212_stocks:
   max_holding_days: 30           # more active than ETFs (90d) but not forex-short
   exit_on_signal: true
   time_limit_as_backstop: true
-  # Stocks only trade in a confirmed bull trend — more regime-sensitive than ETFs, which
-  # also allow TRENDING_BEAR and HIGH_VOLATILITY (see trading212_invest.allowed_entry_regimes
-  # above). A single stock's downside in a bear or high-vol regime is far less diversified
-  # than an ETF's, so the gate is deliberately narrower here.
+  # Regime entry gate — same TRENDING_BULL-only rationale as trading212_invest and
+  # virtual_trading above (see virtual_trading.allowed_entry_regimes for the full
+  # per-regime backtest breakdown); all three automation paths are aligned on this.
   allowed_entry_regimes:
     - TRENDING_BULL
   entry_signal_overrides:

@@ -115,10 +115,10 @@ def test_resolve_entry_signal_defaults_to_strong_buy_when_entry_signal_unset():
 
 _GATE_CFG = {
     "virtual_trading": {
-        "allowed_entry_regimes": ["TRENDING_BULL", "TRENDING_BEAR", "HIGH_VOLATILITY"],
+        "allowed_entry_regimes": ["TRENDING_BULL"],
     },
     "trading212_invest": {
-        "allowed_entry_regimes": ["TRENDING_BULL", "TRENDING_BEAR", "HIGH_VOLATILITY"],
+        "allowed_entry_regimes": ["TRENDING_BULL"],
     },
     "no_gate_section": {
         "entry_signal": "STRONG_BUY",
@@ -143,6 +143,23 @@ def test_is_entry_allowed_returns_false_for_ranging_low_vol():
     """RANGING_LOW_VOL has only 1 trade of backtest data — too little to trust
     either way, so it's treated as unknown/excluded, not as safe by omission."""
     assert is_entry_allowed(_GATE_CFG, "RANGING_LOW_VOL", "virtual_trading") is False
+
+
+def test_is_entry_allowed_returns_false_for_trending_bear():
+    """A full 10-year backtest (2019-present, tradeable assets) showed
+    TRENDING_BEAR has a profit factor of 0.10 for long-only positions — for
+    every £1 made, £10 is lost. The system is long-only, so bear-regime
+    entries have no demonstrable edge and are deliberately excluded from
+    allowed_entry_regimes, same as MIXED and RANGING_LOW_VOL."""
+    assert is_entry_allowed(_GATE_CFG, "TRENDING_BEAR", "virtual_trading") is False
+
+
+def test_is_entry_allowed_returns_false_for_high_volatility():
+    """HIGH_VOLATILITY is excluded on the same 'no demonstrable edge' basis as
+    every other regime except TRENDING_BULL, which is the only regime that
+    has actually shown a positive profit factor (0.613) in the full-history
+    backtest."""
+    assert is_entry_allowed(_GATE_CFG, "HIGH_VOLATILITY", "virtual_trading") is False
 
 
 def test_is_entry_allowed_defaults_to_true_when_key_missing():

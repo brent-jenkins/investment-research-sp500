@@ -5479,39 +5479,28 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # global default — see analysis/regime.py:resolve_entry_signal()). A regime
     # not in allowed_entry_regimes blocks entries entirely, ahead of the
     # threshold check — see analysis/regime.py:is_entry_allowed().
+    def _automation_bit(cfg: dict, section: str, label: str) -> None:
+        allowed = cfg.get("allowed_entry_regimes")
+        note = f" ({'/'.join(allowed)} only)" if allowed else ""
+        if is_entry_allowed(config, regime.value, section):
+            eff = resolve_entry_signal(cfg, regime.value)
+            overridden = regime.value in cfg.get("entry_signal_overrides", {})
+            _auto_bits.append(f"{label} {eff}{' (override)' if overridden else ''}{note}")
+        else:
+            _auto_bits.append(f"{label} blocked{note}")
+            _blocked_paths.append(label)
+
     _auto_bits = []
     _blocked_paths = []
     _t212_cfg_b = config.get("trading212_invest", {})
     if _t212_cfg_b.get("enabled", False):
-        if is_entry_allowed(config, regime.value, "trading212_invest"):
-            _t212_eff = resolve_entry_signal(_t212_cfg_b, regime.value)
-            _t212_overridden = regime.value in _t212_cfg_b.get("entry_signal_overrides", {})
-            _auto_bits.append(f"T212 ETF {_t212_eff}{' (override)' if _t212_overridden else ''}")
-        else:
-            _auto_bits.append("T212 ETF blocked")
-            _blocked_paths.append("T212 ETF")
+        _automation_bit(_t212_cfg_b, "trading212_invest", "T212 ETF")
     _stock_cfg_b = config.get("trading212_stocks", {})
     if _stock_cfg_b.get("enabled", False):
-        _stock_allowed = _stock_cfg_b.get("allowed_entry_regimes")
-        _stock_note = f" ({'/'.join(_stock_allowed)} only)" if _stock_allowed else ""
-        if is_entry_allowed(config, regime.value, "trading212_stocks"):
-            _stock_eff = resolve_entry_signal(_stock_cfg_b, regime.value)
-            _stock_overridden = regime.value in _stock_cfg_b.get("entry_signal_overrides", {})
-            _auto_bits.append(
-                f"T212 Stocks {_stock_eff}{' (override)' if _stock_overridden else ''}{_stock_note}"
-            )
-        else:
-            _auto_bits.append(f"T212 Stocks blocked{_stock_note}")
-            _blocked_paths.append("T212 Stocks")
+        _automation_bit(_stock_cfg_b, "trading212_stocks", "T212 Stocks")
     _vt_cfg_b = config.get("virtual_trading", {})
     if _vt_cfg_b.get("enabled", False):
-        if is_entry_allowed(config, regime.value, "virtual_trading"):
-            _vt_eff = resolve_entry_signal(_vt_cfg_b, regime.value)
-            _vt_overridden = regime.value in _vt_cfg_b.get("entry_signal_overrides", {})
-            _auto_bits.append(f"Virtual {_vt_eff}{' (override)' if _vt_overridden else ''}")
-        else:
-            _auto_bits.append("Virtual blocked")
-            _blocked_paths.append("Virtual")
+        _automation_bit(_vt_cfg_b, "virtual_trading", "Virtual")
     if _auto_bits:
         st.caption(f"Automation entry: {' · '.join(_auto_bits)}")
     if _blocked_paths:
