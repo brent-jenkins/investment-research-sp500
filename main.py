@@ -2486,19 +2486,13 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
         if not _tl_invest_cards:
             st.info("No open T212 Invest positions.")
         else:
-            _ucits_map = _tl_t212_cfg.get("ucits_mapping", {})
-
             _inv_rows = []
             for _ic in _tl_invest_cards:
-                _r_ticker  = _ic["ticker"]
-                _ucits_raw = _ucits_map.get(_r_ticker, "—")
-                _ucits_tk  = (
-                    _ucits_raw.get("ticker", "—") if isinstance(_ucits_raw, dict)
-                    else str(_ucits_raw)
-                )
+                _r_ticker = _ic["ticker"]
                 _inv_rows.append({
                     "Ticker":          _r_ticker,
-                    "UCITS Ticker":    _ucits_tk,
+                    "Type":            "ETF" if _ic.get("asset_type") == "ETF" else "Stock",
+                    "T212 Ticker":     _ic.get("ucits_ticker", "—"),
                     "Ccy":             _ic.get("currency", "USD"),
                     "Qty":             _ic["quantity"],
                     "Avg Price":       _ic["entry_price"],
@@ -3703,7 +3697,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 "in the systemd service file and restart the service."
             )
         else:
-            _tab_account, _tab_mapping = st.tabs(["Account", "Mapping"])
+            _tab_account, _tab_stocks, _tab_mapping = st.tabs(["Account", "Stocks", "Mapping"])
 
             with _tab_account:
                 # ── Account data from scheduler snapshot (reads DB; no direct API calls) ──
@@ -3939,6 +3933,86 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                                             st.error(f"Retry failed: {_r_exc}")
                 else:
                     st.caption("No orders recorded yet.")
+
+
+            with _tab_stocks:
+                _stock_cfg = config.get("trading212_stocks", {})
+                if not _stock_cfg.get("enabled", False):
+                    st.info(
+                        "T212 Stocks automation is **disabled**. "
+                        "Set `trading212_stocks.enabled: true` in config.yaml (on the server) to activate."
+                    )
+                else:
+                    _stock_regime = detect_regime()["regime"].value
+                    if is_entry_allowed(config, _stock_regime, "trading212_stocks"):
+                        _stock_entry_eff = resolve_entry_signal(_stock_cfg, _stock_regime)
+                        _stock_overridden = _stock_regime in _stock_cfg.get("entry_signal_overrides", {})
+                        st.caption(
+                            f"Entry threshold: **{_stock_entry_eff}** "
+                            f"({'regime override for ' if _stock_overridden else 'global default, regime '}"
+                            f"{_stock_regime.replace('_', ' ')})"
+                        )
+                    else:
+                        st.caption(f"⛔ **Entry blocked** ({_stock_regime.replace('_', ' ')} regime not in allowed_entry_regimes)")
+                    st.caption(
+                        f"max £{_stock_cfg.get('max_position_gbp', 200):,.0f}/order · "
+                        f"max {int(float(_stock_cfg.get('max_total_deployed', 0.3)) * 100)}% deployed · "
+                        f"allowed regimes: {', '.join(_stock_cfg.get('allowed_entry_regimes', []) or ['all'])}"
+                    )
+
+                    _stock_tickers = {
+                        e["ticker"] for e in config.get("watchlist", {}).get("us_large_cap", [])
+                        if isinstance(e, dict) and "ticker" in e
+                    }
+                    st.markdown("#### Recent Stock Orders")
+                    if _stock_tickers:
+                        try:
+                            from sqlalchemy import text as _sa_stock_text
+                            with get_engine().connect() as _stock_conn:
+                                _stock_placeholders = ", ".join(f":t{i}" for i in range(len(_stock_tickers)))
+                                _stock_params = {f"t{i}": t for i, t in enumerate(_stock_tickers)}
+                                _stock_ord_rows = _stock_conn.execute(
+                                    _sa_stock_text(f"""
+                                        SELECT ticker, t212_ticker, direction, quantity,
+                                               estimated_value_gbp, status, signal_type,
+                                               confluence_score, regime, account_type,
+                                               error_message, placed_at
+                                        FROM t212_invest_orders
+                                        WHERE ticker IN ({_stock_placeholders})
+                                        ORDER BY placed_at DESC
+                                        LIMIT 10
+                                    """),  # noqa: S608 — placeholders are :t0.. bind params, not interpolated values
+                                    _stock_params,
+                                ).mappings().all()
+                            _stock_ord_data = [dict(r) for r in _stock_ord_rows]
+                        except Exception:
+                            _stock_ord_data = []
+
+                        if _stock_ord_data:
+                            _stock_ord_df = pd.DataFrame(_stock_ord_data)
+                            _stock_ord_df.columns = [
+                                "Ticker", "T212 Ticker", "Dir", "Qty",
+                                "Est. Value (£)", "Status", "Signal",
+                                "Score", "Regime", "Account",
+                                "Error", "Placed At",
+                            ]
+                            st.dataframe(
+                                _stock_ord_df.style.map(
+                                    lambda v: "color:#16a34a" if v == "FILLED"
+                                    else ("color:#d97706" if v == "PLACED"
+                                    else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
+                                    subset=["Status"],
+                                ).map(
+                                    lambda v: "color:#16a34a" if v in ("BUY",)
+                                    else ("color:#dc2626" if v == "SELL" else ""),
+                                    subset=["Dir"],
+                                ),
+                                width="stretch", hide_index=True,
+                            )
+                        else:
+                            st.caption("No stock orders recorded yet.")
+                    else:
+                        st.caption("No tickers in watchlist.us_large_cap.")
 
 
             with _tab_mapping:
@@ -4698,6 +4772,7 @@ _GROUP_LABELS = {
     "commodities_expanded":  "Commodities (Expanded)",
     "crypto_expanded":       "Crypto (Expanded)",
     "uk_etfs":               "UK ETFs (GBP)",
+    "us_large_cap":          "US Large Cap Stocks",
 }
 
 
@@ -5112,24 +5187,41 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
 
     Reads the scheduler-maintained ``t212_positions_snapshot`` from system_metadata
     (written by ``_fetch_t212_snapshot`` in the scheduler).  No direct T212 API
-    calls are made here — the scheduler owns all outbound requests.  Only positions
-    whose UCITS ticker appears in ucits_mapping are included.
+    calls are made here — the scheduler owns all outbound requests.  Covers both
+    T212 automation paths — UCITS ETFs (trading212_invest.ucits_mapping) and
+    direct US stocks (trading212_stocks + watchlist.us_large_cap) — since both
+    write into the same live T212 portfolio and the same t212_invest_orders
+    table. Each card carries ``"asset_type"``: ``"ETF"`` or ``"STOCK"``, so
+    callers can render a type badge.
     """
-    t212_cfg = config.get("trading212_invest", {})
-    if not t212_cfg.get("enabled", False):
-        return []
     if not (os.environ.get("T212_API_KEY", "") and os.environ.get("T212_API_SECRET", "")):
         return []
 
-    ucits_map     = t212_cfg.get("ucits_mapping", {})
-    # Build reverse map and currency lookup, supporting both old and new mapping formats.
-    reverse_ucits: dict[str, str] = {}
+    t212_cfg  = config.get("trading212_invest", {})
+    stock_cfg = config.get("trading212_stocks", {})
+
+    # Build a unified t212_ticker -> (research_ticker, asset_type) map across both
+    # automation paths. ETF mapping takes priority on a ticker collision — the two
+    # ticker universes are disjoint by design (see brokers.trading212._stock_universe).
+    reverse_map: dict[str, tuple[str, str]] = {}
     ucits_currencies: dict[str, str] = {}
-    for _rt, _raw in ucits_map.items():
-        _ut, _ccy = _ucits_entry(_raw)
-        reverse_ucits[_ut] = _rt
-        ucits_currencies[_ut] = _ccy
-    if not reverse_ucits:
+
+    if t212_cfg.get("enabled", False):
+        for _rt, _raw in t212_cfg.get("ucits_mapping", {}).items():
+            _ut, _ccy = _ucits_entry(_raw)
+            reverse_map[_ut] = (_rt, "ETF")
+            ucits_currencies[_ut] = _ccy
+
+    if stock_cfg.get("enabled", False):
+        for _entry in config.get("watchlist", {}).get("us_large_cap", []):
+            if not isinstance(_entry, dict) or "ticker" not in _entry:
+                continue
+            _rt  = _entry["ticker"]
+            _t2t = _entry.get("trading212_instrument", _rt)
+            if _t2t not in reverse_map:
+                reverse_map[_t2t] = (_rt, "STOCK")
+
+    if not reverse_map:
         return []
 
     # Read positions from the scheduler-maintained DB snapshot (no direct API calls).
@@ -5145,8 +5237,8 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     if t2_positions is None:
         return []
 
-    # Build a lookup: ucits_ticker → position dict (for O(1) access)
-    pos_by_ucits = {p.get("ticker", ""): p for p in (t2_positions or [])}
+    # Build a lookup: t212_ticker → position dict (for O(1) access)
+    pos_by_t212 = {p.get("ticker", ""): p for p in (t2_positions or [])}
 
     # Load entry info (signal, score, fill date, currency) from t212_invest_orders
     try:
@@ -5159,18 +5251,18 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
                 WHERE direction = 'BUY' AND status = 'FILLED'
                 ORDER BY filled_at ASC
             """)).mappings().all()
-        # Keep only the earliest fill per UCITS ticker (= opening entry)
-        entry_by_ucits: dict[str, dict] = {}
+        # Keep only the earliest fill per instrument ticker (= opening entry)
+        entry_by_t212: dict[str, dict] = {}
         for _r in _entry_rows:
             _u = _r["t212_ticker"]
-            if _u not in entry_by_ucits:
-                entry_by_ucits[_u] = dict(_r)
+            if _u not in entry_by_t212:
+                entry_by_t212[_u] = dict(_r)
     except Exception:
-        entry_by_ucits = {}
+        entry_by_t212 = {}
 
     cards: list[dict] = []
-    for ucits_ticker, research_ticker in reverse_ucits.items():
-        pos = pos_by_ucits.get(ucits_ticker)
+    for t212_ticker, (research_ticker, asset_type) in reverse_map.items():
+        pos = pos_by_t212.get(t212_ticker)
         if not pos:
             continue  # no open position for this mapping
 
@@ -5184,14 +5276,14 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
 
         unreal_pct = round((current_price - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0.0
 
-        entry_info    = entry_by_ucits.get(ucits_ticker, {})
+        entry_info    = entry_by_t212.get(t212_ticker, {})
         entry_signal  = entry_info.get("signal_type")  or "NEUTRAL"
         entry_score   = float(entry_info.get("confluence_score") or 0)
 
         # Resolve instrument currency: prefer DB-stored value (set at order time from T212 API),
-        # then fall back to config ucits_mapping currency field.
+        # then fall back to config ucits_mapping currency field (ETF only; stocks default USD).
         _db_ccy  = entry_info.get("currency_code")
-        currency = _db_ccy or ucits_currencies.get(ucits_ticker, "USD")
+        currency = _db_ccy or ucits_currencies.get(t212_ticker, "USD")
 
         # Convert position value and P&L from instrument currency to GBP.
         current_value_gbp = round(_t212_ccy_to_gbp(qty * current_price, currency), 2)
@@ -5214,13 +5306,18 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
             current_signal = "NEUTRAL"
             current_score  = 0.0
 
-        # Status for buy-and-hold ETF — mirrors the exit logic in maybe_place_t212_orders:
-        # immediate exits (SELL/STRONG_SELL), confirmed NEUTRAL, and backstop time limit.
-        _t212_max_hold   = int(t212_cfg.get("max_holding_days", 90))
-        _exit_on_signal  = t212_cfg.get("exit_on_signal", True)
+        # Status for buy-and-hold ETF/stock — mirrors the exit logic in
+        # maybe_place_t212_orders() / maybe_place_stock_orders(): immediate exits
+        # (SELL/STRONG_SELL), confirmed NEUTRAL, and backstop time limit. Reads
+        # from whichever config section matches this card's asset_type.
+        _section_cfg     = t212_cfg if asset_type == "ETF" else stock_cfg
+        _default_hold    = 90 if asset_type == "ETF" else 30
+        _t212_max_hold   = int(_section_cfg.get("max_holding_days", _default_hold))
+        _exit_on_signal  = _section_cfg.get("exit_on_signal", True)
         _conf_runs       = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
         _conf_hours      = _conf_runs * 3
-        _neutral_key     = f"t212_neutral_since:{ucits_ticker}"
+        _neutral_prefix  = "t212_neutral_since" if asset_type == "ETF" else "t212_stock_neutral_since"
+        _neutral_key     = f"{_neutral_prefix}:{t212_ticker}"
 
         if current_signal in ("SELL", "STRONG_SELL"):
             status = "EXIT SIGNAL"
@@ -5252,7 +5349,8 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
 
         cards.append({
             "ticker":            research_ticker,
-            "ucits_ticker":      ucits_ticker,
+            "ucits_ticker":      t212_ticker,
+            "asset_type":        asset_type,
             "direction":         "LONG",
             "entry_price":       avg_price,
             "quantity":          qty,
@@ -5274,7 +5372,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
             "entry_score":       entry_score,
             "status":            status,
             "status_priority":   status_priority,
-            "account_name":      "T212 Invest",
+            "account_name":      "T212 Invest" if asset_type == "ETF" else "T212 Stocks",
             "account_type":      "T212_INVEST",
             "stop_loss_price":   None,
             "stop_loss":         None,
@@ -5388,10 +5486,23 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         if is_entry_allowed(config, regime.value, "trading212_invest"):
             _t212_eff = resolve_entry_signal(_t212_cfg_b, regime.value)
             _t212_overridden = regime.value in _t212_cfg_b.get("entry_signal_overrides", {})
-            _auto_bits.append(f"T212 Invest {_t212_eff}{' (override)' if _t212_overridden else ''}")
+            _auto_bits.append(f"T212 ETF {_t212_eff}{' (override)' if _t212_overridden else ''}")
         else:
-            _auto_bits.append("T212 Invest blocked")
-            _blocked_paths.append("T212 Invest")
+            _auto_bits.append("T212 ETF blocked")
+            _blocked_paths.append("T212 ETF")
+    _stock_cfg_b = config.get("trading212_stocks", {})
+    if _stock_cfg_b.get("enabled", False):
+        _stock_allowed = _stock_cfg_b.get("allowed_entry_regimes")
+        _stock_note = f" ({'/'.join(_stock_allowed)} only)" if _stock_allowed else ""
+        if is_entry_allowed(config, regime.value, "trading212_stocks"):
+            _stock_eff = resolve_entry_signal(_stock_cfg_b, regime.value)
+            _stock_overridden = regime.value in _stock_cfg_b.get("entry_signal_overrides", {})
+            _auto_bits.append(
+                f"T212 Stocks {_stock_eff}{' (override)' if _stock_overridden else ''}{_stock_note}"
+            )
+        else:
+            _auto_bits.append(f"T212 Stocks blocked{_stock_note}")
+            _blocked_paths.append("T212 Stocks")
     _vt_cfg_b = config.get("virtual_trading", {})
     if _vt_cfg_b.get("enabled", False):
         if is_entry_allowed(config, regime.value, "virtual_trading"):

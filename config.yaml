@@ -1,4 +1,4 @@
-# 72 assets across 19 groups
+# 90 assets across 20 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -202,12 +202,12 @@ watchlist:
     - ticker: "BTC-USD"
       name: "Bitcoin"
       exchange: "Crypto"
-      tradeable: true
+      tradeable: false
       trading212_instrument: "BTC/USD"
     - ticker: "ETH-USD"
       name: "Ethereum"
       exchange: "Crypto"
-      tradeable: true
+      tradeable: false
       trading212_instrument: "ETH/USD"
 
   volatility_complex:
@@ -340,6 +340,32 @@ watchlist:
       tradeable: false
 
   uk_etfs: []
+
+  # Curated US large-cap stocks for the trading212_stocks automation path (see that
+  # config section below). Sector selection loosely mirrors sector_etfs/tech_subsectors/
+  # financial_subsectors/healthcare_subsectors so each stock has a corresponding sector
+  # ETF already in the watchlist for correlation context: AAPL/MSFT/NVDA/AMD/AVGO -> XLK/
+  # SOXX/SKYY; JPM/GS/BAC/MS -> XLF/KBE; XOM/CVX -> XLE; UNH/JNJ/LLY -> XLV; AMZN/TSLA ->
+  # XLY; NEM/GOLD -> GLD (gold miners track, but don't perfectly correlate with, the metal).
+  us_large_cap:
+    - {ticker: "AAPL",  name: "Apple",                    exchange: "NYSE", tradeable: true}
+    - {ticker: "MSFT",  name: "Microsoft",                 exchange: "NYSE", tradeable: true}
+    - {ticker: "NVDA",  name: "NVIDIA",                    exchange: "NYSE", tradeable: true}
+    - {ticker: "AMD",   name: "Advanced Micro Devices",    exchange: "NYSE", tradeable: true}
+    - {ticker: "AVGO",  name: "Broadcom",                  exchange: "NYSE", tradeable: true}
+    - {ticker: "JPM",   name: "JP Morgan Chase",           exchange: "NYSE", tradeable: true}
+    - {ticker: "GS",    name: "Goldman Sachs",             exchange: "NYSE", tradeable: true}
+    - {ticker: "BAC",   name: "Bank of America",           exchange: "NYSE", tradeable: true}
+    - {ticker: "MS",    name: "Morgan Stanley",            exchange: "NYSE", tradeable: true}
+    - {ticker: "XOM",   name: "ExxonMobil",                exchange: "NYSE", tradeable: true}
+    - {ticker: "CVX",   name: "Chevron",                   exchange: "NYSE", tradeable: true}
+    - {ticker: "UNH",   name: "UnitedHealth Group",        exchange: "NYSE", tradeable: true}
+    - {ticker: "JNJ",   name: "Johnson & Johnson",         exchange: "NYSE", tradeable: true}
+    - {ticker: "LLY",   name: "Eli Lilly",                 exchange: "NYSE", tradeable: true}
+    - {ticker: "AMZN",  name: "Amazon",                    exchange: "NYSE", tradeable: true}
+    - {ticker: "TSLA",  name: "Tesla",                     exchange: "NYSE", tradeable: true}
+    - {ticker: "NEM",   name: "Newmont Corporation",       exchange: "NYSE", tradeable: true}
+    - {ticker: "GOLD",  name: "Barrick Gold",              exchange: "NYSE", tradeable: true}
 
 data:
   # How many calendar days of history to fetch on initial load for any asset
@@ -640,6 +666,47 @@ trading212_invest:
     AMLP: {ticker: SMLPd_EQ,  currency: EUR}  # Invesco Morningstar US Energy Infrastructure MLP (Acc)
     MUB:  {ticker: MUNIl_EQ,  currency: USD}  # Invesco US Municipal Bond (Dist)
     IBB:  {ticker: FBTUl_EQ,  currency: USD}  # First Trust NYSE Arca Biotechnology (Acc)
+
+# Separate automation path for direct US stock trading (watchlist.us_large_cap), alongside
+# the UCITS ETF automation above. Kept as its own config block — not folded into
+# trading212_invest — because stocks carry materially higher idiosyncratic risk than
+# diversified ETFs (single-company earnings/news risk vs a basket), so they get smaller
+# positions, a tighter deployment cap, a shorter holding window, and a stricter regime gate.
+# See brokers/trading212.py:maybe_place_stock_orders().
+#
+# EARNINGS GAP RISK: the system does not check earnings calendars. A stop loss can be
+# gapped through overnight on an earnings announcement — the fill will be at the next
+# available price, not the stop price. This is a materially larger risk for individual
+# stocks than for ETFs (a single company's earnings miss moves the stock far more than
+# any one constituent moves a diversified ETF) and is not currently mitigated in code.
+trading212_stocks:
+  enabled: true
+  live: false                    # NEVER set true until demo-validated — place_market_order() blocks it
+  long_only: true
+  max_position_gbp: 200          # smaller than ETFs (500) — higher individual stock volatility
+  max_total_deployed: 0.3        # tighter cap than ETFs (0.5)
+  entry_signal: STRONG_BUY       # higher bar given idiosyncratic stock risk (no BUY-threshold looser option)
+  exit_signal: SELL
+  max_holding_days: 30           # more active than ETFs (90d) but not forex-short
+  exit_on_signal: true
+  time_limit_as_backstop: true
+  # Stocks only trade in a confirmed bull trend — more regime-sensitive than ETFs, which
+  # also allow TRENDING_BEAR and HIGH_VOLATILITY (see trading212_invest.allowed_entry_regimes
+  # above). A single stock's downside in a bear or high-vol regime is far less diversified
+  # than an ETF's, so the gate is deliberately narrower here.
+  allowed_entry_regimes:
+    - TRENDING_BULL
+  entry_signal_overrides:
+    TRENDING_BULL: STRONG_BUY
+  # Fractional share support — if the T212 instruments API reports maxQuantityPrecision > 0
+  # for a ticker, orders are sized as a decimal quantity (position_gbp converted to USD via
+  # the live GBPUSD rate, divided by price, rounded to that precision) instead of being
+  # floored to a whole share. Falls back to the whole-share floor/minTradeQuantity guard
+  # (the same pattern trading212_invest uses for UCITS ETFs) when precision is 0 or absent.
+  fractional_shares: true
+  # No ucits_mapping needed — stock tickers map directly to T212 instrument names (e.g.
+  # "AAPL" -> "AAPL"). Set trading212_instrument on a watchlist entry only where the T212
+  # instrument name differs from the research ticker.
 
 learning:
   enabled: true
