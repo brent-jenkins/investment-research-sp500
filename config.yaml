@@ -641,6 +641,15 @@ virtual_trading:
   allowed_entry_regimes:
     - TRENDING_BULL
   max_theme_positions: 3         # max simultaneous positions per macro theme (e.g. USD-short forex)
+  # Flat round-trip cost approximation (spread + FX fee) deducted from a closed
+  # virtual trade's raw price-move return before it is stored as `pnl` (GBP).
+  # `pnl_pct` keeps the raw, cost-free return for display; `pnl` is what
+  # _fetch_trades_for_learning() reads (its `pnl IS NOT NULL` filter is also
+  # what makes virtual trades count towards learning.min_trades_before_adjustment
+  # at all — see CLAUDE.md "Feedback learning"). 0.35% is a placeholder based on
+  # typical retail CFD spread + FX conversion fee, not a live feed — revisit
+  # once enough T212 Invest fills exist to compare real execution cost against it.
+  cost_adjustment_pct: 0.35
 
 trading212_invest:
   enabled: true            # Set true when ready to connect

@@ -410,7 +410,7 @@ def _process_virtual_trades(
         if stop_hit or max_hold_exceeded:
             # Hard exits: close immediately regardless of confirmation
             reason = "STOP LOSS" if stop_hit else "MAX HOLDING"
-            to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date")))
+            to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date"), trade.get("investment_amount")))
             del open_by_ticker[ticker]
             closed_this_run.add(ticker)
             clear_metadata(reversal_meta_key)
@@ -419,7 +419,7 @@ def _process_virtual_trades(
             conf_runs = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
             min_hours = conf_runs * 3
             if min_hours <= 0:
-                to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date")))
+                to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date"), trade.get("investment_amount")))
                 del open_by_ticker[ticker]
                 closed_this_run.add(ticker)
             else:
@@ -433,7 +433,7 @@ def _process_virtual_trades(
                     except Exception:
                         hours_weak = 0.0
                     if hours_weak >= min_hours:
-                        to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date")))
+                        to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date"), trade.get("investment_amount")))
                         del open_by_ticker[ticker]
                         closed_this_run.add(ticker)
                         clear_metadata(reversal_meta_key)
@@ -447,9 +447,11 @@ def _process_virtual_trades(
             if get_metadata_str(reversal_meta_key) is not None:
                 clear_metadata(reversal_meta_key)
 
+    cost_adjustment_pct = float(vt.get("cost_adjustment_pct", 0.35))
+
     if to_close:
         with eng.begin() as conn:
-            for trade_id, live_price, reason, direction, entry_price, entry_dt in to_close:
+            for trade_id, live_price, reason, direction, entry_price, entry_dt, investment_amount in to_close:
                 pnl_pct = 0.0
                 if entry_price:
                     pnl_pct = ((live_price - entry_price) / entry_price
@@ -465,21 +467,35 @@ def _process_virtual_trades(
                         hold_days = max(0, (now - entry_dt_parsed).days)
                     except Exception:
                         pass
+
+                # pnl_pct (above) is the raw, cost-free price move — kept as-is for
+                # display. pnl is a flat-rate cost-adjusted GBP figure (round-trip
+                # spread + FX fee approximation) and is what the feedback-learning
+                # system reads via _fetch_trades_for_learning()'s `pnl IS NOT NULL`
+                # filter — see virtual_trading.cost_adjustment_pct in config.yaml.
+                # pnl_pct is stored as a fraction (0.02 = 2%), not a percentage —
+                # cost_adjustment_pct (e.g. 0.35 = 0.35%) is the one that needs /100.
+                investment_amount = float(investment_amount or 0)
+                adjusted_pnl_pct  = pnl_pct - (cost_adjustment_pct / 100)
+                pnl_gbp = round(adjusted_pnl_pct * investment_amount, 4) if investment_amount > 0 else None
+
                 conn.execute(sa_text("""
                     UPDATE trades
                     SET is_open=0, exit_date=:exit_date, exit_price=:exit_price,
-                        pnl_pct=:pnl_pct, holding_days=:hold_days
+                        pnl_pct=:pnl_pct, pnl=:pnl, holding_days=:hold_days
                     WHERE id=:trade_id
                 """), {
                     "exit_date":  now.isoformat(),
                     "exit_price": live_price,
                     "pnl_pct":    round(pnl_pct, 6),
+                    "pnl":        pnl_gbp,
                     "hold_days":  hold_days,
                     "trade_id":   trade_id,
                 })
                 logger.info(
-                    "Virtual trade closed: %s at %.4f (P&L %.2f%%) — %s",
-                    trade_id, live_price, pnl_pct * 100, reason,
+                    "Virtual trade closed: %s at %.4f (raw P&L %.2f%%, cost-adjusted £%s) — %s",
+                    trade_id, live_price, pnl_pct * 100,
+                    f"{pnl_gbp:+.2f}" if pnl_gbp is not None else "n/a", reason,
                 )
 
     # ── Open phase ────────────────────────────────────────────────────────────
@@ -514,6 +530,13 @@ def _process_virtual_trades(
         else {"STRONG_BUY", "STRONG_SELL"}
     )
 
+    # Tickers automated via T212 Invest never get a *new* virtual position —
+    # T212 provides real execution data for them. Existing open virtual
+    # positions on these tickers are unaffected and keep closing normally
+    # (stop loss / signal reversal / max holding) via the close phase above;
+    # this only gates the open phase, so no existing position is force-closed.
+    ucits_tickers: set[str] = set(config.get("trading212_invest", {}).get("ucits_mapping", {}).keys())
+
     to_open: list[dict] = []
     for ticker, sig in signals.items():
         if open_count + len(to_open) >= max_positions:
@@ -525,6 +548,9 @@ def _process_virtual_trades(
                 "Virtual trading: skipping %s — closed earlier this run, "
                 "deferring re-entry to the next scheduled run.", ticker,
             )
+            continue
+        if ticker in ucits_tickers:
+            logger.debug("Skipping virtual open for %s — covered by T212 Invest.", ticker)
             continue
         if ticker not in can_open:
             logger.debug("Virtual trading: skipping %s — exchange not in eligible set.", ticker)
@@ -1004,10 +1030,10 @@ def _trade_alert_job() -> None:
                 _entry = float(trade.get("entry_price") or 0)
                 _dir   = trade.get("direction", "LONG")
                 _live  = live_price or 0.0
-                _pnl   = 0.0
+                _pnl_pct = 0.0
                 if _entry:
-                    _pnl = ((_live - _entry) / _entry if _dir == "LONG"
-                            else (_entry - _live) / _entry)
+                    _pnl_pct = ((_live - _entry) / _entry if _dir == "LONG"
+                                else (_entry - _live) / _entry)
                 _hold = 0
                 _edt  = trade.get("entry_date")
                 if _edt:
@@ -1017,22 +1043,34 @@ def _trade_alert_job() -> None:
                         _hold = max(0, (now_utc.replace(tzinfo=None) - _ep).days)
                     except Exception:
                         pass
+
+                # See _process_virtual_trades() for why pnl is a cost-adjusted GBP
+                # figure while pnl_pct stays the raw, cost-free price move.
+                # pnl_pct is stored as a fraction (0.02 = 2%), not a percentage —
+                # cost_adjustment_pct (e.g. 0.35 = 0.35%) is the one that needs /100.
+                _cost_pct    = float(config.get("virtual_trading", {}).get("cost_adjustment_pct", 0.35))
+                _inv_amount  = float(trade.get("investment_amount") or 0)
+                _adj_pnl_pct = _pnl_pct - (_cost_pct / 100)
+                _pnl_gbp     = round(_adj_pnl_pct * _inv_amount, 4) if _inv_amount > 0 else None
+
                 with _get_engine().begin() as _conn:
                     _conn.execute(_sa_text("""
                         UPDATE trades
                         SET is_open=0, exit_date=:ts, exit_price=:price,
-                            pnl_pct=:pnl, holding_days=:hold
+                            pnl_pct=:pnl_pct, pnl=:pnl, holding_days=:hold
                         WHERE id=:tid AND is_open=1
                     """), {
-                        "ts":    now_utc.replace(tzinfo=None).isoformat(),
-                        "price": _live,
-                        "pnl":   round(_pnl, 6),
-                        "hold":  _hold,
-                        "tid":   trade_id,
+                        "ts":      now_utc.replace(tzinfo=None).isoformat(),
+                        "price":   _live,
+                        "pnl_pct": round(_pnl_pct, 6),
+                        "pnl":     _pnl_gbp,
+                        "hold":    _hold,
+                        "tid":     trade_id,
                     })
                 logger.info(
-                    "Virtual trade %s (%s) closed: STOP LOSS at %.4f (P&L %.2f%%)",
-                    trade_id, ticker, _live, _pnl * 100,
+                    "Virtual trade %s (%s) closed: STOP LOSS at %.4f (raw P&L %.2f%%, cost-adjusted £%s)",
+                    trade_id, ticker, _live, _pnl_pct * 100,
+                    f"{_pnl_gbp:+.2f}" if _pnl_gbp is not None else "n/a",
                 )
                 # Clear the weakening timer now the trade is closed.
                 clear_metadata(f"weakening_since:{trade_id}")

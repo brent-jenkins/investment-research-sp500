@@ -2149,6 +2149,8 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
     if not open_trades:
         st.info("No open trades. Use the form above to log one.")
     else:
+        _ucits_tickers = set(config.get("trading212_invest", {}).get("ucits_mapping", {}).keys())
+
         live_prices = {t["ticker"]: _cached_latest_price(t["ticker"])
                        for t in open_trades}
 
@@ -2296,10 +2298,16 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
             except Exception:
                 pass
 
+            _ticker_disp = (
+                f"{ticker}  ⌛ Closing — now covered by T212"
+                if t.get("account_type") == "VIRTUAL" and ticker in _ucits_tickers
+                else ticker
+            )
+
             rows.append({
                 "ID":           t["id"],
                 "Type":         t.get("account_type") or "PRACTICE",
-                "Ticker":       ticker,
+                "Ticker":       _ticker_disp,
                 "Dir":          direction,
                 "Ccy":          instr_ccy,
                 "Units":        qty if qty > 0 else None,
