@@ -127,6 +127,8 @@ Each module returns a score of −1 (bearish), 0 (neutral), or +1 (bullish):
 | **Correlation** | Cross-asset pair status for pairs involving the ticker (CONFIRMING = +1, DIVERGING = −1, NEUTRAL = 0) |
 | **Regime** | Not directly scored per ticker; determines the weights applied to the other six modules |
 
+> **Trend module's golden/death cross vote is direction-aware, not purely positional.** A golden cross (SMA50 > SMA200) only votes bullish while SMA50 is rising — a declining SMA50 that's still above SMA200 from an earlier uptrend votes neutral (stale cross), or flips bearish if the two lines have converged within `signals.ma_cross_near_pct` (default 2%) of each other, since that's a warning of an imminent death cross rather than confirmation of bullish momentum. Death crosses are scored with the same logic mirrored. The slope lookback is `signals.ma_cross_slope_window` (default 10 trading days). The positional `golden_cross` flag shown on the Charts page indicator panel ("Golden ✓" / "Death ✗") is unchanged and reflects the raw SMA50-vs-SMA200 position; a "⚠ SMA50 declining/rising" caption appears underneath when the direction-aware vote disagrees with it.
+
 ### FRED macro series
 
 The macro module fetches and scores these series (stored in `macro_indicators` table). Beyond the composite average score, several series apply ticker-specific adjustments inside `compute_macro()`:

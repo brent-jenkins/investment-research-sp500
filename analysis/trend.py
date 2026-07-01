@@ -57,6 +57,47 @@ def _pandas_adx(
     return adx, plus_di, minus_di
 
 
+def _ma_cross_vote(
+    sma_50: pd.Series,
+    sma_200: pd.Series,
+    slope_window: int,
+    near_pct: float,
+) -> int:
+    """Direction-aware SMA50/SMA200 cross vote for the latest date.
+
+    A pure positional check (SMA50 > SMA200 = bullish) treats a golden cross
+    as bullish even while SMA50 is rolling over toward a death cross — e.g. a
+    steeply declining SMA50 that is still (barely) above SMA200 from an
+    earlier uptrend. This also weighs the SMA50 slope and how close the two
+    lines are:
+
+    - SMA50 sloping the same way as its cross (rising in a golden cross,
+      falling in a death cross) -> vote matches the cross direction.
+    - SMA50 sloping against its own cross, lines still well apart -> neutral
+      (a stale cross with fading momentum, not yet a reversal).
+    - SMA50 sloping against its own cross AND the lines have converged to
+      within `near_pct` of each other -> vote flips (a new cross is
+      imminent, e.g. a declining SMA50 about to cut below SMA200).
+    """
+    last_sma50, last_sma200 = sma_50.iloc[-1], sma_200.iloc[-1]
+    if last_sma50 != last_sma50 or last_sma200 != last_sma200 or last_sma200 == 0:
+        return 0
+
+    positional = 1 if last_sma50 > last_sma200 else -1
+
+    if len(sma_50) <= slope_window:
+        return positional
+    prev_sma50 = sma_50.iloc[-1 - slope_window]
+    if prev_sma50 != prev_sma50:
+        return positional  # not enough history yet for the slope
+
+    if (last_sma50 - prev_sma50) * positional >= 0:
+        return positional  # SMA50 slope agrees with the cross direction
+
+    gap_pct = abs(last_sma50 - last_sma200) / last_sma200
+    return -positional if gap_pct < near_pct else 0
+
+
 def compute_trend(df: pd.DataFrame, config: dict) -> dict:
     """Compute trend indicators for the latest date in *df*.
 
@@ -68,7 +109,11 @@ def compute_trend(df: pd.DataFrame, config: dict) -> dict:
 
     Scoring logic (needs 2-of-3 agreement):
     - Price vs SMA200: above → bullish, below → bearish
-    - SMA50 vs SMA200: above → bullish (golden), below → bearish (death)
+    - SMA50 vs SMA200: direction-aware — see `_ma_cross_vote()`. A golden
+      cross only votes bullish while SMA50 is rising (or its slope hasn't
+      caught up in recent history); a golden cross with a declining SMA50
+      votes neutral, or bearish if the lines have converged near a flip.
+      Death cross mirrors the same logic.
     - MACD vs signal line (only counted when ADX ≥ threshold — trending market)
 
     Args:
@@ -85,6 +130,8 @@ def compute_trend(df: pd.DataFrame, config: dict) -> dict:
     macd_sig_p   = sig["macd_signal"]
     adx_period   = sig["adx_period"]
     adx_thr      = sig["adx_trend_threshold"]
+    ma_cross_slope_window = int(sig.get("ma_cross_slope_window", 10))
+    ma_cross_near_pct     = float(sig.get("ma_cross_near_pct", 0.02))
     min_rows     = macd_slow + macd_sig_p + 5
 
     empty = {
@@ -93,6 +140,7 @@ def compute_trend(df: pd.DataFrame, config: dict) -> dict:
         "macd": None, "macd_signal": None, "macd_hist": None,
         "adx": None, "plus_di": None, "minus_di": None,
         "golden_cross": 0,
+        "ma_cross_score": 0,
     }
 
     if df.empty or len(df) < min_rows:
@@ -156,9 +204,11 @@ def compute_trend(df: pd.DataFrame, config: dict) -> dict:
     if last_sma200 is not None:
         votes.append(1 if last_close > last_sma200 else -1)
 
-    # Vote 2: SMA50 vs SMA200
+    # Vote 2: SMA50 vs SMA200, direction-aware (see _ma_cross_vote)
+    ma_cross_score = 0
     if last_sma50 is not None and last_sma200 is not None:
-        votes.append(1 if last_sma50 > last_sma200 else -1)
+        ma_cross_score = _ma_cross_vote(sma_50, sma_200, ma_cross_slope_window, ma_cross_near_pct)
+        votes.append(ma_cross_score)
 
     # Vote 3: MACD (only in trending market)
     if last_macd is not None and last_sig is not None:
@@ -182,4 +232,5 @@ def compute_trend(df: pd.DataFrame, config: dict) -> dict:
         "plus_di":      _last(plus_di_s),
         "minus_di":     _last(minus_di_s),
         "golden_cross": golden_cross,
+        "ma_cross_score": ma_cross_score,
     }

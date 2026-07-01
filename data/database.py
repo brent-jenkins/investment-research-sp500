@@ -134,7 +134,8 @@ class Indicator(Base):
     yield_curve_regime = Column(String(10))  # normal / flat / inverted
 
     # Cross-module
-    golden_cross = Column(Float)   # 1 = golden, -1 = death, 0 = neither
+    golden_cross = Column(Float)   # 1 = golden, -1 = death, 0 = neither (positional only)
+    ma_cross_score = Column(Float)  # direction-aware SMA50/SMA200 vote used in trend scoring; see analysis/trend.py:_ma_cross_vote
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -552,6 +553,7 @@ def _apply_migrations(engine) -> None:
         ("indicators", "yield_curve_spread",  "FLOAT"),
         ("indicators", "yield_curve_regime",  "VARCHAR(10)"),
         ("indicators", "golden_cross",        "FLOAT"),
+        ("indicators", "ma_cross_score",      "FLOAT"),
         ("signals",    "regime",              "VARCHAR(20)"),
         ("signals",    "correlation_score",   "INTEGER"),
         ("trades",     "signal_type",         "VARCHAR(15)"),

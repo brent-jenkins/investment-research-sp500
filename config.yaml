@@ -493,6 +493,11 @@ signals:
   adx_period: 14
   adx_trend_threshold: 25
   volume_avg_period: 20
+  # SMA50/SMA200 cross vote: lookback (trading days) used to read the SMA50
+  # slope, and how close (as a % of SMA200) the two lines must be before a
+  # cross moving against its own slope is treated as an imminent flip.
+  ma_cross_slope_window: 10
+  ma_cross_near_pct: 0.02
   # In TRENDING_BULL suppress SELL/STRONG_SELL; in TRENDING_BEAR suppress BUY/STRONG_BUY
   regime_direction_filter: true
   # Require a reversal signal to persist for this many analysis runs (~3 h each)

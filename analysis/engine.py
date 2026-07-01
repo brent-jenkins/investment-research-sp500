@@ -79,6 +79,7 @@ def analyse_ticker(
         "plus_di":      trend_res["plus_di"],
         "minus_di":     trend_res["minus_di"],
         "golden_cross": trend_res["golden_cross"],
+        "ma_cross_score": trend_res["ma_cross_score"],
         # Mean reversion
         "rsi":          mr_res["rsi"],
         "bb_upper":     mr_res["bb_upper"],

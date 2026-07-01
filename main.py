@@ -835,6 +835,16 @@ def _render_indicator_panel(ticker: str) -> None:
         cross_int = int(float(raw_cross)) if raw_cross is not None else 0
         cross_label = {1: "Golden ✓", -1: "Death ✗", 0: "—"}.get(cross_int, "—")
         c5.metric("MA Cross", cross_label)
+        raw_ma_score = row.get("ma_cross_score")
+        ma_score_int = int(float(raw_ma_score)) if raw_ma_score is not None else cross_int
+        if cross_int != 0 and ma_score_int != cross_int:
+            slope_dir = "declining" if cross_int == 1 else "rising"
+            if ma_score_int == 0:
+                note = f"SMA50 {slope_dir} — cross weakening"
+            else:
+                flip = "death" if cross_int == 1 else "golden"
+                note = f"SMA50 converging — {flip} cross imminent"
+            c5.caption(f"⚠ {note}")
 
         # Mean Reversion
         st.markdown("**Mean Reversion**")

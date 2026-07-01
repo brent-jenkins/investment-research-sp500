@@ -131,9 +131,33 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.S
 # Vectorized module scoring — returns integer Series (-1 / 0 / 1) per date
 # ---------------------------------------------------------------------------
 
+def _ma_cross_vote(sma_50: pd.Series, sma_200: pd.Series, slope_window: int, near_pct: float) -> pd.Series:
+    """Vectorized version of analysis/trend.py:_ma_cross_vote — see there for rationale.
+
+    A pure positional SMA50-vs-SMA200 check treats a golden cross as bullish
+    even while SMA50 is rolling over toward a death cross. This votes with
+    the cross direction only while SMA50's slope agrees with it; otherwise
+    the vote goes neutral, or flips if the lines have converged to within
+    `near_pct` of each other (an imminent cross).
+    """
+    positional = pd.Series(np.where(sma_50 > sma_200, 1, -1), index=sma_50.index)
+    prev_sma50 = sma_50.shift(slope_window)
+    slope_agrees = ((sma_50 - prev_sma50) * positional) >= 0
+    gap_pct = (sma_50 - sma_200).abs() / sma_200.replace(0, np.nan)
+    imminent = gap_pct < near_pct
+
+    vote = pd.Series(
+        np.where(slope_agrees, positional, np.where(imminent, -positional, 0)),
+        index=sma_50.index,
+    )
+    return vote.where(prev_sma50.notna(), positional).astype(int)
+
+
 def _trend_scores(df: pd.DataFrame, config: dict) -> pd.Series:
     sig      = config["signals"]
     adx_thr  = sig["adx_trend_threshold"]
+    slope_w  = int(sig.get("ma_cross_slope_window", 10))
+    near_pct = float(sig.get("ma_cross_near_pct", 0.02))
     close    = df["close"].astype(float)
     high     = df["high"].astype(float)
     low      = df["low"].astype(float)
@@ -145,7 +169,7 @@ def _trend_scores(df: pd.DataFrame, config: dict) -> pd.Series:
 
     # Three votes
     v1 = pd.Series(np.where(close > sma_200, 1, -1), index=close.index)
-    v2 = pd.Series(np.where(sma_50  > sma_200, 1, -1), index=close.index)
+    v2 = _ma_cross_vote(sma_50, sma_200, slope_w, near_pct)
     macd_vote = np.where(macd_l > macd_s, 1, -1)
     v3 = pd.Series(np.where(adx_s >= adx_thr, macd_vote, 0), index=close.index)
 

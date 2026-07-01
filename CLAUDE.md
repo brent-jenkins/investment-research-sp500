@@ -94,6 +94,18 @@ Everything flows from `config.yaml`. All indicator periods, confluence threshold
 
 Each `compute_*` function in the analysis modules returns the **latest** scalar values only (not a full time series). The score from each module feeds into `confluence.py:generate_signal()`.
 
+### Trend module — direction-aware MA cross vote
+
+`analysis/trend.py:compute_trend()` scores trend as 2-of-3 votes: price vs SMA200, the SMA50/SMA200 cross, and MACD vs its signal line (ADX-gated). The SMA50/SMA200 vote is **not** a pure positional check — `_ma_cross_vote()` also weighs the SMA50 slope, because a positional-only check treats a stale golden cross (SMA50 still above SMA200 but rolling over from an earlier uptrend) as fully bullish, when it is actually warning of an impending death cross:
+
+- SMA50 sloping the same way as its cross (rising in a golden cross, falling in a death cross) → vote matches the cross direction (+1 / -1).
+- SMA50 sloping against its own cross, but the lines are still well apart → vote is neutral (0) — a stale cross with fading momentum, not yet a reversal.
+- SMA50 sloping against its own cross **and** the lines have converged to within `signals.ma_cross_near_pct` (default 2%) of each other → vote flips to the opposite direction — a new cross is imminent.
+
+The slope lookback (`signals.ma_cross_slope_window`, default 10 trading days) and convergence threshold (`signals.ma_cross_near_pct`, default 0.02) are both configurable. When there isn't enough history yet to read the slope, the vote falls back to the pure positional check. The raw positional `golden_cross` flag (1 = golden, -1 = death, 0 = neither) is kept unchanged for the "just crossed" / "sustained" event history and drives the "Golden ✓" / "Death ✗" label on the Charts page indicator panel; the direction-aware result is stored separately as `ma_cross_score` on the `indicators` table and used for scoring. When `ma_cross_score` disagrees with the positional `golden_cross` flag, the indicator panel shows a "⚠ SMA50 declining/rising — cross weakening/imminent" caption under the MA Cross metric so the discrepancy is visible rather than silently affecting only the score.
+
+`analysis/backtest.py` mirrors this exact logic in a vectorized `_ma_cross_vote()` so historical backtests replay the same scoring behaviour as live analysis.
+
 ### Regime detection
 
 `analysis/regime.py:detect_regime()` reads the most recent stored ^GSPC indicators (SMA 200, ADX, VIX) and applies priority-ordered rules:
