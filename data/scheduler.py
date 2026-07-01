@@ -368,6 +368,7 @@ def _process_virtual_trades(
 
     # ── Close phase (runs on every call regardless of run_type / eligible_exchanges) ──
     to_close: list[tuple] = []
+    closed_this_run: set[str] = set()
     for ticker, trade in list(open_by_ticker.items()):
         live_price = prices.get(ticker)
         if live_price is None:
@@ -411,6 +412,7 @@ def _process_virtual_trades(
             reason = "STOP LOSS" if stop_hit else "MAX HOLDING"
             to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date")))
             del open_by_ticker[ticker]
+            closed_this_run.add(ticker)
             clear_metadata(reversal_meta_key)
         elif signal_reversal:
             # Reversal confirmation: require the reversal to persist for N runs
@@ -419,6 +421,7 @@ def _process_virtual_trades(
             if min_hours <= 0:
                 to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date")))
                 del open_by_ticker[ticker]
+                closed_this_run.add(ticker)
             else:
                 first_weak = get_metadata_str(reversal_meta_key)
                 if first_weak is None:
@@ -432,6 +435,7 @@ def _process_virtual_trades(
                     if hours_weak >= min_hours:
                         to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date")))
                         del open_by_ticker[ticker]
+                        closed_this_run.add(ticker)
                         clear_metadata(reversal_meta_key)
                     else:
                         logger.info(
@@ -515,6 +519,12 @@ def _process_virtual_trades(
         if open_count + len(to_open) >= max_positions:
             break
         if ticker in open_by_ticker:
+            continue
+        if ticker in closed_this_run:
+            logger.debug(
+                "Virtual trading: skipping %s — closed earlier this run, "
+                "deferring re-entry to the next scheduled run.", ticker,
+            )
             continue
         if ticker not in can_open:
             logger.debug("Virtual trading: skipping %s — exchange not in eligible set.", ticker)
