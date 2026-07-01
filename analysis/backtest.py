@@ -463,21 +463,29 @@ def compute_signal_history(
 def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[dict]:
     """Walk forward through *signals* and generate simulated trades.
 
-    Entry: resolved per-date via analysis.regime.resolve_entry_signal(), using
-    the regime already stored in signals["regime"] for that date and the
-    virtual_trading.entry_signal / entry_signal_overrides config (virtual
-    trading, not trading212_invest, since it's the only automation path that
-    — like this backtest — takes both LONG and SHORT positions). A resolved
-    threshold of "STRONG_BUY" only enters on STRONG_BUY (LONG) / STRONG_SELL
-    (SHORT); "BUY" also enters on plain BUY / SELL. This mirrors live
-    behaviour so backtest results reflect the same per-regime conviction
-    gating as data/scheduler.py:_process_virtual_trades().
-    Exit (in priority order, unaffected by entry_signal_overrides):
+    Entry: gated per-date in two steps against virtual_trading config (not
+    trading212_invest, since it's the only automation path that — like this
+    backtest — takes both LONG and SHORT positions):
+      1. analysis.regime.is_entry_allowed() — a regime not in
+         virtual_trading.allowed_entry_regimes blocks entry entirely for that
+         date, before the signal is even considered (e.g. MIXED has no
+         demonstrable edge, so no position is opened regardless of signal
+         strength).
+      2. analysis.regime.resolve_entry_signal() — for an allowed regime, the
+         resolved entry_signal_overrides threshold ("STRONG_BUY" only enters
+         on STRONG_BUY (LONG) / STRONG_SELL (SHORT); "BUY" also enters on
+         plain BUY / SELL) gates the signal itself.
+    This mirrors live behaviour so backtest results reflect the same
+    regime-gating and per-regime conviction thresholding as
+    data/scheduler.py:_process_virtual_trades().
+    Exit (in priority order, unaffected by either entry gate — an open
+    position always continues to be monitored and closed regardless of what
+    the regime does next):
       1. ATR stop loss (entry ± 2 × ATR at entry date)
       2. Signal reversal (SELL/STRONG_SELL for LONG; BUY/STRONG_BUY for SHORT)
       3. Maximum holding period (config backtest.max_holding_days)
     """
-    from analysis.regime import resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
+    from analysis.regime import is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
 
     bt_cfg   = config.get("backtest", {})
     vt_cfg   = config.get("virtual_trading", {})
@@ -498,7 +506,10 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
         atr    = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
 
         if open_trade is None:
-            entry_threshold = resolve_entry_signal(vt_cfg, str(row["regime"]))
+            regime_at_row = str(row["regime"])
+            if not is_entry_allowed(config, regime_at_row, "virtual_trading"):
+                continue
+            entry_threshold = resolve_entry_signal(vt_cfg, regime_at_row)
             entry_signals   = _ALL if entry_threshold == "BUY" else _STRONG
             if sig not in entry_signals:
                 continue

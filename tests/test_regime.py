@@ -1,16 +1,16 @@
-"""Tests for analysis/regime.py: detect_regime() and resolve_entry_signal().
+"""Tests for analysis/regime.py: detect_regime(), resolve_entry_signal(), is_entry_allowed().
 
 detect_regime() reads its inputs from the indicators/price_data tables, so
 these tests use the db_engine fixture (in-memory SQLite) to seed exactly the
-^GSPC row each classification rule depends on. resolve_entry_signal() is a
-pure function over a config dict and needs no DB at all.
+^GSPC row each classification rule depends on. resolve_entry_signal() and
+is_entry_allowed() are pure functions over a config dict and need no DB at all.
 """
 
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from analysis.regime import Regime, detect_regime, resolve_entry_signal
+from analysis.regime import Regime, detect_regime, is_entry_allowed, resolve_entry_signal
 from data.database import Indicator, PriceData
 
 
@@ -107,3 +107,59 @@ def test_resolve_entry_signal_defaults_to_strong_buy_when_entry_signal_unset():
     """With no entry_signal key at all in cfg, the documented default is
     STRONG_BUY (the strictest, safest choice)."""
     assert resolve_entry_signal({}, "MIXED") == "STRONG_BUY"
+
+
+# ---------------------------------------------------------------------------
+# is_entry_allowed() — pure function, no DB involved
+# ---------------------------------------------------------------------------
+
+_GATE_CFG = {
+    "virtual_trading": {
+        "allowed_entry_regimes": ["TRENDING_BULL", "TRENDING_BEAR", "HIGH_VOLATILITY"],
+    },
+    "trading212_invest": {
+        "allowed_entry_regimes": ["TRENDING_BULL", "TRENDING_BEAR", "HIGH_VOLATILITY"],
+    },
+    "no_gate_section": {
+        "entry_signal": "STRONG_BUY",
+    },
+}
+
+
+def test_is_entry_allowed_returns_false_for_mixed():
+    """MIXED has no demonstrable edge (37.5% win rate, -91.26% max drawdown over
+    56.8% of all regime-days) and is deliberately excluded from
+    allowed_entry_regimes — new entries must be blocked."""
+    assert is_entry_allowed(_GATE_CFG, "MIXED", "virtual_trading") is False
+
+
+def test_is_entry_allowed_returns_true_for_trending_bull():
+    """TRENDING_BULL is explicitly listed in allowed_entry_regimes — entries
+    must be permitted (subject to the separate signal-threshold gate)."""
+    assert is_entry_allowed(_GATE_CFG, "TRENDING_BULL", "virtual_trading") is True
+
+
+def test_is_entry_allowed_returns_false_for_ranging_low_vol():
+    """RANGING_LOW_VOL has only 1 trade of backtest data — too little to trust
+    either way, so it's treated as unknown/excluded, not as safe by omission."""
+    assert is_entry_allowed(_GATE_CFG, "RANGING_LOW_VOL", "virtual_trading") is False
+
+
+def test_is_entry_allowed_defaults_to_true_when_key_missing():
+    """A config section with no allowed_entry_regimes key at all must allow
+    every regime — this is the backwards-compatible default for configs
+    written before this gate existed."""
+    assert is_entry_allowed(_GATE_CFG, "MIXED", "no_gate_section") is True
+    assert is_entry_allowed({}, "MIXED", "virtual_trading") is True
+
+
+def test_is_entry_allowed_checks_the_requested_section_independently():
+    """trading212_invest and virtual_trading each read their own
+    allowed_entry_regimes — the section argument must actually select which
+    one is consulted, not silently default to a fixed section."""
+    cfg = {
+        "virtual_trading": {"allowed_entry_regimes": ["MIXED"]},
+        "trading212_invest": {"allowed_entry_regimes": ["TRENDING_BULL"]},
+    }
+    assert is_entry_allowed(cfg, "MIXED", "virtual_trading") is True
+    assert is_entry_allowed(cfg, "MIXED", "trading212_invest") is False

@@ -38,7 +38,14 @@ from analysis.correlations import (
 )
 from analysis.regime import OVERLAY_DESCRIPTIONS
 from analysis.engine import run_analysis
-from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime, resolve_entry_signal
+from analysis.regime import (
+    REGIME_COLOURS,
+    REGIME_DESCRIPTIONS,
+    Regime,
+    detect_regime,
+    is_entry_allowed,
+    resolve_entry_signal,
+)
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
 from data.ingestion import (
     get_all_tickers,
@@ -3667,13 +3674,16 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             unsafe_allow_html=True,
         )
         _t212_regime = detect_regime()["regime"].value
-        _t212_entry_eff = resolve_entry_signal(_t212_cfg, _t212_regime)
-        _t212_entry_overridden = _t212_regime in _t212_cfg.get("entry_signal_overrides", {})
-        st.caption(
-            f"Entry threshold: **{_t212_entry_eff}** "
-            f"({'regime override for ' if _t212_entry_overridden else 'global default, regime '}"
-            f"{_t212_regime.replace('_', ' ')})"
-        )
+        if is_entry_allowed(config, _t212_regime, "trading212_invest"):
+            _t212_entry_eff = resolve_entry_signal(_t212_cfg, _t212_regime)
+            _t212_entry_overridden = _t212_regime in _t212_cfg.get("entry_signal_overrides", {})
+            st.caption(
+                f"Entry threshold: **{_t212_entry_eff}** "
+                f"({'regime override for ' if _t212_entry_overridden else 'global default, regime '}"
+                f"{_t212_regime.replace('_', ' ')})"
+            )
+        else:
+            st.caption(f"⛔ **Entry blocked** ({_t212_regime.replace('_', ' ')} regime not in allowed_entry_regimes)")
         st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
         if _t212_error:
@@ -5368,20 +5378,33 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
     # Effective automation entry threshold for the current regime (per-regime
     # overrides in trading212_invest / virtual_trading can differ from the
-    # global default — see analysis/regime.py:resolve_entry_signal()).
+    # global default — see analysis/regime.py:resolve_entry_signal()). A regime
+    # not in allowed_entry_regimes blocks entries entirely, ahead of the
+    # threshold check — see analysis/regime.py:is_entry_allowed().
     _auto_bits = []
+    _blocked_paths = []
     _t212_cfg_b = config.get("trading212_invest", {})
     if _t212_cfg_b.get("enabled", False):
-        _t212_eff = resolve_entry_signal(_t212_cfg_b, regime.value)
-        _t212_overridden = regime.value in _t212_cfg_b.get("entry_signal_overrides", {})
-        _auto_bits.append(f"T212 Invest {_t212_eff}{' (override)' if _t212_overridden else ''}")
+        if is_entry_allowed(config, regime.value, "trading212_invest"):
+            _t212_eff = resolve_entry_signal(_t212_cfg_b, regime.value)
+            _t212_overridden = regime.value in _t212_cfg_b.get("entry_signal_overrides", {})
+            _auto_bits.append(f"T212 Invest {_t212_eff}{' (override)' if _t212_overridden else ''}")
+        else:
+            _auto_bits.append("T212 Invest blocked")
+            _blocked_paths.append("T212 Invest")
     _vt_cfg_b = config.get("virtual_trading", {})
     if _vt_cfg_b.get("enabled", False):
-        _vt_eff = resolve_entry_signal(_vt_cfg_b, regime.value)
-        _vt_overridden = regime.value in _vt_cfg_b.get("entry_signal_overrides", {})
-        _auto_bits.append(f"Virtual {_vt_eff}{' (override)' if _vt_overridden else ''}")
+        if is_entry_allowed(config, regime.value, "virtual_trading"):
+            _vt_eff = resolve_entry_signal(_vt_cfg_b, regime.value)
+            _vt_overridden = regime.value in _vt_cfg_b.get("entry_signal_overrides", {})
+            _auto_bits.append(f"Virtual {_vt_eff}{' (override)' if _vt_overridden else ''}")
+        else:
+            _auto_bits.append("Virtual blocked")
+            _blocked_paths.append("Virtual")
     if _auto_bits:
         st.caption(f"Automation entry: {' · '.join(_auto_bits)}")
+    if _blocked_paths:
+        st.caption(f"⛔ Entries blocked — {regime.replace('_', ' ')} regime ({', '.join(_blocked_paths)})")
 
     # Active overlay detail strips
     for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):

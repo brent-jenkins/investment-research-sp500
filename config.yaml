@@ -547,7 +547,9 @@ virtual_trading:
   # already-loose exit created high-churn whipsaw trading in trending regimes — TRENDING_BULL
   # and TRENDING_BEAR are only 25% of all regime-days but produced 90% of all simulated trades
   # (2,899 of 3,231), dragging win rate to 42.9%, profit factor to 1.18, and max drawdown to
-  # -99.3% (vs 757 trades / 41.2% / PF 1.35 / -85.4% under STRONG_BUY-only everywhere).
+  # -99.3% (vs 757 trades / 41.2% / PF 1.35 / -85.4% under STRONG_BUY-only everywhere). Reverting
+  # to uniform STRONG_BUY (current state) reproduced that exact 757/41.2%/1.35/-85.4% baseline
+  # on a full-history production backtest, confirming this config is a no-op vs. pre-feature.
   # A regime with no entry here falls back to entry_signal above.
   entry_signal_overrides:
     MIXED: STRONG_BUY
@@ -555,6 +557,21 @@ virtual_trading:
     HIGH_VOLATILITY: STRONG_BUY
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
+  # Regime entry gate — checked before entry_signal_overrides, not instead of it.
+  # MIXED is 56.8% of all regime-days over 10 years but only a 37.5% win rate and
+  # -91.26% max drawdown — no demonstrable edge, so no new positions are opened at
+  # all while the regime is MIXED, regardless of signal strength. RANGING_LOW_VOL
+  # has only 1 trade of backtest data — too little to trust either way, so it's
+  # excluded too (treated as unknown, not as "safe by omission"). HIGH_VOLATILITY
+  # is kept for now — insufficient data to exclude it, but revisit once more
+  # HIGH_VOLATILITY trades have accumulated. A regime not in this list is blocked;
+  # if allowed_entry_regimes is absent entirely, all regimes are allowed (matches
+  # pre-this-feature behaviour). The exit phase is never affected by this gate —
+  # open positions always continue to be monitored and closed normally.
+  allowed_entry_regimes:
+    - TRENDING_BULL
+    - TRENDING_BEAR
+    - HIGH_VOLATILITY  # kept for now — insufficient data to exclude
   max_theme_positions: 3         # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 trading212_invest:
@@ -574,6 +591,13 @@ trading212_invest:
     HIGH_VOLATILITY: STRONG_BUY
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
+  # Regime entry gate — same rationale and keys as virtual_trading.allowed_entry_regimes
+  # above, kept in sync. Checked before entry_signal_overrides; the exit phase is
+  # never affected — existing T212 positions continue to exit normally in any regime.
+  allowed_entry_regimes:
+    - TRENDING_BULL
+    - TRENDING_BEAR
+    - HIGH_VOLATILITY  # kept for now — insufficient data to exclude
   exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
   max_holding_days: 90     # Backstop time limit (3× CFD limit — no leverage/swap costs)
   exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs

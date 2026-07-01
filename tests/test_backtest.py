@@ -108,3 +108,69 @@ def test_regime_change_mid_series_applies_the_new_regimes_threshold():
     assert len(trades) == 1
     assert trades[0]["regime_at_entry"] == "TRENDING_BULL"
     assert trades[0]["entry_date"] == df.index[3].date()
+
+
+# ---------------------------------------------------------------------------
+# allowed_entry_regimes — the regime gate, checked before entry_signal_overrides
+# ---------------------------------------------------------------------------
+
+_GATED_CONFIG = {
+    "backtest": {
+        "atr_stop_multiplier": 2.0,
+        "max_holding_days": 30,
+    },
+    "virtual_trading": {
+        "entry_signal": "STRONG_BUY",
+        "entry_signal_overrides": {
+            "MIXED": "STRONG_BUY",
+            "TRENDING_BULL": "STRONG_BUY",
+            "TRENDING_BEAR": "STRONG_BUY",
+        },
+        "allowed_entry_regimes": ["TRENDING_BULL", "TRENDING_BEAR", "HIGH_VOLATILITY"],
+    },
+}
+
+
+def test_no_trades_open_in_mixed_regime_even_on_strong_buy():
+    """MIXED is excluded from allowed_entry_regimes, so no position should
+    open there regardless of signal strength — even a STRONG_BUY signal
+    (which would clear the entry_signal_overrides threshold on its own) must
+    still be blocked by the regime gate, since the regime gate is checked
+    first and entry_signal_overrides is never reached for a blocked regime."""
+    df = _signal_df([_signal_row("MIXED", "STRONG_BUY", 100.0 + i) for i in range(5)])
+    trades = simulate_trades(df, "TESTX", _GATED_CONFIG)
+    assert trades == []
+
+
+def test_no_trades_open_in_ranging_low_vol_regime():
+    """RANGING_LOW_VOL is also excluded — insufficient backtest data to trust
+    either way, so it's blocked the same as MIXED, not left open by omission."""
+    df = _signal_df([_signal_row("RANGING_LOW_VOL", "STRONG_BUY", 100.0 + i) for i in range(5)])
+    trades = simulate_trades(df, "TESTX", _GATED_CONFIG)
+    assert trades == []
+
+
+def test_trades_still_open_in_allowed_regime_with_gate_configured():
+    """The gate excludes specific regimes, not entries in general — a regime
+    that IS in allowed_entry_regimes must still open trades normally, subject
+    only to the ordinary entry_signal_overrides threshold check."""
+    df = _signal_df([_signal_row("TRENDING_BULL", "STRONG_BUY", 100.0 + i) for i in range(5)])
+    trades = simulate_trades(df, "TESTX", _GATED_CONFIG)
+    assert len(trades) == 1
+    assert trades[0]["regime_at_entry"] == "TRENDING_BULL"
+
+
+def test_open_trade_still_exits_normally_after_regime_becomes_blocked():
+    """The regime gate only affects new entries. A trade opened while
+    TRENDING_BULL was allowed must still exit normally (here: on signal
+    reversal) even after the regime rolls into blocked MIXED — the exit
+    phase is never gated by allowed_entry_regimes."""
+    rows = (
+        [_signal_row("TRENDING_BULL", "STRONG_BUY", 100.0 + i) for i in range(3)]
+        + [_signal_row("MIXED", "STRONG_SELL", 103.0 - i) for i in range(3)]
+    )
+    df = _signal_df(rows)
+    trades = simulate_trades(df, "TESTX", _GATED_CONFIG)
+    assert len(trades) == 1
+    assert trades[0]["regime_at_entry"] == "TRENDING_BULL"
+    assert trades[0]["exit_reason"] == "SIGNAL_REVERSAL"

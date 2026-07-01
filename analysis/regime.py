@@ -220,6 +220,26 @@ def resolve_entry_signal(cfg: dict, regime_name: Optional[str]) -> str:
     return default
 
 
+def is_entry_allowed(config: dict, regime_name: Optional[str], section: str) -> bool:
+    """Return True if new entries are allowed in *regime_name* for config[section].
+
+    Reads config[section]["allowed_entry_regimes"] — a regime not in that list
+    is blocked entirely (checked before resolve_entry_signal(); a blocked
+    regime never reaches the signal-threshold check at all). If the key is
+    absent from config[section], every regime is allowed — this is the
+    backwards-compatible default for configs written before this gate existed.
+
+    section is "trading212_invest" or "virtual_trading" — both use the same
+    allowed_entry_regimes shape. This gate only affects new entries; existing
+    positions always continue to exit normally regardless of regime.
+    """
+    section_cfg = config.get(section, {})
+    allowed = section_cfg.get("allowed_entry_regimes")
+    if allowed is None:
+        return True
+    return regime_name in allowed
+
+
 def detect_overlays() -> dict[str, bool]:
     """Check stored correlations for significant pair divergences that signal a regime overlay.
 

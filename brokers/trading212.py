@@ -41,7 +41,7 @@ from typing import Optional
 
 import requests
 
-from analysis.regime import get_latest_regime_name, resolve_entry_signal
+from analysis.regime import get_latest_regime_name, is_entry_allowed, resolve_entry_signal
 
 logger = logging.getLogger(__name__)
 
@@ -889,6 +889,14 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     # during bearish regimes rather than going net short.  Short-side signal
     # validation is handled by the virtual trading system instead.
     # ────────────────────────────────────────────────────────────────────────
+    if not is_entry_allowed(config, regime_name, "trading212_invest"):
+        logger.info(
+            "Skipping T212 Invest BUY phase — regime is %s, entries blocked "
+            "(allowed_entry_regimes: %s).",
+            regime_name, t212_cfg.get("allowed_entry_regimes"),
+        )
+        return
+
     if total_val > 0 and (invested / total_val) >= max_deployed_pct:
         logger.info(
             "T212 Invest: %.0f%% deployed (limit %.0f%%) — no new orders.",

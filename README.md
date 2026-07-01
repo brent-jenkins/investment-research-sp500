@@ -97,7 +97,7 @@ Replay the current signal logic over up to 10 years of stored historical price d
 ### Status
 System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **Run Analysis Now** (analysis + signals only) and **Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
-A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml, including the DEMO/LIVE badge, position/deployment limits, and the effective entry threshold for the current regime (flagged "(override)" when `entry_signal_overrides` applies one — see "Virtual trading" below). It is split into two tabs:
+A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml, including the DEMO/LIVE badge, position/deployment limits, and the effective entry threshold for the current regime (flagged "(override)" when `entry_signal_overrides` applies one, or a `⛔ Entry blocked` caption in place of the threshold when the current regime isn't in `allowed_entry_regimes` — see "Virtual trading" below). It is split into two tabs:
 - **Account tab** — account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). Data is read from a scheduler-maintained DB snapshot; the **Refresh Account** button queues an out-of-band fetch (handled by the 60-second job dispatcher, "updating within 60s"). When FAILED orders are present a **Retry failed orders** list appears — each row shows the ticker, direction, quantity, and error with a **Retry** and **Delete** button. The Retry button applies the instrument precision/minimum-quantity guard and re-submits.
 - **Mapping tab** — UCITS instrument mapping table (which research tickers map to T212 instrument IDs).
 
@@ -242,9 +242,9 @@ The Streamlit web UI (`investment-research.service`) also starts an in-process s
 
 `analysis/backtest.py` replays the current signal logic over stored historical price data. The correlation module is excluded (it requires pair-level data and is not stored per-date in isolation); its weight is re-normalised across the remaining five modules.
 
-Entry is gated per date by the same `entry_signal_overrides` regime logic used by live automation (see "Per-regime entry signal overrides" in Configuration) — `simulate_trades()` resolves the effective threshold for each date's regime via `analysis/regime.py:resolve_entry_signal()` against `virtual_trading.entry_signal_overrides`, entering only on STRONG_BUY/STRONG_SELL by default, or also on plain BUY/SELL where that regime's override loosens the threshold. This keeps simulated results consistent with what the live system would actually have traded, rather than a fixed STRONG_BUY-only bar across every regime.
+Entry is gated per date by the same two-step regime logic used by live automation (see "Per-regime entry signal overrides" and "Regime entry gate" in Configuration): `simulate_trades()` first checks `analysis/regime.py:is_entry_allowed()` against `virtual_trading.allowed_entry_regimes` — a regime not in that list (MIXED, RANGING_LOW_VOL) blocks entry outright for that date, before any signal is even considered — then, for an allowed regime, resolves the effective threshold via `analysis/regime.py:resolve_entry_signal()` against `virtual_trading.entry_signal_overrides`, entering only on STRONG_BUY/STRONG_SELL by default, or also on plain BUY/SELL where that regime's override loosens the threshold. This keeps simulated results consistent with what the live system would actually have traded, rather than a fixed STRONG_BUY-only bar (or worse, no regime gate at all) across every regime.
 
-Exit conditions (checked in priority order, unaffected by entry_signal_overrides):
+Exit conditions (checked in priority order, unaffected by either entry gate):
 1. **Stop Loss** — price crosses entry ± N × ATR (configurable `atr_stop_multiplier`, default 2.0)
 2. **Signal Reversal** — signal moves opposite to trade direction (SELL/STRONG_SELL for LONG)
 3. **Max Holding Days** — position closed after a configurable cap (default 60 days)
@@ -375,6 +375,10 @@ virtual_trading:
     HIGH_VOLATILITY: STRONG_BUY # shape — see the Status page's T212 Invest Account section.
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
+  allowed_entry_regimes:        # checked BEFORE entry_signal_overrides — a regime not
+    - TRENDING_BULL             # listed here blocks new entries outright, regardless of
+    - TRENDING_BEAR             # signal strength. MIXED and RANGING_LOW_VOL are
+    - HIGH_VOLATILITY           # deliberately absent (both blocked) — see below.
   max_theme_positions: 3        # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 learning:
@@ -388,9 +392,22 @@ learning:
 
 Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while a short-sample backtest of TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) initially looked like it had genuine edge. `entry_signal_overrides` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) is the mechanism for raising the conviction threshold per regime — currently all five regimes are set to `STRONG_BUY`. A regime with no entry in the overrides dict falls back to the global `entry_signal`. Both live automation paths (`brokers/trading212.py:maybe_place_t212_orders()` and `data/scheduler.py:_process_virtual_trades()`) resolve this once per run via `analysis/regime.py:resolve_entry_signal()`, keyed on the regime most recently stamped on `^GSPC`'s row in the `signals` table — so the threshold applied always matches the regime that scored the signal being acted on. Only entries are affected; `exit_signal` has no regime override. The resolved regime is what gets logged to the `regime` column on `t212_invest_orders` and virtual `trades` rows, keeping the applied threshold auditable.
 
-**Why TRENDING_BULL/TRENDING_BEAR aren't looser.** They were briefly set to `BUY` based on the short-sample numbers above, then reverted after a full 10-year backtest showed that was a mistake. `simulate_trades()`'s signal-reversal exit has always accepted plain SELL/BUY, not just STRONG_SELL/STRONG_BUY; pairing that with a loosened BUY *entry* created high-churn whipsaw trading in trending regimes — TRENDING_BULL and TRENDING_BEAR were only ~25% of all regime-days across 2016–2026 but generated 90% of all simulated trades, and win rate/profit factor/drawdown all got materially worse. Confirmed as a real strategy effect (not a code bug) via an independent from-scratch reimplementation of the entry/exit walk-forward that produced identical trade lists to the production function on real data.
+**Why TRENDING_BULL/TRENDING_BEAR aren't looser.** They were briefly set to `BUY` based on the short-sample numbers above, then reverted after a full 10-year backtest showed that was a mistake. `simulate_trades()`'s signal-reversal exit has always accepted plain SELL/BUY, not just STRONG_SELL/STRONG_BUY; pairing that with a loosened BUY *entry* created high-churn whipsaw trading in trending regimes — TRENDING_BULL and TRENDING_BEAR were only ~25% of all regime-days across 2016–2026 but generated 90% of all simulated trades, and win rate/profit factor/drawdown all got materially worse. Confirmed as a real strategy effect (not a code bug) via an independent from-scratch reimplementation of the entry/exit walk-forward that produced identical trade lists to the production function on real data. After reverting to uniform `STRONG_BUY`, a full-history production backtest exactly reproduced the original pre-feature baseline (757 trades / 41.2% win rate / PF 1.35 / −85.4% max drawdown), confirming the current config is a functional no-op relative to the hardcoded behaviour that existed before this feature.
 
 **The backtest engine applies the same `entry_signal_overrides` logic** (against `virtual_trading`'s config specifically — see "Backtesting" above), so simulated results reflect the live system's current per-regime entry gating rather than a single fixed threshold across every regime.
+
+### Regime entry gate
+
+`entry_signal_overrides` alone can only tighten a regime down to `STRONG_BUY` — the 10-year backtest showed that isn't enough. MIXED is 56.8% of all regime-days but has no demonstrable edge even at STRONG_BUY-only (416 trades, 37.5% win rate, −91.26% max drawdown), and RANGING_LOW_VOL has only 1 trade of backtest data — too little to trust either way. `allowed_entry_regimes` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) is a stricter gate, checked *before* `entry_signal_overrides`: a regime not in the list blocks new entries entirely, no matter how strong the signal. `HIGH_VOLATILITY` is kept allowed for now purely for lack of data to exclude it.
+
+`analysis/regime.py:is_entry_allowed(config, regime_name, section)` implements the check — `section` is `"trading212_invest"` or `"virtual_trading"`. If `allowed_entry_regimes` is absent from a config section entirely, every regime is allowed (the backwards-compatible default for configs written before this gate existed).
+
+**The exit phase is always active, regardless of regime.** The gate only ever suppresses *new* entries:
+- `maybe_place_t212_orders()` checks it at the very start of the BUY phase (before the deployed-capital check) and returns immediately if blocked, logging `"Skipping T212 Invest BUY phase — regime is MIXED, entries blocked"`. The EXIT phase runs first, unconditionally — existing T212 positions keep exiting normally on signal reversal, confirmed NEUTRAL, or the backstop time limit in any regime.
+- `_process_virtual_trades()` checks it at the start of the open phase only; the close phase (stop loss, signal reversal) is unaffected.
+- `simulate_trades()` checks it per date, only when no position is open; a trade that opened in an allowed regime still exits normally even if the regime later rolls into a blocked one.
+
+The Daily Briefing and the Status page's T212 Invest Account section both show a `⛔ Entries blocked — MIXED regime` caption in place of the entry-threshold caption whenever the current regime isn't in `allowed_entry_regimes`, so it's immediately visible that no new positions will open.
 
 ### Tradeable vs analysis-only
 

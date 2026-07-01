@@ -40,7 +40,7 @@ from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
 from analysis.macro import fetch_and_store_macro_indicators
-from analysis.regime import get_latest_regime_name, resolve_entry_signal
+from analysis.regime import get_latest_regime_name, is_entry_allowed, resolve_entry_signal
 from data.database import clear_metadata, get_metadata, get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
@@ -497,6 +497,18 @@ def _process_virtual_trades(
 
     # ── Open phase ────────────────────────────────────────────────────────────
     open_count = len(open_by_ticker)
+
+    if not is_entry_allowed(config, regime_name, "virtual_trading"):
+        logger.info(
+            "Virtual trading: skipping open phase — regime is %s, entries blocked "
+            "(allowed_entry_regimes: %s).",
+            regime_name, vt.get("allowed_entry_regimes"),
+        )
+        logger.info(
+            "Virtual trading: closed %d, opened 0, total open %d/%d.",
+            len(to_close), open_count, max_positions,
+        )
+        return
 
     if not can_open:
         logger.info(
