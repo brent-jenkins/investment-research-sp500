@@ -1033,7 +1033,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
            f"{html.escape(note)}</div>" if note else "")
         + f"<div style='display:flex;gap:5px;margin-bottom:5px'>{dist_pills}</div>"
         + f"<div style='font-size:0.71rem;color:#475569'>Signals: {html.escape(ts_str)}"
-        + f" · updates at 07:00, 13:30 &amp; 21:30 UTC</div>"
+        + f" · updates at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} &amp; {_uk_sched_time(21,30)}</div>"
         + f"</div>",
         unsafe_allow_html=True,
     )
@@ -1693,9 +1693,13 @@ def _render_trade_log_page(config: dict, watchlist: dict[str, str], tradeable_se
                     )
                 else:
                     # DB fallback — still usable but flag it
-                    _db_ts = _fx_source.split(":", 1)[1] if ":" in _fx_source else "unknown"
+                    _db_ts_raw = _fx_source.split(":", 1)[1] if ":" in _fx_source else "unknown"
+                    try:
+                        _db_ts = _fmt_uk(datetime.strptime(_db_ts_raw, "%Y-%m-%d %H:%M"))
+                    except (ValueError, TypeError):
+                        _db_ts = _db_ts_raw
                     _fx_info_col.warning(
-                        f"Live rate unavailable — using last saved rate from {_db_ts} UTC: "
+                        f"Live rate unavailable — using last saved rate from {_db_ts}: "
                         f"1 {account_ccy} = {fx_rate:.4f} {instr_ccy} ({fx_rate_pair})"
                     )
             else:
@@ -3318,7 +3322,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             else f"in {_nxt_delta / 3600:.1f}h" if _nxt_delta < 86400
             else f"in {_nxt_delta / 86400:.1f}d"
         )
-        _nxt_val = _fmt_uk(_nxt_dt, "%a %H:%M UTC")
+        _nxt_val = _fmt_uk(_nxt_dt, "%a %H:%M")
         _nxt_sub = f"{_nxt_until} — {_nxt_label}"
     else:
         _nxt_val, _nxt_sub = "Unknown", ""
@@ -3507,14 +3511,15 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("### Scheduled Runs")
     sched_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_DISPLAY = {
-        "pre_market": ("Pre-Market",  "07:00 UTC", "Analysis only — Asian closed, European opening"),
-        "us_open":    ("US Open",     "13:30 UTC", "Analysis only — catches overnight moves before US open"),
-        "eod":        ("End of Day",  "21:30 UTC", "Full refresh + analysis after NYSE close"),
+        "pre_market": ("Pre-Market",  "Analysis only — Asian closed, European opening"),
+        "us_open":    ("US Open",     "Analysis only — catches overnight moves before US open"),
+        "eod":        ("End of Day",  "Full refresh + analysis after NYSE close"),
     }
     run_cols = st.columns(len(_RUN_DISPLAY))
-    for col, (run_name, (label, time_str, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
+    for col, (run_name, (label, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
         run_cfg = sched_runs.get(run_name, {})
         h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
+        time_str = _uk_sched_time(h, m)
         nxt     = _next_run_for_time(h, m)
         delta   = (nxt - datetime.utcnow()).total_seconds()
         until   = (
@@ -3803,7 +3808,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.caption("Open positions are shown in the **Trade Log** and **Daily Briefing** pages.")
 
                     if _fetched:
-                        st.caption(f"Updated {_fetched[:16].replace('T', ' ')} UTC")
+                        try:
+                            _fetched_disp = _fmt_uk(datetime.fromisoformat(_fetched))
+                        except (ValueError, TypeError):
+                            _fetched_disp = _fetched[:16].replace("T", " ")
+                        st.caption(f"Updated {_fetched_disp}")
 
                 # ── Recent T212 orders from our DB ────────────────────────────────────
                 try:
@@ -3856,13 +3865,17 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                             _fo_dir     = _fo["direction"]
                             _fo_qty     = float(_fo["quantity"] or 0)
                             _fo_err     = (_fo.get("error_message") or "")[:80]
-                            _fo_placed  = (_fo.get("placed_at") or "")[:16].replace("T", " ")
+                            _fo_placed_raw = _fo.get("placed_at") or ""
+                            try:
+                                _fo_placed = _fmt_uk(datetime.fromisoformat(_fo_placed_raw))
+                            except (ValueError, TypeError):
+                                _fo_placed = _fo_placed_raw[:16].replace("T", " ")
 
                             _rc1, _rc2, _rc3 = st.columns([5, 1, 1])
                             with _rc1:
                                 st.caption(
                                     f"**{_fo_ticker}** → `{_fo_ucits}` | "
-                                    f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} UTC | "
+                                    f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} | "
                                     f"_{_fo_err}_"
                                 )
                             with _rc3:
@@ -4060,12 +4073,12 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         pass
 
     _JOB_LABELS: dict[str, tuple[str, str]] = {
-        "scheduled_pre_market": ("Pre-Market",    "07:00 UTC · Mon–Fri"),
-        "scheduled_us_open":    ("US Open",       "13:30 UTC · Mon–Fri"),
-        "scheduled_eod":        ("End of Day",    "21:30 UTC · Mon–Fri"),
+        "scheduled_pre_market": ("Pre-Market",    f"{_uk_sched_time(7, 0)} · Mon–Fri"),
+        "scheduled_us_open":    ("US Open",       f"{_uk_sched_time(13, 30)} · Mon–Fri"),
+        "scheduled_eod":        ("End of Day",    f"{_uk_sched_time(21, 30)} · Mon–Fri"),
         "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
-        "weekly_summary":       ("Weekly Summary","10:00 UTC · Sunday"),
-        "fomc_reaction":        ("FOMC Reaction", "19:05 UTC · Mon–Fri (FOMC days only)"),
+        "weekly_summary":       ("Weekly Summary",f"{_uk_sched_time(10, 0)} · Sunday"),
+        "fomc_reaction":        ("FOMC Reaction", f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)"),
         "job_dispatcher":       ("job_dispatcher","—"),
     }
 
@@ -4165,8 +4178,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         _extra_static = [
             ("job_dispatcher",    "job_dispatcher",    "—",                          _ItvTrigger(seconds=60)),
             ("trade_alert_check", "Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri", _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
-            ("weekly_summary",    "Weekly Summary",    "10:00 UTC · Sunday",         _CronTrigger(hour=10, minute=0, day_of_week="sun", timezone=_tz_s)),
-            ("fomc_reaction",     "FOMC Reaction",     "19:05 UTC · Mon–Fri (FOMC days only)", _CronTrigger(hour=19, minute=5, day_of_week="mon-fri", timezone=_tz_s)),
+            ("weekly_summary",    "Weekly Summary",    f"{_uk_sched_time(10, 0)} · Sunday",         _CronTrigger(hour=10, minute=0, day_of_week="sun", timezone=_tz_s)),
+            ("fomc_reaction",     "FOMC Reaction",     f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)", _CronTrigger(hour=19, minute=5, day_of_week="mon-fri", timezone=_tz_s)),
         ]
         _static_jobs.extend(_extra_static)
 
@@ -4478,7 +4491,7 @@ def _render_relationships_page(config: dict) -> None:
     st.markdown("### Notable Relationships")
 
     if not _has_data:
-        st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
+        st.info(f"No correlation data yet — analysis runs automatically at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}.")
     else:
         diverging = [p for p in stored if p.get("divergence") == "DIVERGING"]
         confirming_notable = [
@@ -4537,7 +4550,7 @@ def _render_relationships_page(config: dict) -> None:
     )
 
     if not _has_data:
-        st.info("No correlation data yet — analysis runs automatically at 07:00, 13:30 and 21:30 UTC.")
+        st.info(f"No correlation data yet — analysis runs automatically at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}.")
     else:
         records = []
         for p in stored:
@@ -4718,7 +4731,7 @@ def _render_relationships_page(config: dict) -> None:
         corr_df, tickers_in_matrix = build_correlation_matrix(window=30)
 
     if corr_df.empty:
-        st.info("Insufficient price data to build the correlation matrix — data refreshes automatically at 21:30 UTC.")
+        st.info(f"Insufficient price data to build the correlation matrix — data refreshes automatically at {_uk_sched_time(21,30)}.")
     else:
         z_vals    = corr_df.values.tolist()
         fig_heat  = go.Figure(
@@ -5017,7 +5030,7 @@ def _system_health_check() -> list[dict]:
     last_refresh = get_metadata("last_full_refresh")
     is_warning, is_critical = _is_refresh_overdue(last_refresh)
     if is_critical:
-        last_str = last_refresh.strftime("%Y-%m-%d %H:%M UTC") if last_refresh else "never"
+        last_str = _fmt_uk(last_refresh) if last_refresh else "never"
         alerts.append({
             "level": "red",
             "message": (
@@ -5832,7 +5845,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     if not macro_dash.get("has_data"):
         st.info(
             "No FRED macro data yet — the first fetch runs automatically at the next "
-            "EOD scheduler run (21:30 UTC on weekdays)."
+            f"EOD scheduler run ({_uk_sched_time(21,30)} on weekdays)."
         )
     else:
         # ── Composite health score bar ──
@@ -7162,7 +7175,7 @@ def main() -> None:
     if df.empty:
         st.warning(
             f"No price data found for **{selected}**. "
-            "Data is refreshed automatically at 21:30 UTC — use Manual Controls on the Status page to trigger an immediate pull."
+            f"Data is refreshed automatically at {_uk_sched_time(21,30)} — use Manual Controls on the Status page to trigger an immediate pull."
         )
         return
 

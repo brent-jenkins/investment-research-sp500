@@ -256,6 +256,15 @@ For **reading** indicator data in the UI, use raw SQL via `get_engine().connect(
 
 The Signals page ranked table uses `st.dataframe()` with a Pandas `Styler` (`.map()` per column subset) rather than a custom HTML table. This lets Streamlit's theme control fonts, row backgrounds, and borders while only the meaningful cells carry explicit colours (signal badge, score, module symbols). Set `height=header_px + row_height_px * len(rows)` to expand the frame to its full content and suppress the scrollbar.
 
+### UK-time display in the UI
+
+All storage, scheduling, and internal computation is UTC — `datetime.utcnow()`, APScheduler cron triggers, `config.yaml`'s `scheduler.runs` block, and every DB timestamp column are all UTC throughout the backend. The UI, however, must never show a raw UTC value or a hardcoded "HH:MM UTC" string to the user — every timestamp or scheduled-run time rendered on a page is converted to UK local time (GMT in winter, BST in summer) via two helpers defined near the top of `main.py`:
+
+- `_fmt_uk(dt, fmt="%Y-%m-%d %H:%M")` — converts a naive-UTC or UTC-aware `datetime` to `Europe/London` local time, formats it with `fmt`, and appends `"GMT"` or `"BST"` (from `uk.dst()`) automatically. Never bake the literal string `"UTC"` into the `fmt` argument — `_fmt_uk` already appends the correct live abbreviation, so a hardcoded `"UTC"` in the format string produces a mislabeled result (e.g. `"21:30 UTC BST"`).
+- `_uk_sched_time(hour, minute)` — converts a fixed UTC hour:minute (e.g. the 07:00/13:30/21:30 scheduler slots) to UK local time using *today's* DST offset, for copy like "updates at 07:00, 13:30 & 21:30 UTC" that would otherwise hardcode the UTC clock time directly into UI strings.
+
+`output/briefing.py` (weekly summary and trade-alert emails) defines an identical `_fmt_uk` and applies the same rule. When adding any new UI text or email copy that references a time — a schedule slot, a "last updated" timestamp, a DB-stored `placed_at`/`fetched_at` string — route it through one of these two helpers rather than displaying the raw UTC value or hardcoding a UTC clock time into the string.
+
 ### Status page and startup automation
 
 `main.py:_initialise()` is called on every Streamlit session start. On the **first** request of a session it checks `_has_price_data()` (a lightweight `SELECT 1 FROM price_data LIMIT 1`). If price data exists it synchronously runs `run_analysis()` then `generate_signals()` for the full watchlist and stores a completion message in `st.session_state["_startup_msg"]`. The main render loop pops that key and calls `st.toast()` so the user sees a non-intrusive notification.
