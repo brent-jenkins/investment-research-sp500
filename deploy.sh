@@ -16,6 +16,47 @@ SSH_KEY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ssh-keys/deploy_key"
 
 set -euo pipefail
 
+# --- Deployment blackout window check --------------------------------------
+# Scheduled jobs (data pull + analysis + order placement) run at fixed UTC
+# times — see "Deployment timing" in CLAUDE.md. Deploying inside one of these
+# windows risks the job executing against half-updated code or config
+# (partially applied git pull, service mid-restart) and can place broker
+# orders on that transitional state. Warn and require explicit confirmation
+# rather than blocking outright, since some deploys (e.g. urgent hotfixes)
+# legitimately need to go out regardless.
+now_hm="$(date -u +%H%M)"
+now_dow="$(date -u +%u)"  # ISO day of week: 1=Monday ... 7=Sunday
+blackout_label=""
+
+in_range() {
+  # in_range HHMM START END -> 0 if START <= HHMM <= END
+  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+if in_range "$now_hm" 0645 0715; then
+  blackout_label="pre-market analysis job runs at 07:00 UTC"
+elif in_range "$now_hm" 1315 1400; then
+  blackout_label="US open analysis job runs at 13:30 UTC"
+elif in_range "$now_hm" 2100 2200; then
+  blackout_label="EOD job runs at 21:30 UTC"
+elif [ "$now_dow" = "7" ] && in_range "$now_hm" 0945 1015; then
+  blackout_label="Sunday weekly summary job runs at 10:00 UTC"
+fi
+
+if [ -n "$blackout_label" ]; then
+  echo ""
+  echo "⚠️  WARNING: ${blackout_label} — deploying now risks order logic running on transitional state."
+  read -r -p "Continue anyway? (y/N): " confirm
+  case "$confirm" in
+    y|Y) ;;
+    *)
+      echo "Deployment aborted."
+      exit 1
+      ;;
+  esac
+fi
+# --- End blackout window check ----------------------------------------------
+
 echo ""
 echo "=== [1/3] Pushing latest code to GitHub ==="
 git push origin main

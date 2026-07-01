@@ -487,6 +487,8 @@ git push origin main  # triggers automatic deploy
 
 Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored). Both scripts copy both service files to `/etc/systemd/system/`, ensure the secrets symlink exists, run `systemctl daemon-reload`, and restart both `investment-research` and `investment-research-scheduler`.
 
+Both scripts check the current UTC time before doing anything else: if it falls within 30 minutes of a scheduled job window (07:00 pre-market, 13:30 US open, 21:30 EOD, or 10:00 Sunday weekly summary), they print a warning and require a `y` confirmation before proceeding, since a mid-deploy restart during one of these windows can run order logic against transitional code/config. See "Deployment timing" in [CLAUDE.md](CLAUDE.md) for the full rationale.
+
 ### Useful server commands
 
 ```bash

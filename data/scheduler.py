@@ -1249,26 +1249,51 @@ def _fomc_reaction_job() -> None:
     logger.info("FOMC reaction analysis complete.")
 
 
-def _maybe_catch_up_missed_eod(config: dict) -> None:
-    """Trigger an immediate EOD catch-up if the last full refresh was missed.
+def _check_missed_eod_run(config: dict) -> None:
+    """Trigger an immediate EOD catch-up if today's 21:30 UTC EOD run was missed.
 
-    Called at scheduler startup on weekdays.  Two conditions each independently
-    trigger a catch-up run:
+    Called at scheduler startup, after all jobs are registered.  Both
+    conditions below must hold before a catch-up fires:
 
-    1. last_full_refresh is more than 26 hours ago — the service was down for a
-       full cycle and missed at least one EOD run.
-    2. Current UTC time is past today's configured EOD run time but
-       last_full_refresh.date() < today — the service was restarted after the
-       EOD run was due (e.g. a deployment at 22:00 UTC when the run fires at 21:30).
+    1. last_full_refresh is more than 20 hours old. A run from earlier the
+       same day (e.g. a manual "Refresh Data" click, or the real EOD job
+       having already fired minutes ago) does not count as missed — only a
+       genuinely stale refresh does.
+    2. Current UTC time is between 21:45 and 23:59 — the post-EOD window.
+       21:45 gives the real 21:30 cron trigger a 15-minute grace period
+       before concluding it didn't fire. Outside this window we skip
+       silently: a restart at, say, 08:00 UTC has no reason to believe the
+       EOD job was missed, and the next scheduled job (07:00 pre-market or
+       tomorrow's 21:30 EOD) will naturally pick up stale data anyway.
+
+    If last_full_refresh has never been recorded (fresh install, no data
+    yet), skip silently — there's nothing to catch up on.
+
+    The Saturday/Sunday guard is preserved from the previous version: no EOD
+    job is ever scheduled on a weekend, so a stale last_full_refresh there
+    is expected, not missed.
+
+    NOTE: this replaces the previous _maybe_catch_up_missed_eod, which used a
+    26-hour staleness threshold OR'd with an unbounded "past today's EOD
+    time" check (anywhere from 21:30 UTC through the next morning could
+    re-trigger it) and re-ran the full _eod_job (incremental data pull +
+    FRED fetch + T212 snapshot). Deployments were landing inside that same
+    window and racing the live EOD job — see "Deployment timing" in
+    CLAUDE.md. The narrower 20h/21:45-23:59 AND-gate makes catch-up fire
+    deterministically within one bounded window instead of however long the
+    service happens to stay down, and it now runs _run_analysis_pipeline()
+    directly (analysis + signals + order logic) rather than re-pulling
+    data — a same-day restart in this window means the pipeline ran on a
+    transitional deploy, not that prices are missing.
 
     The catch-up runs in a daemon thread so start_scheduler() returns promptly.
     """
-    last_refresh_str = get_metadata_str("last_full_refresh")
     now_utc = datetime.now(timezone.utc)
 
     if now_utc.weekday() >= 5:  # Saturday (5) or Sunday (6) — no scheduled EOD
         return
 
+    last_refresh_str = get_metadata_str("last_full_refresh")
     if last_refresh_str is None:
         logger.debug(
             "Missed-EOD check: no last_full_refresh recorded yet — "
@@ -1289,32 +1314,33 @@ def _maybe_catch_up_missed_eod(config: dict) -> None:
     last_naive = last_dt.replace(tzinfo=None) if last_dt.tzinfo else last_dt
     hours_since = (now_naive - last_naive).total_seconds() / 3600
 
-    eod_cfg  = config.get("scheduler", {}).get("runs", {}).get("eod", {})
-    eod_hour = int(eod_cfg.get("hour", 21))
-    eod_min  = int(eod_cfg.get("minute", 30))
-    eod_today = now_naive.replace(hour=eod_hour, minute=eod_min, second=0, microsecond=0)
-
-    stale_cycle  = hours_since > 26
-    missed_today = (now_naive >= eod_today) and (last_naive.date() < now_naive.date())
-
-    if not (stale_cycle or missed_today):
+    window_start = now_naive.replace(hour=21, minute=45, second=0, microsecond=0)
+    window_end   = now_naive.replace(hour=23, minute=59, second=59, microsecond=999999)
+    if not (window_start <= now_naive <= window_end):
         logger.debug(
-            "Missed-EOD check: last refresh %.1fh ago — no catch-up needed.", hours_since
+            "Missed-EOD check: outside 21:45-23:59 UTC catch-up window (now %s UTC) — "
+            "next scheduled job will catch up naturally.",
+            now_naive.strftime("%H:%M"),
         )
         return
 
-    reason = (
-        f"last refresh {hours_since:.1f}h ago (>26 h threshold)"
-        if stale_cycle
-        else f"past EOD run time ({eod_hour:02d}:{eod_min:02d} UTC) with no refresh recorded today"
-    )
-    logger.warning(
-        "Missed EOD run detected (%s) — launching immediate catch-up in background.", reason
-    )
+    if hours_since <= 20:
+        logger.debug(
+            "Missed-EOD check: last refresh %.1fh ago (<=20h threshold) — "
+            "no catch-up needed.", hours_since,
+        )
+        return
+
+    logger.warning("Missed EOD run detected — running catch-up pipeline now")
     set_metadata("missed_eod_catch_up", now_utc.isoformat())
 
     import threading  # noqa: PLC0415
-    t = threading.Thread(target=_eod_job, name="eod-catch-up", daemon=True)
+    t = threading.Thread(
+        target=_run_analysis_pipeline,
+        args=(config, get_all_tickers(config), RUN_FULL),
+        name="eod-catch-up",
+        daemon=True,
+    )
     t.start()
 
 
@@ -1436,7 +1462,7 @@ def start_scheduler() -> BackgroundScheduler:
 
     # Check for missed EOD runs after starting, so the scheduler is already
     # accepting jobs before we potentially queue a catch-up run.
-    _maybe_catch_up_missed_eod(config)
+    _check_missed_eod_run(config)
 
     return _scheduler
 

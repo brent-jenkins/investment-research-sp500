@@ -463,6 +463,23 @@ The hook runs `pytest` from the project root first. A failing suite aborts the p
 
 The hook does **not** push to GitHub itself — it schedules the SSH deploy as a detached background job (`nohup ... & disown`) that sleeps 15 seconds before running, giving the outer `git push` time to land on GitHub first, then SSHes in to `git pull` and restart the service. Output is appended to `/tmp/investment-research-deploy.log` on the local machine rather than the terminal, since the hook has already exited by the time it runs. (An earlier version of this hook pushed to GitHub from inside itself before deploying, which raced the outer `git push`: the hook's own push advanced `origin/main`, so the outer push — still holding the old remote SHA it read at hook-invocation time — got rejected with `cannot lock ref`. Not pushing from the hook at all removes the race.) To skip both the tests and the deploy for a single push: `git push --no-verify`.
 
+### Deployment timing
+
+Seven scheduled jobs (see the table at the top of this file) fire at fixed UTC times and, in the EOD case, place live broker orders (`brokers/trading212.py`). A deploy that lands mid-job — `git pull` mid-way through, or `systemctl restart` killing the process mid-run — leaves the service running a half-updated version of the code or reading a half-updated `config.yaml` for the remainder of that run, and can commit broker order decisions based on that transitional state. The scheduled job windows most at risk:
+
+| Window (UTC) | Job |
+|---|---|
+| 06:45–07:15 | Pre-market analysis (07:00) |
+| 13:15–14:00 | US open analysis (13:30) |
+| 21:00–22:00 | EOD full refresh + order placement (21:30) — highest risk, this is the job that places T212 orders |
+| 09:45–10:15 (Sun) | Weekly summary email (10:00) |
+
+**Blackout warning (`deploy.sh` / `deploy.ps1`):** both deploy scripts check the current UTC time before doing anything else. `deploy.sh` compares `date -u +%H%M` (and `date -u +%u` for the Sunday-only window) against the ranges above; `deploy.ps1` uses `[System.DateTime]::UtcNow`. If the current time falls inside any window, the script prints a warning naming the specific job and its run time (e.g. `⚠️  WARNING: EOD job runs at 21:30 UTC — deploying now risks order logic running on transitional state.`) and prompts `Continue anyway? (y/N):`. Any answer other than `y`/`Y` aborts with exit code 1 before either script touches git or SSHes into the server — nothing is deployed. This is a warning, not a hard block, because some deploys (urgent hotfixes) legitimately need to go out regardless of the clock.
+
+**Missed EOD catch-up (`data/scheduler.py:_check_missed_eod_run()`):** the inverse safety net — if a restart (from a blackout-window deploy or otherwise) causes the 21:30 EOD job itself to be skipped for the day, this runs at scheduler startup, after all jobs are registered, and detects it. It requires both: `last_full_refresh` (in `system_metadata`) is more than 20 hours old — a run from earlier the same day doesn't count as missed — and the current UTC time is between 21:45 and 23:59 — the 15-minute grace period after 21:30 plus the rest of the post-EOD window. Inside that window with a stale timestamp, it logs `"Missed EOD run detected — running catch-up pipeline now"` and runs `_run_analysis_pipeline(config, get_all_tickers(config), "full")` in a background daemon thread so `start_scheduler()` returns promptly. Outside the window it skips silently — the next scheduled job (tomorrow's 07:00 pre-market or 21:30 EOD) will pick up stale data naturally. A `None` `last_full_refresh` (fresh install, no data yet) also skips silently, and the existing weekend guard (no EOD job is ever scheduled Saturday/Sunday) is preserved. This replaced an earlier, looser version (`_maybe_catch_up_missed_eod`) that used a 26-hour threshold OR'd with an unbounded "past today's EOD time" check and re-ran the full `_eod_job` (data pull + FRED + T212 snapshot) rather than just the analysis/signal/order pipeline.
+
+**Recommendation:** for deployments affecting order logic (`brokers/trading212.py`, `data/scheduler.py`, `analysis/confluence.py`, `config.yaml`), deploy before 21:00 UTC or after 22:00 UTC on weekdays.
+
 ### Key files
 
 | File | Purpose |
