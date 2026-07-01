@@ -5429,7 +5429,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 f'border-radius:4px;padding:2px 9px;font-size:0.8rem;'
                 f'color:{ec};font-weight:600;white-space:nowrap">'
                 f'{html.escape(ev["event_type"])} &nbsp;'
-                f'<span style="font-weight:400">{html.escape(ev["date"].strftime("%b %-d"))} '
+                f'<span style="font-weight:400">{html.escape(ev["date"].strftime("%b") + " " + ev["date"].strftime("%d").lstrip("0"))} '
                 f'({da_str})</span></span>'
             )
             if ev["event_type"] == "FOMC Decision" and da <= 2:
