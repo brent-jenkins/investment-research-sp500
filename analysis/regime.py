@@ -174,6 +174,52 @@ def detect_regime() -> dict:
     return _build_result(regime, details)
 
 
+def get_latest_regime_name() -> Optional[str]:
+    """Return the most recently stored regime name for the reference ticker.
+
+    Unlike detect_regime() (which recomputes live from the indicators table),
+    this reads the regime that was actually stamped on the signals table by
+    the most recent generate_signals() run — the same regime that produced
+    the current signal classifications and confluence thresholds. Automation
+    that acts on those classifications (T212 Invest orders, virtual trades)
+    should key its per-regime entry overrides off this value so the regime
+    used for the entry decision matches the regime that scored the signal.
+
+    Returns None if no ^GSPC signal row exists yet or the read fails.
+    """
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT COALESCE(regime, notes) AS regime FROM signals "
+                    "WHERE ticker = :ticker ORDER BY date DESC LIMIT 1"
+                ),
+                {"ticker": _REFERENCE_TICKER},
+            ).mappings().first()
+        if row and row["regime"]:
+            return str(row["regime"])
+    except Exception as exc:
+        logger.warning("Could not read stored regime from signals table: %s", exc)
+    return None
+
+
+def resolve_entry_signal(cfg: dict, regime_name: Optional[str]) -> str:
+    """Resolve the effective entry_signal threshold for *cfg*, applying a
+    per-regime override from cfg['entry_signal_overrides'] when one exists.
+
+    cfg is either the trading212_invest or virtual_trading config section —
+    both use the same entry_signal / entry_signal_overrides shape. Falls back
+    to cfg['entry_signal'] (default "STRONG_BUY") when regime_name is None or
+    has no override entry.
+    """
+    default = cfg.get("entry_signal", "STRONG_BUY")
+    overrides = cfg.get("entry_signal_overrides") or {}
+    if regime_name and regime_name in overrides:
+        return overrides[regime_name]
+    return default
+
+
 def detect_overlays() -> dict[str, bool]:
     """Check stored correlations for significant pair divergences that signal a regime overlay.
 

@@ -97,7 +97,7 @@ Replay the current signal logic over up to 10 years of stored historical price d
 ### Status
 System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **Run Analysis Now** (analysis + signals only) and **Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
-A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml. It is split into two tabs:
+A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml, including the DEMO/LIVE badge, position/deployment limits, and the effective entry threshold for the current regime (flagged "(override)" when `entry_signal_overrides` applies one — see "Virtual trading" below). It is split into two tabs:
 - **Account tab** — account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). Data is read from a scheduler-maintained DB snapshot; the **Refresh Account** button queues an out-of-band fetch (handled by the 60-second job dispatcher, "updating within 60s"). When FAILED orders are present a **Retry failed orders** list appears — each row shows the ticker, direction, quantity, and error with a **Retry** and **Delete** button. The Retry button applies the instrument precision/minimum-quantity guard and re-submits.
 - **Mapping tab** — UCITS instrument mapping table (which research tickers map to T212 instrument IDs).
 
@@ -258,7 +258,9 @@ When `virtual_trading.enabled: true`, the system automatically manages a simulat
 - **Opens** a new virtual position on STRONG_BUY / STRONG_SELL signals for tradeable tickers (subject to `max_open_positions` cap).
 - **Closes** existing virtual positions when the signal reverses direction or the current price crosses the ATR-based stop loss.
 
-Virtual positions are sized at `position_pct` of `portfolio_size_gbp` (default 5% of £2,000 = £100 per trade). P&L is recorded as a price-change percentage (no FX or leverage applied). Virtual trades are visible on the Backtest page → Virtual Trading tab and in the weekly summary email.
+Virtual positions are sized at `position_pct` of `portfolio_size_gbp` (default 5% of £2,000 = £100 per trade). P&L is recorded as a price-change percentage (no FX or leverage applied). Virtual trades are visible on the Backtest page → Virtual Trading tab (which shows the effective entry threshold for the current regime, flagged when overridden) and in the weekly summary email.
+
+**Per-regime entry threshold.** `virtual_trading.entry_signal` (and `trading212_invest.entry_signal`) is a global default that can be overridden per detected regime via `entry_signal_overrides` — see "Configuration" below for the full rationale and structure. `analysis/regime.py:resolve_entry_signal()` resolves the effective threshold each run using the regime stamped on the most recent `^GSPC` row in the `signals` table, so it always matches the regime that produced the signal being acted on — not a value that could drift from a freshly recomputed regime.
 
 ---
 
@@ -364,7 +366,13 @@ virtual_trading:
   portfolio_size_gbp: 2000
   position_pct: 0.05             # 5% per trade
   max_open_positions: 10
-  entry_signal: "STRONG_BUY"    # STRONG_BUY = strict; BUY = looser
+  entry_signal: "STRONG_BUY"    # global default — STRONG_BUY = strict; BUY = looser
+  entry_signal_overrides:       # per-regime override, keyed by Regime enum name — falls
+    MIXED: STRONG_BUY           # back to entry_signal above for regimes not listed here.
+    RANGING_LOW_VOL: STRONG_BUY # trading212_invest.entry_signal_overrides uses the same
+    HIGH_VOLATILITY: STRONG_BUY # shape — see the Status page's T212 Invest Account section.
+    TRENDING_BULL: BUY
+    TRENDING_BEAR: BUY
   max_theme_positions: 3        # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 learning:
@@ -373,6 +381,10 @@ learning:
   max_single_weight: 0.30
   min_single_weight: 0.05
 ```
+
+### Per-regime entry signal overrides
+
+Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) showed genuine edge. `entry_signal_overrides` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) raises the conviction threshold to `STRONG_BUY` in regimes without a proven edge, while keeping the looser `entry_signal` default where the backtest supports it. A regime with no entry in the overrides dict falls back to the global `entry_signal`. Both automation paths (`brokers/trading212.py:maybe_place_t212_orders()` and `data/scheduler.py:_process_virtual_trades()`) resolve this once per run via `analysis/regime.py:resolve_entry_signal()`, keyed on the regime most recently stamped on `^GSPC`'s row in the `signals` table — so the threshold applied always matches the regime that scored the signal being acted on. Only entries are affected; `exit_signal` has no regime override. The resolved regime is what gets logged to the `regime` column on `t212_invest_orders` and virtual `trades` rows, keeping the applied threshold auditable.
 
 ### Tradeable vs analysis-only
 

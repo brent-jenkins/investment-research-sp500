@@ -40,6 +40,7 @@ from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
 from analysis.macro import fetch_and_store_macro_indicators
+from analysis.regime import get_latest_regime_name, resolve_entry_signal
 from data.database import clear_metadata, get_metadata, get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
@@ -287,7 +288,13 @@ def _process_virtual_trades(
     from sqlalchemy import text as sa_text  # noqa: PLC0415
     from data.database import get_engine    # noqa: PLC0415
 
-    entry_threshold = vt.get("entry_signal", "STRONG_BUY")
+    regime_name     = get_latest_regime_name()
+    entry_threshold = resolve_entry_signal(vt, regime_name)
+    if regime_name and regime_name in vt.get("entry_signal_overrides", {}):
+        logger.info(
+            "Virtual trading: regime=%s — using entry_signal override %s (global default %s).",
+            regime_name, entry_threshold, vt.get("entry_signal", "STRONG_BUY"),
+        )
     max_positions   = int(vt.get("max_open_positions", 5))
     position_pct    = float(vt.get("position_pct", 0.05))
     portfolio_gbp   = float(vt.get("portfolio_size_gbp", 10000))
@@ -567,7 +574,7 @@ def _process_virtual_trades(
             "entry_price":          live_price,
             "signal_type":          sig_type,
             "confluence_score":     sig.get("confluence_score"),
-            "regime":               sig.get("regime"),
+            "regime":               regime_name or sig.get("regime"),
             "trend_score":          sig.get("trend_score"),
             "mean_reversion_score": sig.get("mean_reversion_score"),
             "volatility_score":     sig.get("volatility_score"),

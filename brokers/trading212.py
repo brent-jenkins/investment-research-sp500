@@ -41,6 +41,8 @@ from typing import Optional
 
 import requests
 
+from analysis.regime import get_latest_regime_name, resolve_entry_signal
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -628,9 +630,15 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
     max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
 
-    _entry_cfg        = t212_cfg.get("entry_signal", "STRONG_BUY")
+    regime_name       = get_latest_regime_name()
+    _entry_cfg        = resolve_entry_signal(t212_cfg, regime_name)
     _exit_cfg         = t212_cfg.get("exit_signal",  "SELL")
     entry_signals     = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
+    if regime_name and regime_name in t212_cfg.get("entry_signal_overrides", {}):
+        logger.info(
+            "T212 Invest: regime=%s — using entry_signal override %s (global default %s).",
+            regime_name, _entry_cfg, t212_cfg.get("entry_signal", "STRONG_BUY"),
+        )
     immediate_exits   = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
     exit_on_signal    = bool(t212_cfg.get("exit_on_signal", True))
     time_limit_backstop = bool(t212_cfg.get("time_limit_as_backstop", True))
@@ -986,7 +994,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             order_id=order_id,
             signal_type=sig_type,
             confluence_score=sig.get("confluence_score"),
-            regime=sig.get("regime"),
+            regime=regime_name or sig.get("regime"),
             account_type=account_label,
             currency_code=_ccy_to_log,
             error_message=error_msg,

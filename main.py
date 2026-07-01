@@ -38,7 +38,7 @@ from analysis.correlations import (
 )
 from analysis.regime import OVERLAY_DESCRIPTIONS
 from analysis.engine import run_analysis
-from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime
+from analysis.regime import REGIME_COLOURS, REGIME_DESCRIPTIONS, Regime, detect_regime, resolve_entry_signal
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
 from data.ingestion import (
     get_all_tickers,
@@ -3666,6 +3666,14 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             f'max {int(float(_t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed',
             unsafe_allow_html=True,
         )
+        _t212_regime = detect_regime()["regime"].value
+        _t212_entry_eff = resolve_entry_signal(_t212_cfg, _t212_regime)
+        _t212_entry_overridden = _t212_regime in _t212_cfg.get("entry_signal_overrides", {})
+        st.caption(
+            f"Entry threshold: **{_t212_entry_eff}** "
+            f"({'regime override for ' if _t212_entry_overridden else 'global default, regime '}"
+            f"{_t212_regime.replace('_', ' ')})"
+        )
         st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
         if _t212_error:
@@ -5358,6 +5366,23 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         )
     st.caption(_thresh_label)
 
+    # Effective automation entry threshold for the current regime (per-regime
+    # overrides in trading212_invest / virtual_trading can differ from the
+    # global default — see analysis/regime.py:resolve_entry_signal()).
+    _auto_bits = []
+    _t212_cfg_b = config.get("trading212_invest", {})
+    if _t212_cfg_b.get("enabled", False):
+        _t212_eff = resolve_entry_signal(_t212_cfg_b, regime.value)
+        _t212_overridden = regime.value in _t212_cfg_b.get("entry_signal_overrides", {})
+        _auto_bits.append(f"T212 Invest {_t212_eff}{' (override)' if _t212_overridden else ''}")
+    _vt_cfg_b = config.get("virtual_trading", {})
+    if _vt_cfg_b.get("enabled", False):
+        _vt_eff = resolve_entry_signal(_vt_cfg_b, regime.value)
+        _vt_overridden = regime.value in _vt_cfg_b.get("entry_signal_overrides", {})
+        _auto_bits.append(f"Virtual {_vt_eff}{' (override)' if _vt_overridden else ''}")
+    if _auto_bits:
+        st.caption(f"Automation entry: {' · '.join(_auto_bits)}")
+
     # Active overlay detail strips
     for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
         if overlay_key not in active_overlays:
@@ -6639,11 +6664,17 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             else:
                 st.warning("Virtual trading is **disabled**")
         with _vt_cfg_col:
+            _vt_regime = detect_regime()["regime"].value
+            _vt_entry_eff = resolve_entry_signal(vt_cfg, _vt_regime)
+            _vt_entry_suffix = (
+                f" (override for {_vt_regime.replace('_', ' ')})"
+                if _vt_regime in vt_cfg.get("entry_signal_overrides", {}) else ""
+            )
             st.caption(
                 f"Portfolio £{port_gbp:,.0f} · "
                 f"{int(pos_pct * 100)}% per trade (£{pos_size_gbp:,.0f}) · "
                 f"Max {vt_cfg.get('max_open_positions', 5)} positions · "
-                f"Entry: {vt_cfg.get('entry_signal', 'STRONG_BUY')}"
+                f"Entry: {_vt_entry_eff}{_vt_entry_suffix}"
             )
 
         # ── Load all virtual trades ───────────────────────────────────────────
