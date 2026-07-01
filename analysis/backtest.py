@@ -463,18 +463,31 @@ def compute_signal_history(
 def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[dict]:
     """Walk forward through *signals* and generate simulated trades.
 
-    Entry:  STRONG_BUY → LONG;  STRONG_SELL → SHORT
-    Exit (in priority order):
+    Entry: resolved per-date via analysis.regime.resolve_entry_signal(), using
+    the regime already stored in signals["regime"] for that date and the
+    virtual_trading.entry_signal / entry_signal_overrides config (virtual
+    trading, not trading212_invest, since it's the only automation path that
+    — like this backtest — takes both LONG and SHORT positions). A resolved
+    threshold of "STRONG_BUY" only enters on STRONG_BUY (LONG) / STRONG_SELL
+    (SHORT); "BUY" also enters on plain BUY / SELL. This mirrors live
+    behaviour so backtest results reflect the same per-regime conviction
+    gating as data/scheduler.py:_process_virtual_trades().
+    Exit (in priority order, unaffected by entry_signal_overrides):
       1. ATR stop loss (entry ± 2 × ATR at entry date)
       2. Signal reversal (SELL/STRONG_SELL for LONG; BUY/STRONG_BUY for SHORT)
       3. Maximum holding period (config backtest.max_holding_days)
     """
+    from analysis.regime import resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
+
     bt_cfg   = config.get("backtest", {})
+    vt_cfg   = config.get("virtual_trading", {})
     max_hold = asset_max_hold(ticker, config)
     atr_mult = float(bt_cfg.get("atr_stop_multiplier", 2.0))
 
-    _BULL = frozenset({"BUY", "STRONG_BUY"})
-    _BEAR = frozenset({"SELL", "STRONG_SELL"})
+    _BULL   = frozenset({"BUY", "STRONG_BUY"})
+    _BEAR   = frozenset({"SELL", "STRONG_SELL"})
+    _STRONG = frozenset({"STRONG_BUY", "STRONG_SELL"})
+    _ALL    = _BULL | _BEAR
 
     trades: list[dict] = []
     open_trade: Optional[dict] = None
@@ -485,9 +498,11 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
         atr    = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
 
         if open_trade is None:
-            if sig not in ("STRONG_BUY", "STRONG_SELL"):
+            entry_threshold = resolve_entry_signal(vt_cfg, str(row["regime"]))
+            entry_signals   = _ALL if entry_threshold == "BUY" else _STRONG
+            if sig not in entry_signals:
                 continue
-            direction = "LONG" if sig == "STRONG_BUY" else "SHORT"
+            direction = "LONG" if sig in _BULL else "SHORT"
             stop = price - atr_mult * atr if direction == "LONG" else price + atr_mult * atr
             open_trade = {
                 "ticker":                   ticker,

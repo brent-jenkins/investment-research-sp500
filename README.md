@@ -242,7 +242,9 @@ The Streamlit web UI (`investment-research.service`) also starts an in-process s
 
 `analysis/backtest.py` replays the current signal logic over stored historical price data. The correlation module is excluded (it requires pair-level data and is not stored per-date in isolation); its weight is re-normalised across the remaining five modules.
 
-Exit conditions (checked in priority order):
+Entry is gated per date by the same `entry_signal_overrides` regime logic used by live automation (see "Per-regime entry signal overrides" in Configuration) — `simulate_trades()` resolves the effective threshold for each date's regime via `analysis/regime.py:resolve_entry_signal()` against `virtual_trading.entry_signal_overrides`, entering only on STRONG_BUY/STRONG_SELL by default, or also on plain BUY/SELL where that regime's override loosens the threshold. This keeps simulated results consistent with what the live system would actually have traded, rather than a fixed STRONG_BUY-only bar across every regime.
+
+Exit conditions (checked in priority order, unaffected by entry_signal_overrides):
 1. **Stop Loss** — price crosses entry ± N × ATR (configurable `atr_stop_multiplier`, default 2.0)
 2. **Signal Reversal** — signal moves opposite to trade direction (SELL/STRONG_SELL for LONG)
 3. **Max Holding Days** — position closed after a configurable cap (default 60 days)
@@ -384,7 +386,9 @@ learning:
 
 ### Per-regime entry signal overrides
 
-Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) showed genuine edge. `entry_signal_overrides` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) raises the conviction threshold to `STRONG_BUY` in regimes without a proven edge, while keeping the looser `entry_signal` default where the backtest supports it. A regime with no entry in the overrides dict falls back to the global `entry_signal`. Both automation paths (`brokers/trading212.py:maybe_place_t212_orders()` and `data/scheduler.py:_process_virtual_trades()`) resolve this once per run via `analysis/regime.py:resolve_entry_signal()`, keyed on the regime most recently stamped on `^GSPC`'s row in the `signals` table — so the threshold applied always matches the regime that scored the signal being acted on. Only entries are affected; `exit_signal` has no regime override. The resolved regime is what gets logged to the `regime` column on `t212_invest_orders` and virtual `trades` rows, keeping the applied threshold auditable.
+Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) showed genuine edge. `entry_signal_overrides` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) raises the conviction threshold to `STRONG_BUY` in regimes without a proven edge, while keeping the looser `entry_signal` default where the backtest supports it. A regime with no entry in the overrides dict falls back to the global `entry_signal`. Both live automation paths (`brokers/trading212.py:maybe_place_t212_orders()` and `data/scheduler.py:_process_virtual_trades()`) resolve this once per run via `analysis/regime.py:resolve_entry_signal()`, keyed on the regime most recently stamped on `^GSPC`'s row in the `signals` table — so the threshold applied always matches the regime that scored the signal being acted on. Only entries are affected; `exit_signal` has no regime override. The resolved regime is what gets logged to the `regime` column on `t212_invest_orders` and virtual `trades` rows, keeping the applied threshold auditable.
+
+**The backtest engine applies the same `entry_signal_overrides` logic** (against `virtual_trading`'s config specifically — see "Backtesting" above), so simulated results reflect the live system's current per-regime entry gating rather than a single fixed threshold across every regime.
 
 ### Tradeable vs analysis-only
 
