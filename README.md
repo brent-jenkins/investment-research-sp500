@@ -373,8 +373,8 @@ virtual_trading:
     MIXED: STRONG_BUY           # back to entry_signal above for regimes not listed here.
     RANGING_LOW_VOL: STRONG_BUY # trading212_invest.entry_signal_overrides uses the same
     HIGH_VOLATILITY: STRONG_BUY # shape — see the Status page's T212 Invest Account section.
-    TRENDING_BULL: BUY
-    TRENDING_BEAR: BUY
+    TRENDING_BULL: STRONG_BUY
+    TRENDING_BEAR: STRONG_BUY
   max_theme_positions: 3        # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 learning:
@@ -386,7 +386,9 @@ learning:
 
 ### Per-regime entry signal overrides
 
-Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) showed genuine edge. `entry_signal_overrides` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) raises the conviction threshold to `STRONG_BUY` in regimes without a proven edge, while keeping the looser `entry_signal` default where the backtest supports it. A regime with no entry in the overrides dict falls back to the global `entry_signal`. Both live automation paths (`brokers/trading212.py:maybe_place_t212_orders()` and `data/scheduler.py:_process_virtual_trades()`) resolve this once per run via `analysis/regime.py:resolve_entry_signal()`, keyed on the regime most recently stamped on `^GSPC`'s row in the `signals` table — so the threshold applied always matches the regime that scored the signal being acted on. Only entries are affected; `exit_signal` has no regime override. The resolved regime is what gets logged to the `regime` column on `t212_invest_orders` and virtual `trades` rows, keeping the applied threshold auditable.
+Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while a short-sample backtest of TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) initially looked like it had genuine edge. `entry_signal_overrides` (shown on `virtual_trading` above; `trading212_invest` supports the identical key) is the mechanism for raising the conviction threshold per regime — currently all five regimes are set to `STRONG_BUY`. A regime with no entry in the overrides dict falls back to the global `entry_signal`. Both live automation paths (`brokers/trading212.py:maybe_place_t212_orders()` and `data/scheduler.py:_process_virtual_trades()`) resolve this once per run via `analysis/regime.py:resolve_entry_signal()`, keyed on the regime most recently stamped on `^GSPC`'s row in the `signals` table — so the threshold applied always matches the regime that scored the signal being acted on. Only entries are affected; `exit_signal` has no regime override. The resolved regime is what gets logged to the `regime` column on `t212_invest_orders` and virtual `trades` rows, keeping the applied threshold auditable.
+
+**Why TRENDING_BULL/TRENDING_BEAR aren't looser.** They were briefly set to `BUY` based on the short-sample numbers above, then reverted after a full 10-year backtest showed that was a mistake. `simulate_trades()`'s signal-reversal exit has always accepted plain SELL/BUY, not just STRONG_SELL/STRONG_BUY; pairing that with a loosened BUY *entry* created high-churn whipsaw trading in trending regimes — TRENDING_BULL and TRENDING_BEAR were only ~25% of all regime-days across 2016–2026 but generated 90% of all simulated trades, and win rate/profit factor/drawdown all got materially worse. Confirmed as a real strategy effect (not a code bug) via an independent from-scratch reimplementation of the entry/exit walk-forward that produced identical trade lists to the production function on real data.
 
 **The backtest engine applies the same `entry_signal_overrides` logic** (against `virtual_trading`'s config specifically — see "Backtesting" above), so simulated results reflect the live system's current per-regime entry gating rather than a single fixed threshold across every regime.
 

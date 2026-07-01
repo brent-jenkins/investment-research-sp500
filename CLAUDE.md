@@ -153,23 +153,25 @@ Active overlays are displayed as compact inline strips on the Signals and Daily 
 
 ### Per-regime entry signal overrides
 
-Backtesting revealed uneven edge by regime — MIXED showed 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) showed genuine edge. Rather than trade every regime at the same conviction threshold, both automated entry paths support a per-regime override of `entry_signal`:
+Backtesting revealed uneven edge by regime — MIXED showed 416 trades at a 37.5% win rate, profit factor 0.123, and −91.26% max drawdown, while a short-sample backtest of TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) looked like it showed genuine edge. Rather than trade every regime at the same conviction threshold, both automated entry paths support a per-regime override of `entry_signal`:
 
 ```yaml
 trading212_invest:            # and, identically, virtual_trading:
   entry_signal: BUY                 # global default (fallback if no regime override)
   entry_signal_overrides:
-    MIXED: STRONG_BUY               # poor backtest edge — require strong conviction
-    RANGING_LOW_VOL: STRONG_BUY     # only 1 trade of backtest data — treat as unknown
-    HIGH_VOLATILITY: STRONG_BUY     # high vol regime — require maximum conviction
-    TRENDING_BULL: BUY              # system has edge here — standard threshold
-    TRENDING_BEAR: BUY              # system has edge here — standard threshold
+    MIXED: STRONG_BUY
+    RANGING_LOW_VOL: STRONG_BUY
+    HIGH_VOLATILITY: STRONG_BUY
+    TRENDING_BULL: STRONG_BUY
+    TRENDING_BEAR: STRONG_BUY
 ```
 
 `entry_signal_overrides` is keyed by `Regime` enum name (`analysis/regime.py`). A regime with no entry in the overrides dict falls back to the global `entry_signal`. Two shared helpers in `analysis/regime.py` implement this:
 
 - `get_latest_regime_name()` — reads the regime stamped on the most recent `^GSPC` row in the `signals` table (not a fresh `detect_regime()` recomputation), so the regime used for the entry decision always matches the regime that actually weighted and thresholded the signal it's acting on.
 - `resolve_entry_signal(cfg, regime_name)` — looks up `cfg["entry_signal_overrides"][regime_name]`, falling back to `cfg["entry_signal"]` (default `"STRONG_BUY"`) when there's no override or no known regime. `cfg` is either the `trading212_invest` or `virtual_trading` config section — both use the same shape.
+
+**Why TRENDING_BULL/TRENDING_BEAR are STRONG_BUY, not BUY.** They were originally set to the looser `BUY` threshold on the theory above. A full 10-year backtest after `analysis/backtest.py:simulate_trades()` started applying this override (see "Backtesting engine" below) showed that was wrong: `simulate_trades()`'s signal-reversal exit has always accepted plain SELL/BUY, not just STRONG_SELL/STRONG_BUY — pairing that with a loosened BUY *entry* created high-churn whipsaw trading. TRENDING_BULL and TRENDING_BEAR are only ~25% of all regime-days across 2016–2026 but generated 90% of all simulated trades (2,899 of 3,231), and overall win rate/profit factor/drawdown all got materially worse (42.9% / 1.18 / −99.3% vs. 41.2% / 1.35 / −85.4% under STRONG_BUY-only). Verified as a real strategy-design effect rather than a code bug via an independent from-scratch reimplementation of the entry/exit walk-forward, which produced identical trade lists to the production function on real multi-year data (VOO 68/68, ^GSPC 63/63 trades, exact match).
 
 `maybe_place_t212_orders()` (`brokers/trading212.py`) and `_process_virtual_trades()` (`data/scheduler.py`) both call `get_latest_regime_name()` once per run and pass the result through `resolve_entry_signal()` to build the entry-signal set used in their BUY-phase filtering, replacing the previous "always read `entry_signal` directly from config" behaviour. The exit side (`exit_signal`) is unaffected — only entries get the per-regime override. The resolved regime name is also what gets written to the `regime` column on `t212_invest_orders` and on virtual `trades` rows for the entry, rather than the per-ticker signal row's own (potentially stale, if that ticker wasn't part of the most recent run) regime value — this keeps the stored regime auditable against the threshold that was actually applied.
 

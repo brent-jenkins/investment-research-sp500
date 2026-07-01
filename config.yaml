@@ -539,16 +539,22 @@ virtual_trading:
   max_open_positions: 10         # cap on simultaneous virtual positions
   entry_signal: "STRONG_BUY"     # global default — STRONG_BUY = strict; BUY = looser entry
   # Per-regime override of entry_signal, keyed by the Regime enum name (see analysis/regime.py).
-  # Backtesting showed poor edge in MIXED (37.5% win rate, PF 0.123, -91% max drawdown) vs
-  # genuine edge in TRENDING_BULL (PF 0.631) and TRENDING_BEAR (PF 0.202) — so unclear-market
-  # regimes require STRONG_BUY conviction while regimes with proven edge keep the looser default.
+  # All five regimes are STRONG_BUY. TRENDING_BULL/TRENDING_BEAR were originally set to the
+  # looser BUY threshold (backtesting on a short sample showed genuine edge there: PF 0.631 /
+  # PF 0.202 respectively, vs MIXED's PF 0.123). A full 10-year backtest after that change
+  # showed why that was wrong: simulate_trades()'s signal-reversal exit has always accepted
+  # plain SELL/BUY (not just STRONG_SELL/STRONG_BUY), so pairing a loosened BUY entry with that
+  # already-loose exit created high-churn whipsaw trading in trending regimes — TRENDING_BULL
+  # and TRENDING_BEAR are only 25% of all regime-days but produced 90% of all simulated trades
+  # (2,899 of 3,231), dragging win rate to 42.9%, profit factor to 1.18, and max drawdown to
+  # -99.3% (vs 757 trades / 41.2% / PF 1.35 / -85.4% under STRONG_BUY-only everywhere).
   # A regime with no entry here falls back to entry_signal above.
   entry_signal_overrides:
-    MIXED: STRONG_BUY            # poor backtest edge — require strong conviction
-    RANGING_LOW_VOL: STRONG_BUY  # only 1 trade of backtest data — treat as unknown, require strong conviction
-    HIGH_VOLATILITY: STRONG_BUY  # high vol regime — require maximum conviction
-    TRENDING_BULL: BUY           # system has edge here — standard threshold
-    TRENDING_BEAR: BUY           # system has edge here — standard threshold
+    MIXED: STRONG_BUY
+    RANGING_LOW_VOL: STRONG_BUY
+    HIGH_VOLATILITY: STRONG_BUY
+    TRENDING_BULL: STRONG_BUY
+    TRENDING_BEAR: STRONG_BUY
   max_theme_positions: 3         # max simultaneous positions per macro theme (e.g. USD-short forex)
 
 trading212_invest:
@@ -560,13 +566,14 @@ trading212_invest:
   entry_signal: BUY        # global default — BUY = enter on BUY or STRONG_BUY; STRONG_BUY = STRONG_BUY only
   # Per-regime override of entry_signal — same rationale and Regime-enum keys as
   # virtual_trading.entry_signal_overrides above, kept in sync so both automation
-  # paths apply the same conviction threshold per regime.
+  # paths apply the same conviction threshold per regime. See that block's comment
+  # for why TRENDING_BULL/TRENDING_BEAR are STRONG_BUY rather than the looser BUY.
   entry_signal_overrides:
     MIXED: STRONG_BUY
     RANGING_LOW_VOL: STRONG_BUY
     HIGH_VOLATILITY: STRONG_BUY
-    TRENDING_BULL: BUY
-    TRENDING_BEAR: BUY
+    TRENDING_BULL: STRONG_BUY
+    TRENDING_BEAR: STRONG_BUY
   exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
   max_holding_days: 90     # Backstop time limit (3× CFD limit — no leverage/swap costs)
   exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs
