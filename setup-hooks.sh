@@ -16,23 +16,25 @@ cat > "$HOOKS_DIR/pre-push" << 'HOOK'
 #!/usr/bin/env bash
 # .git/hooks/pre-push — managed by setup-hooks.sh (re-run to update)
 #
-# Intercepts pushes to main. Pushes to GitHub first, then SSHes into the
-# server to pull and restart. The original `git push` that triggered this
-# hook becomes a no-op ("Everything up to date") because the push was
-# already handled here.
+# Runs the test suite before any push to main, then schedules a deploy to
+# research.example.com in the background. Does NOT push to GitHub itself —
+# git runs the actual `git push` immediately after this hook exits 0, so
+# that push (the one the user typed) is what puts the commits on GitHub.
 #
-# Recursion guard: the inner `DEPLOYING=1 git push` sets DEPLOYING in the
-# environment of the child git process. When git fires the pre-push hook
-# again for that inner push, the check below exits 0 immediately.
-# This is pure bash→git→bash, so env-var propagation is reliable.
-
-if [[ "${DEPLOYING:-0}" == "1" ]]; then
-    exit 0
-fi
+# (Earlier version of this hook pushed to GitHub itself from inside the
+# hook, which raced the outer `git push`: the hook's push would advance
+# origin/main, and the outer push — already holding the old remote SHA —
+# would then get rejected with "cannot lock ref". Not pushing from the
+# hook at all avoids the double-push entirely.)
+#
+# The background delay gives the outer `git push` time to land on GitHub
+# before the server's `git pull` runs; deploy output goes to the log file
+# below rather than the terminal, since the hook has already exited.
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 SSH_KEY="$REPO_ROOT/ssh-keys/deploy_key"
 VM_IP="${VM_IP:-203.0.113.10}"
+LOG_FILE="/tmp/investment-research-deploy.log"
 
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
     if [[ "$remote_ref" == "refs/heads/main" ]]; then
@@ -44,19 +46,19 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
             exit 1
         fi
         echo ""
-        echo "✅ Tests passed — deploying..."
+        echo "✅ Tests passed — pushing now; deploy to research.example.com will follow in the background."
+        echo "    (deploy log: $LOG_FILE)"
 
-        echo ""
-        echo ">>> Pushing to GitHub..."
-        if ! DEPLOYING=1 git push origin main; then
-            echo "GitHub push failed — skipping server deploy."
-            exit 0
-        fi
-
-        echo ""
-        echo ">>> Deploying to research.example.com..."
-        ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "root@${VM_IP}" \
-            "cd /root/investment-research && git pull origin main && systemctl restart investment-research"
+        nohup bash -c '
+            sleep 15
+            ssh_key="$1"; vm_ip="$2"; log_file="$3"
+            {
+                echo "[$(date -u +%FT%TZ)] Deploying to research.example.com"
+                ssh -i "$ssh_key" -o StrictHostKeyChecking=no "root@${vm_ip}" \
+                    "cd /root/investment-research && git pull origin main && systemctl restart investment-research"
+            } >> "$log_file" 2>&1
+        ' _ "$SSH_KEY" "$VM_IP" "$LOG_FILE" >/dev/null 2>&1 &
+        disown
 
         echo ""
         exit 0
@@ -70,5 +72,6 @@ chmod +x "$HOOKS_DIR/pre-push"
 
 echo "Done — pre-push hook installed at $HOOKS_DIR/pre-push"
 echo ""
-echo "Pushes to main will now automatically deploy to research.example.com."
-echo "To skip deployment for a single push: DEPLOYING=1 git push origin main"
+echo "Pushes to main will now run the test suite, then automatically deploy to"
+echo "research.example.com in the background ~15s after the push completes."
+echo "To skip both for a single push: git push --no-verify"
