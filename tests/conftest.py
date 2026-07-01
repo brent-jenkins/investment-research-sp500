@@ -29,6 +29,7 @@ _GET_ENGINE_BINDINGS = (
     "data.database.get_engine",
     "analysis.regime.get_engine",
     "data.ingestion.get_engine",
+    "output.performance.get_engine",
 )
 
 
