@@ -37,6 +37,16 @@ VM_IP="${VM_IP:-203.0.113.10}"
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
     if [[ "$remote_ref" == "refs/heads/main" ]]; then
         echo ""
+        echo ">>> Running test suite..."
+        if ! (cd "$REPO_ROOT" && python -m pytest); then
+            echo ""
+            echo "❌ Tests failed — push aborted. Fix failing tests before deploying."
+            exit 1
+        fi
+        echo ""
+        echo "✅ Tests passed — deploying..."
+
+        echo ""
         echo ">>> Pushing to GitHub..."
         if ! DEPLOYING=1 git push origin main; then
             echo "GitHub push failed — skipping server deploy."

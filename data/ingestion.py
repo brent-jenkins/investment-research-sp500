@@ -108,13 +108,14 @@ def _upsert_price_rows(df: pd.DataFrame, ticker: str) -> int:
         # yfinance may return a MultiIndex when downloading a single ticker
         date_val = date_idx if isinstance(date_idx, datetime) else pd.Timestamp(date_idx).to_pydatetime()
         close_raw = row.get("Close", None)
-        # Skip rows where yfinance returned NaN or zero close — these are
-        # incomplete intraday bars or data gaps that break rolling-mean SMAs.
+        # Skip rows where yfinance returned NaN, infinite, zero, or negative
+        # close — these are incomplete intraday bars or data gaps that break
+        # rolling-mean SMAs (a single bad value poisons the whole window).
         try:
             close_val = float(close_raw)
         except (TypeError, ValueError):
             close_val = 0.0
-        if close_val <= 0 or math.isnan(close_val):
+        if close_val <= 0 or not math.isfinite(close_val):
             continue
         rows.append(
             {

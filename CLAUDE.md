@@ -37,6 +37,17 @@ Key config sections added since initial release:
 - `virtual_trading.enabled`, `portfolio_size_gbp`, `position_pct`, `max_open_positions`, `entry_signal`, `entry_signal_overrides` — control automated virtual trading. `entry_signal: "STRONG_BUY"` limits entries to STRONG_BUY/STRONG_SELL; `"BUY"` also accepts BUY/SELL. `entry_signal_overrides` applies a different threshold per detected regime (see "Per-regime entry signal overrides" below).
 - `trading212_invest.enabled`, `live`, `max_position_gbp`, `max_total_deployed`, `entry_signal`, `entry_signal_overrides`, `exit_signal`, `ucits_mapping` — control T212 Invest API integration. `entry_signal: "BUY"` enters on BUY or STRONG_BUY; `"STRONG_BUY"` restricts to STRONG_BUY only (same pattern for `exit_signal`). `entry_signal_overrides` applies a different threshold per detected regime (see "Per-regime entry signal overrides" below). `ucits_mapping` maps internal research tickers to T212 UCITS instrument IDs — only mapped tickers receive automated orders. Requires `T212_API_KEY` and `T212_API_SECRET` env vars. `live: false` is the hard default and is enforced in code.
 
+## Running tests
+
+```powershell
+pytest                        # run the full suite from the project root
+pytest tests/test_trend.py    # run a single module
+```
+
+The suite lives in `tests/` (configured via `[tool.pytest.ini_options]` / `testpaths = ["tests"]` in `pyproject.toml`) and is fully self-contained: no test touches the real project database, calls yfinance, or calls the live Trading212 API. DB-touching tests depend on the `db_engine` fixture in `tests/conftest.py`, which creates a fresh in-memory SQLite database (schema from `data.database.Base`, kept alive via `StaticPool` since production code calls `get_engine()` fresh on every DB access) and patches every module-level `get_engine` binding the code under test actually resolves at runtime (`data.database`, `analysis.regime`, `data.ingestion` — each `from data.database import get_engine` creates its own name binding, so patching `data.database.get_engine` alone does not affect modules that imported it at their own module level). External services (the Trading212 HTTP client, yfinance) are mocked with `unittest.mock` / `pytest-mock`, never called for real. Runs identically on Windows (local dev) and Ubuntu (server) — nothing in the suite is platform-specific.
+
+**The pre-push hook runs this suite automatically** before deploying to `main` (see "Git hooks" below) — a failing test blocks both the GitHub push and the server deploy. To bypass it in an emergency: `git push --no-verify`. This should not be done on `main` under normal circumstances — it skips the only safety net between a broken change and production.
+
 ## Architecture
 
 ### Data flow
@@ -404,6 +415,8 @@ bash setup-hooks.sh
 ```
 
 The hook SSHes directly into the server after a 15-second background delay, so git finishes pushing to GitHub before the server runs `git pull`. Output is appended to `/tmp/investment-research-deploy.log` on the local machine. To push without triggering deployment: skip the hook by temporarily removing it or not installing it on that machine.
+
+Before any of that, the hook runs `pytest` from the project root. A failing suite aborts the push (exit 1) with `❌ Tests failed — push aborted. Fix failing tests before deploying.` — the push to GitHub and the server deploy both never happen. A passing suite prints `✅ Tests passed — deploying...` and continues as normal. See "Running tests" above for what the suite covers and how it stays self-contained.
 
 ### Key files
 
