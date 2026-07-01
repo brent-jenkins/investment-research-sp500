@@ -1,4 +1,4 @@
-# 90 assets across 20 groups
+# 98 assets across 20 groups
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -342,28 +342,50 @@ watchlist:
   uk_etfs: []
 
   # Curated US large-cap stocks for the trading212_stocks automation path (see that
-  # config section below). Sector selection loosely mirrors sector_etfs/tech_subsectors/
-  # financial_subsectors/healthcare_subsectors so each stock has a corresponding sector
-  # ETF already in the watchlist for correlation context: AAPL/MSFT/NVDA/AMD/AVGO -> XLK/
-  # SOXX/SKYY; JPM/GS/BAC/MS -> XLF/KBE; XOM/CVX -> XLE; UNH/JNJ/LLY -> XLV; AMZN/TSLA ->
-  # XLY; NEM/GOLD -> GLD (gold miners track, but don't perfectly correlate with, the metal).
+  # config section below). S&P 500 large-caps chosen for liquidity and for having a
+  # corresponding sector ETF already in the watchlist for correlation context:
+  # Technology (AAPL/MSFT/NVDA/AMZN/ADBE) -> XLK/SKYY, AMZN also XLY; Financials
+  # (JPM/GS/BAC/V/MA) -> XLF/KBE; Healthcare (LLY/UNH/JNJ/PFE/MRK) -> XLV;
+  # Semiconductors (AMD/AVGO/QCOM) -> SOXX; Consumer Staples (COST/WMT) -> XLP;
+  # Energy (XOM/CVX) -> XLE; Industrials (CAT/RTX) -> XLI; Gold Miners (NEM/GOLD) ->
+  # GLD (gold miners track, but don't perfectly correlate with, the metal itself).
+  # Tickers with significant socio-political or geopolitical risk were deliberately
+  # excluded despite otherwise fitting the liquidity/correlation criteria: TSLA (CEO
+  # political exposure), META and GOOGL (antitrust/regulatory exposure), TSM (Taiwan
+  # geopolitical risk).
   us_large_cap:
+    # Technology
     - {ticker: "AAPL",  name: "Apple",                    exchange: "NYSE", tradeable: true}
     - {ticker: "MSFT",  name: "Microsoft",                 exchange: "NYSE", tradeable: true}
     - {ticker: "NVDA",  name: "NVIDIA",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "AMD",   name: "Advanced Micro Devices",    exchange: "NYSE", tradeable: true}
-    - {ticker: "AVGO",  name: "Broadcom",                  exchange: "NYSE", tradeable: true}
+    - {ticker: "AMZN",  name: "Amazon",                    exchange: "NYSE", tradeable: true}
+    - {ticker: "ADBE",  name: "Adobe",                     exchange: "NYSE", tradeable: true}
+    # Financials
     - {ticker: "JPM",   name: "JP Morgan Chase",           exchange: "NYSE", tradeable: true}
     - {ticker: "GS",    name: "Goldman Sachs",             exchange: "NYSE", tradeable: true}
     - {ticker: "BAC",   name: "Bank of America",           exchange: "NYSE", tradeable: true}
-    - {ticker: "MS",    name: "Morgan Stanley",            exchange: "NYSE", tradeable: true}
-    - {ticker: "XOM",   name: "ExxonMobil",                exchange: "NYSE", tradeable: true}
-    - {ticker: "CVX",   name: "Chevron",                   exchange: "NYSE", tradeable: true}
+    - {ticker: "V",     name: "Visa",                      exchange: "NYSE", tradeable: true}
+    - {ticker: "MA",    name: "Mastercard",                exchange: "NYSE", tradeable: true}
+    # Healthcare
+    - {ticker: "LLY",   name: "Eli Lilly",                 exchange: "NYSE", tradeable: true}
     - {ticker: "UNH",   name: "UnitedHealth Group",        exchange: "NYSE", tradeable: true}
     - {ticker: "JNJ",   name: "Johnson & Johnson",         exchange: "NYSE", tradeable: true}
-    - {ticker: "LLY",   name: "Eli Lilly",                 exchange: "NYSE", tradeable: true}
-    - {ticker: "AMZN",  name: "Amazon",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "TSLA",  name: "Tesla",                     exchange: "NYSE", tradeable: true}
+    - {ticker: "PFE",   name: "Pfizer",                    exchange: "NYSE", tradeable: true}
+    - {ticker: "MRK",   name: "Merck",                     exchange: "NYSE", tradeable: true}
+    # Semiconductors
+    - {ticker: "AMD",   name: "Advanced Micro Devices",    exchange: "NYSE", tradeable: true}
+    - {ticker: "AVGO",  name: "Broadcom",                  exchange: "NYSE", tradeable: true}
+    - {ticker: "QCOM",  name: "Qualcomm",                  exchange: "NYSE", tradeable: true}
+    # Consumer Staples
+    - {ticker: "COST",  name: "Costco",                    exchange: "NYSE", tradeable: true}
+    - {ticker: "WMT",   name: "Walmart",                   exchange: "NYSE", tradeable: true}
+    # Energy
+    - {ticker: "XOM",   name: "ExxonMobil",                exchange: "NYSE", tradeable: true}
+    - {ticker: "CVX",   name: "Chevron",                   exchange: "NYSE", tradeable: true}
+    # Industrials
+    - {ticker: "CAT",   name: "Caterpillar",               exchange: "NYSE", tradeable: true}
+    - {ticker: "RTX",   name: "RTX Corporation",           exchange: "NYSE", tradeable: true}
+    # Gold Miners
     - {ticker: "NEM",   name: "Newmont Corporation",       exchange: "NYSE", tradeable: true}
     - {ticker: "GOLD",  name: "Barrick Gold",              exchange: "NYSE", tradeable: true}
 
