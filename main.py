@@ -4761,6 +4761,10 @@ def _render_trade_card(e: dict) -> None:
     bg      = _hex_rgba(colour, 0.08)
 
     ticker         = html.escape(str(e.get("ticker",    "")))
+    _ucits         = e.get("ucits_ticker", "")
+    ucits_suffix   = (f" <span style='color:#94a3b8;font-size:0.82rem;font-weight:400'>"
+                      f"({html.escape(str(_ucits))})</span>"
+                      if _ucits and _ucits != e.get("ticker") else "")
     direction      = html.escape(str(e.get("direction", "LONG")))
     days_held      = int(e.get("days_held") or 0)
     days_remaining = int(e.get("days_remaining") or 0)
@@ -4847,7 +4851,7 @@ def _render_trade_card(e: dict) -> None:
         f"<span style='background:{colour};color:#fff;padding:2px 9px;"
         f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
-        f"<strong style='font-size:1rem'>{ticker}</strong>"
+        f"<strong style='font-size:1rem'>{ticker}</strong>{ucits_suffix}"
         f"<span style='color:#64748b;font-size:0.85rem'>{direction} · "
         f"{'Day ' + str(days_held) + '/' + str(max_hold_days) if max_hold_days is not None else 'Day ' + str(days_held)}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
@@ -5220,6 +5224,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
 
         cards.append({
             "ticker":            research_ticker,
+            "ucits_ticker":      ucits_ticker,
             "direction":         "LONG",
             "entry_price":       avg_price,
             "quantity":          qty,
