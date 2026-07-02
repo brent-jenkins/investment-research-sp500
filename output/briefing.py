@@ -345,7 +345,12 @@ def _generate_daily_narrative(
         paragraph.
     """
     overlays = set(overlays or [])
-    regime_name = str(regime.get("regime", "MIXED"))
+    # regime["regime"] may be a Regime (str, Enum) instance or a plain string
+    # depending on the caller — str() on a (str, Enum) member renders as
+    # "Regime.MIXED" (its default Enum __str__), not the plain value, so pull
+    # .value explicitly when present rather than relying on str().
+    _regime_raw = regime.get("regime", "MIXED")
+    regime_name = str(getattr(_regime_raw, "value", _regime_raw))
     details = regime.get("details", {}) or {}
     adx     = details.get("adx")
     price   = details.get("price")
@@ -444,7 +449,7 @@ def _generate_daily_narrative(
         sell_n = all_counts.get("SELL", 0) + all_counts.get("STRONG SELL", 0)
         p1_sentences.append(
             f"Signal breadth across the tradeable watchlist stands at {buy_n} buy-leaning vs "
-            f"{sell_n} sell-leaning readings out of {tradeable_total}."
+            f"{sell_n} sell-leaning signals out of {tradeable_total}."
         )
 
     p1 = " ".join(p1_sentences)
@@ -472,8 +477,13 @@ def _generate_daily_narrative(
             frag += f" and {others[0]['label']} (Z={others[0]['z_score']:+.2f})"
         p2 = (
             f"{len(diverging)} pair{'s are' if len(diverging) != 1 else ' is'} diverging from historical "
-            f"norms — notably {frag}. {lead.get('diverge_template', '')}"
+            f"norms — notably {frag}."
         )
+        lead_template = (lead.get("diverge_template") or "").rstrip()
+        if lead_template:
+            if not lead_template.endswith((".", "!", "?")):
+                lead_template += "."
+            p2 += f" {lead_template}"
         if confirming:
             p2 += f" The remaining {len(confirming)} tracked pair(s) are confirming as expected."
 

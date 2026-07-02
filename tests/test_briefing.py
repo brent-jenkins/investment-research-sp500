@@ -8,6 +8,7 @@ fixtures required.
 
 import pytest
 
+from analysis.regime import Regime
 from output.briefing import _generate_daily_narrative
 
 
@@ -196,6 +197,89 @@ def test_open_trade_status_breakdown_is_reflected():
     assert "3 existing position" in lowered or "3 existing positions" in lowered
     assert "on track" in lowered
     assert "weakening" in lowered
+
+
+def test_real_regime_enum_never_leaks_raw_enum_repr():
+    """detect_regime() (the real production caller) puts an actual Regime
+    enum member — not a plain string — in regime["regime"]. The narrative
+    must never leak Python's default Enum repr ("Regime.MIXED") into the
+    displayed text, and must say "mixed" rather than falling back to
+    "unclassified" because the dict lookup missed on the unstringified key."""
+    html_out = _generate_daily_narrative(
+        _regime(Regime.MIXED),
+        _macro_data(),
+        [],
+        _signals(),
+        set(),
+        [],
+        _CONFIG_ALL_TRENDING_BULL_ONLY,
+    )
+    assert "Regime." not in html_out
+    assert "unclassified" not in html_out.lower()
+    assert "mixed" in html_out.lower()
+
+
+def test_blocked_entries_sentence_names_regime_once_with_no_enum_leak():
+    """The blocked-entries reason in paragraph 3 must read '...blocked in
+    the current MIXED regime' — a plain regime name followed by a single
+    literal "regime", not "...current Regime.Mixed regime"."""
+    html_out = _generate_daily_narrative(
+        _regime(Regime.MIXED),
+        _macro_data(),
+        [],
+        _signals(),
+        set(),
+        [],
+        _CONFIG_ALL_TRENDING_BULL_ONLY,
+    )
+    assert "Regime." not in html_out
+    assert "current Mixed regime" in html_out or "current MIXED regime" in html_out
+
+
+def test_signal_breadth_sentence_says_signals_not_readings():
+    html_out = _generate_daily_narrative(
+        _regime("MIXED"),
+        _macro_data(),
+        [],
+        _signals(),
+        set(),
+        [],
+        _CONFIG_ALL_TRENDING_BULL_ONLY,
+    )
+    assert "readings" not in html_out.lower()
+    assert "sell-leaning signals" in html_out
+
+
+def test_diverging_pair_sentence_has_full_stop_before_remaining_pairs_clause():
+    relationships = [
+        {
+            "label": "Gold vs Dollar",
+            "divergence": "DIVERGING",
+            "z_score": 2.10,
+            "corr_30d": 0.42,
+            "diverge_template": "Gold and dollar moving together — safe-haven/dollar relationship has broken down",
+            "confirm_template": "Gold/dollar inverse relationship is intact",
+        },
+        {
+            "label": "VIX vs S&P 500",
+            "divergence": "CONFIRMING",
+            "z_score": 0.2,
+            "corr_30d": -0.7,
+            "diverge_template": "",
+            "confirm_template": "VIX/equity inverse relationship is intact",
+        },
+    ]
+    html_out = _generate_daily_narrative(
+        _regime("MIXED"),
+        _macro_data(),
+        relationships,
+        _signals(),
+        set(),
+        [],
+        _CONFIG_ALL_TRENDING_BULL_ONLY,
+    )
+    assert "broken down. The remaining" in html_out
+    assert "broken down The remaining" not in html_out
 
 
 def test_no_external_calls_no_db_no_scheduler_side_effects():

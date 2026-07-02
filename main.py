@@ -5550,6 +5550,72 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             unsafe_allow_html=True,
         )
 
+    # ── Market Narrative (rule-based plain-English summary; see
+    # output/briefing.py:_generate_daily_narrative()) — placed near the top
+    # of the page, directly below the regime status bar. Reuses regime_result,
+    # ctx and active_overlays already computed above; macro_dash and the
+    # signal-distribution counts are re-fetched here under a "_narrative_"
+    # prefix (cheap, read-only DB calls) since the page's own copies of
+    # those aren't computed until further down. Open-position status is
+    # computed via the same enrich_open_trade() + cached (5-min TTL)
+    # live-price helper the Open Trade Monitor section uses further down,
+    # so it's effectively free once prices are warm in Streamlit's cache —
+    # no alert emails are sent from this pass, that stays solely in the
+    # Open Trade Monitor section. ────────────────────────────────────────
+    _narrative_macro_dash   = get_macro_dashboard(config)
+    relationships_data      = get_stored_correlations()
+    _narrative_all_signals  = get_latest_signals(list(watchlist.keys()))
+    _narrative_trd_signals  = [s for s in _narrative_all_signals if s.get("ticker") in tradeable_set]
+
+    def _narrative_count_signals(signals_list: list) -> dict:
+        c = dict.fromkeys(["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"], 0)
+        for s in signals_list:
+            lbl = (s.get("signal") or "NEUTRAL").replace("_", " ")
+            if lbl in c:
+                c[lbl] += 1
+        return c
+
+    _narrative_open_trades: list[dict] = []
+    try:
+        _narr_raw_open = get_open_trades()
+    except Exception:
+        _narr_raw_open = []
+    if _narr_raw_open:
+        _narr_prices = {
+            t: _cached_latest_price(t) for t in {ot["ticker"] for ot in _narr_raw_open}
+        }
+        _narrative_open_trades = [
+            enrich_open_trade(ot, _narr_prices.get(ot["ticker"]), get_max_holding_days(ot["ticker"], config))
+            for ot in _narr_raw_open
+        ]
+    _narrative_open_trades += _get_t212_invest_brief_cards(config)
+
+    _narrative_macro_data = {**ctx, **_narrative_macro_dash}
+    _narrative_signals = {
+        "counts":           _narrative_count_signals(_narrative_all_signals),
+        "tradeable_counts": _narrative_count_signals(_narrative_trd_signals),
+        "total":            len(_narrative_all_signals),
+        "tradeable_total":  len(_narrative_trd_signals),
+    }
+
+    _narrative_html = _generate_daily_narrative(
+        regime_result,
+        _narrative_macro_data,
+        relationships_data,
+        _narrative_signals,
+        active_overlays,
+        _narrative_open_trades,
+        config,
+    )
+    st.markdown(
+        "<div style='border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin:10px 0'>"
+        "<div style='font-size:0.75rem;font-weight:700;color:#94a3b8;"
+        "text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px'>Today's Briefing</div>"
+        f"{_narrative_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
     # ── Key Events (FOMC / Fed calendar) ───────────────────────────────────
     try:
         from analysis.fomc import get_fomc_events  # noqa: PLC0415
@@ -6087,60 +6153,6 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                         ),
                         unsafe_allow_html=True,
                     )
-
-    st.divider()
-
-    # ── Market Narrative (rule-based plain-English summary; see
-    # output/briefing.py:_generate_daily_narrative()) — reuses data already
-    # computed above (regime_result, ctx, macro_dash, active_overlays,
-    # all_signals counts) plus one cheap correlations read. Open-position
-    # status is computed here via the same enrich_open_trade() + cached
-    # (5-min TTL) live-price helper the Open Trade Monitor section below
-    # uses, so it's effectively free on the common case where prices are
-    # already warm in Streamlit's cache — no alert emails are sent from
-    # this pass, that stays solely in the Open Trade Monitor section. ────
-    relationships_data = get_stored_correlations()
-
-    _narrative_open_trades: list[dict] = []
-    try:
-        _narr_raw_open = get_open_trades()
-    except Exception:
-        _narr_raw_open = []
-    if _narr_raw_open:
-        _narr_prices = {
-            t: _cached_latest_price(t) for t in {ot["ticker"] for ot in _narr_raw_open}
-        }
-        _narrative_open_trades = [
-            enrich_open_trade(ot, _narr_prices.get(ot["ticker"]), get_max_holding_days(ot["ticker"], config))
-            for ot in _narr_raw_open
-        ]
-    _narrative_open_trades += _get_t212_invest_brief_cards(config)
-
-    _narrative_macro_data = {**ctx, **macro_dash}
-    _narrative_signals = {
-        "counts":           _all_counts,
-        "tradeable_counts": _trd_counts,
-        "total":            len(all_signals),
-        "tradeable_total":  len(_trd_signals_all),
-    }
-
-    _narrative_html = _generate_daily_narrative(
-        regime_result,
-        _narrative_macro_data,
-        relationships_data,
-        _narrative_signals,
-        active_overlays,
-        _narrative_open_trades,
-        config,
-    )
-    st.markdown(
-        "<div style='border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin:10px 0'>"
-        "<div style='font-size:0.75rem;font-weight:700;color:#94a3b8;"
-        "text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px'>Today's Briefing</div>"
-        f"{_narrative_html}"
-        "</div>",
-        unsafe_allow_html=True,
-    )
 
     st.divider()
 
