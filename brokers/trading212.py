@@ -59,7 +59,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _instruments_cache: dict[str, tuple[datetime, list]] = {}
-_INSTRUMENTS_TTL = timedelta(hours=24)
+# Instrument prices (read from this same cache via get_instrument_price_gbp)
+# are used directly for order sizing, so a 24h TTL was too stale for that
+# purpose even though it was fine for the mostly-static metadata fields
+# (currencyCode, minTradeQuantity) this cache originally existed for.
+_INSTRUMENTS_TTL = timedelta(hours=1)
 
 
 # ---------------------------------------------------------------------------
@@ -184,15 +188,13 @@ class Trading212Client:
         r = self._request("GET", f"/equity/orders/{order_id}")
         return r.json()
 
-    def get_quantity_for_gbp(self, ticker: str, gbp_amount: float) -> float:
-        """Calculate share quantity for a given GBP order size.
+    @staticmethod
+    def _fx_rates() -> tuple[float, float]:
+        """Return (gbpusd, eurusd) — latest close prices from price_data.
 
-        Looks up the latest close price from our local price_data DB for the
-        underlying US ticker, then converts GBP to USD using the stored GBPUSD
-        rate.  Returns 0.0 if the price is unavailable.
-
-        Most T212 UCITS instruments are USD-denominated and price-track their
-        US counterpart closely enough for order-sizing purposes.
+        GBPUSD=X and EURUSD=X are both quoted as USD-per-1-unit, e.g.
+        GBPUSD=X ~= 1.27 means 1 GBP = 1.27 USD. Falls back to a fixed
+        approximation if either series is missing from the DB.
         """
         try:
             from sqlalchemy import text as sa_text
@@ -202,23 +204,128 @@ class Trading212Client:
                 row = conn.execute(sa_text("""
                     SELECT
                         (SELECT close FROM price_data
-                         WHERE ticker = :ticker ORDER BY date DESC LIMIT 1) AS price,
+                         WHERE ticker = 'GBPUSD=X' ORDER BY date DESC LIMIT 1) AS gbpusd,
                         (SELECT close FROM price_data
-                         WHERE ticker = 'GBPUSD=X' ORDER BY date DESC LIMIT 1) AS gbpusd
-                """), {"ticker": ticker}).fetchone()
+                         WHERE ticker = 'EURUSD=X' ORDER BY date DESC LIMIT 1) AS eurusd
+                """)).fetchone()
+            gbpusd = float(row[0]) if row and row[0] else 1.27
+            eurusd = float(row[1]) if row and row[1] else 1.08
+            return gbpusd, eurusd
+        except Exception:
+            return 1.27, 1.08
 
-            if not row or row[0] is None:
-                logger.warning("get_quantity_for_gbp: no price for %s", ticker)
-                return 0.0
+    @staticmethod
+    def _to_gbp(price: float, currency: str, gbpusd: float, eurusd: float) -> Optional[float]:
+        """Convert a native-currency instrument price to GBP. None if unknown currency."""
+        currency = (currency or "").upper()
+        if currency == "GBP":
+            return price
+        if currency == "GBX":   # LSE pence quoting
+            return price / 100.0
+        if currency == "USD":
+            return price / gbpusd if gbpusd else None
+        if currency == "EUR":
+            return (price * eurusd) / gbpusd if gbpusd else None
+        return None
 
-            price_usd = float(row[0])
-            gbpusd    = float(row[1]) if row[1] else 1.27
-            quantity  = round((gbp_amount * gbpusd) / price_usd, 4)
-            return max(0.0, quantity)
+    def get_instrument_price_gbp(
+        self, t212_ticker: str, research_ticker: Optional[str] = None,
+    ) -> float:
+        """Return the T212 instrument's own per-share price, converted to GBP.
 
+        Primary path: reads currentPrice + currencyCode for t212_ticker from
+        get_instruments() metadata and converts to GBP via live FX rates.
+        UCITS instrument prices can differ from the US research ticker's
+        price by an order of magnitude in either direction (different
+        listing venue, different share structure) — sizing must always
+        prefer the instrument's own price when it is available.
+
+        Fallback path: if the instruments API has no usable price for this
+        instrument, falls back to research_ticker's close price from
+        price_data (assumed USD) — the old, less accurate behaviour. Logs a
+        clear warning since this may misestimate order size for UCITS
+        instruments whose price diverges from the research ticker.
+
+        Returns 0.0 if no price could be determined at all.
+        """
+        gbpusd, eurusd = self._fx_rates()
+
+        try:
+            instruments = self.get_instruments()
+            inst = next(
+                (i for i in (instruments or []) if i.get("ticker") == t212_ticker), None,
+            )
+            if inst:
+                raw_price = inst.get("currentPrice") or inst.get("price")
+                currency  = inst.get("currencyCode") or ""
+                if raw_price:
+                    price_gbp = self._to_gbp(float(raw_price), currency, gbpusd, eurusd)
+                    if price_gbp and price_gbp > 0:
+                        return price_gbp
         except Exception as exc:
-            logger.warning("get_quantity_for_gbp failed for %s: %s", ticker, exc)
+            logger.warning(
+                "get_instrument_price_gbp: instrument lookup failed for %s: %s",
+                t212_ticker, exc,
+            )
+
+        if not research_ticker:
             return 0.0
+
+        logger.warning(
+            "WARNING: Using research ticker price for %s quantity estimation — "
+            "T212 instrument price unavailable. Order size may be inaccurate.",
+            research_ticker,
+        )
+        try:
+            from sqlalchemy import text as sa_text
+            from data.database import get_engine
+            eng = get_engine()
+            with eng.connect() as conn:
+                row = conn.execute(sa_text("""
+                    SELECT close FROM price_data
+                    WHERE ticker = :ticker ORDER BY date DESC LIMIT 1
+                """), {"ticker": research_ticker}).fetchone()
+            if row and row[0]:
+                return float(row[0]) / gbpusd if gbpusd else 0.0
+        except Exception as exc:
+            logger.warning(
+                "get_instrument_price_gbp: fallback price lookup failed for %s: %s",
+                research_ticker, exc,
+            )
+        return 0.0
+
+    def get_quantity_for_gbp(
+        self,
+        t212_ticker: str,
+        gbp_amount: float,
+        research_ticker: Optional[str] = None,
+        floor_to_whole_share: bool = True,
+    ) -> float:
+        """Calculate share quantity for a given GBP order size.
+
+        Sizes against the T212 instrument's own price (via
+        get_instrument_price_gbp), not the research ticker's price — see
+        that method's docstring for why. floor_to_whole_share defaults to
+        True (whole-share UCITS ETF orders); callers placing fractional
+        share orders should pass False and apply their own precision
+        rounding to the raw quantity.
+        """
+        price_gbp = self.get_instrument_price_gbp(t212_ticker, research_ticker=research_ticker)
+        if not price_gbp or price_gbp <= 0:
+            logger.warning("get_quantity_for_gbp: no usable price for %s — returning 0.", t212_ticker)
+            return 0.0
+
+        raw_quantity = gbp_amount / price_gbp
+        quantity = math.floor(raw_quantity) if floor_to_whole_share else round(raw_quantity, 4)
+        quantity = max(0.0, quantity)
+
+        logger.info(
+            "Sizing %s (%s): price=%.4f GBP, target=%.2f GBP, quantity=%s, "
+            "estimated_value=%.2f GBP",
+            research_ticker or t212_ticker, t212_ticker, price_gbp, gbp_amount,
+            quantity, quantity * price_gbp,
+        )
+        return quantity
 
 
 # ---------------------------------------------------------------------------
@@ -948,10 +1055,17 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             )
             break
 
-        quantity = client.get_quantity_for_gbp(us_ticker, position_gbp)
+        # Size using the UCITS instrument's own price, not the US research
+        # ticker's price — UCITS instrument prices can differ from the
+        # research ticker's price by an order of magnitude in either
+        # direction (different listing, different share structure).
+        quantity = client.get_quantity_for_gbp(
+            ucits_ticker, position_gbp, research_ticker=us_ticker,
+        )
         if quantity <= 0:
             logger.warning(
-                "T212 Invest: could not calculate quantity for %s — skipping.", us_ticker,
+                "T212 Invest: could not calculate quantity for %s (%s) — skipping.",
+                us_ticker, ucits_ticker,
             )
             continue
 
@@ -975,6 +1089,12 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
                 us_ticker, quantity,
             )
             continue
+
+        # Actual instrument price used for sizing, re-read for an accurate
+        # estimated_value_gbp (quantity was floored above, so this differs
+        # slightly from the pre-floor target position_gbp).
+        price_gbp     = client.get_instrument_price_gbp(ucits_ticker, research_ticker=us_ticker)
+        est_value_gbp = quantity * price_gbp if price_gbp else position_gbp
 
         live_price = prices.get(us_ticker, 0.0)
         status     = "FAILED"
@@ -1006,7 +1126,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             direction="BUY",
             quantity=quantity,
             estimated_price=live_price,
-            estimated_value_gbp=position_gbp,
+            estimated_value_gbp=est_value_gbp,
             status=status,
             order_id=order_id,
             signal_type=sig_type,
@@ -1432,10 +1552,18 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             )
             break
 
-        raw_quantity = client.get_quantity_for_gbp(us_ticker, position_gbp)
+        # Size using the T212 instrument's own price, not the research
+        # ticker's price — for most us_large_cap stocks the T212 instrument
+        # ticker equals the research ticker so these usually match, but any
+        # trading212_instrument override (a different T212 listing) can
+        # diverge the same way UCITS ETF instruments do.
+        raw_quantity = client.get_quantity_for_gbp(
+            t212_ticker, position_gbp, research_ticker=us_ticker, floor_to_whole_share=False,
+        )
         if raw_quantity <= 0:
             logger.warning(
-                "T212 Stocks: could not calculate quantity for %s — skipping.", us_ticker,
+                "T212 Stocks: could not calculate quantity for %s (%s) — skipping.",
+                us_ticker, t212_ticker,
             )
             continue
 
@@ -1465,6 +1593,9 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             )
             continue
 
+        price_gbp     = client.get_instrument_price_gbp(t212_ticker, research_ticker=us_ticker)
+        est_value_gbp = quantity * price_gbp if price_gbp else position_gbp
+
         live_price = prices.get(us_ticker, 0.0)
         status     = "FAILED"
         order_id   = None
@@ -1493,7 +1624,7 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             direction="BUY",
             quantity=quantity,
             estimated_price=live_price,
-            estimated_value_gbp=position_gbp,
+            estimated_value_gbp=est_value_gbp,
             status=status,
             order_id=order_id,
             signal_type=sig_type,

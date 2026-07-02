@@ -75,6 +75,7 @@ def stock_mocks(db_engine, monkeypatch, mocker):
         {"ticker": "AAPL", "currencyCode": "USD", "maxQuantityPrecision": 2, "minTradeQuantity": 0.01},
     ]
     mock_client.get_quantity_for_gbp.return_value = 1.23456
+    mock_client.get_instrument_price_gbp.return_value = 150.0
     mock_client.place_market_order.return_value = {"id": "mock-stock-order-1"}
 
     mocker.patch("brokers.trading212.Trading212Client", return_value=mock_client)
@@ -96,10 +97,54 @@ def test_trending_bear_regime_skips_buy_phase(db_engine, stock_mocks):
     stock_mocks.place_market_order.assert_not_called()
 
 
-def test_get_quantity_for_gbp_converts_using_live_fx_rate(db_engine, monkeypatch):
-    """get_quantity_for_gbp() must convert the GBP order size to USD using the
-    live GBPUSD=X close price from price_data, then divide by the ticker's
-    own close price — the core of the fractional-share sizing calculation."""
+def test_get_quantity_for_gbp_uses_ucits_instrument_price_iwm(db_engine, monkeypatch, mocker):
+    """Regression test for a live mis-sizing: the IWM UCITS instrument
+    (RU2Kl_EQ) trades around £5.25/share on T212, completely unrelated to
+    the US IWM close price (~$220) that get_quantity_for_gbp() used to read
+    instead. A £500 target must size off the instrument's own price."""
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+    with Session(db_engine) as session:
+        session.add(PriceData(ticker="IWM", date=datetime.utcnow(), close=220.0))
+        session.commit()
+
+    from brokers.trading212 import Trading212Client
+    client = Trading212Client(live=False)
+    mocker.patch.object(client, "get_instruments", return_value=[
+        {"ticker": "RU2Kl_EQ", "currencyCode": "GBP", "currentPrice": 5.25},
+    ])
+
+    quantity = client.get_quantity_for_gbp("RU2Kl_EQ", 500.0, research_ticker="IWM")
+
+    assert quantity == 95  # floor(500 / 5.25) = 95, not floor(500/220)=2
+
+
+def test_get_quantity_for_gbp_uses_ucits_instrument_price_xlf(db_engine, monkeypatch, mocker):
+    """Regression test for a second live mis-sizing: the XLF UCITS instrument
+    (STZXs_EQ) trades around £130/share, far above the US XLF close price
+    (~$50) that used to be read instead."""
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+    with Session(db_engine) as session:
+        session.add(PriceData(ticker="XLF", date=datetime.utcnow(), close=50.0))
+        session.commit()
+
+    from brokers.trading212 import Trading212Client
+    client = Trading212Client(live=False)
+    mocker.patch.object(client, "get_instruments", return_value=[
+        {"ticker": "STZXs_EQ", "currencyCode": "GBP", "currentPrice": 130.0},
+    ])
+
+    quantity = client.get_quantity_for_gbp("STZXs_EQ", 500.0, research_ticker="XLF")
+
+    assert quantity == 3  # floor(500 / 130) = 3, not floor(500/50)=12 or similar
+
+
+def test_get_quantity_for_gbp_falls_back_when_instrument_price_missing(db_engine, monkeypatch, mocker, caplog):
+    """When the T212 instruments API has no price for the instrument,
+    get_quantity_for_gbp() must fall back to the research ticker's close
+    price from price_data, convert via live GBPUSD=X, and log a clear
+    warning that the fallback (potentially inaccurate) path was used."""
     monkeypatch.setenv("T212_API_KEY", "test-key")
     monkeypatch.setenv("T212_API_SECRET", "test-secret")
     with Session(db_engine) as session:
@@ -109,10 +154,38 @@ def test_get_quantity_for_gbp_converts_using_live_fx_rate(db_engine, monkeypatch
 
     from brokers.trading212 import Trading212Client
     client = Trading212Client(live=False)
-    quantity = client.get_quantity_for_gbp("AAPL", 100.0)
+    mocker.patch.object(client, "get_instruments", return_value=[])  # no instrument price available
 
-    # £100 * 1.25 USD/GBP = $125; $125 / $200 per share = 0.625 shares
+    with caplog.at_level("WARNING"):
+        quantity = client.get_quantity_for_gbp(
+            "AAPL_UCITS", 100.0, research_ticker="AAPL", floor_to_whole_share=False,
+        )
+
+    # £100 / (200/1.25 GBP-per-share) = 0.625 shares
     assert quantity == pytest.approx(0.625, abs=1e-4)
+    assert "instrument price unavailable" in caplog.text.lower()
+
+
+def test_get_quantity_for_gbp_logs_sizing_calculation_detail(db_engine, monkeypatch, mocker, caplog):
+    """Every sizing call must log price/target/quantity/estimated-value at
+    INFO level so a future sizing discrepancy is diagnosable from server
+    logs without needing to reproduce the bug."""
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+
+    from brokers.trading212 import Trading212Client
+    client = Trading212Client(live=False)
+    mocker.patch.object(client, "get_instruments", return_value=[
+        {"ticker": "RU2Kl_EQ", "currencyCode": "GBP", "currentPrice": 5.25},
+    ])
+
+    with caplog.at_level("INFO"):
+        client.get_quantity_for_gbp("RU2Kl_EQ", 500.0, research_ticker="IWM")
+
+    assert "Sizing" in caplog.text
+    assert "RU2Kl_EQ" in caplog.text
+    assert "quantity" in caplog.text.lower()
+    assert "estimated_value" in caplog.text.lower()
 
 
 def test_fractional_order_rounds_to_instrument_precision_not_floored(db_engine, stock_mocks):

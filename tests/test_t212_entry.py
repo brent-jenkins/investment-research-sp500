@@ -71,6 +71,7 @@ def t212_mocks(db_engine, monkeypatch, mocker):
     mock_client.get_positions.return_value = []          # no existing positions
     mock_client.get_instruments.return_value = []         # instrument_meta stays empty -> min_qty defaults to 1.0
     mock_client.get_quantity_for_gbp.return_value = 10.0
+    mock_client.get_instrument_price_gbp.return_value = 50.0
     mock_client.place_market_order.return_value = {"id": "mock-order-1"}
 
     mocker.patch("brokers.trading212.Trading212Client", return_value=mock_client)
