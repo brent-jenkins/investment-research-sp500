@@ -275,7 +275,7 @@ _NARRATIVE_REGIME_PLAIN: dict[str, str] = {
     "TRENDING_BEAR":   "a bearish trending",
     "RANGING_LOW_VOL": "a low-volatility, range-bound",
     "HIGH_VOLATILITY": "a high-volatility",
-    "MIXED":           "a mixed, unclear",
+    "MIXED":           "a mixed",
 }
 
 _NARRATIVE_OVERLAY_LABELS: dict[str, str] = {
