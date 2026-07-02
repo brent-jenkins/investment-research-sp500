@@ -90,6 +90,7 @@ from analysis.backtest_metrics import (
 from output.briefing import (
     STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
     STATUS_ICONS   as _BRIEF_STATUS_ICONS,
+    _generate_daily_narrative,
     build_opportunities,
     enrich_open_trade,
     get_current_atr,
@@ -6086,6 +6087,60 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                         ),
                         unsafe_allow_html=True,
                     )
+
+    st.divider()
+
+    # ── Market Narrative (rule-based plain-English summary; see
+    # output/briefing.py:_generate_daily_narrative()) — reuses data already
+    # computed above (regime_result, ctx, macro_dash, active_overlays,
+    # all_signals counts) plus one cheap correlations read. Open-position
+    # status is computed here via the same enrich_open_trade() + cached
+    # (5-min TTL) live-price helper the Open Trade Monitor section below
+    # uses, so it's effectively free on the common case where prices are
+    # already warm in Streamlit's cache — no alert emails are sent from
+    # this pass, that stays solely in the Open Trade Monitor section. ────
+    relationships_data = get_stored_correlations()
+
+    _narrative_open_trades: list[dict] = []
+    try:
+        _narr_raw_open = get_open_trades()
+    except Exception:
+        _narr_raw_open = []
+    if _narr_raw_open:
+        _narr_prices = {
+            t: _cached_latest_price(t) for t in {ot["ticker"] for ot in _narr_raw_open}
+        }
+        _narrative_open_trades = [
+            enrich_open_trade(ot, _narr_prices.get(ot["ticker"]), get_max_holding_days(ot["ticker"], config))
+            for ot in _narr_raw_open
+        ]
+    _narrative_open_trades += _get_t212_invest_brief_cards(config)
+
+    _narrative_macro_data = {**ctx, **macro_dash}
+    _narrative_signals = {
+        "counts":           _all_counts,
+        "tradeable_counts": _trd_counts,
+        "total":            len(all_signals),
+        "tradeable_total":  len(_trd_signals_all),
+    }
+
+    _narrative_html = _generate_daily_narrative(
+        regime_result,
+        _narrative_macro_data,
+        relationships_data,
+        _narrative_signals,
+        active_overlays,
+        _narrative_open_trades,
+        config,
+    )
+    st.markdown(
+        "<div style='border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin:10px 0'>"
+        "<div style='font-size:0.75rem;font-weight:700;color:#94a3b8;"
+        "text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px'>Today's Briefing</div>"
+        f"{_narrative_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     st.divider()
 

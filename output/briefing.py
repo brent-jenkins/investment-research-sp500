@@ -1,9 +1,10 @@
 """Daily briefing: trade status computation, macro context, opportunities, email alerts."""
 
+import html
 import logging
 import os
 import smtplib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
@@ -14,7 +15,7 @@ from typing import Optional
 import yaml
 from sqlalchemy import text
 
-from analysis.regime import get_max_holding_days as _asset_max_hold
+from analysis.regime import get_max_holding_days as _asset_max_hold, is_entry_allowed
 from data.database import clear_metadata, get_engine, get_metadata, get_metadata_str, set_metadata
 from output.performance import get_closed_trades, get_current_signal, get_open_trades
 
@@ -262,6 +263,285 @@ def get_macro_context() -> dict:
     except Exception as exc:
         logger.warning("Macro context read failed: %s", exc)
     return ctx
+
+
+# ---------------------------------------------------------------------------
+# Daily narrative — rule-based plain-English market summary for the Daily
+# Briefing page. See _generate_daily_narrative() docstring for the approach.
+# ---------------------------------------------------------------------------
+
+_NARRATIVE_REGIME_PLAIN: dict[str, str] = {
+    "TRENDING_BULL":   "a bullish trending",
+    "TRENDING_BEAR":   "a bearish trending",
+    "RANGING_LOW_VOL": "a low-volatility, range-bound",
+    "HIGH_VOLATILITY": "a high-volatility",
+    "MIXED":           "a mixed, unclear",
+}
+
+_NARRATIVE_OVERLAY_LABELS: dict[str, str] = {
+    "MACRO_STRESS":     "Macro Stress",
+    "VOL_REGIME_SHIFT":  "Vol Regime Shift",
+    "CREDIT_STRESS":    "Credit Stress",
+    "RECESSION_RISK":   "Recession Risk",
+    "EM_STRESS":        "EM Stress",
+}
+
+
+def _generate_daily_narrative(
+    regime: dict,
+    macro_data: dict,
+    relationships: list,
+    signals: dict,
+    overlays,
+    open_trades: list,
+    config: dict,
+) -> str:
+    """Generate a rule-based, plain-English 3-paragraph market narrative.
+
+    This is intentionally rule-based — conditional sentence fragments
+    assembled from threshold checks against live data — not AI-generated,
+    following the same pattern as the "Market Intelligence" summary on the
+    Signals page (main.py:_render_signals_page, the `_intel` list joined
+    into a single st.info() call). No call is made to the Anthropic API or
+    any other external service, nothing is written to the database, and no
+    scheduler job is involved — the narrative is regenerated fresh on every
+    Daily Briefing render from data already computed for that render.
+    Migrating to Claude API generation (for more natural phrasing, or to
+    weave the fragments together more fluidly) is a considered future
+    enhancement, not yet implemented.
+
+    Args:
+        regime: detect_regime() output — {"regime": Regime, "details":
+            {"price", "sma_200", "adx", "vix"}, "description", "colour"}.
+        macro_data: get_macro_context() and get_macro_dashboard() dicts
+            merged into one — vix, yield_spread, yield_regime, dollar_trend,
+            dollar_pct, composite_score, n_bullish, n_bearish, n_neutral,
+            n_series, has_data, real_yield, real_yield_trend, breakeven,
+            breakeven_trend, credit_status, fed_rate, fed_rate_trend,
+            extra_series (list of dicts, one of which may have
+            series_id == "CFNAI").
+        relationships: get_stored_correlations() output — list of pair
+            dicts with label, divergence, z_score, corr_30d,
+            diverge_template, confirm_template.
+        signals: {"counts": {signal_label: count}, "tradeable_counts":
+            {...}, "total": int, "tradeable_total": int} — signal
+            distribution, using the same "STRONG BUY"/"BUY"/... labels as
+            the Daily Briefing's own signal-distribution display.
+        overlays: iterable of active overlay keys (e.g. {"CREDIT_STRESS"}) —
+            same set as system_metadata's active_overlays.
+        open_trades: list of enriched trade/position dicts, each with a
+            "status" key in {"ON TRACK", "WEAKENING", "EXIT SIGNAL",
+            "STOP LOSS"} (the same shape used elsewhere on the Daily
+            Briefing for the open trade monitor).
+        config: full app config — read for allowed_entry_regimes per
+            automation path (trading212_invest, trading212_stocks,
+            virtual_trading) via analysis.regime.is_entry_allowed().
+
+    Returns:
+        HTML string of up to three <p> paragraphs (each html.escape()'d
+        internally), ready to embed inside an existing bordered card via
+        st.markdown(..., unsafe_allow_html=True). Never empty for any of
+        the five Regime values — always returns at least the environment
+        paragraph.
+    """
+    overlays = set(overlays or [])
+    regime_name = str(regime.get("regime", "MIXED"))
+    details = regime.get("details", {}) or {}
+    adx     = details.get("adx")
+    price   = details.get("price")
+    sma_200 = details.get("sma_200")
+    vix     = macro_data.get("vix")
+
+    # ── Paragraph 1: market environment ─────────────────────────────────────
+    regime_plain = _NARRATIVE_REGIME_PLAIN.get(regime_name, "an unclassified")
+
+    if adx is None:
+        trend_phrase = "trend strength (ADX) is not yet available"
+    elif adx < 20:
+        trend_phrase = f"trend momentum is weak (ADX {adx:.1f}, below the 25 threshold for a confirmed trend)"
+    elif adx < 25:
+        trend_phrase = f"trend momentum is moderate (ADX {adx:.1f}, approaching but not yet confirming a trend)"
+    else:
+        trend_phrase = f"trend momentum is strong (ADX {adx:.1f}, a confirmed trend above the 25 threshold)"
+
+    if vix is None:
+        vol_phrase = "VIX data is not yet available"
+    elif vix < 15:
+        vol_phrase = f"volatility is suppressed (VIX {vix:.1f})"
+    elif vix < 20:
+        vol_phrase = f"volatility is calm but not suppressed (VIX {vix:.1f})"
+    elif vix < 30:
+        vol_phrase = f"volatility is elevated (VIX {vix:.1f})"
+    else:
+        vol_phrase = f"volatility is high (VIX {vix:.1f})"
+
+    p1_sentences: list[str] = [
+        f"Markets are in {regime_plain} regime — {trend_phrase} and {vol_phrase}."
+    ]
+
+    if price is not None and sma_200:
+        pct = (price / sma_200 - 1) * 100
+        p1_sentences.append(
+            f"The S&P 500 is trading {abs(pct):.1f}% {'above' if pct >= 0 else 'below'} its 200-day moving average."
+        )
+
+    yield_regime = macro_data.get("yield_regime")
+    dollar_trend = macro_data.get("dollar_trend")
+    if yield_regime and dollar_trend:
+        p1_sentences.append(f"The yield curve is {yield_regime} and the dollar is {dollar_trend}.")
+    elif yield_regime:
+        p1_sentences.append(f"The yield curve is {yield_regime}.")
+    elif dollar_trend:
+        p1_sentences.append(f"The dollar is {dollar_trend}.")
+
+    composite = macro_data.get("composite_score")
+    n_bullish = macro_data.get("n_bullish")
+    n_series  = macro_data.get("n_series")
+    if macro_data.get("has_data") and composite is not None and n_series:
+        if composite > 0.3:
+            macro_word = "broadly supportive"
+        elif composite < -0.3:
+            macro_word = "broadly cautionary"
+        else:
+            macro_word = "mixed"
+        macro_sentence = f"The macro backdrop is {macro_word} with {n_bullish} of {n_series} indicators bullish"
+
+        cfnai_entry = next(
+            (e for e in (macro_data.get("extra_series") or []) if e.get("series_id") == "CFNAI"),
+            None,
+        )
+        cfnai_val: Optional[float] = None
+        if cfnai_entry and cfnai_entry.get("display_value") not in (None, "—"):
+            try:
+                cfnai_val = float(cfnai_entry["display_value"])
+            except (TypeError, ValueError):
+                cfnai_val = None
+        if cfnai_val is not None:
+            if cfnai_val < -0.70:
+                cfnai_word = "recessionary"
+            elif cfnai_val <= 0:
+                cfnai_word = "running below trend"
+            else:
+                cfnai_word = "running above trend"
+            macro_sentence += f", though growth is {cfnai_word} (CFNAI {cfnai_val:+.2f})"
+        p1_sentences.append(macro_sentence + ".")
+    elif macro_data.get("has_data") is False:
+        p1_sentences.append("Macro indicator data has not been fetched yet.")
+
+    if overlays:
+        overlay_labels = [
+            _NARRATIVE_OVERLAY_LABELS.get(k, k.replace("_", " ").title())
+            for k in sorted(overlays)
+        ]
+        p1_sentences.append(
+            f"Active risk overlay{'s' if len(overlay_labels) > 1 else ''}: {', '.join(overlay_labels)}."
+        )
+
+    all_counts = signals.get("counts", {}) or {}
+    tradeable_total = signals.get("tradeable_total")
+    if tradeable_total:
+        buy_n  = all_counts.get("STRONG BUY", 0) + all_counts.get("BUY", 0)
+        sell_n = all_counts.get("SELL", 0) + all_counts.get("STRONG SELL", 0)
+        p1_sentences.append(
+            f"Signal breadth across the tradeable watchlist stands at {buy_n} buy-leaning vs "
+            f"{sell_n} sell-leaning readings out of {tradeable_total}."
+        )
+
+    p1 = " ".join(p1_sentences)
+
+    # ── Paragraph 2: cross-asset relationships ──────────────────────────────
+    relationships = relationships or []
+    scored = [p for p in relationships if p.get("z_score") is not None]
+    diverging  = [p for p in scored if p.get("divergence") == "DIVERGING"]
+    confirming = [p for p in scored if p.get("divergence") == "CONFIRMING"]
+
+    if not scored:
+        p2 = "Cross-asset relationship data is not yet available."
+    elif not diverging:
+        p2 = "Cross-asset relationships are broadly normal — no pairs are currently diverging from historical norms"
+        if confirming:
+            p2 += f", and {len(confirming)} pair(s) are actively confirming their expected direction"
+        p2 += "."
+    else:
+        notable = [p for p in diverging if abs(p.get("z_score") or 0) > 1.5] or diverging
+        notable.sort(key=lambda p: abs(p.get("z_score") or 0), reverse=True)
+        lead = notable[0]
+        frag = f"{lead['label']} (Z={lead['z_score']:+.2f})"
+        others = notable[1:2]
+        if others:
+            frag += f" and {others[0]['label']} (Z={others[0]['z_score']:+.2f})"
+        p2 = (
+            f"{len(diverging)} pair{'s are' if len(diverging) != 1 else ' is'} diverging from historical "
+            f"norms — notably {frag}. {lead.get('diverge_template', '')}"
+        )
+        if confirming:
+            p2 += f" The remaining {len(confirming)} tracked pair(s) are confirming as expected."
+
+    # ── Paragraph 3: system status and what to watch ────────────────────────
+    _AUTOMATION_SECTIONS = (
+        ("trading212_invest",  "T212 ETF"),
+        ("trading212_stocks",  "T212 Stocks"),
+        ("virtual_trading",    "Virtual Trading"),
+    )
+    enabled_paths: list[tuple[str, str]] = [
+        (section, label) for section, label in _AUTOMATION_SECTIONS
+        if config.get(section, {}).get("enabled")
+    ]
+    active_paths  = [label for section, label in enabled_paths if is_entry_allowed(config, regime_name, section)]
+    blocked_paths = [label for section, label in enabled_paths if not is_entry_allowed(config, regime_name, section)]
+
+    regime_label = regime_name.replace("_", " ").title()
+
+    if regime_name == "TRENDING_BULL" and not overlays and active_paths:
+        p3_lead = f"The system is actively entering new positions via {', '.join(active_paths)}"
+        if blocked_paths:
+            p3_lead += f", while {', '.join(blocked_paths)} remain blocked"
+        p3_lead += "."
+    else:
+        reasons: list[str] = []
+        if blocked_paths:
+            reasons.append(
+                f"{', '.join(blocked_paths)} {'is' if len(blocked_paths) == 1 else 'are'} blocked in the "
+                f"current {regime_label} regime"
+            )
+        if overlays:
+            overlay_labels = [
+                _NARRATIVE_OVERLAY_LABELS.get(k, k.replace("_", " ").title())
+                for k in sorted(overlays)
+            ]
+            reasons.append(f"active risk overlay{'s' if len(overlay_labels) > 1 else ''} ({', '.join(overlay_labels)})")
+        if not reasons:
+            reasons.append(f"the current {regime_label} regime does not meet entry criteria")
+        p3_lead = (
+            f"The system is not opening new positions — {'; '.join(reasons)}. "
+            "Entries resume once a TRENDING_BULL regime is confirmed (ADX above 25 with price above "
+            "the 200-day moving average, and VIX below 20)."
+        )
+
+    open_trades = open_trades or []
+    if open_trades:
+        status_counts = Counter(t.get("status", "ON TRACK") for t in open_trades)
+        n_open = len(open_trades)
+        breakdown = ", ".join(
+            f"{status_counts[s]} {s.lower()}"
+            for s in ("ON TRACK", "WEAKENING", "EXIT SIGNAL", "STOP LOSS")
+            if status_counts.get(s)
+        )
+        p3_positions = (
+            f"{n_open} existing position{'s are' if n_open != 1 else ' is'} being monitored"
+            + (f" ({breakdown})" if breakdown else "")
+            + "."
+        )
+    else:
+        p3_positions = "No positions are currently open."
+
+    p3 = f"{p3_lead} {p3_positions}"
+
+    paragraphs = [p for p in (p1, p2, p3) if p]
+    return "".join(
+        f"<p style='margin:0 0 8px 0;line-height:1.6;font-size:0.9rem'>{html.escape(p)}</p>"
+        for p in paragraphs
+    )
 
 
 def get_current_atr(ticker: str) -> Optional[float]:
