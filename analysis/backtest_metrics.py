@@ -127,26 +127,55 @@ def compute_metrics(df: pd.DataFrame) -> dict:
 # ---------------------------------------------------------------------------
 
 def equity_curve(df: pd.DataFrame, start_value: float = 1.0) -> pd.DataFrame:
-    """Return a dated equity curve DataFrame.
+    """Return a daily portfolio equity curve DataFrame.
+
+    A trade's P&L is realised on its exit_date. Sorting trades by
+    entry_date (the old behaviour) while plotting exit_date produced
+    backwards jumps in the time axis whenever trades of different holding
+    periods overlapped — a trade entered first but held longest could
+    still exit after a later-entered, shorter trade. Trades are now
+    compounded in exit_date order (the order P&L actually lands in a real
+    account), then expanded into one row per calendar day from the first
+    trade's entry_date to the last trade's exit_date, so the resulting
+    date axis is always monotonically increasing with no gaps. Days with
+    no trade exit (including weekends) carry forward the previous day's
+    equity value; days before any trade has exited hold at start_value.
 
     Args:
-        df:           Trades DataFrame (must have entry_date and pnl_pct).
+        df:           Trades DataFrame (must have entry_date, exit_date — or
+                      entry_date alone as a fallback — and pnl_pct).
         start_value:  Starting portfolio value (default 1.0 = normalised).
 
     Returns:
-        DataFrame with columns: date, equity, drawdown_pct.
+        DataFrame with columns: date (daily, no gaps), equity, drawdown_pct.
     """
     if df is None or df.empty:
         return pd.DataFrame(columns=["date", "equity", "drawdown_pct"])
 
-    df = df.sort_values("entry_date").reset_index(drop=True)
-    cum = (1 + df["pnl_pct"]).cumprod() * start_value
-    peak = cum.cummax()
-    dd   = (cum - peak) / peak * 100
+    df = df.copy()
+    df["entry_date"] = pd.to_datetime(df["entry_date"]).dt.normalize()
+    exit_col = "exit_date" if "exit_date" in df.columns else "entry_date"
+    df["exit_date"] = pd.to_datetime(df[exit_col]).dt.normalize()
+
+    # Realise P&L in exit-date order — the order it actually compounds in a
+    # real account — not entry-date order.
+    df = df.sort_values("exit_date").reset_index(drop=True)
+    cum_at_exit = (1 + df["pnl_pct"]).cumprod() * start_value
+
+    # Multiple trades can exit on the same day; keep the last (fully
+    # compounded) value for that date.
+    exit_equity = pd.Series(cum_at_exit.values, index=df["exit_date"])
+    exit_equity = exit_equity.groupby(level=0).last()
+
+    all_days = pd.date_range(df["entry_date"].min(), df["exit_date"].max(), freq="D")
+    equity = exit_equity.reindex(all_days).ffill().fillna(start_value)
+
+    peak = equity.cummax()
+    dd   = (equity - peak) / peak * 100
 
     return pd.DataFrame({
-        "date":         df["exit_date"] if "exit_date" in df.columns else df["entry_date"],
-        "equity":       cum.values,
+        "date":         all_days,
+        "equity":       equity.values,
         "drawdown_pct": dd.values,
     })
 

@@ -6499,7 +6499,12 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             c8.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
             c9.metric("Max Loss Streak", mets.get("max_loss_streak", 0))
 
-            # Equity curve
+            # Equity curve — bt_equity_curve() (analysis/backtest_metrics.py:
+            # equity_curve()) returns one row per calendar day (P&L realised
+            # in exit-date order, days with no exit carrying forward the
+            # prior value), not one row per trade, so the date axis below is
+            # always monotonically increasing with no backwards jumps even
+            # when trades overlap.
             if not df.empty:
                 ec = bt_equity_curve(df)
                 if not ec.empty:
@@ -6508,14 +6513,16 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     fig.add_trace(go.Scatter(
                         x=ec["date"], y=ec["equity"],
                         mode="lines", name="Portfolio (normalised to 1.0)",
-                        line=dict(color="#3b82f6", width=2),
+                        line=dict(color="#3b82f6", width=2, shape="linear"),
                         fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                        hovertemplate="%{x|%Y-%m-%d}<br>Equity: %{y:.4f}<extra></extra>",
                     ))
                     fig.update_layout(
-                        title=f"Equity Curve — Run #{sel_id}",
+                        title=f"Equity Curve — Run #{sel_id} (daily portfolio value)",
                         xaxis_title="Date", yaxis_title="Portfolio Value",
                         height=350, margin=dict(l=0, r=0, t=40, b=0),
                         yaxis=dict(tickformat=".2f"),
+                        xaxis=dict(type="date"),
                     )
                     st.plotly_chart(fig, width="stretch")
 

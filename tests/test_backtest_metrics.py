@@ -118,16 +118,64 @@ def test_equity_curve_empty_df_returns_empty_with_expected_columns():
 
 
 def test_equity_curve_compounds_returns_and_tracks_drawdown():
-    """Equity must compound (not sum) trade returns in entry_date order, and
-    drawdown_pct must be measured against the running peak."""
+    """Equity must compound (not sum) trade returns in exit_date order —
+    the order P&L actually lands in a real account — and drawdown_pct must
+    be measured against the running peak. The curve is a daily series: days
+    with no trade exit (including the gap before the first exit and any day
+    between exits) must carry forward the previous value."""
     df = _df([
-        _trade(entry_date=pd.Timestamp("2023-01-01"), pnl_pct=0.10),
-        _trade(entry_date=pd.Timestamp("2023-01-06"), pnl_pct=-0.05),
+        _trade(entry_date=pd.Timestamp("2023-01-01"), exit_date=pd.Timestamp("2023-01-05"), pnl_pct=0.10),
+        _trade(entry_date=pd.Timestamp("2023-01-03"), exit_date=pd.Timestamp("2023-01-10"), pnl_pct=-0.05),
     ])
     curve = equity_curve(df, start_value=1.0)
-    assert curve["equity"].iloc[0] == pytest.approx(1.10, abs=1e-4)
-    assert curve["equity"].iloc[1] == pytest.approx(1.10 * 0.95, abs=1e-4)
-    assert curve["drawdown_pct"].iloc[1] == pytest.approx(-5.0, abs=1e-2)
+
+    # Daily series spanning the first entry to the last exit, no gaps.
+    assert curve["date"].min() == pd.Timestamp("2023-01-01")
+    assert curve["date"].max() == pd.Timestamp("2023-01-10")
+    assert len(curve) == 10
+
+    by_date = curve.set_index("date")["equity"]
+    assert by_date[pd.Timestamp("2023-01-01")] == pytest.approx(1.0)              # before any exit
+    assert by_date[pd.Timestamp("2023-01-04")] == pytest.approx(1.0)              # still before first exit
+    assert by_date[pd.Timestamp("2023-01-05")] == pytest.approx(1.10, abs=1e-4)   # first trade realised
+    assert by_date[pd.Timestamp("2023-01-07")] == pytest.approx(1.10, abs=1e-4)   # carried forward
+    assert by_date[pd.Timestamp("2023-01-10")] == pytest.approx(1.10 * 0.95, abs=1e-4)  # second trade realised
+
+    dd_by_date = curve.set_index("date")["drawdown_pct"]
+    assert dd_by_date[pd.Timestamp("2023-01-10")] == pytest.approx(-5.0, abs=1e-2)
+
+
+def test_equity_curve_dates_are_strictly_monotonically_increasing():
+    """Regression test for the original bug: sorting trades by entry_date
+    while plotting exit_date produced backwards jumps in the time axis
+    whenever trades of different holding periods overlapped — a trade
+    entered first but held the longest could still exit after a
+    later-entered, shorter trade. The daily series must never move
+    backwards or repeat a date."""
+    df = _df([
+        _trade(entry_date=pd.Timestamp("2023-01-01"), exit_date=pd.Timestamp("2023-03-01"), pnl_pct=0.20),
+        _trade(entry_date=pd.Timestamp("2023-01-15"), exit_date=pd.Timestamp("2023-01-20"), pnl_pct=-0.02),
+        _trade(entry_date=pd.Timestamp("2023-02-01"), exit_date=pd.Timestamp("2023-02-10"), pnl_pct=0.03),
+    ])
+    curve = equity_curve(df)
+
+    assert curve["date"].is_monotonic_increasing
+    assert curve["date"].is_unique
+    diffs = curve["date"].diff().dropna()
+    assert (diffs == pd.Timedelta(days=1)).all()
+
+
+def test_equity_curve_same_day_exits_use_fully_compounded_value():
+    """Multiple trades exiting on the same calendar day must all be
+    realised into that day's equity — the day's value is the fully
+    compounded result, not just the last trade processed."""
+    df = _df([
+        _trade(entry_date=pd.Timestamp("2023-01-01"), exit_date=pd.Timestamp("2023-01-05"), pnl_pct=0.10),
+        _trade(entry_date=pd.Timestamp("2023-01-01"), exit_date=pd.Timestamp("2023-01-05"), pnl_pct=0.05),
+    ])
+    curve = equity_curve(df, start_value=1.0)
+    by_date = curve.set_index("date")["equity"]
+    assert by_date[pd.Timestamp("2023-01-05")] == pytest.approx(1.10 * 1.05, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
