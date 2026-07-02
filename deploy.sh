@@ -46,6 +46,7 @@ fi
 if [ -n "$blackout_label" ]; then
   echo ""
   echo "⚠️  WARNING: ${blackout_label} — deploying now risks order logic running on transitional state."
+  echo "    Note: deploy restarts BOTH investment-research and investment-research-scheduler."
   read -r -p "Continue anyway? (y/N): " confirm
   case "$confirm" in
     y|Y) ;;

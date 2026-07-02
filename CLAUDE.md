@@ -485,6 +485,20 @@ bash deploy.sh          # Git Bash — VM_IP is hardcoded in the script
 
 Both scripts push to GitHub first, then SSH into the VM to `git pull`, reinstall any new packages, copy both service files to `/etc/systemd/system/`, ensure the secrets symlink exists for the scheduler service, run `systemctl daemon-reload`, and restart both `investment-research` and `investment-research-scheduler`. Service file changes in the repo take effect automatically on the next deploy.
 
+**Two systemd services must both be restarted on every deploy** — there is no way to update just one:
+
+- `investment-research` — the Streamlit web UI.
+- `investment-research-scheduler` — the standalone APScheduler daemon (`scheduler_daemon.py`) that fires all seven scheduled jobs even when no browser is connected (see "Status page and startup automation" above).
+
+Both processes import the same modules independently at startup and keep their own in-memory copy of the code until restarted. **If a deploy restarts `investment-research` but not `investment-research-scheduler`, the scheduler daemon keeps running the pre-deploy code** — including stale versions of `analysis/regime.py`'s `is_entry_allowed()` / `resolve_entry_signal()`, `brokers/trading212.py`'s order-placement logic, and `data/scheduler.py`'s `_process_virtual_trades()`. Since the daemon (not the web UI) is what actually places T212 orders and opens/closes virtual trades on the EOD/pre-market/US-open schedule, this means newly-deployed regime gates, entry-signal overrides, or any other order-logic change silently fail to apply — orders keep being placed under the old rules until the daemon itself is restarted. `deploy.sh`, `deploy.ps1`, and `setup.sh` all restart/enable both services for exactly this reason — never edit them to restart only `investment-research`.
+
+After any deploy that touches order logic, verify both services picked up the same code by checking their start times match the deploy:
+
+```bash
+ps aux | grep -E "streamlit|scheduler_daemon" | grep -v grep
+systemctl status investment-research investment-research-scheduler
+```
+
 ### Git hooks
 
 `setup-hooks.sh` installs a pre-push hook that auto-deploys whenever you push to `main`. Run once after cloning:
@@ -508,7 +522,7 @@ Seven scheduled jobs (see the table at the top of this file) fire at fixed UTC t
 | 21:00–22:00 | EOD full refresh + order placement (21:30) — highest risk, this is the job that places T212 orders |
 | 09:45–10:15 (Sun) | Weekly summary email (10:00) |
 
-**Blackout warning (`deploy.sh` / `deploy.ps1`):** both deploy scripts check the current UTC time before doing anything else. `deploy.sh` compares `date -u +%H%M` (and `date -u +%u` for the Sunday-only window) against the ranges above; `deploy.ps1` uses `[System.DateTime]::UtcNow`. If the current time falls inside any window, the script prints a warning naming the specific job and its run time (e.g. `⚠️  WARNING: EOD job runs at 21:30 UTC — deploying now risks order logic running on transitional state.`) and prompts `Continue anyway? (y/N):`. Any answer other than `y`/`Y` aborts with exit code 1 before either script touches git or SSHes into the server — nothing is deployed. This is a warning, not a hard block, because some deploys (urgent hotfixes) legitimately need to go out regardless of the clock.
+**Blackout warning (`deploy.sh` / `deploy.ps1`):** both deploy scripts check the current UTC time before doing anything else. `deploy.sh` compares `date -u +%H%M` (and `date -u +%u` for the Sunday-only window) against the ranges above; `deploy.ps1` uses `[System.DateTime]::UtcNow`. If the current time falls inside any window, the script prints a warning naming the specific job and its run time (e.g. `⚠️  WARNING: EOD job runs at 21:30 UTC — deploying now risks order logic running on transitional state.`), followed by `Note: deploy restarts BOTH investment-research and investment-research-scheduler.`, and prompts `Continue anyway? (y/N):`. Any answer other than `y`/`Y` aborts with exit code 1 before either script touches git or SSHes into the server — nothing is deployed. This is a warning, not a hard block, because some deploys (urgent hotfixes) legitimately need to go out regardless of the clock. The reminder matters more than usual here: a deploy that skips restarting the scheduler daemon is worse than no deploy at all — the web UI shows new code while the daemon keeps placing orders under the old logic (see "Ongoing deploys" above).
 
 **Missed EOD catch-up (`data/scheduler.py:_check_missed_eod_run()`):** the inverse safety net — if a restart (from a blackout-window deploy or otherwise) causes the 21:30 EOD job itself to be skipped for the day, this runs at scheduler startup, after all jobs are registered, and detects it. It requires both: `last_full_refresh` (in `system_metadata`) is more than 20 hours old — a run from earlier the same day doesn't count as missed — and the current UTC time is between 21:45 and 23:59 — the 15-minute grace period after 21:30 plus the rest of the post-EOD window. Inside that window with a stale timestamp, it logs `"Missed EOD run detected — running catch-up pipeline now"` and runs `_run_analysis_pipeline(config, get_all_tickers(config), "full")` in a background daemon thread so `start_scheduler()` returns promptly. Outside the window it skips silently — the next scheduled job (tomorrow's 07:00 pre-market or 21:30 EOD) will pick up stale data naturally. A `None` `last_full_refresh` (fresh install, no data yet) also skips silently, and the existing weekend guard (no EOD job is ever scheduled Saturday/Sunday) is preserved. This replaced an earlier, looser version (`_maybe_catch_up_missed_eod`) that used a 26-hour threshold OR'd with an unbounded "past today's EOD time" check and re-ran the full `_eod_job` (data pull + FRED + T212 snapshot) rather than just the analysis/signal/order pipeline.
 

@@ -489,15 +489,24 @@ Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitign
 
 Both scripts check the current UTC time before doing anything else: if it falls within 30 minutes of a scheduled job window (07:00 pre-market, 13:30 US open, 21:30 EOD, or 10:00 Sunday weekly summary), they print a warning and require a `y` confirmation before proceeding, since a mid-deploy restart during one of these windows can run order logic against transitional code/config. See "Deployment timing" in [CLAUDE.md](CLAUDE.md) for the full rationale.
 
+**Two systemd services, both must be restarted.** `investment-research` is the Streamlit UI; `investment-research-scheduler` is the standalone daemon that actually fires the seven scheduled jobs (including order placement) whether or not anyone has the dashboard open. Each keeps its own in-memory copy of the code until restarted — if a deploy only restarts the UI, the scheduler daemon keeps running the old code, so a newly-deployed regime gate or entry-signal change silently fails to apply and orders keep going out under the previous logic. `deploy.sh`/`deploy.ps1`/`setup.sh` always restart (or enable+start, on first setup) both services for this reason.
+
+After deploying, verify both services picked up the same code:
+
+```bash
+ps aux | grep -E "streamlit|scheduler_daemon" | grep -v grep
+systemctl status investment-research investment-research-scheduler
+```
+
 ### Useful server commands
 
 ```bash
-journalctl -u investment-research -f              # web UI live logs
-journalctl -u investment-research-scheduler -f   # scheduler daemon live logs
+systemctl restart investment-research            # Streamlit UI
+systemctl restart investment-research-scheduler  # Scheduler daemon
+journalctl -u investment-research -f             # UI logs
+journalctl -u investment-research-scheduler -f   # Scheduler logs
 systemctl status investment-research
 systemctl status investment-research-scheduler
-systemctl restart investment-research
-systemctl restart investment-research-scheduler
 ```
 
 ---
