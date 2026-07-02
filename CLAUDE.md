@@ -527,7 +527,7 @@ Seven scheduled jobs (see the table at the top of this file) fire at fixed UTC t
 | `deploy.sh` | Git Bash deploy script (VM_IP hardcoded; SSH key at `ssh-keys/`) |
 | `deploy.ps1` | PowerShell deploy script — gitignored (local-only, contains SSH key path) |
 | `setup-hooks.sh` | Installs the pre-push git hook; run once after cloning |
-| `config.yaml` | Runtime config — **gitignored** (contains FRED API key; manage on server directly) |
+| `config.yaml` | Runtime config — **actually git-tracked** (not in `.gitignore`, despite this file previously documenting it as gitignored/server-managed). Secret fields (`macro.fred_api_key`, `notifications.email.smtp_password`) are committed as blank placeholders — real values are supplied only via env vars (`FRED_API_KEY`, `SMTP_PASSWORD`, `T212_API_KEY`, `T212_API_SECRET`) in the server's systemd secrets drop-in, never written into this file. Verify those fields stay blank before committing any change here. |
 
 ### TA-Lib: Windows vs Linux
 
