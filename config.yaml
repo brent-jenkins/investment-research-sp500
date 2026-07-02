@@ -584,7 +584,7 @@ backtest:
   max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
   max_holding_days_crypto: 14    # crypto (ticker ends with -USD) — high volatility, shorter cycles
   max_holding_days_bonds: 45     # bond ETFs (TLT, IEF, etc.) — slow-moving, longer trend duration
-  atr_stop_multiplier: 3.0       # stop loss = entry ± N × ATR (matches live system)
+  atr_stop_multiplier: 2.0       # stop loss = entry ± N × ATR (matches live system)
 
   # Walk-forward validation window settings
   walk_forward_months: 6         # training window size in months
