@@ -17,7 +17,12 @@ cat > "$HOOKS_DIR/pre-push" << 'HOOK'
 # .git/hooks/pre-push — managed by setup-hooks.sh (re-run to update)
 #
 # Runs the test suite before any push to main, then schedules a deploy to
-# research.example.com in the background. Does NOT push to GitHub itself —
+# research.example.com in the background — restarting BOTH investment-research
+# (Streamlit UI) and investment-research-scheduler (the daemon that actually
+# fires scheduled jobs and places orders). Restarting only the UI service
+# leaves the scheduler daemon running stale in-memory code indefinitely,
+# silently bypassing any regime-gate or order-logic change just deployed.
+# Does NOT push to GitHub itself —
 # git runs the actual `git push` immediately after this hook exits 0, so
 # that push (the one the user typed) is what puts the commits on GitHub.
 #
@@ -55,7 +60,7 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
             {
                 echo "[$(date -u +%FT%TZ)] Deploying to research.example.com"
                 ssh -i "$ssh_key" -o StrictHostKeyChecking=no "root@${vm_ip}" \
-                    "cd /root/investment-research && git pull origin main && systemctl restart investment-research"
+                    "cd /root/investment-research && git pull origin main && systemctl restart investment-research investment-research-scheduler"
             } >> "$log_file" 2>&1
         ' _ "$SSH_KEY" "$VM_IP" "$LOG_FILE" >/dev/null 2>&1 &
         disown
