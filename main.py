@@ -80,6 +80,7 @@ from analysis.backtest_metrics import (
     MODULE_LABELS,
     compute_metrics,
     equity_curve as bt_equity_curve,
+    exit_reason_breakdown,
     forex_holding_sensitivity,
     module_attribution,
     period_breakdown,
@@ -6766,6 +6767,40 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 m4.metric("Signal Reversal %", f"{decay.get('pct_signal_reversal', 0):.1f}%")
                 m5.metric("Max Holding %",     f"{decay.get('pct_max_holding', 0):.1f}%")
                 m6.metric("End of Data %",     f"{decay.get('pct_end_of_data', 0):.1f}%")
+
+                # ── Performance by Exit Reason ────────────────────────────────
+                st.markdown("#### Performance by Exit Reason")
+                _erb = exit_reason_breakdown(df)
+                if _erb.empty:
+                    st.info("Not enough trade data for an exit reason breakdown.")
+                else:
+                    _erb_df = _erb.reset_index().rename(columns={
+                        "exit_reason": "Exit Reason",
+                        "trades":      "Trades",
+                        "win_rate":    "Win Rate",
+                        "avg_return":  "Avg Return",
+                        "avg_hold":    "Avg Hold (days)",
+                    })
+
+                    def _style_erb_return(val):
+                        if not isinstance(val, (int, float)): return ""
+                        return ("color:#16a34a;font-weight:bold" if val > 0
+                                else "color:#dc2626;font-weight:bold" if val < 0 else "")
+
+                    st.dataframe(
+                        _erb_df.style.map(_style_erb_return, subset=["Avg Return"]).format({
+                            "Win Rate":        "{:.1f}%",
+                            "Avg Return":      "{:+.2f}%",
+                            "Avg Hold (days)": "{:.1f}",
+                        }),
+                        width="stretch", hide_index=True,
+                    )
+                    st.caption(
+                        "If MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the ATR stop "
+                        "may be cutting profitable trades short — consider widening `backtest.atr_stop_multiplier` "
+                        "in config.yaml. If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding "
+                        "losers too long."
+                    )
 
                 # Histogram
                 bins = decay.get("hold_bins", [])

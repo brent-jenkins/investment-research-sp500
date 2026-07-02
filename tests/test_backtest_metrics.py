@@ -11,6 +11,7 @@ import pytest
 from analysis.backtest_metrics import (
     compute_metrics,
     equity_curve,
+    exit_reason_breakdown,
     forex_holding_sensitivity,
     module_attribution,
     period_breakdown,
@@ -257,6 +258,51 @@ def test_signal_decay_average_hold_computed_per_regime():
     result = signal_decay(df)
     assert result["regime_holds"]["TRENDING_BULL"] == pytest.approx(15.0)
     assert result["regime_holds"]["MIXED"] == pytest.approx(5.0)
+
+
+# ---------------------------------------------------------------------------
+# exit_reason_breakdown
+# ---------------------------------------------------------------------------
+
+def test_exit_reason_breakdown_one_row_per_exit_reason_present():
+    df = _df([
+        _trade(exit_reason="STOP_LOSS"),
+        _trade(exit_reason="MAX_HOLDING"),
+        _trade(exit_reason="SIGNAL_REVERSAL"),
+    ])
+    result = exit_reason_breakdown(df)
+    assert set(result.index) == {"STOP_LOSS", "MAX_HOLDING", "SIGNAL_REVERSAL"}
+    assert len(result) == 3
+
+
+def test_exit_reason_breakdown_computes_correct_stats_per_group():
+    """Synthetic 4-trade DataFrame with known win/loss, return, and hold values —
+    verify win_rate, avg_return, and avg_hold are computed correctly per exit reason,
+    independently for each group."""
+    df = _df([
+        _trade(exit_reason="STOP_LOSS",   is_win=False, pnl_pct=-0.02, holding_days=2),
+        _trade(exit_reason="STOP_LOSS",   is_win=True,  pnl_pct=0.01,  holding_days=4),
+        _trade(exit_reason="MAX_HOLDING", is_win=True,  pnl_pct=0.08,  holding_days=30),
+        _trade(exit_reason="MAX_HOLDING", is_win=True,  pnl_pct=0.04,  holding_days=20),
+    ])
+    result = exit_reason_breakdown(df)
+
+    sl = result.loc["STOP_LOSS"]
+    assert sl["trades"] == 2
+    assert sl["win_rate"] == pytest.approx(50.0)
+    assert sl["avg_return"] == pytest.approx(-0.5)   # (-0.02 + 0.01) / 2 * 100
+    assert sl["avg_hold"] == pytest.approx(3.0)
+
+    mh = result.loc["MAX_HOLDING"]
+    assert mh["trades"] == 2
+    assert mh["win_rate"] == pytest.approx(100.0)
+    assert mh["avg_return"] == pytest.approx(6.0)    # (0.08 + 0.04) / 2 * 100
+    assert mh["avg_hold"] == pytest.approx(25.0)
+
+
+def test_exit_reason_breakdown_empty_df_returns_empty_without_error():
+    result = exit_reason_breakdown(pd.DataFrame())
+    assert result.empty
 
 
 # ---------------------------------------------------------------------------

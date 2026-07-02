@@ -305,6 +305,30 @@ def signal_decay(df: pd.DataFrame) -> dict:
     }
 
 
+def exit_reason_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate trade performance by exit reason.
+
+    Returns:
+        DataFrame indexed by exit_reason with columns:
+            trades, win_rate (pct, e.g. 62.5), avg_return (pct, e.g. 1.23),
+            avg_hold (days)
+    """
+    if df is None or df.empty or "exit_reason" not in df.columns:
+        return pd.DataFrame()
+
+    rows = []
+    for reason, sub in df.groupby("exit_reason"):
+        rows.append({
+            "exit_reason": reason,
+            "trades":      len(sub),
+            "win_rate":    round(float(sub["is_win"].mean()) * 100, 1)   if "is_win" in sub.columns      else 0.0,
+            "avg_return":  round(float(sub["pnl_pct"].mean()) * 100, 2)  if "pnl_pct" in sub.columns      else 0.0,
+            "avg_hold":    round(float(sub["holding_days"].mean()), 1)   if "holding_days" in sub.columns else 0.0,
+        })
+
+    return pd.DataFrame(rows).set_index("exit_reason") if rows else pd.DataFrame()
+
+
 # ---------------------------------------------------------------------------
 # Walk-forward validation
 # ---------------------------------------------------------------------------
