@@ -25,7 +25,9 @@ from analysis.confluence import (
     generate_signals,
     get_last_signal_timestamp,
     get_latest_signals,
+    get_learned_weights,
     get_regime_thresholds,
+    get_weight_history,
 )
 from analysis.correlations import (
     build_correlation_matrix,
@@ -38,6 +40,7 @@ from analysis.engine import run_analysis
 from analysis.regime import (
     REGIME_COLOURS,
     REGIME_DESCRIPTIONS,
+    REGIME_WEIGHTS,
     Regime,
     detect_regime,
     is_entry_allowed,
@@ -1947,7 +1950,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     )
                     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
-                    st.caption("Open positions are shown in the **Trade Log** and **Daily Briefing** pages.")
+                    st.caption("Open positions are shown in the **Performance** and **Daily Briefing** pages.")
 
                     if _fetched:
                         try:
@@ -3125,6 +3128,52 @@ def _render_trade_card(e: dict) -> None:
     )
 
 
+def _render_trade_card_compact(e: dict) -> None:
+    """Render one open T212 position as a single-line summary row.
+
+    Used on the Daily Briefing, where full per-position detail (signal delta,
+    SL/TP, live R:R) would crowd a page that already covers regime, macro,
+    and opportunities — that detail lives on the Performance page's Open
+    Positions section via the full _render_trade_card().
+    """
+    status = e.get("status", "ON TRACK")
+    colour = _BRIEF_STATUS_COLOURS.get(status, "#6b7280")
+    icon   = _BRIEF_STATUS_ICONS.get(status, "")
+    bg     = _hex_rgba(colour, 0.08)
+
+    ticker    = html.escape(str(e.get("ticker", "")))
+    asset_tag = html.escape(str(e.get("asset_type", "")))
+    days_held = int(e.get("days_held") or 0)
+
+    unreal_pnl_gbp    = e.get("unreal_pnl_gbp")
+    unreal_pct        = e.get("unreal_pct")
+    price_unavailable = e.get("price_unavailable", e.get("live_price") is None)
+
+    if price_unavailable:
+        pnl_html = "⚠ Price unavailable"
+        pnl_col  = "#f59e0b"
+    elif unreal_pnl_gbp is not None and unreal_pct is not None:
+        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
+        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
+    else:
+        pnl_html = "—"
+        pnl_col  = "#6b7280"
+
+    st.markdown(
+        f"<div style='border-left:4px solid {colour};padding:6px 14px;"
+        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:6px;"
+        f"display:flex;align-items:center;gap:12px;flex-wrap:wrap'>"
+        f"<span style='background:{colour};color:#fff;padding:1px 8px;"
+        f"border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:0.05em'>"
+        f"{icon} {status}</span>"
+        f"<strong style='font-size:0.92rem'>{ticker}</strong>"
+        f"<span style='color:#64748b;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
+        f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _expected_last_eod(now: datetime) -> datetime:
     """Return the UTC datetime of the most recent EOD run that should have fired by now.
 
@@ -4282,7 +4331,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             t212_invest_cards, key=lambda x: x.get("status_priority", 0), reverse=True
         )
         for e in all_cards:
-            _render_trade_card(e)
+            _render_trade_card_compact(e)
+        st.caption("Full position detail (signal delta, SL/TP, live R:R) is on the **Performance** page.")
 
     st.divider()
 
@@ -4961,6 +5011,244 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 st.dataframe(show_wf, width="stretch", hide_index=True)
 
 
+def _t212_asset_type_map(config: dict) -> dict[str, str]:
+    """Map research ticker -> 'ETF' or 'STOCK' via the T212 automation config.
+
+    t212_pnl.ticker stores the research ticker, not the T212 instrument ticker,
+    so this is keyed the opposite way to _get_t212_invest_brief_cards()'s
+    internal reverse_map (which is keyed by T212 instrument ticker).
+    """
+    asset_types: dict[str, str] = {}
+    for rt in config.get("trading212_invest", {}).get("ucits_mapping", {}):
+        asset_types[rt] = "ETF"
+    if config.get("trading212_stocks", {}):
+        for entry in config.get("watchlist", {}).get("us_large_cap", []):
+            if isinstance(entry, dict) and "ticker" in entry:
+                asset_types.setdefault(entry["ticker"], "STOCK")
+    return asset_types
+
+
+def _get_t212_pnl_rows() -> list[dict]:
+    """Return all reconstructed closed T212 positions, most recently exited first.
+
+    Reads brokers/t212_learning.py:_reconstruct_t212_pnl()'s output table directly
+    — no T212 API calls, no re-derivation of P&L.
+    """
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                sa_text("SELECT * FROM t212_pnl ORDER BY exit_date DESC")
+            ).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _t212_pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
+    """Adapt t212_pnl rows to the column shape analysis/backtest_metrics.py expects.
+
+    backtest_metrics.py's functions (compute_metrics, equity_curve,
+    exit_reason_breakdown, regime_performance) were written against
+    BacktestTrade rows and read pnl_pct/is_win/holding_days/entry_date/
+    exit_date/regime_at_entry — reused here rather than reimplementing the
+    same aggregation logic a second time for t212_pnl, which carries the same
+    information under slightly different column names (regime vs
+    regime_at_entry, no is_win/direction columns at all since T212 Invest is
+    long-only cash-account and every row is a realised close).
+    """
+    if not pnl_rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(pnl_rows)
+    df["entry_date"]      = pd.to_datetime(df["entry_date"])
+    df["exit_date"]       = pd.to_datetime(df["exit_date"])
+    df["pnl_pct"]         = df["pnl_pct"].astype(float)
+    df["is_win"]          = df["pnl_gbp"] > 0
+    df["direction"]       = "LONG"
+    df["regime_at_entry"] = df["regime"]
+    return df
+
+
+def _render_performance_page(config: dict) -> None:
+    """T212 Invest execution performance — open positions, closed positions,
+    aggregate metrics (once enough history exists), and feedback-learning status.
+
+    All P&L here is derived from actual T212 order fills (see "T212 P&L
+    reconstruction" in CLAUDE.md), not simulated/paper trades — there is no
+    other trade source left in the app.
+    """
+    st.title("Performance")
+
+    # ── Section 1: Open Positions ───────────────────────────────────────────
+    st.markdown("### Open Positions")
+    open_cards = _get_t212_invest_brief_cards(config)
+    if not open_cards:
+        st.info("No open T212 Invest positions.")
+    else:
+        all_cards = sorted(open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
+        for e in all_cards:
+            _render_trade_card(e)
+
+    st.divider()
+
+    # ── Section 2: Closed Positions ─────────────────────────────────────────
+    st.markdown("### Closed Positions")
+    pnl_rows = _get_t212_pnl_rows()
+
+    if not pnl_rows:
+        st.info("No closed positions yet — data will appear as T212 positions close.")
+    else:
+        asset_types = _t212_asset_type_map(config)
+        show_df = pd.DataFrame(pnl_rows)
+        show_df["Type"] = show_df["ticker"].map(lambda t: asset_types.get(t, "—"))
+        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"]).dt.strftime("%Y-%m-%d")
+        show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
+        show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
+        show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
+
+        show_df = show_df[[
+            "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
+            "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
+            "signal_type", "regime", "exit_reason",
+        ]]
+        show_df.columns = [
+            "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
+            "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
+            "Entry Signal", "Regime", "Exit Reason",
+        ]
+        st.dataframe(
+            show_df.style
+                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
+                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
+            width="stretch", hide_index=True,
+        )
+
+    st.divider()
+
+    # ── Section 3: Performance Metrics ──────────────────────────────────────
+    st.markdown("### Performance Metrics")
+    n_closed = len(pnl_rows)
+
+    if n_closed < 5:
+        st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_closed}/5).")
+        if n_closed:
+            wins = sum(1 for r in pnl_rows if (r.get("pnl_gbp") or 0) > 0)
+            losses = n_closed - wins
+            total_pnl = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
+            st.caption(
+                f"So far: {wins} win{'s' if wins != 1 else ''} / "
+                f"{losses} loss{'es' if losses != 1 else ''} · "
+                f"total realised P&L £{total_pnl:+,.2f}."
+            )
+    else:
+        mdf  = _t212_pnl_metrics_df(pnl_rows)
+        mets = compute_metrics(mdf)
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Closed Positions", mets.get("total_trades", 0))
+        wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
+        c2.metric("Win Rate", f"{wr_pct}%")
+        c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
+        c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
+        c5.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
+        c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
+
+        total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
+        st.caption(
+            f"Total realised P&L: £{total_pnl_gbp:+,.2f} across {n_closed} closed positions · "
+            f"avg hold {mets.get('avg_holding_days', 0):.0f} days."
+        )
+
+        ec = bt_equity_curve(mdf)
+        if not ec.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=ec["date"], y=ec["equity"],
+                mode="lines", name="Portfolio (normalised to 1.0)",
+                line=dict(color="#3b82f6", width=2, shape="linear"),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                hovertemplate="%{x|%Y-%m-%d}<br>Equity: %{y:.4f}<extra></extra>",
+            ))
+            fig.update_layout(
+                title="Equity Curve (daily, normalised to 1.0)",
+                xaxis_title="Date", yaxis_title="Portfolio Value",
+                height=320, margin=dict(l=0, r=0, t=40, b=0),
+                yaxis=dict(tickformat=".2f"),
+                xaxis=dict(type="date"),
+            )
+            st.plotly_chart(fig, width="stretch")
+
+        rp = regime_performance(mdf)
+        if not rp.empty:
+            st.markdown("#### Performance by Regime at Entry")
+            rp_show = rp.copy()
+            rp_show.columns = ["N Trades", "Win Rate %", "Avg Return %", "Max DD %", "Sharpe"]
+            st.dataframe(rp_show, width="stretch")
+
+        erb = exit_reason_breakdown(mdf)
+        if not erb.empty:
+            st.markdown("#### Performance by Exit Reason")
+            erb_show = erb.copy()
+            erb_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
+            st.dataframe(erb_show, width="stretch")
+
+    st.divider()
+
+    # ── Section 4: Learning System ──────────────────────────────────────────
+    st.markdown("### Learning System")
+
+    learning_cfg = config.get("learning", {})
+    min_trades   = learning_cfg.get("min_trades_before_adjustment", 20)
+    n_pnl        = len(pnl_rows)
+
+    st.caption(
+        f"{n_pnl} T212 closed position{'s' if n_pnl != 1 else ''} toward the next weight "
+        f"adjustment (fires at {min_trades})."
+    )
+    st.info(
+        "The feedback-learning system is not yet wired to T212 execution data — "
+        "recalculate_learned_weights() still reads the legacy `trades` table "
+        "(historical CFD/virtual trade records from before that automation was "
+        "removed), not `t212_pnl`. Rewiring it is a planned follow-up; the figures "
+        "below reflect whatever was last computed from that legacy data, if anything."
+    )
+
+    learned = get_learned_weights()
+    if learned:
+        weights   = learned.get("weights", {})
+        win_rates = learned.get("win_rates", {})
+        modules   = ["trend", "mean_reversion", "volatility", "volume", "macro", "correlation"]
+
+        avg_static = {
+            m: sum(REGIME_WEIGHTS[r][m] for r in REGIME_WEIGHTS) / len(REGIME_WEIGHTS)
+            for m in modules
+        }
+
+        st.markdown("#### Learned Weights vs Static Regime Weights (avg across regimes)")
+        cmp_df = pd.DataFrame([
+            {
+                "Module":            m.replace("_", " ").title(),
+                "Learned Weight":    weights.get(m),
+                "Static Avg Weight": round(avg_static.get(m, 0), 4),
+                "Win Rate":          win_rates.get(m),
+            }
+            for m in modules
+        ])
+        st.dataframe(cmp_df, width="stretch", hide_index=True)
+        st.caption(f"Last computed from {learned.get('n_trades', 0)} closed trades (legacy source).")
+
+        history = get_weight_history()
+        if history:
+            with st.expander(f"Weight history ({len(history)} snapshots)"):
+                hist_rows = [
+                    {"Timestamp": h.get("ts"), "N Trades": h.get("n_trades"), **h.get("weights", {})}
+                    for h in history
+                ]
+                st.dataframe(pd.DataFrame(hist_rows), width="stretch", hide_index=True)
+    else:
+        st.caption("No learned weights have been computed yet — insufficient closed-trade history.")
+
+
 # Main UI
 # ---------------------------------------------------------------------------
 
@@ -4991,12 +5279,13 @@ def main() -> None:
         st.divider()
 
         # Page navigation
-        _PAGES = ["Daily Briefing", "Signals", "Charts", "Relationships", "Backtest", "Status"]
+        _PAGES = ["Daily Briefing", "Signals", "Charts", "Relationships", "Performance", "Backtest", "Status"]
         _PAGE_KEYS = {
             "Daily Briefing": "briefing",
             "Signals":       "signals",
             "Charts":        "charts",
             "Relationships": "relationships",
+            "Performance":   "performance",
             "Backtest":      "backtest",
             "Status":        "status",
         }
@@ -5043,6 +5332,10 @@ def main() -> None:
 
     if page_key == "relationships":
         _render_relationships_page(config)
+        return
+
+    if page_key == "performance":
+        _render_performance_page(config)
         return
 
     if page_key == "backtest":
