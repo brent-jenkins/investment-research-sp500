@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from analysis.regime import is_entry_allowed
 from data.database import get_engine, get_metadata_str, set_metadata
-from output.performance import get_closed_trades
+from output.performance import get_t212_closed_positions
 
 logger = logging.getLogger(__name__)
 
@@ -908,8 +908,8 @@ def _gather_weekly_data(config: dict) -> dict:
 
     # T212 closed positions (from t212_pnl) — every row is a real order fill,
     # no VIRTUAL/legacy filtering needed.
-    closed_week   = get_closed_trades(from_date=week_ago)
-    all_closed    = get_closed_trades()
+    closed_week   = get_t212_closed_positions(from_date=week_ago)
+    all_closed    = get_t212_closed_positions()
 
     return {
         "now":            now,

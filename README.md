@@ -8,7 +8,7 @@ Live at [research.example.com](https://research.example.com) (password protected
 
 ## What it does
 
-The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on six scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history.
+The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on seven scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy.
 
 ---
 
@@ -31,7 +31,7 @@ Add your FRED API key to `config.yaml` under `macro.fred_api_key` (free at [fred
 The operational home page. A single compact status bar shows the active market regime, key stats (^GSPC vs SMA200, ADX, VIX, yield spread, USD trend), and any active regime overlay pills — all in one bordered row. The regime description and signal-threshold caption appear below it. Active overlay detail strips follow with their full descriptions. FOMC key-event pills and signal distribution counts (all assets / tradeable-only) complete the header block.
 
 Below the header:
-- **Open Trade Monitor** — T212 Invest positions (UCITS ETFs and direct US stocks), sorted by urgency. Each card shows live GBP P&L, current signal, score delta since entry, and a health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS). Tickers with an open T212 Invest position are excluded from Today's Opportunities to avoid duplicate signals. (This used to also show manually-logged CFD trades — see "Removed: manual CFD trade logging" below.)
+- **Open Trade Monitor** — a compact one-line status card per open T212 Invest position (UCITS ETFs and direct US stocks), sorted by urgency: status badge, ticker, asset type, day count, live GBP P&L. Tickers with an open T212 Invest position are excluded from Today's Opportunities to avoid duplicate signals. Full detail — signal delta since entry, SL/TP, live R:R — is on the **Performance** page (see below), which reads the same underlying position data.
 - **Top Opportunities** — STRONG BUY / STRONG SELL signals filtered to tradeable assets by default. Each card shows the rationale, live price, and overlay confidence warning badges (MACRO_STRESS −20%, CREDIT_STRESS −15%, RECESSION_RISK −25%, EM_STRESS −15%) when relevant overlays are active for that ticker.
 
 ### Signals
@@ -77,6 +77,15 @@ Cross-asset correlation analysis across **28 predefined pairs**. Compact header 
 ¹ T10Y2Y and DFII10 are FRED macro series, not price tickers — these pairs read from the `macro_indicators` table via `_get_macro_changes()`.
 
 Assets not directly in any pair inherit a correlation score via `CATEGORY_PROXY` in `analysis/correlations.py` — each proxy maps a ticker to a related pair member and blends 50% of that member's pair score into the ticker's confluence score. For example, COPX → GLD, XOP → USO, ITB → TLT, USDCNY=X → FXI. A proxy inheritance table is shown at the bottom of the Relationships page.
+
+### Performance
+
+T212 Invest execution performance, driven entirely by real broker fills — no manually-logged or simulated trade data feeds this page at all (see "Removed: virtual trading" and "Removed: manual CFD trade logging" below). Four sections:
+
+- **Open Positions** — the same full-detail cards as the Daily Briefing's monitor used to show before it was simplified to a one-line summary: live GBP P&L, current signal, score delta since entry, SL/TP, live R:R, health status. Reads the same scheduler-maintained snapshot, no direct T212 API calls.
+- **Closed Positions** — a table of every closed T212 position (`t212_pnl`): ticker, type, entry/exit date and price, quantity, P&L in £ and %, holding days, entry signal, regime, exit reason. Always shown, regardless of row count — `"No closed positions yet — data will appear as T212 positions close"` when the table is empty.
+- **Performance Metrics** — gated behind 5 closed positions (T212 exits are infrequent — maybe 5–10/year — so this can take a while to populate). Below 5, just a win/loss count and total P&L. At 5+: win rate, avg/total return, profit factor, max drawdown, an equity curve, and performance broken down by regime-at-entry and by exit reason. Reuses the same metrics functions as the Backtest page (`analysis/backtest_metrics.py`) via a column-renaming adapter, rather than a second implementation of the same aggregation logic.
+- **Learning System** — live count of `t212_pnl` rows against `learning.min_trades_before_adjustment` (default 20 — see "Feedback learning" below), and, once any weights have been learned, a comparison of learned per-module weights against the static regime-weight average.
 
 ### Backtest
 Replay the current signal logic over up to 10 years of stored historical price data — no look-ahead bias (vectorized pandas rolling operations). The backtest mirrors live system config rather than accepting independent runtime parameters: `config.yaml` is the single source of truth for holding limits, ATR stop multiplier, entry/exit thresholds, and the regime gate, for backtesting exactly as it is for live trading. To test different settings, edit `config.yaml` and re-run — there's no separate backtest-only parameter set.
@@ -220,7 +229,7 @@ The Daily Briefing shows the current effective thresholds and the approximate nu
 
 ### Feedback learning
 
-After 20+ closed trades, `recalculate_learned_weights()` computes per-module accuracy and adjusts confluence weights proportionally, clamped between 0.05 and 0.30. Learned weights override static regime weights and are stored in `system_metadata` under `learned_weights`.
+After 20+ closed T212 Invest positions (tracked in `t212_pnl` — see "T212 P&L reconstruction" below), `recalculate_learned_weights()` computes per-module accuracy and adjusts confluence weights proportionally, clamped between 0.05 and 0.30. Learned weights override static regime weights and are stored in `system_metadata` under `learned_weights`. Since T212 positions close infrequently (roughly 5–10/year), reaching the 20-position threshold takes time — the Performance page's Learning System section shows live progress toward it.
 
 ### Automatic scheduling
 
@@ -269,9 +278,17 @@ Historical `trades` table rows with `account_type = 'VIRTUAL'` are not deleted, 
 
 ## Removed: manual CFD trade logging
 
-The Trade Log page (manual trade entry form, open-position tracker, close-trade form, position-sizing guidance) and the Performance page (equity curve, win rate by signal type/regime, indicator hit-rate table, closed trades list) have both been removed — the app now has six pages instead of eight. A rebuilt Performance page, driven by T212 execution data instead of manually-logged CFD trades, is planned but not yet implemented.
+The original Trade Log page (manual trade entry form, open-position tracker, close-trade form, position-sizing guidance) and the original Performance page (equity curve, win rate by signal type/regime, indicator hit-rate table, closed trades list — both driven by manually-logged rows in the `trades` table) were removed together. The Trade Log page is gone permanently. The Performance page has since been **rebuilt from scratch**, driven entirely by real T212 execution data instead — see "Performance" above and "T212 P&L reconstruction" below.
 
-Removed alongside the two pages: `log_trade()`, `close_trade()`, `update_trade_plan()`, `get_open_trades()`, `get_all_trades()`, `classify_trade_theme()` (`output/performance.py`); `enrich_open_trade()`, `compute_trade_status()`, and the manual-CFD alert-email chain — `send_alert_email()`, `should_send_alert()`, `_build_alert_html()`, and their exclusive helpers (`output/briefing.py`); the CFD-trade alerting loop and price-level SL/TP proximity check in the hourly `_trade_alert_job()` (`data/scheduler.py`); and the `accounts:` config section (Practice/Live CFD account balances and position-sizing percentages), which only the Trade Log page read.
+Removed alongside the two original pages (permanently — not reintroduced by the Performance page rebuild): `log_trade()`, `close_trade()`, `update_trade_plan()`, `get_open_trades()`, `get_all_trades()`, `classify_trade_theme()` (`output/performance.py`); `enrich_open_trade()`, `compute_trade_status()`, and the manual-CFD alert-email chain — `send_alert_email()`, `should_send_alert()`, `_build_alert_html()`, and their exclusive helpers (`output/briefing.py`); the CFD-trade alerting loop and price-level SL/TP proximity check in the hourly `_trade_alert_job()` (`data/scheduler.py`); and the `accounts:` config section (Practice/Live CFD account balances and position-sizing percentages), which only the Trade Log page read.
+
+---
+
+## T212 P&L reconstruction
+
+`brokers/t212_learning.py:_reconstruct_t212_pnl()` derives realised P&L for closed T212 Invest positions directly from `t212_invest_orders` (the order-execution audit trail both automation paths already write to) rather than requiring any manual trade-logging step. It FIFO-pairs each FILLED BUY with the next FILLED SELL for the same ticker, computes GBP P&L (converting from the instrument's native currency using historical FX rates as of the exit date), and writes one row per closed position to `t212_pnl` — idempotently, so repeated calls only ever add newly-closed positions. Called from both `maybe_exit_t212_positions()` and `maybe_exit_stock_positions()` on every exit check (hourly + EOD), so there's no separate scheduler job for it.
+
+`t212_pnl` is now the **only** closed-position data source in the app — it feeds the Performance page's Closed Positions/Metrics sections and the feedback-learning system (see "Feedback learning" above). `get_t212_closed_positions()` in `output/performance.py` (renamed from `get_closed_trades()`) reads it for the weekly summary email.
 
 Any CFD trade rows already in the `trades` table (account_type PRACTICE or LIVE) are not deleted, but are no longer opened, closed, monitored, or alerted on — see "Trade model" below.
 
@@ -333,11 +350,13 @@ SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `wit
 | `correlations` | Cross-asset pair stats (30d corr, 90d corr, hist mean/std, z-score, status) |
 | `macro_indicators` | FRED series values with 30d pct change, 2yr z-score, and −1/0/+1 score |
 | `opportunity_flags` | Catch-up opportunity flags with 5d/20d return tracking |
-| `trades` | Legacy CFD trade ledger (open and closed; also holds legacy VIRTUAL rows) — historical only, no longer written to; see "Removed: virtual trading" and "Removed: manual CFD trade logging" above |
-| `performance` | Rolling performance metrics per ticker (Sharpe, Sortino, Calmar, drawdown) |
+| `trades` | Legacy CFD trade ledger (open and closed; also holds legacy VIRTUAL rows) — historical only, no longer written to or read by any live code path; see "Removed: virtual trading" and "Removed: manual CFD trade logging" above |
+| `performance` | Rolling performance metrics per ticker (Sharpe, Sortino, Calmar, drawdown) — not to be confused with the Performance *page*, which reads `t212_pnl` instead |
 | `backtest_runs` | Metadata for each backtest run (params, status, summary metrics) |
 | `backtest_signals` | Per-ticker per-date signal history generated during a backtest run |
 | `backtest_trades` | Simulated trades from each backtest run with full entry/exit/P&L detail |
+| `t212_invest_orders` | Every T212 Invest order attempt (BUY and SELL, ETF and stock) — the execution audit trail both automation paths write to |
+| `t212_pnl` | Reconstructed realised P&L per closed T212 Invest position, derived from `t212_invest_orders`; see "T212 P&L reconstruction" above |
 | `system_metadata` | Key-value store for operational state (timestamps, learned weights, alert status) |
 
 Schema migrations (`_apply_migrations()`) run on every startup. One-time data fixes (`_apply_data_fixes()`) are guarded by value-based conditions. Stale tickers are purged from all tables on every startup via `_purge_unlisted_tickers()`. Rows with a null or zero close price are also purged from `price_data` on every startup — these are incomplete intraday bars that yfinance occasionally returns for sessions that hadn't closed at fetch time, and a single such row breaks the rolling-mean SMA line on the chart for the following 20–50 trading days. The ingestion layer (`_upsert_price_rows`) now also skips these rows before they reach the database.

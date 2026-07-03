@@ -1,14 +1,14 @@
 """Tests for the feedback-learning system reading from t212_pnl (Stage 5).
 
 _fetch_trades_for_learning() and recalculate_learned_weights() in
-analysis/confluence.py, and get_closed_trades() in output/performance.py,
+analysis/confluence.py, and get_t212_closed_positions() in output/performance.py,
 were rewired from the legacy `trades` table to `t212_pnl` — the only
 closed-position data source left now that virtual trading and manual CFD
 trade logging have both been removed. All DB reads/writes go through the
 db_engine fixture's in-memory SQLite database — see tests/conftest.py.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -126,22 +126,22 @@ def test_recalculate_learned_weights_computes_from_t212_pnl(db_engine):
     assert payload["win_rates"]["volume"] == 0.0
 
 
-def test_get_closed_trades_reads_from_t212_pnl(db_engine):
-    from output.performance import get_closed_trades
+def test_get_t212_closed_positions_reads_from_t212_pnl(db_engine):
+    from output.performance import get_t212_closed_positions
 
     with Session(db_engine) as session:
         session.add(T212Pnl(**_pnl_row(buy_order_id=1, sell_order_id=2)))
         session.commit()
 
-    trades = get_closed_trades()
+    trades = get_t212_closed_positions()
     assert len(trades) == 1
     assert trades[0]["direction"] == "LONG"
     assert trades[0]["pnl"] == 39.4
     assert trades[0]["ticker"] == "AAPL"
 
 
-def test_get_closed_trades_filters_by_exit_date_range(db_engine):
-    from output.performance import get_closed_trades
+def test_get_t212_closed_positions_filters_by_exit_date_range(db_engine):
+    from output.performance import get_t212_closed_positions
 
     with Session(db_engine) as session:
         session.add(T212Pnl(**_pnl_row(
@@ -154,12 +154,12 @@ def test_get_closed_trades_filters_by_exit_date_range(db_engine):
         )))
         session.commit()
 
-    recent = get_closed_trades(from_date=datetime(2026, 6, 1))
+    recent = get_t212_closed_positions(from_date=datetime(2026, 6, 1))
     assert len(recent) == 1
     assert recent[0]["ticker"] == "XLF"
 
 
-def test_get_closed_trades_empty_when_no_t212_pnl_rows(db_engine):
-    from output.performance import get_closed_trades
+def test_get_t212_closed_positions_empty_when_no_t212_pnl_rows(db_engine):
+    from output.performance import get_t212_closed_positions
 
-    assert get_closed_trades() == []
+    assert get_t212_closed_positions() == []

@@ -1,10 +1,10 @@
-"""Live price/signal lookups and closed-trade queries.
+"""Live price/signal lookups and closed-position queries.
 
 Manual CFD trade logging (log_trade, close_trade, update_trade_plan,
 get_open_trades, get_all_trades) and macro-theme classification
 (classify_trade_theme) were removed along with the Trade Log page — see
-"Removed: manual CFD trade logging" in CLAUDE.md. get_closed_trades() is
-kept because the weekly summary email reads closed T212 Invest positions
+"Removed: manual CFD trade logging" in CLAUDE.md. get_t212_closed_positions()
+is kept because the weekly summary email reads closed T212 Invest positions
 (from t212_pnl) for accuracy stats.
 """
 
@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 # Quote currency for forex CFD instruments.
 # "JPY" pairs need a two-step P&L conversion: price move → JPY → USD → GBP.
 # All other entries have USD as quote currency: move → USD → GBP.
+#
+# Retained as a defensive fallback in main.py:_quote_ccy_sym(), used only by
+# _render_trade_card()'s non-GBP P&L branch. T212 Invest cards always set
+# unreal_pnl_gbp directly (see _get_t212_invest_brief_cards()), and T212
+# Invest never trades forex instruments in the first place — see "Forex
+# exclusion" in CLAUDE.md — so this branch is theoretically unreachable for
+# T212-only data. Kept rather than deleted in case a future card source ever
+# needs the fallback.
 FOREX_QUOTE_CCY: dict[str, str] = {
     "GBPUSD=X": "USD",
     "EURUSD=X": "USD",
@@ -88,7 +96,7 @@ def get_current_signal(ticker: str) -> dict:
 # Queries
 # ---------------------------------------------------------------------------
 
-def get_closed_trades(
+def get_t212_closed_positions(
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
 ) -> list[dict]:
