@@ -5205,13 +5205,6 @@ def _render_performance_page(config: dict) -> None:
         f"{n_pnl} T212 closed position{'s' if n_pnl != 1 else ''} toward the next weight "
         f"adjustment (fires at {min_trades})."
     )
-    st.info(
-        "The feedback-learning system is not yet wired to T212 execution data — "
-        "recalculate_learned_weights() still reads the legacy `trades` table "
-        "(historical CFD/virtual trade records from before that automation was "
-        "removed), not `t212_pnl`. Rewiring it is a planned follow-up; the figures "
-        "below reflect whatever was last computed from that legacy data, if anything."
-    )
 
     learned = get_learned_weights()
     if learned:
@@ -5235,7 +5228,7 @@ def _render_performance_page(config: dict) -> None:
             for m in modules
         ])
         st.dataframe(cmp_df, width="stretch", hide_index=True)
-        st.caption(f"Last computed from {learned.get('n_trades', 0)} closed trades (legacy source).")
+        st.caption(f"Last computed from {learned.get('n_trades', 0)} T212 closed positions.")
 
         history = get_weight_history()
         if history:
@@ -5246,7 +5239,7 @@ def _render_performance_page(config: dict) -> None:
                 ]
                 st.dataframe(pd.DataFrame(hist_rows), width="stretch", hide_index=True)
     else:
-        st.caption("No learned weights have been computed yet — insufficient closed-trade history.")
+        st.caption("No learned weights have been computed yet — insufficient T212 closed-position history.")
 
 
 # Main UI

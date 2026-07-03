@@ -4,8 +4,8 @@ Manual CFD trade logging (log_trade, close_trade, update_trade_plan,
 get_open_trades, get_all_trades) and macro-theme classification
 (classify_trade_theme) were removed along with the Trade Log page — see
 "Removed: manual CFD trade logging" in CLAUDE.md. get_closed_trades() is
-kept because the weekly summary email still reads historical closed trades
-for accuracy stats.
+kept because the weekly summary email reads closed T212 Invest positions
+(from t212_pnl) for accuracy stats.
 """
 
 import logging
@@ -91,11 +91,22 @@ def get_current_signal(ticker: str) -> dict:
 def get_closed_trades(
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
-    account_type: Optional[str] = None,
 ) -> list[dict]:
-    """Return closed trades, optionally filtered by exit date range and/or account type."""
+    """Return closed T212 Invest positions, optionally filtered by exit date range.
+
+    Reads t212_pnl — reconstructed realised P&L for closed T212 Invest positions
+    (see brokers/t212_learning.py:_reconstruct_t212_pnl()) — the only closed-trade
+    data source left in the app now that virtual trading and manual CFD trade
+    logging have both been removed (see CLAUDE.md). Every row here is a real T212
+    order fill, so callers no longer need an account_type filter to exclude
+    synthetic/paper data the way the old VIRTUAL rows required.
+
+    T212 Invest is a long-only cash account, so every row is implicitly a LONG
+    position — a synthetic "direction": "LONG" key is added to each dict for
+    callers that display trade direction.
+    """
     engine = get_engine()
-    sql    = "SELECT * FROM trades WHERE is_open = 0"
+    sql    = "SELECT * FROM t212_pnl WHERE 1=1"
     params: dict = {}
     if from_date:
         sql += " AND exit_date >= :from_date"
@@ -103,12 +114,15 @@ def get_closed_trades(
     if to_date:
         sql += " AND exit_date <= :to_date"
         params["to_date"] = to_date
-    if account_type:
-        sql += " AND account_type = :account_type"
-        params["account_type"] = account_type
     sql += " ORDER BY exit_date ASC"
     with engine.connect() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["pnl"] = d.get("pnl_gbp")
+        d["direction"] = "LONG"
+        result.append(d)
+    return result
 
 

@@ -21,8 +21,8 @@ from analysis.volume import compute_volume
 from data.database import Signal, get_engine, get_metadata_str, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_price_df
 
-# Modules whose accuracy can be tracked via the trades table
-# (correlation_score is not stored on trades, so it stays at its regime weight)
+# Modules whose accuracy can be tracked via t212_pnl
+# (correlation_score is not stored there, so it stays at its regime weight)
 _TRACKABLE_MODULES = ["trend", "mean_reversion", "volatility", "volume", "macro"]
 _ALL_MODULES       = _TRACKABLE_MODULES + ["correlation"]
 
@@ -144,27 +144,35 @@ def _weighted_score(scores: dict[str, int], weights: dict[str, float]) -> float:
 # ---------------------------------------------------------------------------
 
 def _fetch_trades_for_learning() -> list[dict]:
-    """Minimal SQL query returning only the columns needed for accuracy learning."""
+    """Minimal SQL query returning only the columns needed for accuracy learning.
+
+    Reads from t212_pnl — reconstructed realised P&L for closed T212 Invest
+    positions (see brokers/t212_learning.py:_reconstruct_t212_pnl()) — the only
+    closed-trade data source now that virtual trading and manual CFD trade
+    logging have both been removed (see CLAUDE.md "Removed: virtual trading" /
+    "Removed: manual CFD trade logging"). pnl_gbp is aliased to pnl since the
+    win/loss comparisons below expect a `pnl` key.
+    """
     engine = get_engine()
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT signal_type, confluence_score, regime, pnl, "
+                "SELECT signal_type, confluence_score, regime, pnl_gbp AS pnl, "
                 "trend_score, mean_reversion_score, volatility_score, "
                 "volume_score, macro_score "
-                "FROM trades WHERE is_open = 0 AND pnl IS NOT NULL"
+                "FROM t212_pnl WHERE pnl_gbp IS NOT NULL"
             )
         ).mappings().all()
     return [dict(r) for r in rows]
 
 
 def recalculate_learned_weights(config: dict) -> Optional[dict]:
-    """Derive per-module weights from closed-trade accuracy and persist them.
+    """Derive per-module weights from T212 closed-position accuracy and persist them.
 
     Win rate for each module is measured as: (calls where the module's sign
     matched the trade outcome) / (total non-neutral calls by that module).
-    Correlation score is not stored on trades so it inherits a neutral 50% rate.
-    Returns the new weight dict, or None if there are insufficient trades.
+    Correlation score is not stored on t212_pnl so it inherits a neutral 50% rate.
+    Returns the new weight dict, or None if there are insufficient closed positions.
     """
     learning_cfg = config.get("learning", {})
     if not learning_cfg.get("enabled", True):
@@ -176,7 +184,9 @@ def recalculate_learned_weights(config: dict) -> Optional[dict]:
 
     trades = _fetch_trades_for_learning()
     if len(trades) < min_trades:
-        logger.info("Learning: %d closed trades — minimum is %d, skipping", len(trades), min_trades)
+        logger.info(
+            "Learning: %d T212 closed positions — minimum is %d, skipping", len(trades), min_trades
+        )
         return None
 
     win_rates: dict[str, float] = {}
@@ -223,7 +233,7 @@ def recalculate_learned_weights(config: dict) -> Optional[dict]:
     })
     set_metadata("weight_history", json.dumps(history[-20:]))
 
-    logger.info("Learned weights updated from %d trades: %s", n, final_weights)
+    logger.info("Learned weights updated from %d T212 closed positions: %s", n, final_weights)
     return final_weights
 
 

@@ -906,10 +906,10 @@ def _gather_weekly_data(config: dict) -> dict:
         for r in price_rows if r["close"] is not None
     }
 
-    # Trades — exclude VIRTUAL (legacy rows only; no longer opened live) from
-    # real accuracy stats.
-    closed_week   = [t for t in get_closed_trades(from_date=week_ago) if t.get("account_type") != "VIRTUAL"]
-    all_closed    = [t for t in get_closed_trades()        if t.get("account_type") != "VIRTUAL"]
+    # T212 closed positions (from t212_pnl) — every row is a real order fill,
+    # no VIRTUAL/legacy filtering needed.
+    closed_week   = get_closed_trades(from_date=week_ago)
+    all_closed    = get_closed_trades()
 
     return {
         "now":            now,
@@ -1036,9 +1036,9 @@ def _build_weekly_email(data: dict, config: dict) -> str:
 
     # ── Closed This Week ──────────────────────────────────────────────
     closed = data["closed_week"]
-    section(f"TRADES CLOSED THIS WEEK  ({len(closed)} trade{'s' if len(closed) != 1 else ''})")
+    section(f"T212 POSITIONS CLOSED THIS WEEK  ({len(closed)} position{'s' if len(closed) != 1 else ''})")
     if not closed:
-        L.append("  No trades closed this week.")
+        L.append("  No T212 positions closed this week.")
     else:
         wins   = [t for t in closed if float(t.get("pnl_pct") or 0) > 0]
         losses = [t for t in closed if float(t.get("pnl_pct") or 0) <= 0]
@@ -1061,7 +1061,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     min_trd  = config.get("learning", {}).get("min_trades_before_adjustment", 20)
     n        = len(all_c)
     if n == 0:
-        L.append("  No closed trades yet — accuracy tracking begins after the first closed trade.")
+        L.append("  No T212 closed positions yet — accuracy tracking begins after the first one.")
     else:
         wins_all = [t for t in all_c if float(t.get("pnl_pct") or 0) > 0]
         wr       = len(wins_all) / n * 100
@@ -1069,7 +1069,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
         bar_w    = 20
         filled   = int(pct_done / 100 * bar_w)
         bar      = "#" * filled + "." * (bar_w - filled)
-        L.append(f"  Closed trades:    {n}  (need {min_trd} for adaptive weight learning)")
+        L.append(f"  T212 closed positions: {n}  (need {min_trd} for adaptive weight learning)")
         L.append(f"  Progress:         [{bar}]  {n}/{min_trd}  ({pct_done:.0f}%)")
         L.append(f"  Overall win rate: {wr:.1f}%")
         # By signal type
@@ -1349,9 +1349,9 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
             ["", "Dir", "Ticker", "P&amp;L", "Hold", "Entry Signal"], cl_rows
         )
     else:
-        closed_html = '<p style="color:#64748b;font-size:13px">No trades closed this week.</p>'
+        closed_html = '<p style="color:#64748b;font-size:13px">No T212 positions closed this week.</p>'
 
-    sections += _section_h(f"TRADES CLOSED THIS WEEK ({len(closed)})", closed_html, "#7c3aed")
+    sections += _section_h(f"T212 POSITIONS CLOSED THIS WEEK ({len(closed)})", closed_html, "#7c3aed")
 
     # ── Signal Accuracy Progress ──────────────────────────────────────
     all_c   = data["all_closed"]
@@ -1361,7 +1361,7 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
     if n == 0:
         acc_html = (
             '<p style="color:#64748b;font-size:13px">'
-            'No closed trades yet — accuracy tracking begins after the first closed trade.</p>'
+            'No T212 closed positions yet — accuracy tracking begins after the first one.</p>'
         )
     else:
         wins_all = [t for t in all_c if float(t.get("pnl_pct") or 0) > 0]
@@ -1379,7 +1379,7 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
         wr_color = "#16a34a" if wr >= 50 else "#dc2626"
         stats    = (
             f'<p style="margin:6px 0;font-size:13px">'
-            f'<strong>{n}</strong> closed trades / {min_trd} target &nbsp;·&nbsp; '
+            f'<strong>{n}</strong> T212 closed positions / {min_trd} target &nbsp;·&nbsp; '
             f'Win rate: <strong style="color:{wr_color}">{wr:.1f}%</strong></p>'
         )
         sig_stats: dict[str, list[int]] = defaultdict(lambda: [0, 0])

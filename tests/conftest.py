@@ -28,6 +28,7 @@ from data.database import Base  # noqa: E402
 _GET_ENGINE_BINDINGS = (
     "data.database.get_engine",
     "analysis.regime.get_engine",
+    "analysis.confluence.get_engine",
     "data.ingestion.get_engine",
     "output.performance.get_engine",
 )
