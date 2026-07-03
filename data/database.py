@@ -407,6 +407,8 @@ class BacktestTrade(Base):
     entry_signal = Column(String(20))
     exit_reason = Column(String(30))  # SIGNAL_REVERSAL / STOP_LOSS / MAX_HOLDING / END_OF_DATA
     pnl_pct = Column(Float)
+    position_gbp = Column(Float)  # VaR-scaled position size used to size this simulated trade — see analysis/volatility.py:compute_var_position_size()
+    pnl_gbp = Column(Float)       # position_gbp * pnl_pct — realised £ P&L for this simulated trade
     regime_at_entry = Column(String(30))
     trend_at_entry = Column(Integer)
     mean_reversion_at_entry = Column(Integer)
@@ -443,6 +445,7 @@ class T212InvestOrder(Base):
     account_type     = Column(String(10))           # DEMO / LIVE
     currency_code    = Column(String(10))           # instrument currency (USD, EUR, GBX, …)
     exit_reason      = Column(String(20))           # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT; null for BUY orders
+    var_pct          = Column(Float)                # holding-period VaR (as a fraction, e.g. -0.08 = -8%) used to size this BUY order; null for SELL orders and for orders placed under position_sizing: fixed
     error_message    = Column(Text)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     filled_at        = Column(DateTime)
@@ -635,7 +638,11 @@ def _apply_migrations(engine) -> None:
         ("t212_invest_orders", "filled_quantity",     "FLOAT"),
         ("t212_invest_orders", "currency_code",       "TEXT"),
         ("t212_invest_orders", "exit_reason",         "TEXT"),
+        ("t212_invest_orders", "var_pct",             "FLOAT"),
+        ("backtest_trades",    "position_gbp",        "FLOAT"),
+        ("backtest_trades",    "pnl_gbp",              "FLOAT"),
     ]
+
     for table, column, col_type in new_columns:
         try:
             with engine.begin() as conn:

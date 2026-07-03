@@ -1838,6 +1838,21 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             )
         else:
             st.caption(f"⛔ **Entry blocked** ({_t212_regime.replace('_', ' ')} regime not in allowed_entry_regimes)")
+
+        if _t212_cfg.get("position_sizing", "fixed") == "var":
+            st.caption(
+                f"Position sizing: **VaR** "
+                f"({int(float(_t212_cfg.get('var_confidence', 0.95)) * 100)}% confidence, "
+                f"{int(_t212_cfg.get('var_lookback_days', 252))}-day lookback, "
+                f"{float(_t212_cfg.get('max_risk_pct', 0.01)) * 100:.0f}% max risk — "
+                f"floor £{float(_t212_cfg.get('min_position_gbp', 50)):.0f}, "
+                f"ceiling £{float(_t212_cfg.get('max_position_gbp', 500)):.0f})"
+            )
+        else:
+            st.caption(
+                f"Position sizing: **Fixed** "
+                f"(flat £{float(_t212_cfg.get('max_position_gbp', 500)):.0f} per order)"
+            )
         st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
         if _t212_error:
@@ -1973,7 +1988,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     with get_engine().connect() as _t2_conn:
                         _ord_rows = _t2_conn.execute(_sa_text("""
                             SELECT id, ticker, t212_ticker, direction, quantity,
-                                   estimated_value_gbp, status, signal_type,
+                                   estimated_value_gbp, var_pct, status, signal_type,
                                    confluence_score, regime, account_type,
                                    error_message, placed_at
                             FROM t212_invest_orders
@@ -1987,9 +2002,12 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 st.markdown("#### Recent Orders")
                 if _ord_data:
                     _ord_df = pd.DataFrame([{k: v for k, v in r.items() if k != "id"} for r in _ord_data])
+                    _ord_df["var_pct"] = _ord_df["var_pct"].map(
+                        lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
+                    )
                     _ord_df.columns = [
                         "Ticker", "UCITS Ticker", "Dir", "Qty",
-                        "Est. Value (£)", "Status", "Signal",
+                        "Est. Value (£)", "VaR at Entry", "Status", "Signal",
                         "Score", "Regime", "Account",
                         "Error", "Placed At",
                     ]
@@ -2142,7 +2160,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                                 _stock_ord_rows = _stock_conn.execute(
                                     _sa_stock_text(f"""
                                         SELECT ticker, t212_ticker, direction, quantity,
-                                               estimated_value_gbp, status, signal_type,
+                                               estimated_value_gbp, var_pct, status, signal_type,
                                                confluence_score, regime, account_type,
                                                error_message, placed_at
                                         FROM t212_invest_orders
@@ -2158,9 +2176,12 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
                         if _stock_ord_data:
                             _stock_ord_df = pd.DataFrame(_stock_ord_data)
+                            _stock_ord_df["var_pct"] = _stock_ord_df["var_pct"].map(
+                                lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
+                            )
                             _stock_ord_df.columns = [
                                 "Ticker", "T212 Ticker", "Dir", "Qty",
-                                "Est. Value (£)", "Status", "Signal",
+                                "Est. Value (£)", "VaR at Entry", "Status", "Signal",
                                 "Score", "Regime", "Account",
                                 "Error", "Placed At",
                             ]
@@ -3110,6 +3131,9 @@ def _render_trade_card(e: dict) -> None:
         detail_parts.append(html.escape(f"TP: {tp_price:,.4f}"))
     if live_rr is not None:
         detail_parts.append(html.escape(f"R:R: {live_rr:+.2f}"))
+    _entry_var_pct = e.get("entry_var_pct")
+    if _entry_var_pct is not None:
+        detail_parts.append(html.escape(f"VaR at entry: {_entry_var_pct * 100:.2f}%"))
     if near_max_hold:
         detail_parts.append(
             f"<span style='color:#f59e0b;font-weight:700'>⏱ {days_remaining}d left</span>"
@@ -3460,7 +3484,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         from sqlalchemy import text as _sa_t              # noqa: PLC0415
         with _get_eng().connect() as _tc:
             _entry_rows = _tc.execute(_sa_t("""
-                SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code
+                SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code, var_pct
                 FROM t212_invest_orders
                 WHERE direction = 'BUY' AND status = 'FILLED'
                 ORDER BY filled_at ASC
@@ -3493,6 +3517,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         entry_info    = entry_by_t212.get(t212_ticker, {})
         entry_signal  = entry_info.get("signal_type")  or "NEUTRAL"
         entry_score   = float(entry_info.get("confluence_score") or 0)
+        entry_var_pct = entry_info.get("var_pct")  # None when placed under position_sizing: fixed
 
         # Resolve instrument currency: prefer DB-stored value (set at order time from T212 API),
         # then fall back to config ucits_mapping currency field (ETF only; stocks default USD).
@@ -3584,6 +3609,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
             "current_score":     current_score,
             "entry_signal":      entry_signal,
             "entry_score":       entry_score,
+            "entry_var_pct":     entry_var_pct,
             "status":            status,
             "status_priority":   status_priority,
             "account_name":      "T212 Invest" if asset_type == "ETF" else "T212 Stocks",

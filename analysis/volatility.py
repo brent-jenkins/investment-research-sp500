@@ -1,5 +1,8 @@
 """Volatility indicators: ATR, Bollinger Band width, realised vol, VIX regime."""
 
+import logging
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -8,6 +11,8 @@ try:
     _TALIB_AVAILABLE = True
 except ImportError:
     _TALIB_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 def _vix_regime(level: float) -> str:
@@ -143,3 +148,173 @@ def compute_volatility(
         "vix_level":   vix_close,
         "vix_regime":  regime_str,
     }
+
+
+# ---------------------------------------------------------------------------
+# VaR-based position sizing
+# ---------------------------------------------------------------------------
+
+# Minimum number of daily log returns required before a VaR estimate is
+# trusted. Below this, compute_var_position_size() falls back to a flat
+# fraction of max_position_gbp rather than sizing off a thin sample.
+_MIN_VAR_RETURNS = 60
+
+
+def _var_position_size_core(
+    log_returns: "pd.Series | np.ndarray",
+    account_value_gbp: float,
+    max_position_gbp: float,
+    holding_days: int,
+    var_confidence: float,
+    max_risk_pct: float,
+    min_position_gbp: float,
+) -> tuple[float, float, float]:
+    """Pure VaR position-sizing math — no DB access, no look-ahead risk.
+
+    Historical VaR: the (1 - var_confidence) percentile of the daily
+    log-return distribution (e.g. the 5th percentile at 95% confidence).
+    Historical (percentile-based) rather than Parametric VaR because
+    day-to-day equity/ETF returns are fat-tailed — a normal-distribution
+    assumption understates tail risk. Not Monte Carlo VaR — needlessly
+    expensive for a sizing calculation that has to run for ~64 tickers on
+    every EOD pass.
+
+    Scaled to the position's actual holding period via the square-root-of-time
+    rule (holding_var = daily_var * sqrt(holding_days)) since a longer hold
+    has more time to accumulate an adverse move. Position size is then set so
+    that a holding-period move of that magnitude would lose at most
+    max_risk_pct of account_value_gbp: position_gbp = (account_value_gbp *
+    max_risk_pct) / abs(holding_var). Floored at min_position_gbp, capped at
+    max_position_gbp — max_position_gbp remains a hard ceiling regardless of
+    how low volatility gets.
+
+    Shared by compute_var_position_size() below (the live-trading path, which
+    reads price_data via get_price_df()) and analysis/backtest.py:
+    simulate_trades() (which cannot use get_price_df() directly, since
+    that always fetches relative to *today* — a historical backtest instead
+    passes in log returns computed from prices strictly before the entry
+    date, to avoid look-ahead bias). Keeping the formula in one place means
+    live and backtested position sizing can never quietly drift apart.
+
+    Returns (position_gbp, daily_var, holding_var). daily_var and holding_var
+    are returned so callers can log/display them without recomputing.
+    """
+    daily_var = float(np.percentile(log_returns, (1 - var_confidence) * 100))
+    holding_var = daily_var * math.sqrt(max(holding_days, 1))
+
+    if holding_var == 0:
+        # No observed downside at all in the sample (e.g. a perfectly flat
+        # series) — nothing to constrain against, so use the full ceiling.
+        return max_position_gbp, daily_var, holding_var
+
+    position_gbp = (account_value_gbp * max_risk_pct) / abs(holding_var)
+    position_gbp = max(min_position_gbp, min(position_gbp, max_position_gbp))
+    return round(position_gbp, 2), daily_var, holding_var
+
+
+def compute_var_position_size_detailed(
+    ticker: str,
+    account_value_gbp: float,
+    max_position_gbp: float,
+    config: dict,
+    confidence: float = 0.95,
+    section: str = "trading212_invest",
+) -> tuple[float, "float | None", "float | None"]:
+    """Return (position_gbp, daily_var, holding_var) for *ticker* (live-trading path).
+
+    Reads the last var_lookback_days of daily closes for *ticker* from the
+    stored price_data table (no yfinance call — must stay fast enough for
+    ~64 tickers on every EOD run) and sizes the position so its expected
+    holding-period loss at *confidence* (default 95%) stays within
+    config[section]["max_risk_pct"] of account_value_gbp. See
+    _var_position_size_core() above for the full formula.
+
+    config[section] (either "trading212_invest" or "trading212_stocks" — both
+    carry an identical set of keys, sized independently since ETF and stock
+    risk tolerance can differ) supplies:
+      var_confidence     (default: the *confidence* parameter, 0.95)
+      var_lookback_days  (default 252 — ~1 trading year)
+      max_risk_pct       (default 0.01 — 1% of account value)
+      min_position_gbp   (default 50)
+
+    Falls back to max_position_gbp * 0.5 (logged as a warning) when fewer
+    than _MIN_VAR_RETURNS (60) daily returns are available — a newly-listed
+    ticker or a data gap shouldn't block sizing entirely, but also shouldn't
+    be sized off a handful of noisy observations. daily_var/holding_var are
+    None in the fallback case, since no VaR was actually computed.
+
+    This "detailed" variant exists (rather than making compute_var_position_size()
+    itself return a tuple) so brokers/trading212.py can log and persist the
+    holding-period VaR alongside the order (t212_invest_orders.var_pct, shown
+    on the Performance page) without a second DB round-trip to recompute it —
+    see that module's BUY-phase call sites. compute_var_position_size() below
+    is a thin wrapper for callers that only need the position size.
+    """
+    sect_cfg = config.get(section, {})
+    var_confidence   = float(sect_cfg.get("var_confidence", confidence))
+    var_lookback     = int(sect_cfg.get("var_lookback_days", 252))
+    max_risk_pct     = float(sect_cfg.get("max_risk_pct", 0.01))
+    min_position_gbp = float(sect_cfg.get("min_position_gbp", 50))
+
+    fallback = round(max_position_gbp * 0.5, 2)
+
+    from analysis.regime import get_max_holding_days  # noqa: PLC0415  local import — avoid circular import
+    from data.ingestion import get_price_df  # noqa: PLC0415  local import — keeps this module DB-free otherwise
+
+    # var_lookback_days is a count of *trading* days; fetch a generous
+    # calendar-day window (1.6x plus a small buffer) so that many trading
+    # days are comfortably included after weekends/holidays, then trim with
+    # tail() below to exactly what's needed.
+    df = get_price_df(ticker, days=int(var_lookback * 1.6) + 30)
+    if df.empty or len(df) < _MIN_VAR_RETURNS:
+        logger.warning(
+            "compute_var_position_size: insufficient price history for %s "
+            "(%d rows, need >= %d) — falling back to max_position_gbp * 0.5 (£%.0f).",
+            ticker, len(df), _MIN_VAR_RETURNS, fallback,
+        )
+        return fallback, None, None
+
+    close = df["close"].astype(float).tail(var_lookback + 1)
+    log_returns = np.log(close / close.shift(1)).dropna()
+    if len(log_returns) < _MIN_VAR_RETURNS:
+        logger.warning(
+            "compute_var_position_size: insufficient return history for %s "
+            "(%d returns, need >= %d) — falling back to max_position_gbp * 0.5 (£%.0f).",
+            ticker, len(log_returns), _MIN_VAR_RETURNS, fallback,
+        )
+        return fallback, None, None
+
+    holding_days = get_max_holding_days(ticker, config)
+    position_gbp, daily_var, holding_var = _var_position_size_core(
+        log_returns, account_value_gbp, max_position_gbp, holding_days,
+        var_confidence, max_risk_pct, min_position_gbp,
+    )
+
+    log_prefix = "T212 Invest" if section == "trading212_invest" else "T212 Stocks"
+    logger.info(
+        "%s: VaR sizing %s — daily VaR=%.2f%%, holding VaR=%.2f%%, "
+        "position=£%.0f (account=£%.0f, max=£%.0f)",
+        log_prefix, ticker, daily_var * 100, holding_var * 100,
+        position_gbp, account_value_gbp, max_position_gbp,
+    )
+
+    return position_gbp, daily_var, holding_var
+
+
+def compute_var_position_size(
+    ticker: str,
+    account_value_gbp: float,
+    max_position_gbp: float,
+    config: dict,
+    confidence: float = 0.95,
+    section: str = "trading212_invest",
+) -> float:
+    """Return just the VaR-scaled GBP position size for *ticker*.
+
+    Thin wrapper around compute_var_position_size_detailed() for callers that
+    don't need the daily/holding VaR values themselves.
+    """
+    position_gbp, _daily_var, _holding_var = compute_var_position_size_detailed(
+        ticker, account_value_gbp, max_position_gbp, config, confidence, section,
+    )
+    return position_gbp

@@ -54,6 +54,14 @@ def compute_metrics(df: pd.DataFrame) -> dict:
 
     Args:
         df: DataFrame with columns pnl_pct, is_win, holding_days, entry_date.
+            An optional pnl_gbp column (VaR-scaled £ P&L — see
+            analysis/backtest.py:simulate_trades() and
+            analysis/volatility.py:compute_var_position_size()) adds a
+            parallel set of "_gbp"-suffixed keys to the returned dict below;
+            all existing "_pct"-suffixed keys are always computed from
+            pnl_pct exactly as before, so callers that only know about the
+            percentage-based keys (older backtest_trades rows have no
+            pnl_gbp at all) see no change in behaviour.
 
     Returns:
         Dict of metrics suitable for display.
@@ -105,7 +113,7 @@ def compute_metrics(df: pd.DataFrame) -> dict:
         else:
             streak = 0
 
-    return {
+    result = {
         "total_trades":       n,
         "win_rate":           round(win_rate, 4),
         "avg_return_pct":     round(avg_ret, 3),
@@ -119,7 +127,31 @@ def compute_metrics(df: pd.DataFrame) -> dict:
         "calmar_ratio":       round(min(calmar, 99.9), 2),
         "avg_holding_days":   round(avg_hold, 1),
         "max_loss_streak":    max_loss_streak,
+        "has_pnl_gbp":        False,
     }
+
+    # ── £ P&L metrics (additive — only when pnl_gbp is present and populated) ──
+    if "pnl_gbp" in df.columns and df["pnl_gbp"].notna().any():
+        gbp = df["pnl_gbp"].dropna().astype(float)
+        gbp_wins   = df[(df["is_win"] == True)  & df["pnl_gbp"].notna()]["pnl_gbp"]
+        gbp_losses = df[(df["is_win"] == False) & df["pnl_gbp"].notna()]["pnl_gbp"]
+
+        profit_factor_gbp = (
+            (gbp_wins.sum() / abs(gbp_losses.sum()))
+            if not gbp_losses.empty and gbp_losses.sum() != 0
+            else float("inf")
+        )
+
+        result.update({
+            "has_pnl_gbp":       True,
+            "total_pnl_gbp":     round(float(gbp.sum()), 2),
+            "avg_pnl_gbp":       round(float(gbp.mean()), 2),
+            "avg_win_gbp":       round(float(gbp_wins.mean()), 2)  if not gbp_wins.empty  else 0.0,
+            "avg_loss_gbp":      round(float(gbp_losses.mean()), 2) if not gbp_losses.empty else 0.0,
+            "profit_factor_gbp": round(min(profit_factor_gbp, 999999.0), 2),
+        })
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +209,59 @@ def equity_curve(df: pd.DataFrame, start_value: float = 1.0) -> pd.DataFrame:
         "date":         all_days,
         "equity":       equity.values,
         "drawdown_pct": dd.values,
+    })
+
+
+def equity_curve_gbp(df: pd.DataFrame, starting_capital_gbp: float = 10000.0) -> pd.DataFrame:
+    """Return a daily £ portfolio equity curve DataFrame from VaR-sized trades.
+
+    A true £ equity curve, unlike equity_curve() above — that function
+    compounds fractional pnl_pct returns multiplicatively ((1+r).cumprod()),
+    which implicitly assumes 100% reinvestment of the whole account into
+    every trade. With VaR position sizing, each trade only ever risks a
+    small slice of the account (position_gbp), so £ P&L instead ADDS onto a
+    starting capital baseline: equity_t = starting_capital_gbp +
+    cumsum(pnl_gbp), realised in exit-date order exactly like equity_curve()
+    above. Returns an empty-columns DataFrame (not a curve pinned at
+    starting_capital_gbp) when df has no usable pnl_gbp, so callers can tell
+    "no £-sized trades in this run" apart from "a flat £ curve".
+
+    Args:
+        df:                    Trades DataFrame — must have entry_date,
+                               exit_date (or entry_date as a fallback), and
+                               pnl_gbp.
+        starting_capital_gbp:  Notional starting account value — see
+                               backtest.starting_capital_gbp in config.yaml
+                               and CLAUDE.md's "VaR position sizing" section.
+
+    Returns:
+        DataFrame with columns: date (daily, no gaps), equity_gbp, drawdown_gbp.
+    """
+    if df is None or df.empty or "pnl_gbp" not in df.columns or df["pnl_gbp"].isna().all():
+        return pd.DataFrame(columns=["date", "equity_gbp", "drawdown_gbp"])
+
+    df = df.dropna(subset=["pnl_gbp"]).copy()
+    df["entry_date"] = pd.to_datetime(df["entry_date"]).dt.normalize()
+    exit_col = "exit_date" if "exit_date" in df.columns else "entry_date"
+    df["exit_date"] = pd.to_datetime(df[exit_col]).dt.normalize()
+
+    # Realise P&L in exit-date order, same rationale as equity_curve() above.
+    df = df.sort_values("exit_date").reset_index(drop=True)
+    cum_at_exit = starting_capital_gbp + df["pnl_gbp"].cumsum()
+
+    exit_equity = pd.Series(cum_at_exit.values, index=df["exit_date"])
+    exit_equity = exit_equity.groupby(level=0).last()
+
+    all_days = pd.date_range(df["entry_date"].min(), df["exit_date"].max(), freq="D")
+    equity = exit_equity.reindex(all_days).ffill().fillna(starting_capital_gbp)
+
+    peak = equity.cummax()
+    dd   = equity - peak
+
+    return pd.DataFrame({
+        "date":           all_days,
+        "equity_gbp":     equity.values,
+        "drawdown_gbp":   dd.values,
     })
 
 

@@ -82,7 +82,7 @@ Assets not directly in any pair inherit a correlation score via `CATEGORY_PROXY`
 
 T212 Invest execution performance, driven entirely by real broker fills — no manually-logged or simulated trade data feeds this page at all (see "Removed: virtual trading" and "Removed: manual CFD trade logging" below). Four sections:
 
-- **Open Positions** — the same full-detail cards as the Daily Briefing's monitor used to show before it was simplified to a one-line summary: live GBP P&L, current signal, score delta since entry, SL/TP, live R:R, health status. Reads the same scheduler-maintained snapshot, no direct T212 API calls.
+- **Open Positions** — the same full-detail cards as the Daily Briefing's monitor used to show before it was simplified to a one-line summary: live GBP P&L, current signal, score delta since entry, SL/TP, live R:R, health status, and VaR at entry when the position was sized under `position_sizing: var` (see "VaR position sizing" below). Reads the same scheduler-maintained snapshot, no direct T212 API calls.
 - **Closed Positions** — a table of every closed T212 position (`t212_pnl`): ticker, type, entry/exit date and price, quantity, P&L in £ and %, holding days, entry signal, regime, exit reason. Always shown, regardless of row count — `"No closed positions yet — data will appear as T212 positions close"` when the table is empty.
 - **Performance Metrics** — gated behind 5 closed positions (T212 exits are infrequent — maybe 5–10/year — so this can take a while to populate). Below 5, just a win/loss count and total P&L. At 5+: win rate, avg/total return, profit factor, max drawdown, an equity curve, and performance broken down by regime-at-entry and by exit reason. Reuses the same metrics functions as the Backtest page (`analysis/backtest_metrics.py`) via a column-renaming adapter, rather than a second implementation of the same aggregation logic.
 - **Learning System** — live count of `t212_pnl` rows against `learning.min_trades_before_adjustment` (default 20 — see "Feedback learning" below), and, once any weights have been learned, a comparison of learned per-module weights against the static regime-weight average.
@@ -99,8 +99,8 @@ Replay the current signal logic over up to 10 years of stored historical price d
 ### Status
 System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **Run Analysis Now** (analysis + signals only) and **Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
-A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml, including the DEMO/LIVE badge, position/deployment limits, and the effective entry threshold for the current regime (flagged "(override)" when `entry_signal_overrides` applies one, or a `⛔ Entry blocked` caption in place of the threshold when the current regime isn't in `allowed_entry_regimes` — see "Per-regime entry signal overrides" below). It is split into three tabs:
-- **Account tab** — account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red). Data is read from a scheduler-maintained DB snapshot; the **Refresh Account** button queues an out-of-band fetch (handled by the 60-second job dispatcher, "updating within 60s"). When FAILED orders are present a **Retry failed orders** list appears — each row shows the ticker, direction, quantity, and error with a **Retry** and **Delete** button. The Retry button applies the instrument precision/minimum-quantity guard and re-submits.
+A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml, including the DEMO/LIVE badge, position/deployment limits, a "Position sizing" caption showing **VaR** (with its confidence/lookback/max-risk/floor/ceiling params) or **Fixed**, and the effective entry threshold for the current regime (flagged "(override)" when `entry_signal_overrides` applies one, or a `⛔ Entry blocked` caption in place of the threshold when the current regime isn't in `allowed_entry_regimes` — see "Per-regime entry signal overrides" below). It is split into three tabs:
+- **Account tab** — account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red) plus a "VaR at Entry" column. Data is read from a scheduler-maintained DB snapshot; the **Refresh Account** button queues an out-of-band fetch (handled by the 60-second job dispatcher, "updating within 60s"). When FAILED orders are present a **Retry failed orders** list appears — each row shows the ticker, direction, quantity, and error with a **Retry** and **Delete** button. The Retry button applies the instrument precision/minimum-quantity guard and re-submits.
 - **Stocks tab** — the `trading212_stocks` entry threshold (or blocked-entry caption), position/deployment limits, and the last 10 automated orders filtered from the same `t212_invest_orders` table down to tickers in `watchlist.us_large_cap` — see "T212 Stocks automation" below.
 - **Mapping tab** — UCITS instrument mapping table (which research tickers map to T212 instrument IDs).
 
@@ -117,10 +117,27 @@ A **T212 Invest Account** panel shows the live connection state when `trading212
 A separate `trading212_stocks` config block automates direct US large-cap stock trading (`watchlist.us_large_cap` — 31 S&P 500 stocks across 9 sectors: Technology (AAPL, MSFT, NVDA, AMZN, ADBE, CRM), Financials (JPM, GS, BAC, V, MA, SPGI), Healthcare (LLY, UNH, JNJ, PFE, MRK, TMO), Semiconductors (AMD, AVGO, QCOM), Consumer Staples (COST, WMT, PG), Consumer Discretionary (HD), Energy (XOM, CVX), Industrials (CAT, RTX), Gold Miners (NEM, GOLD) — chosen for liquidity and for having a corresponding sector ETF already in the watchlist for correlation context; TSLA, META, GOOGL, and TSM were deliberately excluded despite otherwise fitting, for CEO/antitrust/geopolitical risk respectively), running alongside — not instead of — the UCITS ETF automation above. `brokers/trading212.py:maybe_place_stock_orders()` is structurally identical to `maybe_place_t212_orders()` (same two-phase EXIT/BUY flow, same duplicate-order guard, same `t212_invest_orders` table) but with three differences that all reflect individual stocks carrying more idiosyncratic risk than a diversified ETF basket:
 
 - **Regime gate:** `allowed_entry_regimes` is `[TRENDING_BULL]` only — the same as the ETF path (see "Regime entry gate" above for the full per-regime backtest rationale, including why TRENDING_BEAR was removed). A single stock's downside in a bear or high-vol regime is far less diversified than an ETF's, so this was always intended to be at least as strict for stocks. As with the ETF path, the EXIT phase is never regime-gated — existing stock positions always continue to be evaluated for exit.
-- **Smaller, tighter sizing:** `max_position_gbp: 200` (vs 500), `max_total_deployed: 0.3` (vs 0.5), `max_holding_days: 30` (vs 90).
+- **Smaller, tighter sizing:** `max_position_gbp: 200` (vs 500), `max_total_deployed: 0.3` (vs 0.5), `max_holding_days: 30` (vs 90) — VaR position sizing (below) applies on top of this ceiling.
 - **Fractional-share ordering:** no `ucits_mapping` — the T212 instrument ticker defaults to the research ticker itself (override per watchlist entry via `trading212_instrument` where it differs). When `fractional_shares: true` and the T212 instruments API reports `maxQuantityPrecision > 0` for a ticker, the order quantity is a decimal — `get_quantity_for_gbp()`'s GBP→USD-converted value rounded to that precision — instead of floored to a whole share the way UCITS ETF orders are. This uses the same `/equity/orders/market` endpoint as whole-share orders (T212 accepts a decimal `quantity` directly for fractional-eligible instruments); no separate value-based order call is implemented.
 
 > **Earnings gap risk:** neither T212 automation path checks an earnings calendar. A position can gap through overnight on an earnings announcement — the next scheduled exit check fills at whatever price is then available, not any intended level. This is a materially larger risk for individual stocks than for diversified ETFs and is not currently mitigated in code.
+
+### VaR position sizing
+
+Both T212 automation paths size new BUY orders with **Historical VaR** rather than a flat `max_position_gbp` for every ticker, when `position_sizing: var` (the default for both `trading212_invest` and `trading212_stocks` — `fixed` reproduces the pre-VaR flat-allocation behaviour exactly). Position size scales inversely with the ticker's own historical volatility, so e.g. NVDA sizes smaller than WMT for the same £ ceiling instead of both getting an identical allocation regardless of risk.
+
+`analysis/volatility.py:compute_var_position_size()`: reads the last `var_lookback_days` (default 252, ~1 year) of daily closes from `price_data` (no yfinance call), computes daily log returns, and takes the `(1 - var_confidence)` percentile as the daily VaR (Historical, not Parametric — equity/ETF returns are fat-tailed — and not Monte Carlo, which is unnecessarily expensive for a per-ticker sizing check on every EOD run). Scaled to the position's actual holding period via the square-root-of-time rule (`holding_var = daily_var × √holding_days`, using the same per-ticker `get_max_holding_days()` the live exit checks and backtest use), then sized so a holding-period move of that magnitude would lose at most `max_risk_pct` (default 1%) of account value. Floored at `min_position_gbp` (default £50), capped at `max_position_gbp` (unchanged — still a hard ceiling). Falls back to `max_position_gbp × 0.5` when fewer than 60 daily returns are available (new listing, data gap).
+
+```yaml
+trading212_invest:            # and, identically, trading212_stocks:
+  position_sizing: var        # "var" or "fixed" (flat max_position_gbp — the pre-VaR behaviour)
+  var_confidence: 0.95
+  var_lookback_days: 252
+  max_risk_pct: 0.01
+  min_position_gbp: 50
+```
+
+The holding-period VaR used to size each order is stored on `t212_invest_orders.var_pct` and shown as "VaR at Entry" in the Status page's Recent Orders tables and the Performance page's Open Positions cards. See "VaR position sizing" in [CLAUDE.md](CLAUDE.md) for the full formula, the shared-core design that keeps live and backtested sizing from drifting apart, and how the backtest avoids look-ahead bias when reusing the same math.
 
 ---
 
@@ -267,7 +284,9 @@ Exit conditions (checked in priority order, unaffected by either entry gate):
 
 None of these values are accepted as override parameters by `simulate_trades()` or `run_backtest()` — they're read directly from `config`, so the backtest always reflects whatever `config.yaml` currently says the live system should do.
 
-Results are stored in three tables (`backtest_runs`, `backtest_signals`, `backtest_trades`) and analysed by `analysis/backtest_metrics.py` which provides: full metrics (Sharpe, Calmar, profit factor, max drawdown), equity curve, period breakdown, module attribution, signal decay histogram, and rolling walk-forward validation.
+Each entry is sized with the same VaR position sizing live trading uses (see "VaR position sizing" above) rather than every simulated trade being equal-weight — a `position_gbp` and `pnl_gbp` (`position_gbp × pnl_pct`) is stored per trade. `backtest.starting_capital_gbp` (default £10,000) is a notional constant, not a real compounding balance, since `simulate_trades()` runs one ticker at a time with no shared cross-ticker portfolio.
+
+Results are stored in three tables (`backtest_runs`, `backtest_signals`, `backtest_trades`) and analysed by `analysis/backtest_metrics.py` which provides: full metrics (Sharpe, Calmar, profit factor, max drawdown — plus `_gbp`-suffixed £ metrics when `pnl_gbp` is populated), a normalised % equity curve and a true £ equity curve (`equity_curve_gbp()` — additive, not compounding), period breakdown, module attribution, signal decay histogram, and rolling walk-forward validation.
 
 ---
 
@@ -390,6 +409,7 @@ notifications:
     enabled: true         # set false to disable without touching email.enabled
 
 backtest:
+  starting_capital_gbp: 10000     # notional account size for VaR position sizing — see "VaR position sizing" above
   max_holding_days: 30           # default max hold — equities, ETFs, commodities
   max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
   max_holding_days_crypto: 14    # crypto (ticker ends with -USD) — high volatility, shorter cycles

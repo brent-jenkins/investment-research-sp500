@@ -465,10 +465,30 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
          asset-class limits read from config).
     """
     from analysis.regime import get_max_holding_days, is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
+    from analysis.volatility import _MIN_VAR_RETURNS, _var_position_size_core  # noqa: PLC0415  shared VaR math — see that module's docstring for why this is imported rather than reimplemented
 
     bt_cfg   = config.get("backtest", {})
     max_hold = get_max_holding_days(ticker, config)
     atr_mult = float(bt_cfg.get("atr_stop_multiplier", 2.0))
+
+    # VaR position sizing — reads risk parameters from trading212_invest (the
+    # backtest has no config block of its own for these; entry-gating alone
+    # is kept separate under backtest: because it can go LONG or SHORT, but
+    # risk tolerance is not direction-specific, so trading212_invest's
+    # values are reused directly here). starting_capital_gbp is a notional
+    # account size, not a real compounding balance: simulate_trades() runs
+    # one ticker at a time with no shared cross-ticker portfolio, so this
+    # value is constant for every entry across the whole run rather than
+    # growing/shrinking as a real account would — see CLAUDE.md's "VaR
+    # position sizing" section for the full rationale.
+    var_cfg           = config.get("trading212_invest", {})
+    starting_capital  = float(bt_cfg.get("starting_capital_gbp", 10000))
+    var_confidence    = float(var_cfg.get("var_confidence", 0.95))
+    var_lookback      = int(var_cfg.get("var_lookback_days", 252))
+    max_risk_pct      = float(var_cfg.get("max_risk_pct", 0.01))
+    min_position_gbp  = float(var_cfg.get("min_position_gbp", 50))
+    max_position_gbp  = float(var_cfg.get("max_position_gbp", 500))
+    close_series      = signals["close"].astype(float)
 
     _BULL   = frozenset({"BUY", "STRONG_BUY"})
     _BEAR   = frozenset({"SELL", "STRONG_SELL"})
@@ -497,6 +517,25 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 continue
             direction = "LONG" if sig in _BULL else "SHORT"
             stop = price - atr_mult * atr if direction == "LONG" else price + atr_mult * atr
+
+            # VaR position sizing — uses only prices strictly BEFORE dt (no
+            # look-ahead). Falls back to max_position_gbp * 0.5 when fewer
+            # than _MIN_VAR_RETURNS (60) prior daily returns are available
+            # within the signals range passed to this call — the same
+            # fallback threshold and value analysis/volatility.py:
+            # compute_var_position_size() uses live, so an entry early in a
+            # short requested backtest window degrades safely rather than
+            # erroring or silently reusing future data.
+            prior_closes = close_series.loc[close_series.index < dt].tail(var_lookback + 1)
+            log_returns  = np.log(prior_closes / prior_closes.shift(1)).dropna()
+            if len(log_returns) >= _MIN_VAR_RETURNS:
+                position_gbp, _daily_var, _holding_var = _var_position_size_core(
+                    log_returns, starting_capital, max_position_gbp, max_hold,
+                    var_confidence, max_risk_pct, min_position_gbp,
+                )
+            else:
+                position_gbp = round(max_position_gbp * 0.5, 2)
+
             open_trade = {
                 "ticker":                   ticker,
                 "direction":                direction,
@@ -504,6 +543,7 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "entry_price":              price,
                 "entry_signal":             sig,
                 "stop_price":               stop,
+                "position_gbp":             position_gbp,
                 "regime_at_entry":          str(row["regime"]),
                 "trend_at_entry":           int(row["trend_score"]),
                 "mean_reversion_at_entry":  int(row["mean_reversion_score"]),
@@ -552,6 +592,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "entry_signal":             open_trade["entry_signal"],
                 "exit_reason":              exit_reason,
                 "pnl_pct":                  float(pnl_pct),
+                "position_gbp":             open_trade["position_gbp"],
+                "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
                 "regime_at_entry":          open_trade["regime_at_entry"],
                 "trend_at_entry":           open_trade["trend_at_entry"],
                 "mean_reversion_at_entry":  open_trade["mean_reversion_at_entry"],
@@ -581,6 +623,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
             "entry_signal":             open_trade["entry_signal"],
             "exit_reason":              "END_OF_DATA",
             "pnl_pct":                  float(pnl_pct),
+            "position_gbp":             open_trade["position_gbp"],
+            "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
             "regime_at_entry":          open_trade["regime_at_entry"],
             "trend_at_entry":           open_trade["trend_at_entry"],
             "mean_reversion_at_entry":  open_trade["mean_reversion_at_entry"],

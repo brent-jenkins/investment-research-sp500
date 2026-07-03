@@ -51,6 +51,7 @@ from typing import Optional
 import requests
 
 from analysis.regime import get_latest_regime_name, is_entry_allowed, resolve_entry_signal
+from analysis.volatility import compute_var_position_size_detailed
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,7 @@ def _log_t212_order(
     account_type: str,
     currency_code: Optional[str] = None,
     exit_reason: Optional[str] = None,
+    var_pct: Optional[float] = None,
     error_message: Optional[str],
 ) -> None:
     """Insert one row into t212_invest_orders (best-effort; never raises).
@@ -399,6 +401,11 @@ def _log_t212_order(
     exit_reason is one of SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED /
     TIME_LIMIT for SELL orders placed by maybe_exit_t212_positions() /
     maybe_exit_stock_positions(); left as None for BUY orders.
+
+    var_pct is the holding-period VaR (as a fraction, e.g. -0.08) that
+    analysis/volatility.py:compute_var_position_size() used to size this BUY
+    order — left as None for SELL orders and for BUY orders placed under
+    position_sizing: fixed.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -410,12 +417,12 @@ def _log_t212_order(
                     order_id, ticker, t212_ticker, direction,
                     quantity, estimated_price, estimated_value_gbp,
                     status, signal_type, confluence_score, regime,
-                    account_type, currency_code, exit_reason, error_message, placed_at, created_at
+                    account_type, currency_code, exit_reason, var_pct, error_message, placed_at, created_at
                 ) VALUES (
                     :order_id, :ticker, :t212_ticker, :direction,
                     :quantity, :estimated_price, :estimated_value_gbp,
                     :status, :signal_type, :confluence_score, :regime,
-                    :account_type, :currency_code, :exit_reason, :error_message, :now, :now
+                    :account_type, :currency_code, :exit_reason, :var_pct, :error_message, :now, :now
                 )
             """), {
                 "order_id":            order_id,
@@ -432,6 +439,7 @@ def _log_t212_order(
                 "account_type":        account_type,
                 "currency_code":       currency_code,
                 "exit_reason":         exit_reason,
+                "var_pct":             var_pct,
                 "error_message":       error_message,
                 "now":                 datetime.utcnow().isoformat(),
             })
@@ -1190,8 +1198,22 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             logger.debug("T212 Invest: %s has a recent order in DB — skipping.", us_ticker)
             continue
 
-        # Position sizing: cap at max_position_gbp and 25% of available cash per order
-        position_gbp = min(max_position_gbp, free_cash * 0.25)
+        # Position sizing: VaR-scaled when trading212_invest.position_sizing is
+        # "var" (the default — see analysis/volatility.py:compute_var_position_size()
+        # for the formula), otherwise the pre-VaR flat max_position_gbp behaviour.
+        # Either way, still capped at 25% of available cash per order.
+        var_pct = None
+        if t212_cfg.get("position_sizing", "fixed") == "var":
+            position_gbp, _daily_var, holding_var = compute_var_position_size_detailed(
+                ticker=us_ticker,
+                account_value_gbp=total_val,
+                max_position_gbp=max_position_gbp,
+                config=config,
+            )
+            var_pct = holding_var
+            position_gbp = min(position_gbp, free_cash * 0.25)
+        else:
+            position_gbp = min(max_position_gbp, free_cash * 0.25)
         if position_gbp < 10:
             logger.warning(
                 "T212 Invest: insufficient free cash (£%.2f) — stopping new orders.", free_cash,
@@ -1277,6 +1299,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             regime=regime_name or sig.get("regime"),
             account_type=account_label,
             currency_code=_ccy_to_log,
+            var_pct=var_pct,
             error_message=error_msg,
         )
 
@@ -1721,8 +1744,24 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             logger.debug("T212 Stocks: %s has a recent order in DB — skipping.", us_ticker)
             continue
 
-        # Position sizing: cap at max_position_gbp and 25% of available cash per order
-        position_gbp = min(max_position_gbp, free_cash * 0.25)
+        # Position sizing: VaR-scaled when trading212_stocks.position_sizing is
+        # "var" (the default) — e.g. NVDA sizes smaller than WMT for the same
+        # max_position_gbp ceiling, since NVDA is materially more volatile. See
+        # analysis/volatility.py:compute_var_position_size() for the formula.
+        # Either way, still capped at 25% of available cash per order.
+        var_pct = None
+        if stock_cfg.get("position_sizing", "fixed") == "var":
+            position_gbp, _daily_var, holding_var = compute_var_position_size_detailed(
+                ticker=us_ticker,
+                account_value_gbp=total_val,
+                max_position_gbp=max_position_gbp,
+                config=config,
+                section="trading212_stocks",
+            )
+            var_pct = holding_var
+            position_gbp = min(position_gbp, free_cash * 0.25)
+        else:
+            position_gbp = min(max_position_gbp, free_cash * 0.25)
         if position_gbp < 10:
             logger.warning(
                 "T212 Stocks: insufficient free cash (£%.2f) — stopping new orders.", free_cash,
@@ -1809,6 +1848,7 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             regime=regime_name or sig.get("regime"),
             account_type=account_label,
             currency_code=_ccy_to_log,
+            var_pct=var_pct,
             error_message=error_msg,
         )
 

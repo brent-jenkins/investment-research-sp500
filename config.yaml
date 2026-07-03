@@ -559,6 +559,12 @@ notifications:
     enabled: true           # set false to disable without touching email.enabled
 
 backtest:
+  # Notional account size VaR position sizing uses inside simulate_trades().
+  # simulate_trades() runs one ticker at a time with no shared, compounding
+  # cross-ticker portfolio balance (see CLAUDE.md's "VaR position sizing"
+  # section), so this stays constant for every entry across a whole run
+  # rather than growing/shrinking the way a real account would.
+  starting_capital_gbp: 10000
   # Exit conditions for trade simulation
   max_holding_days: 30           # default max hold — equities, ETFs, commodities
   max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
@@ -628,8 +634,18 @@ trading212_invest:
   enabled: true            # Set true when ready to connect
   live: false              # NEVER set true until demo-validated — place_market_order() blocks it
   long_only: true          # T212 Invest is a cash account — no shorting allowed
-  max_position_gbp: 500    # Hard GBP limit per order
+  max_position_gbp: 500    # Hard ceiling GBP limit per order — unchanged; VaR sizing never exceeds this
   max_total_deployed: 0.5  # Never deploy more than 50% of account value
+  # Position sizing — "var" scales position size inversely with the ticker's own
+  # historical volatility so the expected holding-period loss at var_confidence
+  # stays within max_risk_pct of account value; "fixed" uses max_position_gbp
+  # flat for every ticker (the pre-VaR behaviour) — useful for testing and as a
+  # safety fallback. See analysis/volatility.py:compute_var_position_size().
+  position_sizing: var
+  var_confidence: 0.95      # Historical VaR confidence level
+  var_lookback_days: 252    # Trading days of price history used for the VaR estimate (~1 year)
+  max_risk_pct: 0.01        # Max % of account value the expected holding-period loss may reach
+  min_position_gbp: 50      # Floor — VaR sizing never sizes below this regardless of volatility
   entry_signal: BUY        # global default — BUY = enter on BUY or STRONG_BUY; STRONG_BUY = STRONG_BUY only
   # Per-regime override of entry_signal — same rationale and Regime-enum keys as
   # backtest.entry_signal_overrides above, kept in sync so both automation
@@ -708,8 +724,18 @@ trading212_stocks:
   enabled: true
   live: false                    # NEVER set true until demo-validated — place_market_order() blocks it
   long_only: true
-  max_position_gbp: 200          # smaller than ETFs (500) — higher individual stock volatility
+  max_position_gbp: 200          # smaller than ETFs (500) — higher individual stock volatility; hard ceiling, VaR sizing never exceeds this
   max_total_deployed: 0.3        # tighter cap than ETFs (0.5)
+  # Position sizing — identical mechanism to trading212_invest above, sized
+  # independently here since individual stocks (e.g. NVDA) can be materially
+  # more volatile than diversified ETFs, or than each other (e.g. NVDA vs WMT)
+  # — VaR sizing scales each stock's position down/up to match its own risk
+  # rather than giving every stock the same flat max_position_gbp allocation.
+  position_sizing: var
+  var_confidence: 0.95
+  var_lookback_days: 252
+  max_risk_pct: 0.01
+  min_position_gbp: 50
   entry_signal: STRONG_BUY       # higher bar given idiosyncratic stock risk (no BUY-threshold looser option)
   exit_signal: SELL
   max_holding_days: 30           # more active than ETFs (90d) but not forex-short
