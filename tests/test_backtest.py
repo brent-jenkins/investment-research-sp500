@@ -20,8 +20,6 @@ _CONFIG = {
     "backtest": {
         "atr_stop_multiplier": 2.0,
         "max_holding_days": 30,
-    },
-    "virtual_trading": {
         "entry_signal": "STRONG_BUY",
         "entry_signal_overrides": {
             "MIXED": "STRONG_BUY",
@@ -94,7 +92,7 @@ def test_trending_bear_regime_sell_signal_opens_a_short_trade():
 
 def test_high_volatility_regime_with_no_override_falls_back_to_global_default():
     """HIGH_VOLATILITY has no entry in entry_signal_overrides, so it must fall
-    back to virtual_trading.entry_signal (STRONG_BUY) — a plain BUY signal
+    back to backtest.entry_signal (STRONG_BUY) — a plain BUY signal
     must not open a trade."""
     df = _signal_df([_signal_row("HIGH_VOLATILITY", "BUY", 100.0 + i) for i in range(5)])
     trades = simulate_trades(df, "TESTX", _CONFIG)
@@ -124,8 +122,6 @@ _GATED_CONFIG = {
     "backtest": {
         "atr_stop_multiplier": 2.0,
         "max_holding_days": 30,
-    },
-    "virtual_trading": {
         "entry_signal": "STRONG_BUY",
         "entry_signal_overrides": {
             "MIXED": "STRONG_BUY",
@@ -184,9 +180,9 @@ def test_open_trade_still_exits_normally_after_regime_becomes_blocked():
 
 # ---------------------------------------------------------------------------
 # get_max_holding_days() — per-ticker asset-class holding limits, the single
-# source of truth used by both simulate_trades() (here) and
-# _process_virtual_trades() (data/scheduler.py) so backtested and live
-# holding-period limits always agree.
+# source of truth used by both simulate_trades() (here) and the live T212
+# exit checks (data/scheduler.py) so backtested and live holding-period
+# limits always agree.
 # ---------------------------------------------------------------------------
 
 _HOLD_CONFIG = {
@@ -256,8 +252,7 @@ def test_simulate_trades_applies_per_ticker_hold_limit_not_the_flat_default():
     ]
     df = _signal_df(rows)
     cfg = {
-        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
-        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30, "entry_signal": "STRONG_BUY"},
         "trading212_invest": {
             "max_holding_days": 90,
             "ucits_mapping": {"VOO": {"ticker": "I50Dl_EQ", "currency": "USD"}},
@@ -290,8 +285,7 @@ def test_simulate_trades_stop_loss_uses_atr_multiplier_from_config():
     proving the multiplier is read from config, not hardcoded or passed
     separately."""
     cfg = {
-        "backtest": {"atr_stop_multiplier": 3.0, "max_holding_days": 30},
-        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+        "backtest": {"atr_stop_multiplier": 3.0, "max_holding_days": 30, "entry_signal": "STRONG_BUY"},
     }
     rows = [_signal_row("MIXED", "STRONG_BUY", 100.0)] + [
         {**_signal_row("MIXED", "NEUTRAL", 100.0 - 3.0 * 1.0), "atr": 1.0}
@@ -308,8 +302,7 @@ def test_simulate_trades_exit_signal_strong_sell_only_ignores_plain_sell():
     reversal exits to STRONG_SELL only — a plain SELL must not close the
     position, mirroring the live exit_signal threshold."""
     cfg = {
-        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
-        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30, "entry_signal": "STRONG_BUY"},
         "trading212_invest": {"exit_signal": "STRONG_SELL"},
     }
     rows = (
@@ -327,8 +320,7 @@ def test_simulate_trades_exit_signal_defaults_to_sell_when_unset():
     a plain SELL signal must close a LONG position, matching current/prior
     (pre-config-gating) behaviour exactly."""
     cfg = {
-        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
-        "virtual_trading": {"entry_signal": "STRONG_BUY"},
+        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30, "entry_signal": "STRONG_BUY"},
     }
     rows = (
         [_signal_row("MIXED", "STRONG_BUY", 100.0)]

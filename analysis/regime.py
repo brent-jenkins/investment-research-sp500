@@ -181,9 +181,9 @@ def get_latest_regime_name() -> Optional[str]:
     this reads the regime that was actually stamped on the signals table by
     the most recent generate_signals() run — the same regime that produced
     the current signal classifications and confluence thresholds. Automation
-    that acts on those classifications (T212 Invest orders, virtual trades)
-    should key its per-regime entry overrides off this value so the regime
-    used for the entry decision matches the regime that scored the signal.
+    that acts on those classifications (T212 Invest orders) should key its
+    per-regime entry overrides off this value so the regime used for the
+    entry decision matches the regime that scored the signal.
 
     Returns None if no ^GSPC signal row exists yet or the read fails.
     """
@@ -208,10 +208,10 @@ def resolve_entry_signal(cfg: dict, regime_name: Optional[str]) -> str:
     """Resolve the effective entry_signal threshold for *cfg*, applying a
     per-regime override from cfg['entry_signal_overrides'] when one exists.
 
-    cfg is either the trading212_invest or virtual_trading config section —
-    both use the same entry_signal / entry_signal_overrides shape. Falls back
-    to cfg['entry_signal'] (default "STRONG_BUY") when regime_name is None or
-    has no override entry.
+    cfg is the trading212_invest, trading212_stocks, or backtest config
+    section — all three use the same entry_signal / entry_signal_overrides
+    shape. Falls back to cfg['entry_signal'] (default "STRONG_BUY") when
+    regime_name is None or has no override entry.
     """
     default = cfg.get("entry_signal", "STRONG_BUY")
     overrides = cfg.get("entry_signal_overrides") or {}
@@ -247,9 +247,9 @@ def get_max_holding_days(ticker: str, config: dict) -> int:
       6. everything else                             → backtest.max_holding_days (default)
 
     This is the single source of truth for per-asset holding limits, used by
-    both simulate_trades() (analysis/backtest.py) and _process_virtual_trades()
-    (data/scheduler.py) so the backtest and live virtual trading always apply
-    the same limit for the same ticker.
+    simulate_trades() (analysis/backtest.py) and by the live T212 exit checks
+    and trade-alert job (data/scheduler.py) so backtested and live holding
+    limits always agree for the same ticker.
     """
     bt_cfg = config.get("backtest", {})
     default = int(bt_cfg.get("max_holding_days", 30))
@@ -280,9 +280,9 @@ def is_entry_allowed(config: dict, regime_name: Optional[str], section: str) -> 
     absent from config[section], every regime is allowed — this is the
     backwards-compatible default for configs written before this gate existed.
 
-    section is "trading212_invest", "trading212_stocks", or "virtual_trading" —
-    all three use the same allowed_entry_regimes shape (currently kept in sync
-    at ["TRENDING_BULL"] across all three — see config.yaml for the per-regime
+    section is "trading212_invest", "trading212_stocks", or "backtest" — all
+    three use the same allowed_entry_regimes shape (currently kept in sync at
+    ["TRENDING_BULL"] across all three — see config.yaml for the per-regime
     backtest rationale). This gate only affects new entries; existing positions
     always continue to exit normally regardless of regime.
     """

@@ -437,11 +437,13 @@ def compute_signal_history(
 def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[dict]:
     """Walk forward through *signals* and generate simulated trades.
 
-    Entry: gated per-date in two steps against virtual_trading config (not
-    trading212_invest, since it's the only automation path that — like this
-    backtest — takes both LONG and SHORT positions):
+    Entry: gated per-date in two steps against config["backtest"]'s own
+    entry-gating keys (entry_signal, entry_signal_overrides,
+    allowed_entry_regimes) — kept separate from trading212_invest /
+    trading212_stocks because this backtest, unlike those two long-only
+    cash-account automation paths, can open both LONG and SHORT positions:
       1. analysis.regime.is_entry_allowed() — a regime not in
-         virtual_trading.allowed_entry_regimes blocks entry entirely for that
+         backtest.allowed_entry_regimes blocks entry entirely for that
          date, before the signal is even considered (e.g. MIXED has no
          demonstrable edge, so no position is opened regardless of signal
          strength).
@@ -449,9 +451,6 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
          resolved entry_signal_overrides threshold ("STRONG_BUY" only enters
          on STRONG_BUY (LONG) / STRONG_SELL (SHORT); "BUY" also enters on
          plain BUY / SELL) gates the signal itself.
-    This mirrors live behaviour so backtest results reflect the same
-    regime-gating and per-regime conviction thresholding as
-    data/scheduler.py:_process_virtual_trades().
     Exit (in priority order, unaffected by either entry gate — an open
     position always continues to be monitored and closed regardless of what
     the regime does next):
@@ -462,14 +461,12 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
          live exit_signal threshold used by maybe_place_t212_orders() so the
          backtest's exit behaviour matches production.
       3. Maximum holding period — per-ticker via
-         analysis.regime.get_max_holding_days(), the same helper
-         _process_virtual_trades() uses live (ETF/stock/bond/forex/crypto
+         analysis.regime.get_max_holding_days() (ETF/stock/bond/forex/crypto
          asset-class limits read from config).
     """
     from analysis.regime import get_max_holding_days, is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
 
     bt_cfg   = config.get("backtest", {})
-    vt_cfg   = config.get("virtual_trading", {})
     max_hold = get_max_holding_days(ticker, config)
     atr_mult = float(bt_cfg.get("atr_stop_multiplier", 2.0))
 
@@ -492,9 +489,9 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
 
         if open_trade is None:
             regime_at_row = str(row["regime"])
-            if not is_entry_allowed(config, regime_at_row, "virtual_trading"):
+            if not is_entry_allowed(config, regime_at_row, "backtest"):
                 continue
-            entry_threshold = resolve_entry_signal(vt_cfg, regime_at_row)
+            entry_threshold = resolve_entry_signal(bt_cfg, regime_at_row)
             entry_signals   = _ALL if entry_threshold == "BUY" else _STRONG
             if sig not in entry_signals:
                 continue

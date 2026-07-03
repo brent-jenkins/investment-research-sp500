@@ -334,8 +334,8 @@ def _generate_daily_narrative(
             "STOP LOSS"} (the same shape used elsewhere on the Daily
             Briefing for the open trade monitor).
         config: full app config — read for allowed_entry_regimes per
-            automation path (trading212_invest, trading212_stocks,
-            virtual_trading) via analysis.regime.is_entry_allowed().
+            automation path (trading212_invest, trading212_stocks)
+            via analysis.regime.is_entry_allowed().
 
     Returns:
         HTML string of up to three <p> paragraphs (each html.escape()'d
@@ -491,7 +491,6 @@ def _generate_daily_narrative(
     _AUTOMATION_SECTIONS = (
         ("trading212_invest",  "T212 ETF"),
         ("trading212_stocks",  "T212 Stocks"),
-        ("virtual_trading",    "Virtual Trading"),
     )
     enabled_paths: list[tuple[str, str]] = [
         (section, label) for section, label in _AUTOMATION_SECTIONS
@@ -1575,15 +1574,11 @@ def _gather_weekly_data(config: dict) -> dict:
         for r in price_rows if r["close"] is not None
     }
 
-    # Trades — exclude VIRTUAL from real accuracy stats
+    # Trades — exclude VIRTUAL (legacy rows only; no longer opened live) from
+    # real accuracy stats.
     open_trades   = [t for t in get_open_trades()          if t.get("account_type") != "VIRTUAL"]
     closed_week   = [t for t in get_closed_trades(from_date=week_ago) if t.get("account_type") != "VIRTUAL"]
     all_closed    = [t for t in get_closed_trades()        if t.get("account_type") != "VIRTUAL"]
-
-    vt_cfg    = config.get("virtual_trading", {})
-    vt_enabled = vt_cfg.get("enabled", False)
-    virt_open  = get_open_trades(account_type="VIRTUAL")          if vt_enabled else []
-    virt_week  = get_closed_trades(from_date=week_ago, account_type="VIRTUAL") if vt_enabled else []
 
     return {
         "now":            now,
@@ -1601,10 +1596,6 @@ def _gather_weekly_data(config: dict) -> dict:
         "open_trades":    open_trades,
         "closed_week":    closed_week,
         "all_closed":     all_closed,
-        "vt_enabled":     vt_enabled,
-        "virt_open":      virt_open,
-        "virt_week":      virt_week,
-        "vt_portfolio":   vt_cfg.get("portfolio_size_gbp", 10000),
     }
 
 
@@ -1877,39 +1868,6 @@ def _build_weekly_email(data: dict, config: dict) -> str:
         for f in flags[:5]:
             z = float(f.get("z_score") or 0)
             L.append(f"    {f['ticker']:<14}  {f['flag_type']}  (z={z:+.1f})")
-
-    # ── Virtual Portfolio ─────────────────────────────────────────────
-    if data["vt_enabled"]:
-        section(f"VIRTUAL PORTFOLIO  (GBP {data['vt_portfolio']:,.0f})")
-        v_open = data["virt_open"]
-        v_week = data["virt_week"]
-        L.append(f"  Open positions: {len(v_open)}")
-        if v_open:
-            L.append("")
-            for t in v_open:
-                ticker    = t.get("ticker", "?")
-                direction = t.get("direction", "?")
-                entry_p   = float(t.get("entry_price") or 0)
-                curr_p    = curr_prices.get(ticker)
-                if curr_p and entry_p:
-                    ret = ((curr_p - entry_p) / entry_p * 100 if direction == "LONG"
-                           else (entry_p - curr_p) / entry_p * 100)
-                    pnl_str = f"{ret:+.1f}%"
-                else:
-                    pnl_str = "?"
-                L.append(
-                    f"    {direction:<5} {ticker:<12}  {t.get('signal_type','?'):<12}  {pnl_str}"
-                )
-        if v_week:
-            v_wins = [t for t in v_week if float(t.get("pnl_pct") or 0) > 0]
-            v_net  = sum(float(t.get("pnl_pct") or 0) * 100 for t in v_week)
-            L.append("")
-            L.append(
-                f"  Closed this week: {len(v_week)} trade{'s' if len(v_week)!=1 else ''}  |  "
-                f"{len(v_wins)} wins  |  Net: {v_net:+.1f}%"
-            )
-        else:
-            L.append("  No virtual trades closed this week.")
 
     # ── Footer ────────────────────────────────────────────────────────
     L.append("")
@@ -2336,55 +2294,6 @@ def _build_weekly_email_html(data: dict, config: dict) -> str:  # noqa: C901
             )
 
     sections += _section_h("WATCH LIST", watch_html, "#b45309")
-
-    # ── Virtual Portfolio ─────────────────────────────────────────────
-    if data["vt_enabled"]:
-        v_open = data["virt_open"]
-        v_week = data["virt_week"]
-        vt_html = (
-            f'<p style="margin:0 0 8px;font-size:13px">'
-            f'<strong>Portfolio:</strong> £{data["vt_portfolio"]:,.0f} &nbsp;·&nbsp; '
-            f'<strong>Open positions:</strong> {len(v_open)}</p>'
-        )
-        if v_open:
-            vt_rows = []
-            for t in v_open:
-                ticker    = t.get("ticker", "?")
-                direction = t.get("direction", "?")
-                ep        = float(t.get("entry_price") or 0)
-                curr_p    = curr_prices.get(ticker)
-                if curr_p and ep:
-                    ret = (curr_p - ep) / ep * 100 if direction == "LONG" else (ep - curr_p) / ep * 100
-                    pnl_cell = f'<span style="color:{_pnl_color(ret)};font-weight:600">{ret:+.1f}%</span>'
-                else:
-                    pnl_cell = "—"
-                sig_type = t.get("signal_type", "?")
-                vt_rows.append([
-                    _badge_h(direction, "#1e293b" if direction == "LONG" else "#475569"),
-                    f"<strong>{ticker}</strong>",
-                    _sig_badge_h(sig_type) if sig_type in _SIG_STYLES_H else sig_type,
-                    pnl_cell,
-                ])
-            vt_html += _table_h(["Dir", "Ticker", "Entry Signal", "Price &Delta;"], vt_rows)
-
-        if v_week:
-            v_wins = [t for t in v_week if float(t.get("pnl_pct") or 0) > 0]
-            v_net  = sum(float(t.get("pnl_pct") or 0) * 100 for t in v_week)
-            vt_html += (
-                f'<p style="margin:10px 0 0;font-size:13px">'
-                f'Week closed: {len(v_week)} trade{"s" if len(v_week) != 1 else ""}, '
-                f'{len(v_wins)} wins &nbsp;·&nbsp; '
-                f'Net: <strong style="color:{_pnl_color(v_net)}">{v_net:+.1f}%</strong></p>'
-            )
-        else:
-            vt_html += (
-                '<p style="margin:10px 0 0;font-size:13px;color:#64748b">'
-                'No virtual trades closed this week.</p>'
-            )
-
-        sections += _section_h(
-            f'VIRTUAL PORTFOLIO (£{data["vt_portfolio"]:,.0f})', vt_html, "#7c3aed"
-        )
 
     # ── Assemble ──────────────────────────────────────────────────────
     next_sunday = now + timedelta(days=(6 - now.weekday() + 7) % 7 or 7)

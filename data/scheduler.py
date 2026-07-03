@@ -2,9 +2,9 @@
 
 Run schedule (weekdays only, UTC):
   07:00  Pre-market  — pull fresh data for exchanges that just closed (Asian markets),
-                       then run analysis; open virtual trades for those tickers
-  13:30  US open     — analysis only, no data pull, no virtual trade opens
-  21:30  End of day  — full data refresh then analysis (all exchanges); opens for all
+                       then run analysis
+  13:30  US open     — analysis only, no data pull
+  21:30  End of day  — full data refresh then analysis (all exchanges); places T212 orders
   00-21,23  Hourly   — open-trade health check; email alert on STOP LOSS / EXIT SIGNAL
                        only fires for trades whose home exchange is currently in session
 
@@ -68,60 +68,6 @@ _ALWAYS_PULL: frozenset[str] = frozenset({
 # on weekdays.  The EOD job must not rely solely on _is_exchange_open() for
 # these — an unrecognised calendar name could cause them to be skipped.
 _ALWAYS_OPEN_EXCHANGES: frozenset[str] = frozenset({"FX", "Crypto"})
-
-# Native pricing currency for each exchange (used when opening virtual trades
-# to compute units = investment_GBP × fx_rate / entry_price).
-_EXCHANGE_CURRENCY: dict[str, str] = {
-    "NYSE":   "USD",
-    "NASDAQ": "USD",
-    "CBOE":   "USD",
-    "LSE":    "GBP",
-    "TSE":    "JPY",
-    "JPX":    "JPY",
-    "XETR":   "EUR",
-    "EUREX":  "EUR",
-    "HKEX":   "HKD",
-    "Crypto": "USD",
-}
-
-# Quote currency for FX ticker pairs (the currency the rate is priced in).
-_FX_QUOTE_CCY: dict[str, str] = {
-    "GBPUSD=X": "USD",
-    "EURUSD=X": "USD",
-    "AUDUSD=X": "USD",
-    "USDJPY=X": "JPY",
-    "USDCHF=X": "CHF",
-    "USDCAD=X": "CAD",
-    "EURGBP=X": "GBP",
-}
-
-
-def _instrument_ccy(ticker: str, exchange: str) -> str:
-    """Return the native pricing currency for a ticker."""
-    if exchange == "FX":
-        return _FX_QUOTE_CCY.get(ticker, "USD")
-    return _EXCHANGE_CURRENCY.get(exchange, "USD")
-
-
-def _gbp_to_ccy_rate(ccy: str, prices: dict[str, float]) -> float:
-    """Units of *ccy* per GBP, derived from prices already loaded from the DB."""
-    if ccy == "GBP":
-        return 1.0
-    gbpusd = prices.get("GBPUSD=X", 1.27)
-    if ccy == "USD":
-        return gbpusd
-    if ccy == "JPY":
-        return gbpusd * prices.get("USDJPY=X", 150.0)
-    if ccy == "EUR":
-        eurusd = prices.get("EURUSD=X", 1.10)
-        return gbpusd / eurusd if eurusd else gbpusd
-    if ccy == "AUD":
-        audusd = prices.get("AUDUSD=X", 0.64)
-        return gbpusd / audusd if audusd else gbpusd
-    if ccy == "HKD":
-        return gbpusd * 7.8  # approximate; GBPHKD not in watchlist
-    return gbpusd  # fallback: treat as USD-denominated
-
 
 def _resolve_calendar(name: str) -> str:
     return _CALENDAR_ALIASES.get(name, name)
@@ -241,418 +187,6 @@ def _exchanges_closed_before(
     return closed
 
 
-def _process_virtual_trades(
-    config: dict,
-    run_type: str = RUN_FULL,
-    eligible_exchanges: set[str] | None = None,
-) -> None:
-    """Auto-open/close virtual positions based on current signals.
-
-    Called at the end of every analysis pipeline run.  Has no effect unless
-    virtual_trading.enabled: true in config.yaml.
-
-    Close conditions (checked on every run):
-      - Current price has crossed the stored stop_loss_price, or
-      - Signal has reversed direction.
-
-    Open conditions:
-      - Either run_type == RUN_FULL (EOD job with fresh data for all exchanges),
-        OR eligible_exchanges is explicitly provided (pre-market partial pull),
-      - The ticker's exchange is in eligible_exchanges (or tradeable_open_today
-        when eligible_exchanges is None and run_type == RUN_FULL),
-      - Signal is STRONG_BUY or STRONG_SELL (or BUY/SELL if entry_signal: "BUY"),
-      - Ticker is tradeable with no existing virtual position,
-      - Total open virtual positions < max_open_positions.
-    """
-    vt = config.get("virtual_trading", {})
-    if not vt.get("enabled", False):
-        return
-
-    from sqlalchemy import text as sa_text  # noqa: PLC0415
-    from data.database import get_engine    # noqa: PLC0415
-
-    regime_name     = get_latest_regime_name()
-    entry_threshold = resolve_entry_signal(vt, regime_name)
-    if regime_name and regime_name in vt.get("entry_signal_overrides", {}):
-        logger.info(
-            "Virtual trading: regime=%s — using entry_signal override %s (global default %s).",
-            regime_name, entry_threshold, vt.get("entry_signal", "STRONG_BUY"),
-        )
-    max_positions   = int(vt.get("max_open_positions", 5))
-    position_pct    = float(vt.get("position_pct", 0.05))
-    portfolio_gbp   = float(vt.get("portfolio_size_gbp", 10000))
-    atr_mult        = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
-
-    tradeable: set[str] = {
-        e["ticker"]
-        for g in config.get("watchlist", {}).values()
-        if isinstance(g, list)
-        for e in g
-        if isinstance(e, dict) and e.get("tradeable")
-    }
-
-    if not tradeable:
-        return
-
-    ticker_exchange = _build_ticker_exchange_map(config)
-    today_utc = datetime.now(timezone.utc).date()
-
-    # Determine which tickers are eligible to have new virtual positions opened.
-    # Priority: explicit eligible_exchanges > run_type check > skip
-    if eligible_exchanges is not None:
-        # Pre-market or partial run: only open for the specified exchanges
-        can_open: set[str] = {
-            t for t in tradeable
-            if ticker_exchange.get(t, "NYSE") in eligible_exchanges
-            or ticker_exchange.get(t, "NYSE") in _ALWAYS_OPEN_EXCHANGES
-        }
-    elif run_type == RUN_FULL:
-        # EOD run: open for all tradeable tickers whose exchange had a session today
-        exchange_open_today: dict[str, bool] = {}
-        for ticker in tradeable:
-            exch = ticker_exchange.get(ticker, "NYSE")
-            if exch not in exchange_open_today:
-                exchange_open_today[exch] = _is_exchange_open(exch, today_utc)
-        can_open = {
-            t for t in tradeable
-            if exchange_open_today.get(ticker_exchange.get(t, "NYSE"), True)
-        }
-    else:
-        # Analysis-only run with no explicit eligible exchanges: skip opens
-        logger.info(
-            "Virtual trading: skipping open phase on analysis-only run "
-            "(run_type=%s) — new positions require fresh price data.", run_type,
-        )
-        can_open = set()
-
-    eng = get_engine()
-    now = datetime.utcnow()
-
-    # ── Load data ─────────────────────────────────────────────────────────────
-    with eng.connect() as conn:
-        open_rows = conn.execute(sa_text(
-            "SELECT * FROM trades WHERE account_type='VIRTUAL' AND is_open=1"
-        )).mappings().all()
-
-        sig_rows = conn.execute(sa_text("""
-            SELECT s.ticker, s.signal, s.confluence_score, s.regime,
-                   s.trend_score, s.mean_reversion_score, s.volatility_score,
-                   s.volume_score, s.macro_score
-            FROM signals s
-            INNER JOIN (
-                SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
-            ) latest ON s.ticker = latest.ticker AND s.date = latest.md
-        """)).mappings().all()
-
-        price_rows = conn.execute(sa_text("""
-            SELECT p.ticker, p.close
-            FROM price_data p
-            INNER JOIN (
-                SELECT ticker, MAX(date) AS md FROM price_data GROUP BY ticker
-            ) latest ON p.ticker = latest.ticker AND p.date = latest.md
-        """)).mappings().all()
-
-        atr_rows = conn.execute(sa_text("""
-            SELECT i.ticker, i.atr
-            FROM indicators i
-            INNER JOIN (
-                SELECT ticker, MAX(date) AS md FROM indicators GROUP BY ticker
-            ) latest ON i.ticker = latest.ticker AND i.date = latest.md
-        """)).mappings().all()
-
-    open_trades    = [dict(r) for r in open_rows]
-    open_by_ticker = {t["ticker"]: t for t in open_trades}
-    signals        = {r["ticker"]: dict(r) for r in sig_rows if r["ticker"] in tradeable}
-    prices         = {r["ticker"]: float(r["close"]) for r in price_rows if r["close"] is not None}
-    atrs           = {r["ticker"]: float(r["atr"])   for r in atr_rows   if r["atr"]   is not None}
-
-    # ── Close phase (runs on every call regardless of run_type / eligible_exchanges) ──
-    to_close: list[tuple] = []
-    closed_this_run: set[str] = set()
-    for ticker, trade in list(open_by_ticker.items()):
-        live_price = prices.get(ticker)
-        if live_price is None:
-            continue
-
-        direction   = trade.get("direction", "LONG")
-        entry_price = float(trade.get("entry_price") or 0)
-        sl_price    = trade.get("stop_loss_price")
-        trade_id    = trade["id"]
-
-        if sl_price is None and entry_price and ticker in atrs:
-            sl_price = (entry_price - atr_mult * atrs[ticker] if direction == "LONG"
-                        else entry_price + atr_mult * atrs[ticker])
-
-        stop_hit = (
-            (direction == "LONG"  and sl_price is not None and live_price <= sl_price) or
-            (direction == "SHORT" and sl_price is not None and live_price >= sl_price)
-        )
-        sig_now = signals.get(ticker, {}).get("signal", "NEUTRAL")
-        signal_reversal = (
-            (direction == "LONG"  and sig_now in ("SELL", "STRONG_SELL")) or
-            (direction == "SHORT" and sig_now in ("BUY",  "STRONG_BUY"))
-        )
-
-        hold_days = 0
-        entry_dt_raw = trade.get("entry_date")
-        if entry_dt_raw:
-            try:
-                entry_dt_parsed = (
-                    entry_dt_raw if isinstance(entry_dt_raw, datetime)
-                    else datetime.fromisoformat(str(entry_dt_raw).split(".")[0])
-                )
-                hold_days = (now - entry_dt_parsed).days
-            except Exception:
-                pass
-        max_hold_exceeded = hold_days >= get_max_holding_days(ticker, config)
-
-        reversal_meta_key = f"weakening_since:{trade_id}"
-        if stop_hit or max_hold_exceeded:
-            # Hard exits: close immediately regardless of confirmation
-            reason = "STOP LOSS" if stop_hit else "MAX HOLDING"
-            to_close.append((trade_id, live_price, reason, direction, entry_price, trade.get("entry_date"), trade.get("investment_amount")))
-            del open_by_ticker[ticker]
-            closed_this_run.add(ticker)
-            clear_metadata(reversal_meta_key)
-        elif signal_reversal:
-            # Reversal confirmation: require the reversal to persist for N runs
-            conf_runs = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
-            min_hours = conf_runs * 3
-            if min_hours <= 0:
-                to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date"), trade.get("investment_amount")))
-                del open_by_ticker[ticker]
-                closed_this_run.add(ticker)
-            else:
-                first_weak = get_metadata_str(reversal_meta_key)
-                if first_weak is None:
-                    set_metadata(reversal_meta_key, now.isoformat())
-                    logger.info("Virtual trade %s (%s): reversal detected — waiting for confirmation.", trade_id, ticker)
-                else:
-                    try:
-                        hours_weak = (now - datetime.fromisoformat(first_weak)).total_seconds() / 3600
-                    except Exception:
-                        hours_weak = 0.0
-                    if hours_weak >= min_hours:
-                        to_close.append((trade_id, live_price, "SIGNAL REVERSAL", direction, entry_price, trade.get("entry_date"), trade.get("investment_amount")))
-                        del open_by_ticker[ticker]
-                        closed_this_run.add(ticker)
-                        clear_metadata(reversal_meta_key)
-                    else:
-                        logger.info(
-                            "Virtual trade %s (%s): reversal pending confirmation (%.1fh / %.0fh).",
-                            trade_id, ticker, hours_weak, min_hours,
-                        )
-        else:
-            # No close condition — clear reversal timer if it was running
-            if get_metadata_str(reversal_meta_key) is not None:
-                clear_metadata(reversal_meta_key)
-
-    cost_adjustment_pct = float(vt.get("cost_adjustment_pct", 0.35))
-
-    if to_close:
-        with eng.begin() as conn:
-            for trade_id, live_price, reason, direction, entry_price, entry_dt, investment_amount in to_close:
-                pnl_pct = 0.0
-                if entry_price:
-                    pnl_pct = ((live_price - entry_price) / entry_price
-                               if direction == "LONG"
-                               else (entry_price - live_price) / entry_price)
-                hold_days = 0
-                if entry_dt:
-                    try:
-                        entry_dt_parsed = (
-                            entry_dt if isinstance(entry_dt, datetime)
-                            else datetime.fromisoformat(str(entry_dt).split(".")[0])
-                        )
-                        hold_days = max(0, (now - entry_dt_parsed).days)
-                    except Exception:
-                        pass
-
-                # pnl_pct (above) is the raw, cost-free price move — kept as-is for
-                # display. pnl is a flat-rate cost-adjusted GBP figure (round-trip
-                # spread + FX fee approximation) and is what the feedback-learning
-                # system reads via _fetch_trades_for_learning()'s `pnl IS NOT NULL`
-                # filter — see virtual_trading.cost_adjustment_pct in config.yaml.
-                # pnl_pct is stored as a fraction (0.02 = 2%), not a percentage —
-                # cost_adjustment_pct (e.g. 0.35 = 0.35%) is the one that needs /100.
-                investment_amount = float(investment_amount or 0)
-                adjusted_pnl_pct  = pnl_pct - (cost_adjustment_pct / 100)
-                pnl_gbp = round(adjusted_pnl_pct * investment_amount, 4) if investment_amount > 0 else None
-
-                conn.execute(sa_text("""
-                    UPDATE trades
-                    SET is_open=0, exit_date=:exit_date, exit_price=:exit_price,
-                        pnl_pct=:pnl_pct, pnl=:pnl, holding_days=:hold_days
-                    WHERE id=:trade_id
-                """), {
-                    "exit_date":  now.isoformat(),
-                    "exit_price": live_price,
-                    "pnl_pct":    round(pnl_pct, 6),
-                    "pnl":        pnl_gbp,
-                    "hold_days":  hold_days,
-                    "trade_id":   trade_id,
-                })
-                logger.info(
-                    "Virtual trade closed: %s at %.4f (raw P&L %.2f%%, cost-adjusted £%s) — %s",
-                    trade_id, live_price, pnl_pct * 100,
-                    f"{pnl_gbp:+.2f}" if pnl_gbp is not None else "n/a", reason,
-                )
-
-    # ── Open phase ────────────────────────────────────────────────────────────
-    open_count = len(open_by_ticker)
-
-    if not is_entry_allowed(config, regime_name, "virtual_trading"):
-        logger.info(
-            "Virtual trading: skipping open phase — regime is %s, entries blocked "
-            "(allowed_entry_regimes: %s).",
-            regime_name, vt.get("allowed_entry_regimes"),
-        )
-        logger.info(
-            "Virtual trading: closed %d, opened 0, total open %d/%d.",
-            len(to_close), open_count, max_positions,
-        )
-        return
-
-    if not can_open:
-        logger.info(
-            "Virtual trading: closed %d, opened 0, total open %d/%d.",
-            len(to_close), open_count, max_positions,
-        )
-        return
-
-    if open_count >= max_positions:
-        logger.info("Virtual trading: at max positions (%d/%d) — no new entries.", open_count, max_positions)
-        return
-
-    entry_signal_set = (
-        {"STRONG_BUY", "BUY", "STRONG_SELL", "SELL"}
-        if entry_threshold == "BUY"
-        else {"STRONG_BUY", "STRONG_SELL"}
-    )
-
-    # Tickers automated via T212 Invest never get a *new* virtual position —
-    # T212 provides real execution data for them. Existing open virtual
-    # positions on these tickers are unaffected and keep closing normally
-    # (stop loss / signal reversal / max holding) via the close phase above;
-    # this only gates the open phase, so no existing position is force-closed.
-    ucits_tickers: set[str] = set(config.get("trading212_invest", {}).get("ucits_mapping", {}).keys())
-
-    to_open: list[dict] = []
-    for ticker, sig in signals.items():
-        if open_count + len(to_open) >= max_positions:
-            break
-        if ticker in open_by_ticker:
-            continue
-        if ticker in closed_this_run:
-            logger.debug(
-                "Virtual trading: skipping %s — closed earlier this run, "
-                "deferring re-entry to the next scheduled run.", ticker,
-            )
-            continue
-        if ticker in ucits_tickers:
-            logger.debug("Skipping virtual open for %s — covered by T212 Invest.", ticker)
-            continue
-        if ticker not in can_open:
-            logger.debug("Virtual trading: skipping %s — exchange not in eligible set.", ticker)
-            continue
-        sig_type = sig.get("signal", "NEUTRAL")
-        if sig_type not in entry_signal_set:
-            continue
-        live_price = prices.get(ticker)
-        if not live_price:
-            continue
-
-        direction = "LONG" if sig_type in ("STRONG_BUY", "BUY") else "SHORT"
-
-        # Theme concentration gate: don't open if this theme is already at limit.
-        try:
-            from output.performance import classify_trade_theme  # noqa: PLC0415
-            _vt_theme     = classify_trade_theme(ticker, direction)
-            _max_theme    = int(vt.get("max_theme_positions", 3))
-            _theme_open   = sum(
-                1 for _ot in open_trades
-                if classify_trade_theme(
-                    _ot.get("ticker", ""), _ot.get("direction", "LONG")
-                ) == _vt_theme
-            )
-            if _theme_open >= _max_theme:
-                logger.info(
-                    "Virtual trading: skipping %s — theme '%s' at limit (%d/%d open).",
-                    ticker, _vt_theme, _theme_open, _max_theme,
-                )
-                continue
-        except Exception as _te:
-            logger.debug("Theme concentration check failed for %s: %s", ticker, _te)
-
-        atr       = atrs.get(ticker)
-        sl_price  = None
-        if atr:
-            sl_price = (live_price - atr_mult * atr if direction == "LONG"
-                        else live_price + atr_mult * atr)
-
-        # Position sizing: convert GBP investment to native currency, then to units.
-        exchange       = ticker_exchange.get(ticker, "NYSE")
-        instr_ccy      = _instrument_ccy(ticker, exchange)
-        fx_rate        = _gbp_to_ccy_rate(instr_ccy, prices)
-        investment_gbp = round(portfolio_gbp * position_pct, 2)
-        pos_value_native = round(investment_gbp * fx_rate, 4)
-        quantity       = round(pos_value_native / live_price, 6) if live_price else None
-
-        to_open.append({
-            "ticker":               ticker,
-            "direction":            direction,
-            "entry_date":           now.isoformat(),
-            "entry_price":          live_price,
-            "signal_type":          sig_type,
-            "confluence_score":     sig.get("confluence_score"),
-            "regime":               regime_name or sig.get("regime"),
-            "trend_score":          sig.get("trend_score"),
-            "mean_reversion_score": sig.get("mean_reversion_score"),
-            "volatility_score":     sig.get("volatility_score"),
-            "volume_score":         sig.get("volume_score"),
-            "macro_score":          sig.get("macro_score"),
-            "investment":           investment_gbp,
-            "sl":                   round(sl_price, 6) if sl_price else None,
-            "currency":             instr_ccy,
-            "fx_rate":              round(fx_rate, 6),
-            "quantity":             quantity,
-            "pos_value":            pos_value_native,
-        })
-
-    if to_open:
-        with eng.begin() as conn:
-            for row in to_open:
-                conn.execute(sa_text("""
-                    INSERT INTO trades (
-                        ticker, account_type, account_name, account_id,
-                        direction, entry_date, entry_price, signal_type,
-                        confluence_score, regime, trend_score, mean_reversion_score,
-                        volatility_score, volume_score, macro_score,
-                        investment_amount, stop_loss_price,
-                        quantity, currency, fx_rate_at_entry, position_value,
-                        is_open, created_at
-                    ) VALUES (
-                        :ticker, 'VIRTUAL', 'Virtual Portfolio', 'virtual',
-                        :direction, :entry_date, :entry_price, :signal_type,
-                        :confluence_score, :regime, :trend_score, :mean_reversion_score,
-                        :volatility_score, :volume_score, :macro_score,
-                        :investment, :sl,
-                        :quantity, :currency, :fx_rate, :pos_value,
-                        1, :now
-                    )
-                """), {**row, "now": now.isoformat()})
-                logger.info(
-                    "Virtual trade opened: %s %s at %.4f (signal=%s, regime=%s)",
-                    row["direction"], row["ticker"], row["entry_price"],
-                    row["signal_type"], row["regime"],
-                )
-
-    logger.info(
-        "Virtual trading: closed %d, opened %d, total open %d/%d.",
-        len(to_close), len(to_open), open_count + len(to_open), max_positions,
-    )
-
-
 def _fetch_t212_snapshot(config: dict) -> None:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
@@ -718,14 +252,8 @@ def _run_analysis_pipeline(
     config: dict,
     all_tickers: list[str],
     run_type: str,
-    eligible_exchanges: set[str] | None = None,
 ) -> None:
-    """Execute the full analysis pipeline and stamp metadata.
-
-    eligible_exchanges: when provided, only those exchanges are eligible for
-    virtual trade openings (used by the pre-market run for Asian markets).
-    When None the standard run_type logic applies inside _process_virtual_trades.
-    """
+    """Execute the full analysis pipeline and stamp metadata."""
     try:
         run_analysis(tickers=all_tickers, config=config)
     except Exception as exc:
@@ -740,11 +268,6 @@ def _run_analysis_pipeline(
         set_metadata("last_run_type", run_type)
     except Exception as exc:
         logger.warning("Could not stamp last_run_type: %s", exc)
-
-    try:
-        _process_virtual_trades(config, run_type, eligible_exchanges)
-    except Exception as exc:
-        logger.error("Virtual trading automation failed: %s", exc, exc_info=True)
 
     try:
         from brokers.trading212 import maybe_place_t212_orders  # noqa: PLC0415
@@ -766,8 +289,8 @@ def _pre_market_job() -> None:
 
     Asian markets (JPX/Tokyo ~06:30, HKEX ~08:00) close before this run fires.
     For any exchange whose session ended before 07:30 UTC today, we pull
-    incremental price data and allow virtual trade openings for those tickers.
-    The 13:30 and 21:30 runs handle European and US markets respectively.
+    incremental price data for those tickers. The 13:30 and 21:30 runs
+    handle European and US markets respectively.
     """
     logger.info("Scheduled pre-market analysis starting (07:00 UTC)…")
     try:
@@ -798,27 +321,19 @@ def _pre_market_job() -> None:
             )
         except Exception as exc:
             logger.error("Pre-market incremental pull failed: %s", exc, exc_info=True)
-            recently_closed = set()  # don't open virtual trades if pull failed
-
-    if recently_closed:
-        logger.info(
-            "Pre-market: opening virtual trades for recently-closed exchanges: %s",
-            recently_closed,
-        )
 
     _run_analysis_pipeline(
         config,
         get_all_tickers(config),
         run_type=RUN_ANALYSIS_ONLY,
-        eligible_exchanges=recently_closed if recently_closed else None,
     )
 
 
 def _us_open_job() -> None:
     """13:30 UTC — analysis only using most recently stored price data.
 
-    European markets are mid-session; US is about to open.  No data pull and
-    no virtual trade openings — both require a complete session close.
+    European markets are mid-session; US is about to open. No data pull —
+    requires a complete session close.
     """
     logger.info("Scheduled US-open analysis starting (13:30 UTC)…")
     try:
@@ -1045,67 +560,6 @@ def _trade_alert_job() -> None:
         status = enriched.get("status", "ON TRACK")
         if status not in _ALERT_STATUSES:
             continue
-
-        # Close virtual trades immediately on STOP LOSS.  The exchange-session
-        # check earlier in this loop already guarantees the market is open, so
-        # the market-hours constraint is satisfied.  EXIT SIGNAL is left to the
-        # scheduled analysis runs (07:00 / 13:30 / 21:30) where the reversal-
-        # confirmation logic runs.
-        if status == "STOP LOSS" and trade.get("account_type") == "VIRTUAL":
-            try:
-                from data.database import get_engine as _get_engine  # noqa: PLC0415
-                from sqlalchemy import text as _sa_text              # noqa: PLC0415
-                _entry = float(trade.get("entry_price") or 0)
-                _dir   = trade.get("direction", "LONG")
-                _live  = live_price or 0.0
-                _pnl_pct = 0.0
-                if _entry:
-                    _pnl_pct = ((_live - _entry) / _entry if _dir == "LONG"
-                                else (_entry - _live) / _entry)
-                _hold = 0
-                _edt  = trade.get("entry_date")
-                if _edt:
-                    try:
-                        _ep = (_edt if isinstance(_edt, datetime)
-                               else datetime.fromisoformat(str(_edt).split(".")[0]))
-                        _hold = max(0, (now_utc.replace(tzinfo=None) - _ep).days)
-                    except Exception:
-                        pass
-
-                # See _process_virtual_trades() for why pnl is a cost-adjusted GBP
-                # figure while pnl_pct stays the raw, cost-free price move.
-                # pnl_pct is stored as a fraction (0.02 = 2%), not a percentage —
-                # cost_adjustment_pct (e.g. 0.35 = 0.35%) is the one that needs /100.
-                _cost_pct    = float(config.get("virtual_trading", {}).get("cost_adjustment_pct", 0.35))
-                _inv_amount  = float(trade.get("investment_amount") or 0)
-                _adj_pnl_pct = _pnl_pct - (_cost_pct / 100)
-                _pnl_gbp     = round(_adj_pnl_pct * _inv_amount, 4) if _inv_amount > 0 else None
-
-                with _get_engine().begin() as _conn:
-                    _conn.execute(_sa_text("""
-                        UPDATE trades
-                        SET is_open=0, exit_date=:ts, exit_price=:price,
-                            pnl_pct=:pnl_pct, pnl=:pnl, holding_days=:hold
-                        WHERE id=:tid AND is_open=1
-                    """), {
-                        "ts":      now_utc.replace(tzinfo=None).isoformat(),
-                        "price":   _live,
-                        "pnl_pct": round(_pnl_pct, 6),
-                        "pnl":     _pnl_gbp,
-                        "hold":    _hold,
-                        "tid":     trade_id,
-                    })
-                logger.info(
-                    "Virtual trade %s (%s) closed: STOP LOSS at %.4f (raw P&L %.2f%%, cost-adjusted £%s)",
-                    trade_id, ticker, _live, _pnl_pct * 100,
-                    f"{_pnl_gbp:+.2f}" if _pnl_gbp is not None else "n/a",
-                )
-                # Clear the weakening timer now the trade is closed.
-                clear_metadata(f"weakening_since:{trade_id}")
-            except Exception as _exc:
-                logger.error(
-                    "Failed to close virtual trade %s on STOP LOSS: %s", trade_id, _exc
-                )
 
         meta_key = f"trade_alert_status:{trade_id}"
         if get_metadata_str(meta_key) == status:

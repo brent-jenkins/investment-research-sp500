@@ -559,7 +559,7 @@ signals:
   # In TRENDING_BULL suppress SELL/STRONG_SELL; in TRENDING_BEAR suppress BUY/STRONG_BUY
   regime_direction_filter: true
   # Require a reversal signal to persist for this many analysis runs (~3 h each)
-  # before EXIT_SIGNAL is confirmed and a virtual trade is closed on reversal.
+  # before EXIT_SIGNAL is confirmed and a T212 position is closed on reversal.
   # Set to 0 to disable (close immediately on first reversal signal).
   reversal_confirmation_runs: 2
 
@@ -590,11 +590,14 @@ backtest:
   walk_forward_months: 6         # training window size in months
   walk_forward_step: 1           # step between windows in months
 
-virtual_trading:
-  enabled: true                  # set true to enable automatic virtual trades
-  portfolio_size_gbp: 2000       # starting virtual portfolio value
-  position_pct: 0.05             # fraction of portfolio per trade (5%)
-  max_open_positions: 10         # cap on simultaneous virtual positions
+  # Entry gating for analysis/backtest.py:simulate_trades(). Kept separate from
+  # trading212_invest/trading212_stocks because simulated backtest trades can go
+  # LONG or SHORT, unlike those two long-only cash-account automation paths.
+  # These keys previously lived under a virtual_trading: section that also drove
+  # live automated paper trading; that live automation was removed, but
+  # simulate_trades() still needs its own entry-gating config, so these values
+  # moved here rather than being deleted — see analysis/backtest.py for the
+  # read site and CLAUDE.md's "Backtesting engine" section for detail.
   entry_signal: "STRONG_BUY"     # global default — STRONG_BUY = strict; BUY = looser entry
   # Per-regime override of entry_signal, keyed by the Regime enum name (see analysis/regime.py).
   # All five regimes are STRONG_BUY. TRENDING_BULL/TRENDING_BEAR were originally set to the
@@ -640,16 +643,6 @@ virtual_trading:
   # to be monitored and closed normally.
   allowed_entry_regimes:
     - TRENDING_BULL
-  max_theme_positions: 3         # max simultaneous positions per macro theme (e.g. USD-short forex)
-  # Flat round-trip cost approximation (spread + FX fee) deducted from a closed
-  # virtual trade's raw price-move return before it is stored as `pnl` (GBP).
-  # `pnl_pct` keeps the raw, cost-free return for display; `pnl` is what
-  # _fetch_trades_for_learning() reads (its `pnl IS NOT NULL` filter is also
-  # what makes virtual trades count towards learning.min_trades_before_adjustment
-  # at all — see CLAUDE.md "Feedback learning"). 0.35% is a placeholder based on
-  # typical retail CFD spread + FX conversion fee, not a live feed — revisit
-  # once enough T212 Invest fills exist to compare real execution cost against it.
-  cost_adjustment_pct: 0.35
 
 trading212_invest:
   enabled: true            # Set true when ready to connect
@@ -659,7 +652,7 @@ trading212_invest:
   max_total_deployed: 0.5  # Never deploy more than 50% of account value
   entry_signal: BUY        # global default — BUY = enter on BUY or STRONG_BUY; STRONG_BUY = STRONG_BUY only
   # Per-regime override of entry_signal — same rationale and Regime-enum keys as
-  # virtual_trading.entry_signal_overrides above, kept in sync so both automation
+  # backtest.entry_signal_overrides above, kept in sync so both automation
   # paths apply the same conviction threshold per regime. See that block's comment
   # for why TRENDING_BULL/TRENDING_BEAR are STRONG_BUY rather than the looser BUY.
   entry_signal_overrides:
@@ -668,7 +661,7 @@ trading212_invest:
     HIGH_VOLATILITY: STRONG_BUY
     TRENDING_BULL: STRONG_BUY
     TRENDING_BEAR: STRONG_BUY
-  # Regime entry gate — same rationale and keys as virtual_trading.allowed_entry_regimes
+  # Regime entry gate — same rationale and keys as backtest.allowed_entry_regimes
   # above, kept in sync (only TRENDING_BULL — TRENDING_BEAR's profit factor of 1.09 has
   # no meaningful edge next to TRENDING_BULL's 1.78). Checked before entry_signal_overrides;
   # the exit phase is never affected — existing T212 positions continue to exit normally
@@ -743,8 +736,8 @@ trading212_stocks:
   exit_on_signal: true
   time_limit_as_backstop: true
   # Regime entry gate — same TRENDING_BULL-only rationale as trading212_invest and
-  # virtual_trading above (see virtual_trading.allowed_entry_regimes for the full
-  # per-regime backtest breakdown); all three automation paths are aligned on this.
+  # backtest above (see backtest.allowed_entry_regimes for the full
+  # per-regime backtest breakdown); all three sections are aligned on this.
   allowed_entry_regimes:
     - TRENDING_BULL
   entry_signal_overrides:

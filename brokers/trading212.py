@@ -1124,8 +1124,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
     #
     # T212 Invest is a cash account — no shorting.  Tickers with SELL or
     # STRONG_SELL signals are skipped here; the account simply holds cash
-    # during bearish regimes rather than going net short.  Short-side signal
-    # validation is handled by the virtual trading system instead.
+    # during bearish regimes rather than going net short.
     # ────────────────────────────────────────────────────────────────────────
     if not is_entry_allowed(config, regime_name, "trading212_invest"):
         logger.info(

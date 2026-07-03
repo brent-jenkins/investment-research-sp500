@@ -114,7 +114,7 @@ def test_resolve_entry_signal_defaults_to_strong_buy_when_entry_signal_unset():
 # ---------------------------------------------------------------------------
 
 _GATE_CFG = {
-    "virtual_trading": {
+    "backtest": {
         "allowed_entry_regimes": ["TRENDING_BULL"],
     },
     "trading212_invest": {
@@ -130,19 +130,19 @@ def test_is_entry_allowed_returns_false_for_mixed():
     """MIXED has no demonstrable edge (37.5% win rate, -91.26% max drawdown over
     56.8% of all regime-days) and is deliberately excluded from
     allowed_entry_regimes — new entries must be blocked."""
-    assert is_entry_allowed(_GATE_CFG, "MIXED", "virtual_trading") is False
+    assert is_entry_allowed(_GATE_CFG, "MIXED", "backtest") is False
 
 
 def test_is_entry_allowed_returns_true_for_trending_bull():
     """TRENDING_BULL is explicitly listed in allowed_entry_regimes — entries
     must be permitted (subject to the separate signal-threshold gate)."""
-    assert is_entry_allowed(_GATE_CFG, "TRENDING_BULL", "virtual_trading") is True
+    assert is_entry_allowed(_GATE_CFG, "TRENDING_BULL", "backtest") is True
 
 
 def test_is_entry_allowed_returns_false_for_ranging_low_vol():
     """RANGING_LOW_VOL has only 1 trade of backtest data — too little to trust
     either way, so it's treated as unknown/excluded, not as safe by omission."""
-    assert is_entry_allowed(_GATE_CFG, "RANGING_LOW_VOL", "virtual_trading") is False
+    assert is_entry_allowed(_GATE_CFG, "RANGING_LOW_VOL", "backtest") is False
 
 
 def test_is_entry_allowed_returns_false_for_trending_bear():
@@ -151,14 +151,14 @@ def test_is_entry_allowed_returns_false_for_trending_bear():
     barely above breakeven) versus TRENDING_BULL's 1.78 — no meaningful
     edge, so it is deliberately excluded from allowed_entry_regimes, same
     as MIXED and RANGING_LOW_VOL."""
-    assert is_entry_allowed(_GATE_CFG, "TRENDING_BEAR", "virtual_trading") is False
+    assert is_entry_allowed(_GATE_CFG, "TRENDING_BEAR", "backtest") is False
 
 
 def test_is_entry_allowed_returns_false_for_high_volatility():
     """HIGH_VOLATILITY is excluded on the same 'no demonstrable edge' basis as
     every other regime except TRENDING_BULL, which is the standout regime
     (profit factor 1.78, +1.14% avg return) in the full-history backtest."""
-    assert is_entry_allowed(_GATE_CFG, "HIGH_VOLATILITY", "virtual_trading") is False
+    assert is_entry_allowed(_GATE_CFG, "HIGH_VOLATILITY", "backtest") is False
 
 
 def test_is_entry_allowed_defaults_to_true_when_key_missing():
@@ -166,16 +166,16 @@ def test_is_entry_allowed_defaults_to_true_when_key_missing():
     every regime — this is the backwards-compatible default for configs
     written before this gate existed."""
     assert is_entry_allowed(_GATE_CFG, "MIXED", "no_gate_section") is True
-    assert is_entry_allowed({}, "MIXED", "virtual_trading") is True
+    assert is_entry_allowed({}, "MIXED", "backtest") is True
 
 
 def test_is_entry_allowed_checks_the_requested_section_independently():
-    """trading212_invest and virtual_trading each read their own
+    """trading212_invest and backtest each read their own
     allowed_entry_regimes — the section argument must actually select which
     one is consulted, not silently default to a fixed section."""
     cfg = {
-        "virtual_trading": {"allowed_entry_regimes": ["MIXED"]},
+        "backtest": {"allowed_entry_regimes": ["MIXED"]},
         "trading212_invest": {"allowed_entry_regimes": ["TRENDING_BULL"]},
     }
-    assert is_entry_allowed(cfg, "MIXED", "virtual_trading") is True
+    assert is_entry_allowed(cfg, "MIXED", "backtest") is True
     assert is_entry_allowed(cfg, "MIXED", "trading212_invest") is False

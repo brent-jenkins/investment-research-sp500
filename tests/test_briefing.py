@@ -63,7 +63,6 @@ def _signals(**overrides) -> dict:
 _CONFIG_ALL_TRENDING_BULL_ONLY = {
     "trading212_invest":  {"enabled": True, "allowed_entry_regimes": ["TRENDING_BULL"]},
     "trading212_stocks":  {"enabled": True, "allowed_entry_regimes": ["TRENDING_BULL"]},
-    "virtual_trading":    {"enabled": True, "allowed_entry_regimes": ["TRENDING_BULL"]},
 }
 
 
