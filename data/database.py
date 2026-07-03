@@ -433,6 +433,7 @@ class T212InvestOrder(Base):
     direction        = Column(String(5))            # BUY / SELL
     quantity         = Column(Float)                # shares ordered
     estimated_price  = Column(Float)                # price at time of order (from our DB)
+    estimated_value_gbp = Column(Float)             # intended notional at order time; overwritten with true GBP cost basis on fill
     fill_price       = Column(Float)                # actual fill price (if later confirmed)
     filled_quantity  = Column(Float)               # actual quantity filled (may differ from ordered)
     status           = Column(String(20))           # PLACED / FILLED / FAILED / CANCELLED
@@ -441,11 +442,56 @@ class T212InvestOrder(Base):
     regime           = Column(String(20))
     account_type     = Column(String(10))           # DEMO / LIVE
     currency_code    = Column(String(10))           # instrument currency (USD, EUR, GBX, …)
+    exit_reason      = Column(String(20))           # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT; null for BUY orders
     error_message    = Column(Text)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     filled_at        = Column(DateTime)
     cancelled_at     = Column(DateTime)
     created_at       = Column(DateTime, default=datetime.utcnow)
+
+
+class T212Pnl(Base):
+    """Reconstructed realised P&L for closed T212 Invest positions.
+
+    Built by brokers/t212_learning.py:_reconstruct_t212_pnl(), which pairs
+    each FILLED BUY order in t212_invest_orders with the next FILLED SELL
+    order for the same ticker (FIFO — this codebase only ever holds one open
+    T212 position per ticker at a time, so BUY/SELL pairs never interleave).
+    One row per closed position; never updated once written.
+    """
+
+    __tablename__ = "t212_pnl"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    ticker           = Column(String(20), nullable=False, index=True)  # internal research ticker
+    t212_ticker      = Column(String(64))            # T212 instrument ticker
+    buy_order_id     = Column(Integer, nullable=False)   # t212_invest_orders.id of the FILLED BUY row
+    sell_order_id    = Column(Integer, nullable=False)   # t212_invest_orders.id of the FILLED SELL row
+    entry_date       = Column(DateTime)               # BUY fill timestamp
+    exit_date        = Column(DateTime)                # SELL fill timestamp
+    entry_price      = Column(Float)                   # BUY fill_price, instrument-native currency
+    exit_price       = Column(Float)                   # SELL fill_price, instrument-native currency
+    quantity         = Column(Float)
+    currency         = Column(String(10))               # instrument native currency (USD, EUR, GBX, …)
+    pnl_gbp          = Column(Float)                    # realised P&L converted to GBP
+    pnl_pct          = Column(Float)                    # fraction (0.02 = 2%); native-currency price return, no FX
+    holding_days     = Column(Integer)
+    signal_type      = Column(String(15))               # signal on the BUY order (e.g. STRONG_BUY)
+    confluence_score = Column(Float)                    # confluence score on the BUY order
+    regime           = Column(String(20))               # regime on the BUY order
+    exit_reason      = Column(String(20))               # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT
+    # Module scores as of the BUY fill date — not stored on t212_invest_orders
+    # itself, so looked up from the nearest signals row for (ticker, date).
+    trend_score           = Column(Integer)
+    mean_reversion_score  = Column(Integer)
+    volatility_score      = Column(Integer)
+    volume_score          = Column(Integer)
+    macro_score           = Column(Integer)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("buy_order_id", "sell_order_id", name="uq_t212_pnl_buy_sell"),
+    )
 
 
 class SystemMetadata(Base):
@@ -588,6 +634,7 @@ def _apply_migrations(engine) -> None:
         ("t212_invest_orders", "estimated_value_gbp", "FLOAT"),
         ("t212_invest_orders", "filled_quantity",     "FLOAT"),
         ("t212_invest_orders", "currency_code",       "TEXT"),
+        ("t212_invest_orders", "exit_reason",         "TEXT"),
     ]
     for table, column, col_type in new_columns:
         try:

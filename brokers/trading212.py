@@ -391,9 +391,15 @@ def _log_t212_order(
     regime: Optional[str],
     account_type: str,
     currency_code: Optional[str] = None,
+    exit_reason: Optional[str] = None,
     error_message: Optional[str],
 ) -> None:
-    """Insert one row into t212_invest_orders (best-effort; never raises)."""
+    """Insert one row into t212_invest_orders (best-effort; never raises).
+
+    exit_reason is one of SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED /
+    TIME_LIMIT for SELL orders placed by maybe_exit_t212_positions() /
+    maybe_exit_stock_positions(); left as None for BUY orders.
+    """
     try:
         from sqlalchemy import text as sa_text
         from data.database import get_engine
@@ -404,12 +410,12 @@ def _log_t212_order(
                     order_id, ticker, t212_ticker, direction,
                     quantity, estimated_price, estimated_value_gbp,
                     status, signal_type, confluence_score, regime,
-                    account_type, currency_code, error_message, placed_at, created_at
+                    account_type, currency_code, exit_reason, error_message, placed_at, created_at
                 ) VALUES (
                     :order_id, :ticker, :t212_ticker, :direction,
                     :quantity, :estimated_price, :estimated_value_gbp,
                     :status, :signal_type, :confluence_score, :regime,
-                    :account_type, :currency_code, :error_message, :now, :now
+                    :account_type, :currency_code, :exit_reason, :error_message, :now, :now
                 )
             """), {
                 "order_id":            order_id,
@@ -425,6 +431,7 @@ def _log_t212_order(
                 "regime":              regime,
                 "account_type":        account_type,
                 "currency_code":       currency_code,
+                "exit_reason":         exit_reason,
                 "error_message":       error_message,
                 "now":                 datetime.utcnow().isoformat(),
             })
@@ -819,6 +826,16 @@ def maybe_exit_t212_positions(config: dict) -> None:
     if not api_key or not api_secret:
         return
 
+    # Reconstruct P&L for any position closed since the last call before the
+    # position-checking logic below, which returns early whenever there are
+    # currently no open positions — exactly the state right after a position
+    # closes, so reconstruction must not be gated behind "positions exist now".
+    try:
+        from brokers.t212_learning import _reconstruct_t212_pnl  # noqa: PLC0415
+        _reconstruct_t212_pnl(config)
+    except Exception as exc:
+        logger.warning("T212 Invest: P&L reconstruction failed: %s", exc)
+
     ucits_mapping: dict = t212_cfg.get("ucits_mapping", {})
     if not ucits_mapping:
         return
@@ -887,14 +904,16 @@ def maybe_exit_t212_positions(config: dict) -> None:
         if current_qty <= 0:
             continue
 
-        should_exit  = False
-        exit_reason  = ""
-        neutral_key  = f"t212_neutral_since:{ucits_ticker}"
+        should_exit      = False
+        exit_reason      = ""
+        exit_reason_code: Optional[str] = None
+        neutral_key      = f"t212_neutral_since:{ucits_ticker}"
 
         # 1. Immediate exit on strong sell signals
         if sig_type in immediate_exits:
             should_exit = True
             exit_reason = f"signal={sig_type}"
+            exit_reason_code = f"{sig_type}_SIGNAL"
             _sm_clear(neutral_key)  # reset any NEUTRAL timer
 
         # 2. Confirmed NEUTRAL exit (primary signal-driven exit)
@@ -917,6 +936,7 @@ def maybe_exit_t212_positions(config: dict) -> None:
                             f"signal={sig_type} confirmed after "
                             f"{hours_neutral:.1f}h ({confirmation_runs} runs)"
                         )
+                        exit_reason_code = "NEUTRAL_CONFIRMED"
                 except Exception:
                     pass
 
@@ -931,6 +951,7 @@ def maybe_exit_t212_positions(config: dict) -> None:
                 days_held = (datetime.utcnow() - first_fill).days
                 if days_held >= max_holding_days:
                     should_exit = True
+                    exit_reason_code = "TIME_LIMIT"
                     exit_reason = (
                         f"backstop time limit: {days_held}d >= {max_holding_days}d"
                     )
@@ -994,6 +1015,7 @@ def maybe_exit_t212_positions(config: dict) -> None:
             regime=sig.get("regime"),
             account_type=account_label,
             currency_code=ucits_currencies.get(ucits_ticker),
+            exit_reason=exit_reason_code,
             error_message=error_msg,
         )
 
@@ -1311,6 +1333,16 @@ def maybe_exit_stock_positions(config: dict) -> None:
     if not api_key or not api_secret:
         return
 
+    # Reconstruct P&L for any position closed since the last call before the
+    # position-checking logic below, which returns early whenever there are
+    # currently no open positions — exactly the state right after a position
+    # closes, so reconstruction must not be gated behind "positions exist now".
+    try:
+        from brokers.t212_learning import _reconstruct_t212_pnl  # noqa: PLC0415
+        _reconstruct_t212_pnl(config)
+    except Exception as exc:
+        logger.warning("T212 Stocks: P&L reconstruction failed: %s", exc)
+
     stock_entries = _stock_universe(config)
     if not stock_entries:
         return
@@ -1379,14 +1411,16 @@ def maybe_exit_stock_positions(config: dict) -> None:
         if current_qty <= 0:
             continue
 
-        should_exit  = False
-        exit_reason  = ""
-        neutral_key  = f"t212_stock_neutral_since:{t212_ticker}"
+        should_exit      = False
+        exit_reason      = ""
+        exit_reason_code: Optional[str] = None
+        neutral_key      = f"t212_stock_neutral_since:{t212_ticker}"
 
         # 1. Immediate exit on strong sell signals
         if sig_type in immediate_exits:
             should_exit = True
             exit_reason = f"signal={sig_type}"
+            exit_reason_code = f"{sig_type}_SIGNAL"
             _sm_clear(neutral_key)
 
         # 2. Confirmed NEUTRAL exit (primary signal-driven exit)
@@ -1409,6 +1443,7 @@ def maybe_exit_stock_positions(config: dict) -> None:
                             f"signal={sig_type} confirmed after "
                             f"{hours_neutral:.1f}h ({confirmation_runs} runs)"
                         )
+                        exit_reason_code = "NEUTRAL_CONFIRMED"
                 except Exception:
                     pass
 
@@ -1423,6 +1458,7 @@ def maybe_exit_stock_positions(config: dict) -> None:
                 days_held = (datetime.utcnow() - first_fill).days
                 if days_held >= max_holding_days:
                     should_exit = True
+                    exit_reason_code = "TIME_LIMIT"
                     exit_reason = (
                         f"backstop time limit: {days_held}d >= {max_holding_days}d"
                     )
@@ -1483,6 +1519,7 @@ def maybe_exit_stock_positions(config: dict) -> None:
             regime=sig.get("regime"),
             account_type=account_label,
             currency_code=instrument_meta.get(t212_ticker, {}).get("currencyCode") or "USD",
+            exit_reason=exit_reason_code,
             error_message=error_msg,
         )
 

@@ -40,8 +40,7 @@ from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
 from analysis.macro import fetch_and_store_macro_indicators
-from analysis.regime import get_latest_regime_name, get_max_holding_days, is_entry_allowed, resolve_entry_signal
-from data.database import clear_metadata, get_metadata, get_metadata_str, set_metadata
+from data.database import get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
 logger = logging.getLogger(__name__)
@@ -147,21 +146,6 @@ def _get_calendar_session(
     except Exception as exc:
         logger.warning("Session lookup failed for %s on %s: %s", calendar_name, check_date, exc)
         return None
-
-
-def _is_exchange_in_session(calendar_name: str, now_utc: datetime) -> bool:
-    """Return True if *now_utc* falls within the exchange's active trading session.
-
-    Crypto and FX markets are always considered in-session on weekdays.
-    Fails open (returns True) on lookup errors.
-    """
-    if calendar_name in ("Crypto", "FX"):
-        return True
-    session = _get_calendar_session(calendar_name, now_utc.date())
-    if session is None:
-        return False  # market closed today
-    open_dt, close_dt = session
-    return open_dt <= now_utc <= close_dt
 
 
 def _exchanges_closed_before(
@@ -412,31 +396,26 @@ def _eod_job() -> None:
 
 
 def _trade_alert_job() -> None:
-    """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — check open trade health and send alerts.
+    """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — VIX spike check + T212 upkeep.
 
-    Fetches a live price for every open trade whose home exchange is currently
-    in session, enriches it with current signal and stop-loss status, then emails
-    an alert when any trade reaches STOP LOSS or EXIT SIGNAL.  Deduplicates per
-    trade: the same status for the same trade only triggers one email until the
-    status changes.
+    Runs unconditionally on every firing:
+      - VIX spike check: on a >20% intraday VIX jump vs. the previous close,
+        runs an immediate analysis-only pipeline and sends a spike alert email
+        (once per calendar day).
+      - T212 order-status polling (`poll_placed_orders()`) and account/positions
+        snapshot refresh (`_fetch_t212_snapshot()`), so the Status page snapshot
+        stays current.
+      - The T212 Invest exit check — `brokers.trading212.maybe_exit_t212_positions()`
+        / `maybe_exit_stock_positions()` — so a confirmed EXIT SIGNAL or backstop
+        time-limit exit closes within about an hour rather than waiting for the
+        next EOD run (see "Broker integration — Trading212 Invest" in CLAUDE.md
+        for the exit trigger priority and the 24h duplicate-SELL guard shared
+        with the EOD run's own delegated call to the same functions).
 
-    Per-exchange session filtering ensures that:
-      - UK/EU trades are only checked during LSE/XETR hours (08:00–16:30 UTC)
-      - Asian trades are checked during JPX/HKEX hours (00:00–08:00 UTC)
-      - US trades are checked during NYSE hours (14:30–21:00 UTC)
-      - Crypto/FX trades are always checked
-
-    The global alert_cooldown_hours setting in config.yaml still applies.
-
-    Also runs (unconditionally, regardless of open-trade state above):
-    T212 order-status polling, account snapshot refresh, and — via
-    brokers.trading212.maybe_exit_t212_positions() /
-    maybe_exit_stock_positions() — the T212 Invest exit check, so a
-    confirmed EXIT SIGNAL or backstop time-limit exit closes within about an
-    hour rather than waiting for the next EOD run (see "Broker integration
-    — Trading212 Invest" in CLAUDE.md for the exit trigger priority and the
-    24h duplicate-SELL guard shared with the EOD run's own delegated call to
-    the same functions).
+    Manually-logged CFD trade alerting (STOP LOSS / EXIT SIGNAL emails, and the
+    price-level SL/TP proximity check) was removed along with the Trade Log
+    page — see "Removed: manual CFD trade logging" in CLAUDE.md. Any CFD trade
+    rows already in the `trades` table are no longer monitored or alerted on.
     """
     logger.info("Trade alert check starting…")
     config = _load_config()
@@ -511,242 +490,6 @@ def _trade_alert_job() -> None:
     except Exception as exc:
         logger.error("Hourly T212 snapshot refresh failed: %s", exc)
     # ── End T212 ───────────────────────────────────────────────────────────
-
-    from output.performance import get_latest_price, get_open_trades  # noqa: PLC0415
-    from output.briefing import (  # noqa: PLC0415
-        enrich_open_trade,
-        send_alert_email,
-        should_send_alert,
-    )
-
-    trades = get_open_trades()
-    if not trades:
-        logger.info("Trade alert check: no open trades.")
-        return
-
-    now_utc        = datetime.now(timezone.utc)
-    ticker_exchange = _build_ticker_exchange_map(config)
-
-    _ALERT_STATUSES: frozenset[str] = frozenset({"STOP LOSS", "EXIT SIGNAL"})
-    pending: list[dict] = []
-    skipped_closed_exchange = 0
-
-    for trade in trades:
-        ticker   = trade.get("ticker", "")
-        trade_id = trade.get("id")
-
-        # Only alert on trades where the asset's home exchange is currently in session.
-        exchange = ticker_exchange.get(ticker, "NYSE")
-        if not _is_exchange_in_session(exchange, now_utc):
-            skipped_closed_exchange += 1
-            logger.debug(
-                "Trade alert: skipping %s — %s not in session at %s UTC.",
-                ticker, exchange, now_utc.strftime("%H:%M"),
-            )
-            continue
-
-        try:
-            live_price = get_latest_price(ticker)
-        except Exception as exc:
-            logger.warning("Price fetch failed for %s: %s", ticker, exc)
-            live_price = None
-
-        try:
-            enriched = enrich_open_trade(trade, live_price, get_max_holding_days(ticker, config))
-        except Exception as exc:
-            logger.warning("enrich_open_trade failed for %s: %s", ticker, exc)
-            continue
-
-        status = enriched.get("status", "ON TRACK")
-        if status not in _ALERT_STATUSES:
-            continue
-
-        meta_key = f"trade_alert_status:{trade_id}"
-        if get_metadata_str(meta_key) == status:
-            logger.info(
-                "Trade %s (%s): already alerted for %s — skipping.",
-                trade_id, ticker, status,
-            )
-            continue
-
-        pending.append(enriched)
-
-    if skipped_closed_exchange:
-        logger.info(
-            "Trade alert check: %d trade(s) skipped — exchange not in session.",
-            skipped_closed_exchange,
-        )
-
-    # ── Price-level SL/TP proximity alerts (live prices via yfinance fast_info) ──
-    # Runs independently of the enrich-based check above so you're alerted within
-    # one hour if a price approaches or crosses a stored SL/TP level.
-    _price_pending: list[dict] = []
-    try:
-        import yfinance as yf  # noqa: PLC0415
-
-        for _pt in trades:
-            _pt_ticker   = _pt.get("ticker", "")
-            _pt_id       = _pt.get("id")
-            _pt_dir      = _pt.get("direction", "LONG")
-            _pt_entry    = float(_pt.get("entry_price") or 0)
-            _pt_sl       = _pt.get("stop_loss_price")
-            _pt_tp       = _pt.get("take_profit_price")
-
-            if _pt_sl is None and _pt_tp is None:
-                continue
-
-            _pt_exch = ticker_exchange.get(_pt_ticker, "NYSE")
-            if not _is_exchange_in_session(_pt_exch, now_utc):
-                continue
-
-            try:
-                _pt_live = float(yf.Ticker(_pt_ticker).fast_info["last_price"])
-                if not _pt_live or _pt_live <= 0:
-                    continue
-            except Exception as _fe:
-                logger.debug("fast_info fetch failed for %s: %s", _pt_ticker, _fe)
-                continue
-
-            _pt_sl = float(_pt_sl) if _pt_sl is not None else None
-            _pt_tp = float(_pt_tp) if _pt_tp is not None else None
-
-            # Determine triggered condition — priority: SL HIT > APPROACHING > TP HIT
-            _pt_alert: str | None = None
-            if _pt_sl is not None:
-                _sl_hit = (
-                    (_pt_dir == "LONG"  and _pt_live <= _pt_sl) or
-                    (_pt_dir == "SHORT" and _pt_live >= _pt_sl)
-                )
-                _approaching = not _sl_hit and (
-                    (_pt_dir == "LONG"  and _pt_live <= _pt_sl * 1.01) or
-                    (_pt_dir == "SHORT" and _pt_live >= _pt_sl * 0.99)
-                )
-                if _sl_hit:
-                    _pt_alert = "STOP LOSS HIT"
-                elif _approaching:
-                    _pt_alert = "APPROACHING STOP"
-
-            if _pt_alert is None and _pt_tp is not None and _pt_tp > 0:
-                _tp_hit = (
-                    (_pt_dir == "LONG"  and _pt_live >= _pt_tp) or
-                    (_pt_dir == "SHORT" and _pt_live <= _pt_tp)
-                )
-                if _tp_hit:
-                    _pt_alert = "TAKE PROFIT REACHED"
-
-            _pt_meta_key = f"trade_price_alert:{_pt_id}"
-
-            if _pt_alert is None:
-                # Clear APPROACHING STOP dedup when price recovers so re-approach re-alerts.
-                if get_metadata_str(_pt_meta_key) == "APPROACHING STOP":
-                    clear_metadata(_pt_meta_key)
-                continue
-
-            # Dedup: only alert on state transitions
-            if get_metadata_str(_pt_meta_key) == _pt_alert:
-                logger.info(
-                    "Trade %s (%s): already alerted for %s — skipping.",
-                    _pt_id, _pt_ticker, _pt_alert,
-                )
-                continue
-
-            # Compute fields for the alert card
-            _pt_unreal = None
-            if _pt_entry:
-                _raw = (_pt_live - _pt_entry) if _pt_dir == "LONG" else (_pt_entry - _pt_live)
-                _pt_unreal = round(_raw / _pt_entry * 100, 2)
-
-            _pt_days = 0
-            _pt_edt = _pt.get("entry_date")
-            if _pt_edt:
-                try:
-                    _pt_ep = (
-                        _pt_edt if isinstance(_pt_edt, datetime)
-                        else datetime.fromisoformat(str(_pt_edt).split(".")[0])
-                    )
-                    _pt_days = max(0, (datetime.utcnow() - _pt_ep).days)
-                except Exception:
-                    pass
-
-            # Fetch current signal so the options-guidance section has up-to-date context.
-            _current_sig = "NEUTRAL"
-            _current_sc  = 0.0
-            try:
-                from output.performance import get_current_signal as _gcs  # noqa: PLC0415
-                _sig_row = _gcs(_pt_ticker)
-                if _sig_row:
-                    _current_sig = _sig_row.get("signal") or "NEUTRAL"
-                    _current_sc  = float(_sig_row.get("confluence_score") or 0)
-            except Exception:
-                pass
-
-            _price_pending.append({
-                **_pt,                             # carry all original trade fields (incl. planned_risk_gbp, fx_rate_at_entry, etc.)
-                "id":               _pt_id,
-                "ticker":           _pt_ticker,
-                "direction":        _pt_dir,
-                "entry_price":      _pt_entry,
-                "live_price":       _pt_live,
-                "unreal_pct":       _pt_unreal,
-                "entry_signal":     _pt.get("signal_type", "?"),
-                "current_signal":   _current_sig,
-                "entry_score":      float(_pt.get("confluence_score") or 0),
-                "current_score":    _current_sc,
-                "stop_loss":        _pt_sl,
-                "take_profit_price": _pt_tp,
-                "days_held":        _pt_days,
-                "days_remaining":   None,
-                "max_holding_days": get_max_holding_days(_pt_ticker, config),
-                "near_max_hold":    False,
-                "status":           _pt_alert,
-            })
-
-    except Exception as _pe:
-        logger.warning("Price-level SL/TP alert check failed: %s", _pe)
-
-    # Merge price alerts — skip STOP LOSS HIT duplicates if enrich already caught them
-    if _price_pending:
-        _enriched_ids = {e.get("id") for e in pending}
-        for _pa in _price_pending:
-            if _pa["status"] == "STOP LOSS HIT" and _pa["id"] in _enriched_ids:
-                continue
-            pending.append(_pa)
-        logger.info(
-            "Price-level check: %d new alert(s) added to pending.", len(_price_pending)
-        )
-
-    if not pending:
-        logger.info(
-            "Trade alert check: no new conditions across %d open trade(s).", len(trades)
-        )
-        return
-
-    logger.info("Trade alert check: %d new alert(s) pending.", len(pending))
-
-    if not should_send_alert(config):
-        logger.info("Alert email suppressed by cooldown or disabled config.")
-        return
-
-    ok, msg = send_alert_email(pending, config)
-    logger.info("Alert email result: %s — %s", ok, msg)
-
-    if ok:
-        _price_alert_statuses = frozenset({"APPROACHING STOP", "STOP LOSS HIT", "TAKE PROFIT REACHED"})
-        for enriched in pending:
-            _eid = enriched.get("id")
-            _est = enriched.get("status", "")
-            _mk  = (
-                f"trade_price_alert:{_eid}"
-                if _est in _price_alert_statuses
-                else f"trade_alert_status:{_eid}"
-            )
-            try:
-                set_metadata(_mk, _est)
-            except Exception as exc:
-                logger.warning(
-                    "Could not stamp alert status for trade %s: %s", _eid, exc,
-                )
-
 
 
 def _weekly_summary_job() -> None:

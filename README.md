@@ -1,6 +1,6 @@
 # Investment Research Dashboard
 
-A self-hosted Streamlit application for daily market analysis, multi-module confluence signal generation, cross-asset correlation tracking, CFD trade management, historical backtesting, and automated T212 Invest order placement.
+A self-hosted Streamlit application for daily market analysis, multi-module confluence signal generation, cross-asset correlation tracking, historical backtesting, and automated T212 Invest order placement.
 
 Live at [research.example.com](https://research.example.com) (password protected).
 
@@ -8,7 +8,7 @@ Live at [research.example.com](https://research.example.com) (password protected
 
 ## What it does
 
-The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on six scheduler jobs. Open CFD trades are monitored live with P&L in GBP, ATR-based stop losses, and automated health status. Automated email alerts fire when trades hit critical thresholds. A backtesting engine replays signal logic over up to 10 years of stored history.
+The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on six scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history.
 
 ---
 
@@ -31,7 +31,7 @@ Add your FRED API key to `config.yaml` under `macro.fred_api_key` (free at [fred
 The operational home page. A single compact status bar shows the active market regime, key stats (^GSPC vs SMA200, ADX, VIX, yield spread, USD trend), and any active regime overlay pills — all in one bordered row. The regime description and signal-threshold caption appear below it. Active overlay detail strips follow with their full descriptions. FOMC key-event pills and signal distribution counts (all assets / tradeable-only) complete the header block.
 
 Below the header:
-- **Open Trade Monitor** — CFD trades and T212 Invest positions combined into a single list, sorted by urgency. Each card shows live GBP P&L, current signal, score delta since entry, ATR-based stop loss, live R:R, and a health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS). Tickers with an open T212 Invest position are excluded from Today's Opportunities to avoid duplicate signals.
+- **Open Trade Monitor** — T212 Invest positions (UCITS ETFs and direct US stocks), sorted by urgency. Each card shows live GBP P&L, current signal, score delta since entry, and a health status (ON TRACK / WEAKENING / EXIT SIGNAL / STOP LOSS). Tickers with an open T212 Invest position are excluded from Today's Opportunities to avoid duplicate signals. (This used to also show manually-logged CFD trades — see "Removed: manual CFD trade logging" below.)
 - **Top Opportunities** — STRONG BUY / STRONG SELL signals filtered to tradeable assets by default. Each card shows the rationale, live price, and overlay confidence warning badges (MACRO_STRESS −20%, CREDIT_STRESS −15%, RECESSION_RISK −25%, EM_STRESS −15%) when relevant overlays are active for that ticker.
 
 ### Signals
@@ -78,12 +78,6 @@ Cross-asset correlation analysis across **28 predefined pairs**. Compact header 
 
 Assets not directly in any pair inherit a correlation score via `CATEGORY_PROXY` in `analysis/correlations.py` — each proxy maps a ticker to a related pair member and blends 50% of that member's pair score into the ticker's confluence score. For example, COPX → GLD, XOP → USO, ITB → TLT, USDCNY=X → FXI. A proxy inheritance table is shown at the bottom of the Relationships page.
 
-### Trade Log
-Full CFD trade lifecycle: log new trades (auto-populates current signal; captures leverage, FX rate, investment amount, SL/TP, R:R, swap rate, spread cost, T212 instrument name), open-position tracker with live GBP P&L and per-trade edit expanders, close-trade form, and position sizing guidance based on account balance and per-trade risk settings. A **T212 Invest Positions** table below the CFD tracker shows all open automated ETF positions (ticker, UCITS ID, qty, avg/current price, current value £, P&L £/%, days held, current signal, status) — read-only, auto-managed by the EOD pipeline.
-
-### Performance
-Historical analysis of all closed trades: equity curve (cumulative GBP P&L), win rate by signal type and by regime, indicator hit-rate table, closed trades list. All sections filter to a selected date range.
-
 ### Backtest
 Replay the current signal logic over up to 10 years of stored historical price data — no look-ahead bias (vectorized pandas rolling operations). The backtest mirrors live system config rather than accepting independent runtime parameters: `config.yaml` is the single source of truth for holding limits, ATR stop multiplier, entry/exit thresholds, and the regime gate, for backtesting exactly as it is for live trading. To test different settings, edit `config.yaml` and re-run — there's no separate backtest-only parameter set.
 
@@ -101,13 +95,13 @@ A **T212 Invest Account** panel shows the live connection state when `trading212
 - **Stocks tab** — the `trading212_stocks` entry threshold (or blocked-entry caption), position/deployment limits, and the last 10 automated orders filtered from the same `t212_invest_orders` table down to tickers in `watchlist.us_large_cap` — see "T212 Stocks automation" below.
 - **Mapping tab** — UCITS instrument mapping table (which research tickers map to T212 instrument IDs).
 
-**Note:** T212 removes filled market orders from the orders endpoint once they become open positions — a 404 response does not mean cancelled. The poller checks for an active position on 404; if one exists the order is marked FILLED with `averagePrice` from the position (derived as `currentPrice − ppl/quantity` if `averagePrice` is null), and `estimated_value_gbp` is updated with `fill_price × quantity` converted to GBP using live FX rates — T212 returns prices in the instrument's native currency (USD, EUR, or GBP) so conversion is required for correct cost basis. Only if no position is found is the order marked CANCELLED. Open positions are displayed on the **Daily Briefing** and **Trade Log** pages, not here.
+**Note:** T212 removes filled market orders from the orders endpoint once they become open positions — a 404 response does not mean cancelled. The poller checks for an active position on 404; if one exists the order is marked FILLED with `averagePrice` from the position (derived as `currentPrice − ppl/quantity` if `averagePrice` is null), and `estimated_value_gbp` is updated with `fill_price × quantity` converted to GBP using live FX rates — T212 returns prices in the instrument's native currency (USD, EUR, or GBP) so conversion is required for correct cost basis. Only if no position is found is the order marked CANCELLED. Open positions are displayed on the **Daily Briefing** page, not here.
 
-> **Forex pairs excluded by design:** Tickers ending in `=X` (e.g. `GBPUSD=X`, `EURUSD=X`) are never automated through T212 Invest. T212 Invest is a cash/equity account that supports stocks and ETFs only — forex is CFD-only, and the T212 CFD account has no public API. All forex trades remain manual CFD positions logged in the Trade Log.
+> **Forex pairs excluded by design:** Tickers ending in `=X` (e.g. `GBPUSD=X`, `EURUSD=X`) are never automated through T212 Invest. T212 Invest is a cash/equity account that supports stocks and ETFs only — forex is CFD-only, and the T212 CFD account has no public API. There is currently no automation path for forex at all (manual CFD trade logging was removed — see "Removed: manual CFD trade logging" below).
 >
 > **Ticker substitutions in `ucits_mapping`:** Some research tickers are mapped to a different T212 instrument where T212 doesn't carry the exact fund. For example, `VIXY` maps to `VXX` — VXX (iPath S&P 500 VIX Short-Term Futures ETN) is the T212-available equivalent, tracking the same VIX short-term futures index. Each substitution is documented as an inline comment on the relevant `ucits_mapping` entry in `config.yaml`.
 >
-> **Tradeable assets without a `ucits_mapping` entry:** `SHY`, `JNK`, and `XLRE` are `tradeable: true` in the watchlist so they generate signals, appear in opportunities, and can be logged as manual CFD trades — but they have no `ucits_mapping` entry and therefore cannot receive automated T212 Invest orders. `JNK`'s omission is intentional: `HYG` is already mapped and covers essentially the same US high-yield bond exposure (adding JNK would open a duplicate position in the same index). `SHY` and `XLRE` are likely gaps — UCITS equivalents exist for both (iShares $ Treasury Bond 1-3yr ETF; SPDR S&P U.S. Real Estate Select Sector UCITS ETF), and their absence is inconsistent with the pattern of TLT/IEF/TIP being mapped and all other major SPDR sector ETFs being mapped. Consider adding their T212 instrument IDs to `ucits_mapping` in `config.yaml`.
+> **Tradeable assets without a `ucits_mapping` entry:** `SHY`, `JNK`, and `XLRE` are `tradeable: true` in the watchlist so they generate signals and appear in opportunities — but they have no `ucits_mapping` entry and therefore cannot receive automated T212 Invest orders. `JNK`'s omission is intentional: `HYG` is already mapped and covers essentially the same US high-yield bond exposure (adding JNK would open a duplicate position in the same index). `SHY` and `XLRE` are likely gaps — UCITS equivalents exist for both (iShares $ Treasury Bond 1-3yr ETF; SPDR S&P U.S. Real Estate Select Sector UCITS ETF), and their absence is inconsistent with the pattern of TLT/IEF/TIP being mapped and all other major SPDR sector ETFs being mapped. Consider adding their T212 instrument IDs to `ucits_mapping` in `config.yaml`.
 
 ### T212 Stocks automation
 
@@ -273,19 +267,29 @@ Historical `trades` table rows with `account_type = 'VIRTUAL'` are not deleted, 
 
 ---
 
+## Removed: manual CFD trade logging
+
+The Trade Log page (manual trade entry form, open-position tracker, close-trade form, position-sizing guidance) and the Performance page (equity curve, win rate by signal type/regime, indicator hit-rate table, closed trades list) have both been removed — the app now has six pages instead of eight. A rebuilt Performance page, driven by T212 execution data instead of manually-logged CFD trades, is planned but not yet implemented.
+
+Removed alongside the two pages: `log_trade()`, `close_trade()`, `update_trade_plan()`, `get_open_trades()`, `get_all_trades()`, `classify_trade_theme()` (`output/performance.py`); `enrich_open_trade()`, `compute_trade_status()`, and the manual-CFD alert-email chain — `send_alert_email()`, `should_send_alert()`, `_build_alert_html()`, and their exclusive helpers (`output/briefing.py`); the CFD-trade alerting loop and price-level SL/TP proximity check in the hourly `_trade_alert_job()` (`data/scheduler.py`); and the `accounts:` config section (Practice/Live CFD account balances and position-sizing percentages), which only the Trade Log page read.
+
+Any CFD trade rows already in the `trades` table (account_type PRACTICE or LIVE) are not deleted, but are no longer opened, closed, monitored, or alerted on — see "Trade model" below.
+
+---
+
 ## Email alerts
 
-All three email functions send **HTML emails with plain-text fallback** via a shared `_smtp_send()` helper in `output/briefing.py`. Emails are built as `MIMEMultipart("alternative")` with inline CSS only (Outlook-compatible — no external stylesheets, no flex/grid, `bgcolor` on TD elements). SMTP password is read from config or the `SMTP_PASSWORD` environment variable.
+Email functions send **HTML emails with plain-text fallback** via a shared `_smtp_send()` helper in `output/briefing.py`. Emails are built as `MIMEMultipart("alternative")` with inline CSS only (Outlook-compatible — no external stylesheets, no flex/grid, `bgcolor` on TD elements). SMTP password is read from config or the `SMTP_PASSWORD` environment variable.
 
 | Type | When | Controlled by |
 |------|------|--------------|
-| **Trade alert** | Hourly (14:00–21:00 UTC weekdays) when any open trade hits STOP LOSS or EXIT SIGNAL | `notifications.email.enabled` + per-trade deduplication via `system_metadata` |
+| **VIX spike alert** | Triggered ad hoc (checked hourly) when VIX rises >20% intraday vs. the previous close | Fires at most once per calendar day |
 | **Weekly summary** | Every Sunday at 10:00 UTC | `notifications.weekly_summary.enabled` |
 | **Test email** | On demand via Status page button | Always sends (ignores enabled flag) |
 
-The weekly summary covers: regime + overlays, signal snapshot with tradeable counts, 7-day signal performance (directional hit rate), open trade status, trades closed that week, signal accuracy progress toward the 20-trade learning threshold (HTML progress bar), FRED macro pulse (VIX + key series with week-over-week change), and diverging pairs and catch-up flags.
+Manual CFD trade alerting (the old "Trade alert" email — STOP LOSS/EXIT SIGNAL emails for manually-logged trades) was removed along with the Trade Log page — see "Removed: manual CFD trade logging" above. T212 Invest positions exit automatically and don't need email alerts.
 
-The trade alert cooldown (`alert_cooldown_hours: 8`) prevents email storms. Each trade's last-alerted status is stored in `system_metadata` under `trade_alert_status:{trade_id}` to prevent duplicate alerts for the same condition.
+The weekly summary covers: regime + overlays, signal snapshot with tradeable counts, 7-day signal performance (directional hit rate), trades closed that week, signal accuracy progress toward the 20-trade learning threshold (HTML progress bar), FRED macro pulse (VIX + key series with week-over-week change), and diverging pairs and catch-up flags.
 
 Default relay: Brevo (smtp-relay.brevo.com:587). Any STARTTLS-capable relay works. Set the SMTP password via the `SMTP_PASSWORD` environment variable rather than the config file.
 
@@ -293,7 +297,7 @@ Default relay: Brevo (smtp-relay.brevo.com:587). Any STARTTLS-capable relay work
 
 ## Trade model
 
-Trades capture the full CFD context at the time of entry:
+**Historical only** — manual CFD trade logging was removed (see "Removed: manual CFD trade logging" above), so no new rows are written to this schema. Existing rows remain in the `trades` table and are still read by the weekly summary email for historical accuracy stats. Documented here for reference:
 
 | Field | Description |
 |-------|-------------|
@@ -329,7 +333,7 @@ SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `wit
 | `correlations` | Cross-asset pair stats (30d corr, 90d corr, hist mean/std, z-score, status) |
 | `macro_indicators` | FRED series values with 30d pct change, 2yr z-score, and −1/0/+1 score |
 | `opportunity_flags` | Catch-up opportunity flags with 5d/20d return tracking |
-| `trades` | Full CFD trade ledger (open and closed; legacy VIRTUAL rows also live here — see "Removed: virtual trading" below) |
+| `trades` | Legacy CFD trade ledger (open and closed; also holds legacy VIRTUAL rows) — historical only, no longer written to; see "Removed: virtual trading" and "Removed: manual CFD trade logging" above |
 | `performance` | Rolling performance metrics per ticker (Sharpe, Sortino, Calmar, drawdown) |
 | `backtest_runs` | Metadata for each backtest run (params, status, summary metrics) |
 | `backtest_signals` | Per-ticker per-date signal history generated during a backtest run |
@@ -415,7 +419,7 @@ The Daily Briefing and the Status page's T212 Invest Account section both show a
 
 ### Tradeable vs analysis-only
 
-Each watchlist entry has a `tradeable: true/false` flag. Assets with `tradeable: false` are included in analysis but excluded from opportunity filtering and the Trade Log. The Signals page shows all assets with a tradeable sub-count on each signal distribution.
+Each watchlist entry has a `tradeable: true/false` flag. Assets with `tradeable: false` are included in analysis but excluded from opportunity filtering. The Signals page shows all assets with a tradeable sub-count on each signal distribution.
 
 ---
 

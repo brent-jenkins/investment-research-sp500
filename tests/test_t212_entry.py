@@ -108,6 +108,22 @@ def test_mixed_regime_strong_buy_signal_triggers_order(db_engine, t212_mocks):
     assert args[1] > 0  # positive quantity = BUY
 
 
+def test_buy_order_has_no_exit_reason(db_engine, t212_mocks):
+    """BUY orders are not exits — exit_reason must stay None (not just unset,
+    since Stage 3's P&L reconstruction distinguishes BUY/SELL by direction,
+    but exit_reason=None makes the intent explicit at the DB row level)."""
+    from brokers.trading212 import maybe_place_t212_orders
+
+    _seed_signal(db_engine, ticker="^GSPC", signal="NEUTRAL", regime="MIXED")
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_BUY", regime="MIXED")
+
+    maybe_place_t212_orders(_config(), run_type="full")
+
+    with Session(db_engine) as session:
+        order = session.query(T212InvestOrder).filter_by(direction="BUY").one()
+    assert order.exit_reason is None
+
+
 def test_trending_bull_regime_buy_signal_triggers_order(db_engine, t212_mocks):
     """TRENDING_BULL overrides entry_signal to the looser BUY threshold — a
     plain BUY signal is sufficient to place an order in this regime, unlike
@@ -211,3 +227,19 @@ def test_exit_skips_duplicate_when_recent_sell_order_exists(db_engine, t212_mock
     maybe_exit_t212_positions(_config())
 
     t212_mocks.place_market_order.assert_not_called()
+
+
+def test_exit_immediate_sell_signal_stores_exit_reason(db_engine, t212_mocks):
+    """A SELL order placed via the immediate-signal branch stores a structured
+    exit_reason (SELL_SIGNAL or STRONG_SELL_SIGNAL, derived from sig_type) on
+    the t212_invest_orders row, not just a free-text log line."""
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_SELL", regime="MIXED")
+
+    maybe_exit_t212_positions(_config())
+
+    with Session(db_engine) as session:
+        order = session.query(T212InvestOrder).filter_by(direction="SELL").one()
+    assert order.exit_reason == "STRONG_SELL_SIGNAL"
