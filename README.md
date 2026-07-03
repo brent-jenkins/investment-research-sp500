@@ -8,7 +8,7 @@ Live at [research.example.com](https://research.example.com) (password protected
 
 ## What it does
 
-The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on seven scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy.
+The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on eight scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy.
 
 ---
 
@@ -233,12 +233,13 @@ After 20+ closed T212 Invest positions (tracked in `t212_pnl` — see "T212 P&L 
 
 ### Automatic scheduling
 
-Seven APScheduler jobs run automatically from a **standalone scheduler daemon** (`scheduler_daemon.py`) managed by `investment-research-scheduler.service`. The daemon starts at boot and fires jobs on their UTC schedule regardless of whether anyone has visited the dashboard — no browser connection required.
+Eight APScheduler jobs run automatically from a **standalone scheduler daemon** (`scheduler_daemon.py`) managed by `investment-research-scheduler.service`. The daemon starts at boot and fires jobs on their UTC schedule regardless of whether anyone has visited the dashboard — no browser connection required.
 
 | Schedule | Type | What it does |
 |----------|------|--------------|
 | **Every 60 seconds** | Job dispatcher | Writes `scheduler_heartbeat` to `system_metadata`; checks `pending_t212_fetch` flag and, when set, calls `_fetch_t212_snapshot()` to refresh the T212 account/positions snapshot |
-| **Mon–Fri 07:00 UTC** | Asian EOD | `pull_incremental()` for exchanges closed before 07:00 UTC (e.g. JPX/Tokyo), then full analysis pipeline |
+| **Mon 07:00 UTC** | Monday pre-market | Cancels any PLACED BUY order still open from Friday's EOD run (older than 30h), then the same analysis-only pipeline as Tue–Fri pre-market — see "Monday pre-market job" below |
+| **Tue–Fri 07:00 UTC** | Asian EOD | `pull_incremental()` for exchanges closed before 07:00 UTC (e.g. JPX/Tokyo), then full analysis pipeline |
 | **Mon–Fri 13:30 UTC** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` — before US open, no data pull |
 | **Mon–Fri 19:05 UTC** | FOMC reaction | Analysis-only pipeline on FOMC decision days only (Fed statement released ~18:00–19:00 UTC); silently skips on non-FOMC days |
 | **Mon–Fri 21:30 UTC** | Full refresh | `pull_incremental()` for open exchanges, then full analysis pipeline + FRED macro fetch; places T212 orders |
@@ -246,6 +247,10 @@ Seven APScheduler jobs run automatically from a **standalone scheduler daemon** 
 | **Sunday 10:00 UTC** | Weekly summary | Sends the weekly summary email covering signals, open trades, closed P&L, accuracy progress, macro pulse, diverging pairs |
 
 The Streamlit web UI (`investment-research.service`) also starts an in-process scheduler as a fallback, but checks the `scheduler_heartbeat` key in `system_metadata` first — if the heartbeat is less than 90 seconds old the daemon is active and the in-process scheduler is skipped, preventing duplicate job execution.
+
+### Monday pre-market job
+
+BUY orders placed by the Friday 21:30 UTC EOD run can still be sitting `PLACED` when markets reopen Monday — T212 doesn't fill market orders outside trading hours. A lot can change over a weekend (geopolitical events, Sunday futures pricing, macro news), so `_monday_premarket_job()` cancels any `PLACED` `BUY` order older than 30 hours via the T212 API before re-running the standard analysis-only pipeline against Friday's closing prices (no data pull). Signal placement, exit checks, and everything else run exactly as they do on any other analysis-only run — a ticker still showing `STRONG_BUY` in `TRENDING_BULL` after cancellation gets a fresh order; a weakened signal doesn't. Fires Mondays only; `_pre_market_job()` itself now runs Tuesday–Friday.
 
 ---
 
@@ -501,7 +506,7 @@ Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitign
 
 Both scripts check the current UTC time before doing anything else: if it falls within 30 minutes of a scheduled job window (07:00 pre-market, 13:30 US open, 21:30 EOD, or 10:00 Sunday weekly summary), they print a warning and require a `y` confirmation before proceeding, since a mid-deploy restart during one of these windows can run order logic against transitional code/config. See "Deployment timing" in [CLAUDE.md](CLAUDE.md) for the full rationale.
 
-**Two systemd services, both must be restarted.** `investment-research` is the Streamlit UI; `investment-research-scheduler` is the standalone daemon that actually fires the seven scheduled jobs (including order placement) whether or not anyone has the dashboard open. Each keeps its own in-memory copy of the code until restarted — if a deploy only restarts the UI, the scheduler daemon keeps running the old code, so a newly-deployed regime gate or entry-signal change silently fails to apply and orders keep going out under the previous logic. `deploy.sh`/`deploy.ps1`/`setup.sh` always restart (or enable+start, on first setup) both services for this reason.
+**Two systemd services, both must be restarted.** `investment-research` is the Streamlit UI; `investment-research-scheduler` is the standalone daemon that actually fires the eight scheduled jobs (including order placement) whether or not anyone has the dashboard open. Each keeps its own in-memory copy of the code until restarted — if a deploy only restarts the UI, the scheduler daemon keeps running the old code, so a newly-deployed regime gate or entry-signal change silently fails to apply and orders keep going out under the previous logic. `deploy.sh`/`deploy.ps1`/`setup.sh` always restart (or enable+start, on first setup) both services for this reason.
 
 After deploying, verify both services picked up the same code:
 

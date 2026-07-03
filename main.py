@@ -1451,15 +1451,21 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     )
     _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub, _sched_lvl)
 
-    # Next Scheduled Run — soonest upcoming job across all configured runs
+    # Next Scheduled Run — soonest upcoming job across all configured runs.
+    # The pre_market slot is Monday Pre-Market (_monday_premarket_job — adds
+    # stale weekend-order cancellation) on Mondays and the regular Pre-Market
+    # job (_pre_market_job, Tue-Fri only) every other weekday; _next_run_for_time()
+    # still finds the correct next weekday occurrence for either since a job
+    # fires at this hour:minute every weekday, just a different function on Monday.
     _sched_cfg_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_LABELS = {"pre_market": "Pre-Market", "us_open": "US Open", "eod": "End of Day"}
     _nxt_dt, _nxt_label = None, ""
     for _rn, _rl in _RUN_LABELS.items():
         _rc = _sched_cfg_runs.get(_rn, {})
         _nt = _next_run_for_time(int(_rc.get("hour", 0)), int(_rc.get("minute", 0)))
+        _rl_eff = "Monday Pre-Market" if (_rn == "pre_market" and _nt.weekday() == 0) else _rl
         if _nxt_dt is None or _nt < _nxt_dt:
-            _nxt_dt, _nxt_label = _nt, _rl
+            _nxt_dt, _nxt_label = _nt, _rl_eff
     if _nxt_dt:
         _nxt_delta = (_nxt_dt - datetime.utcnow()).total_seconds()
         _nxt_until = (
@@ -1656,7 +1662,9 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("### Scheduled Runs")
     sched_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_DISPLAY = {
-        "pre_market": ("Pre-Market",  "Analysis only — Asian closed, European opening"),
+        "pre_market": ("Pre-Market",  "Tue–Fri: analysis only — Asian closed, European opening. "
+                                       "Mon: Monday Pre-Market job runs instead — cancels stale "
+                                       "weekend BUY orders first, then the same analysis-only run."),
         "us_open":    ("US Open",     "Analysis only — catches overnight moves before US open"),
         "eod":        ("End of Day",  "Full refresh + analysis after NYSE close"),
     }
