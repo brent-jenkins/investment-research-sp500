@@ -110,7 +110,7 @@ A **T212 Invest Account** panel shows the live connection state when `trading212
 >
 > **Ticker substitutions in `ucits_mapping`:** Some research tickers are mapped to a different T212 instrument where T212 doesn't carry the exact fund. For example, `VIXY` maps to `VXX` — VXX (iPath S&P 500 VIX Short-Term Futures ETN) is the T212-available equivalent, tracking the same VIX short-term futures index. Each substitution is documented as an inline comment on the relevant `ucits_mapping` entry in `config.yaml`.
 >
-> **Tradeable assets without a `ucits_mapping` entry:** `SHY`, `JNK`, and `XLRE` are `tradeable: true` in the watchlist so they generate signals and appear in opportunities — but they have no `ucits_mapping` entry and therefore cannot receive automated T212 Invest orders. `JNK`'s omission is intentional: `HYG` is already mapped and covers essentially the same US high-yield bond exposure (adding JNK would open a duplicate position in the same index). `SHY` and `XLRE` are likely gaps — UCITS equivalents exist for both (iShares $ Treasury Bond 1-3yr ETF; SPDR S&P U.S. Real Estate Select Sector UCITS ETF), and their absence is inconsistent with the pattern of TLT/IEF/TIP being mapped and all other major SPDR sector ETFs being mapped. Consider adding their T212 instrument IDs to `ucits_mapping` in `config.yaml`.
+> **`SHY`, `JNK`, and `XLRE` are analysis-only:** none has a `ucits_mapping` entry, so all three are `tradeable: false` (see "Tradeable vs analysis-only" below) — they still generate signals and feed correlations/macro scoring, but never receive automated orders or appear in opportunities. `JNK`'s exclusion is intentional: `HYG` is already mapped and covers essentially the same US high-yield bond exposure (adding JNK would open a duplicate position in the same index). `SHY` and `XLRE` are intentionally analysis-only — UCITS equivalents exist but not currently mapped; add to `ucits_mapping` if automation is desired (iShares $ Treasury Bond 1-3yr ETF for SHY; SPDR S&P U.S. Real Estate Select Sector UCITS ETF for XLRE — both inconsistent with the pattern of TLT/IEF/TIP being mapped and all other major SPDR sector ETFs being mapped). Adding either to `ucits_mapping` also needs its watchlist `tradeable` flag flipped back to `true` to match.
 
 ### T212 Stocks automation
 
@@ -438,7 +438,7 @@ The Daily Briefing and the Status page's T212 Invest Account section both show a
 
 ### Tradeable vs analysis-only
 
-Each watchlist entry has a `tradeable: true/false` flag. Assets with `tradeable: false` are included in analysis but excluded from opportunity filtering. The Signals page shows all assets with a tradeable sub-count on each signal distribution.
+Each watchlist entry has a `tradeable: true/false` flag. **`tradeable: true` means "eligible for automated T212 Invest orders"** — the ticker is in `trading212_invest.ucits_mapping` or `watchlist.us_large_cap`; everything else is `tradeable: false`. Assets with `tradeable: false` are still fully analysed — signals, correlations, macro scoring, regime detection — but are excluded from opportunity filtering and can never receive an automated order. The Signals page shows all assets with a tradeable sub-count on each signal distribution. Currently 64 of the 104 watchlist tickers are `tradeable: true` (33 `ucits_mapping` + 31 `us_large_cap`).
 
 ---
 
@@ -528,6 +528,8 @@ systemctl status investment-research-scheduler
 ### Adding assets
 
 Edit `config.yaml` under `watchlist:` — add a dict with `ticker`, `name`, `exchange`, and `tradeable`. No code changes needed. If adding a new group, also add its label to `_GROUP_LABELS` in `main.py`.
+
+Set `tradeable: true` only if the ticker is (or will be, in the same change) in `trading212_invest.ucits_mapping` or `watchlist.us_large_cap` — see "Tradeable vs analysis-only" above. Everything else should be `tradeable: false`.
 
 ### Adding a new analysis module
 
