@@ -912,6 +912,16 @@ def _trade_alert_job() -> None:
       - Crypto/FX trades are always checked
 
     The global alert_cooldown_hours setting in config.yaml still applies.
+
+    Also runs (unconditionally, regardless of open-trade state above):
+    T212 order-status polling, account snapshot refresh, and — via
+    brokers.trading212.maybe_exit_t212_positions() /
+    maybe_exit_stock_positions() — the T212 Invest exit check, so a
+    confirmed EXIT SIGNAL or backstop time-limit exit closes within about an
+    hour rather than waiting for the next EOD run (see "Broker integration
+    — Trading212 Invest" in CLAUDE.md for the exit trigger priority and the
+    24h duplicate-SELL guard shared with the EOD run's own delegated call to
+    the same functions).
     """
     logger.info("Trade alert check starting…")
     config = _load_config()
@@ -962,6 +972,24 @@ def _trade_alert_job() -> None:
             logger.info("T212 order poll: %d order(s) updated to terminal status.", _n_updated)
     except Exception as _poll_exc:
         logger.warning("T212 order poll failed: %s", _poll_exc)
+
+    # Exit checks run hourly so a confirmed EXIT SIGNAL closes within ~1h
+    # rather than waiting up to 24h for the next EOD run. The EOD pipeline
+    # calls the same two functions via maybe_place_t212_orders() /
+    # maybe_place_stock_orders() — the 24h duplicate-SELL guard inside each
+    # (_has_recent_sell_order()) keeps the two calls from both selling the
+    # same position.
+    try:
+        from brokers.trading212 import maybe_exit_t212_positions  # noqa: PLC0415
+        maybe_exit_t212_positions(config)
+    except Exception as exc:
+        logger.error("T212 Invest hourly exit check failed: %s", exc, exc_info=True)
+
+    try:
+        from brokers.trading212 import maybe_exit_stock_positions  # noqa: PLC0415
+        maybe_exit_stock_positions(config)
+    except Exception as exc:
+        logger.error("T212 Stocks hourly exit check failed: %s", exc, exc_info=True)
 
     try:
         _fetch_t212_snapshot(config)

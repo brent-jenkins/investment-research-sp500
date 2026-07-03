@@ -432,6 +432,105 @@ def _log_t212_order(
         logger.warning("Failed to log T212 order to DB: %s", exc)
 
 
+def _load_signals_and_prices() -> "tuple[dict[str, dict], dict[str, float]]":
+    """Latest signal row and latest close price for every ticker, in one round trip.
+
+    Shared by the EXIT and BUY phases of both the ETF and stock automation
+    paths so the query is defined once.
+    """
+    from sqlalchemy import text as sa_text
+    from data.database import get_engine
+    eng = get_engine()
+    with eng.connect() as conn:
+        sig_rows = conn.execute(sa_text("""
+            SELECT s.ticker, s.signal, s.confluence_score,
+                   COALESCE(s.regime, s.notes) AS regime
+            FROM signals s
+            INNER JOIN (
+                SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
+            ) latest ON s.ticker = latest.ticker AND s.date = latest.md
+        """)).mappings().all()
+
+        price_rows = conn.execute(sa_text("""
+            SELECT p.ticker, p.close
+            FROM price_data p
+            INNER JOIN (
+                SELECT ticker, MAX(date) AS md FROM price_data GROUP BY ticker
+            ) latest ON p.ticker = latest.ticker AND p.date = latest.md
+        """)).mappings().all()
+
+    signals = {r["ticker"]: dict(r) for r in sig_rows}
+    prices  = {r["ticker"]: float(r["close"]) for r in price_rows if r["close"] is not None}
+    return signals, prices
+
+
+def _load_open_order_tickers(days: int = 30) -> "set[str]":
+    """Tickers (any direction) with a PLACED/FILLED order in the last *days* days."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT DISTINCT ticker FROM t212_invest_orders
+                WHERE status IN ('PLACED', 'FILLED')
+                AND placed_at > datetime('now', :window)
+            """), {"window": f"-{days} days"}).mappings().all()
+        return {r["ticker"] for r in rows}
+    except Exception:
+        return set()
+
+
+def _load_first_fill_dates() -> "dict[str, datetime]":
+    """Earliest FILLED BUY fill date per t212_ticker, across ETFs and stocks alike."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            fill_rows = conn.execute(sa_text("""
+                SELECT t212_ticker, MIN(filled_at) AS first_fill
+                FROM t212_invest_orders
+                WHERE direction = 'BUY' AND status = 'FILLED'
+                GROUP BY t212_ticker
+            """)).mappings().all()
+        first_fill_dates: dict[str, datetime] = {}
+        for r in fill_rows:
+            if r["first_fill"]:
+                try:
+                    first_fill_dates[r["t212_ticker"]] = datetime.fromisoformat(str(r["first_fill"]))
+                except Exception:
+                    pass
+        return first_fill_dates
+    except Exception:
+        return {}
+
+
+def _has_recent_sell_order(us_ticker: str, hours: int = 24) -> bool:
+    """True if a PLACED or FILLED SELL order exists for *us_ticker* within *hours*.
+
+    Guards against the hourly exit check (maybe_exit_t212_positions /
+    maybe_exit_stock_positions) and the EOD run's own delegated call to the
+    same functions both placing a SELL for the same position in one window.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            row = conn.execute(sa_text("""
+                SELECT 1 FROM t212_invest_orders
+                WHERE ticker = :ticker AND direction = 'SELL'
+                AND status IN ('PLACED', 'FILLED')
+                AND placed_at > datetime('now', :window)
+                LIMIT 1
+            """), {"ticker": us_ticker, "window": f"-{hours} hours"}).fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning("_has_recent_sell_order: check failed for %s: %s", us_ticker, exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Fill-status polling — called hourly and on Refresh Account
 # ---------------------------------------------------------------------------
@@ -686,50 +785,42 @@ def poll_placed_orders(config: dict) -> int:
 # Automated order placement — called from EOD pipeline
 # ---------------------------------------------------------------------------
 
-def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
-    """Place T212 Invest DEMO market orders based on current signals.
+def maybe_exit_t212_positions(config: dict) -> None:
+    """Close any open T212 Invest position whose signal or holding period calls for exit.
 
-    Phase 1 — EXIT: closes any open T212 position whose underlying research
-    signal has moved to SELL or STRONG_SELL.
+    Extracted from maybe_place_t212_orders() so exit logic exists in exactly
+    one place: called every hour from data/scheduler.py:_trade_alert_job()
+    for near-real-time exits (no more waiting up to 24h for the next EOD
+    run), and again from maybe_place_t212_orders() during the EOD run before
+    its BUY phase. Runs unconditionally — no run_type gate — a position must
+    always be able to exit regardless of which scheduled job is running.
 
-    Phase 2 — BUY: places new market orders for STRONG_BUY signals on tickers
-    listed in trading212_invest.ucits_mapping in config.yaml.
+    T212 Invest is a cash account — no shorting. This loop iterates ONLY
+    over positions currently held, so every sell order is a position close,
+    never a naked short.
 
-    Entry conditions (all must be true):
-      1. trading212_invest.enabled: true in config.yaml
-      2. run_type == "full"  — only on EOD runs with fresh price data
-      3. T212_API_KEY and T212_API_SECRET environment variables are set
-      4. ucits_mapping section present in trading212_invest config
+    Trigger priority:
+      1. Immediate: SELL or STRONG_SELL signal (per trading212_invest.exit_signal)
+      2. Confirmed: signal drops to NEUTRAL for confirmation_runs x 3h
+         (tracked per position in system_metadata as t212_neutral_since:<ucits>)
+      3. Backstop: position held > max_holding_days (only when
+         time_limit_as_backstop: true; overrides confirmed-only logic)
 
-    Per-BUY-order conditions:
-      - Ticker has a ucits_mapping entry
-      - No existing T212 position for this UCITS instrument
-      - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
-      - Free cash covers at least £10
-      - Total deployed remains below max_total_deployed x account value
-
-    All outcomes (success and failure) are written to t212_invest_orders.
-    API errors set "t212_invest_error" in system_metadata, stop placement for
-    the current run, and trigger an alert email.
+    Idempotent: _has_recent_sell_order() skips a ticker that already has a
+    PLACED or FILLED SELL order within the last 24 hours, so the hourly job
+    and a same-window EOD call never both sell the same position.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
         return
 
-    if run_type != "full":
-        logger.debug("T212 Invest: skipping order placement on %s run (full only).", run_type)
-        return
-
     api_key    = os.environ.get("T212_API_KEY", "")
     api_secret = os.environ.get("T212_API_SECRET", "")
     if not api_key or not api_secret:
-        logger.warning("T212 Invest: T212_API_KEY or T212_API_SECRET not set — skipping.")
-        _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
         return
 
     ucits_mapping: dict = t212_cfg.get("ucits_mapping", {})
     if not ucits_mapping:
-        logger.info("T212 Invest: no ucits_mapping in config — nothing to do.")
         return
 
     # Build reverse map (ucits_ticker → research_ticker) and currency lookup,
@@ -741,135 +832,43 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         reverse_ucits[_ut] = _rt
         ucits_currencies[_ut] = _ccy
 
-    live             = t212_cfg.get("live", False)
-    long_only        = bool(t212_cfg.get("long_only", True))  # T212 Invest is cash-only
-    max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
-    max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
+    live                 = t212_cfg.get("live", False)
+    _exit_cfg            = t212_cfg.get("exit_signal", "SELL")
+    immediate_exits      = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
+    exit_on_signal       = bool(t212_cfg.get("exit_on_signal", True))
+    time_limit_backstop  = bool(t212_cfg.get("time_limit_as_backstop", True))
+    max_holding_days     = int(t212_cfg.get("max_holding_days", 90))
+    confirmation_runs    = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
+    confirmation_hours   = confirmation_runs * 3
 
-    regime_name       = get_latest_regime_name()
-    _entry_cfg        = resolve_entry_signal(t212_cfg, regime_name)
-    _exit_cfg         = t212_cfg.get("exit_signal",  "SELL")
-    entry_signals     = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
-    if regime_name and regime_name in t212_cfg.get("entry_signal_overrides", {}):
-        logger.info(
-            "T212 Invest: regime=%s — using entry_signal override %s (global default %s).",
-            regime_name, _entry_cfg, t212_cfg.get("entry_signal", "STRONG_BUY"),
-        )
-    immediate_exits   = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
-    exit_on_signal    = bool(t212_cfg.get("exit_on_signal", True))
-    time_limit_backstop = bool(t212_cfg.get("time_limit_as_backstop", True))
-    max_holding_days  = int(t212_cfg.get("max_holding_days", 90))
-    confirmation_runs = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
-    confirmation_hours = confirmation_runs * 3
-
-    # ── Connect and fetch account state ─────────────────────────────────────
     try:
         client = Trading212Client(live=live)
-
-        summary   = client.get_account_summary()
-        _s_cash   = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
-        _s_inv    = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
-        total_val = float(summary.get("totalValue", 0) or 0)
-        invested  = float(_s_inv.get("currentValue", 0) or 0)
-        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
-
         positions = client.get_positions()
         positions_by_ucits: dict[str, dict] = {
             p.get("ticker", ""): p for p in (positions or [])
         }
-
-        instruments = client.get_instruments()
-        instrument_meta: dict[str, dict] = {
-            inst["ticker"]: inst
-            for inst in (instruments or [])
-            if "ticker" in inst
-        }
-
     except Exception as exc:
-        logger.error("T212 Invest: API error during setup — %s", exc, exc_info=True)
+        logger.error("T212 Invest: API error during exit check — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
         _send_t212_error_email(str(exc), config)
         return
 
-    # ── Read all current signals and latest prices from DB ───────────────────
+    if not positions_by_ucits:
+        return
+
+    logger.info("T212 Invest: EXIT phase triggered by hourly job — checking open positions")
+
     try:
-        from sqlalchemy import text as sa_text
-        from data.database import get_engine
-        eng = get_engine()
-        with eng.connect() as conn:
-            sig_rows = conn.execute(sa_text("""
-                SELECT s.ticker, s.signal, s.confluence_score,
-                       COALESCE(s.regime, s.notes) AS regime
-                FROM signals s
-                INNER JOIN (
-                    SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
-                ) latest ON s.ticker = latest.ticker AND s.date = latest.md
-            """)).mappings().all()
-
-            price_rows = conn.execute(sa_text("""
-                SELECT p.ticker, p.close
-                FROM price_data p
-                INNER JOIN (
-                    SELECT ticker, MAX(date) AS md FROM price_data GROUP BY ticker
-                ) latest ON p.ticker = latest.ticker AND p.date = latest.md
-            """)).mappings().all()
-
-            try:
-                order_rows = conn.execute(sa_text("""
-                    SELECT DISTINCT ticker FROM t212_invest_orders
-                    WHERE status IN ('PLACED', 'FILLED')
-                    AND placed_at > datetime('now', '-30 days')
-                """)).mappings().all()
-                open_order_tickers: set[str] = {r["ticker"] for r in order_rows}
-            except Exception:
-                open_order_tickers = set()
-
-            try:
-                fill_rows = conn.execute(sa_text("""
-                    SELECT t212_ticker, MIN(filled_at) AS first_fill
-                    FROM t212_invest_orders
-                    WHERE direction = 'BUY' AND status = 'FILLED'
-                    GROUP BY t212_ticker
-                """)).mappings().all()
-                first_fill_dates: dict[str, datetime] = {}
-                for _fr in fill_rows:
-                    if _fr["first_fill"]:
-                        try:
-                            first_fill_dates[_fr["t212_ticker"]] = datetime.fromisoformat(
-                                str(_fr["first_fill"])
-                            )
-                        except Exception:
-                            pass
-            except Exception:
-                first_fill_dates = {}
-
+        signals, prices = _load_signals_and_prices()
+        first_fill_dates = _load_first_fill_dates()
     except Exception as exc:
-        logger.error("T212 Invest: DB read error — %s", exc, exc_info=True)
+        logger.error("T212 Invest: DB read error during exit check — %s", exc, exc_info=True)
         _set_t212_error(f"DB read failed: {exc}")
         return
 
-    signals: dict[str, dict] = {r["ticker"]: dict(r) for r in sig_rows}
-    prices:  dict[str, float] = {
-        r["ticker"]: float(r["close"])
-        for r in price_rows if r["close"] is not None
-    }
     gbpusd        = prices.get("GBPUSD=X", 1.27)
     account_label = "LIVE" if live else "DEMO"
 
-    # ────────────────────────────────────────────────────────────────────────
-    # Phase 1 — EXIT (close existing long positions only)
-    #
-    # T212 Invest is a cash account — no shorting.  This loop iterates ONLY
-    # over positions we currently hold (positions_by_ucits), so every sell
-    # order is a position close, never a naked short.
-    #
-    # Trigger priority:
-    #   1. Immediate: SELL or STRONG_SELL signal
-    #   2. Confirmed: signal drops to NEUTRAL for confirmation_runs × 3 h
-    #      (tracked per position in system_metadata as t212_neutral_since:<ucits>)
-    #   3. Backstop: position held > max_holding_days (only when
-    #      time_limit_as_backstop: true; overrides confirmed-only logic)
-    # ────────────────────────────────────────────────────────────────────────
     from data.database import (  # noqa: PLC0415
         set_metadata as _sm_set,
         get_metadata_str as _sm_get,
@@ -939,6 +938,13 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         if not should_exit:
             continue
 
+        if _has_recent_sell_order(us_ticker):
+            logger.info(
+                "T212 Invest: %s already has a recent SELL order — skipping duplicate.",
+                us_ticker,
+            )
+            continue
+
         # Long-only safety: current_qty must be positive (we hold shares).
         # current_qty <= 0 is caught above, but re-check before sending the
         # close order so we never accidentally place a naked short.
@@ -992,13 +998,129 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         )
 
         if status == "FAILED":
-            logger.warning("T212 Invest: halting after sell-order failure.")
+            logger.warning("T212 Invest: halting exit phase after sell-order failure.")
             return
 
         time.sleep(0.5)
 
+
+def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
+    """Exit stale T212 Invest positions, then place new BUY orders based on current signals.
+
+    Phase 1 — EXIT: delegates entirely to maybe_exit_t212_positions(), which
+    is also called every hour from _trade_alert_job() — see that function's
+    docstring for the trigger priority and the duplicate-SELL guard that
+    makes calling it twice in the same window a safe no-op. It runs here
+    regardless of run_type, same as the hourly call.
+
+    Phase 2 — BUY: places new market orders for BUY/STRONG_BUY signals
+    (resolved per-regime via entry_signal_overrides) on tickers listed in
+    trading212_invest.ucits_mapping in config.yaml. Only runs on EOD
+    ("full") runs, which have fresh price data.
+
+    Entry conditions (all must be true):
+      1. trading212_invest.enabled: true in config.yaml
+      2. run_type == "full"  — only on EOD runs with fresh price data
+      3. T212_API_KEY and T212_API_SECRET environment variables are set
+      4. ucits_mapping section present in trading212_invest config
+
+    Per-BUY-order conditions:
+      - Ticker has a ucits_mapping entry
+      - No existing T212 position for this UCITS instrument
+      - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
+      - Free cash covers at least £10
+      - Total deployed remains below max_total_deployed x account value
+
+    All outcomes (success and failure) are written to t212_invest_orders.
+    API errors set "t212_invest_error" in system_metadata, stop placement for
+    the current run, and trigger an alert email.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return
+
+    if run_type != "full":
+        # The BUY phase below only ever runs on EOD ("full") runs, which have
+        # fresh price data — but exits must not wait for one. Delegate to the
+        # same unconditional exit check the hourly job uses.
+        maybe_exit_t212_positions(config)
+        logger.debug("T212 Invest: skipping BUY-phase order placement on %s run (full only).", run_type)
+        return
+
+    api_key    = os.environ.get("T212_API_KEY", "")
+    api_secret = os.environ.get("T212_API_SECRET", "")
+    if not api_key or not api_secret:
+        logger.warning("T212 Invest: T212_API_KEY or T212_API_SECRET not set — skipping.")
+        _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
+        return
+
+    ucits_mapping: dict = t212_cfg.get("ucits_mapping", {})
+    if not ucits_mapping:
+        logger.info("T212 Invest: no ucits_mapping in config — nothing to do.")
+        return
+
+    live             = t212_cfg.get("live", False)
+    long_only        = bool(t212_cfg.get("long_only", True))  # T212 Invest is cash-only
+    max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
+    max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
+
+    regime_name       = get_latest_regime_name()
+    _entry_cfg        = resolve_entry_signal(t212_cfg, regime_name)
+    entry_signals     = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
+    if regime_name and regime_name in t212_cfg.get("entry_signal_overrides", {}):
+        logger.info(
+            "T212 Invest: regime=%s — using entry_signal override %s (global default %s).",
+            regime_name, _entry_cfg, t212_cfg.get("entry_signal", "STRONG_BUY"),
+        )
+
+    # ── Connect and fetch account state ─────────────────────────────────────
+    # Fetched BEFORE the maybe_exit_t212_positions() delegation below so a
+    # ticker sold during this call's own exit phase still reads as held in
+    # positions_by_ucits — it is skipped by the BUY phase's duplicate-position
+    # guard for the rest of this run rather than immediately re-bought.
+    try:
+        client = Trading212Client(live=live)
+
+        summary   = client.get_account_summary()
+        _s_cash   = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        _s_inv    = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_val = float(summary.get("totalValue", 0) or 0)
+        invested  = float(_s_inv.get("currentValue", 0) or 0)
+        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
+
+        positions = client.get_positions()
+        positions_by_ucits: dict[str, dict] = {
+            p.get("ticker", ""): p for p in (positions or [])
+        }
+
+        instruments = client.get_instruments()
+        instrument_meta: dict[str, dict] = {
+            inst["ticker"]: inst
+            for inst in (instruments or [])
+            if "ticker" in inst
+        }
+
+    except Exception as exc:
+        logger.error("T212 Invest: API error during setup — %s", exc, exc_info=True)
+        _set_t212_error(str(exc))
+        _send_t212_error_email(str(exc), config)
+        return
+
+    maybe_exit_t212_positions(config)
+
+    # ── Read current signals, latest prices, and recent orders from DB ───────
+    try:
+        signals, prices = _load_signals_and_prices()
+        open_order_tickers = _load_open_order_tickers()
+    except Exception as exc:
+        logger.error("T212 Invest: DB read error — %s", exc, exc_info=True)
+        _set_t212_error(f"DB read failed: {exc}")
+        return
+
+    account_label = "LIVE" if live else "DEMO"
+
     # ────────────────────────────────────────────────────────────────────────
-    # Phase 2 — BUY: open new long positions for BUY/STRONG_BUY signals
+    # BUY: open new long positions for BUY/STRONG_BUY signals
     #
     # T212 Invest is a cash account — no shorting.  Tickers with SELL or
     # STRONG_SELL signals are skipped here; the account simply holds cash
@@ -1171,216 +1293,75 @@ def _stock_universe(config: dict) -> list[dict]:
     ]
 
 
-def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
-    """Place T212 Invest DEMO market orders for direct US large-cap stocks.
+def maybe_exit_stock_positions(config: dict) -> None:
+    """Close any open T212 Invest stock position whose signal or holding period calls for exit.
 
-    Parallel to maybe_place_t212_orders() (UCITS ETFs) but reads the
-    trading212_stocks config block, sources its ticker universe from
-    watchlist.us_large_cap instead of ucits_mapping, and supports fractional
-    share ordering where the T212 instruments API reports it.
-
-    Phase 1 — EXIT: closes any open stock position whose underlying research
-    signal has moved to SELL/STRONG_SELL, or via the confirmed-NEUTRAL /
-    backstop time-limit exits — identical trigger priority to
-    maybe_place_t212_orders(). Always runs regardless of the current regime;
-    only new entries are regime-gated.
-
-    Phase 2 — BUY: places new market orders for STRONG_BUY signals on tickers
-    in watchlist.us_large_cap, gated first by
-    trading212_stocks.allowed_entry_regimes (TRENDING_BULL only by default —
-    a materially stricter gate than the ETF path's TRENDING_BULL/BEAR/
-    HIGH_VOLATILITY, since a single stock's downside in a bear or high-vol
-    regime is far less diversified than an ETF's) and then by the resolved
-    entry_signal_overrides threshold.
-
-    Entry conditions (all must be true):
-      1. trading212_stocks.enabled: true in config.yaml
-      2. run_type == "full"  — only on EOD runs with fresh price data
-      3. T212_API_KEY and T212_API_SECRET environment variables are set
-      4. watchlist.us_large_cap has at least one tradeable, unclaimed ticker
-
-    Per-BUY-order conditions:
-      - Current regime is in allowed_entry_regimes
-      - Signal meets the resolved entry_signal_overrides threshold
-      - No existing T212 position for this instrument
-      - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
-      - Free cash covers at least £10
-      - Total deployed remains below max_total_deployed x account value
-
-    Order sizing: when trading212_stocks.fractional_shares is true and the
-    T212 instruments API reports maxQuantityPrecision > 0 for the ticker,
-    the order quantity is a decimal (position_gbp converted to USD via the
-    live GBPUSD rate, divided by price, rounded to that precision) rather
-    than floored to a whole share. Falls back to the same
-    floor-to-integer + minTradeQuantity guard used for UCITS ETFs when
-    precision is 0/absent or fractional_shares is false. This reuses
-    get_quantity_for_gbp()'s existing GBP->USD conversion and the same
-    /equity/orders/market endpoint as whole-share orders — T212's market
-    order endpoint accepts a decimal quantity directly for instruments that
-    support fractional trading, so no separate "value-based" order call is
-    needed or implemented here.
-
-    Shares the t212_invest_orders table with the ETF path (account_type
-    DEMO/LIVE, same schema, same 30-day duplicate-order window) — no
-    separate table.
-
-    EARNINGS GAP RISK: no earnings-calendar check is performed anywhere in
-    this pipeline. A stop loss can be gapped through overnight on an
-    earnings announcement — the next trade alert / EOD exit check will fill
-    at whatever price is then available, not the intended stop price. This
-    is a materially larger risk for individual stocks than for diversified
-    ETFs and is not currently mitigated in code.
+    Stock-path counterpart to maybe_exit_t212_positions() — same design and
+    trigger priority (immediate SELL/STRONG_SELL > confirmed NEUTRAL >
+    backstop time limit), same duplicate-SELL guard, same unconditional
+    (no run_type gate) execution. Called every hour from
+    data/scheduler.py:_trade_alert_job() and again from
+    maybe_place_stock_orders() during the EOD run before its BUY phase.
     """
     stock_cfg = config.get("trading212_stocks", {})
     if not stock_cfg.get("enabled", False):
         return
 
-    if run_type != "full":
-        logger.debug("T212 Stocks: skipping order placement on %s run (full only).", run_type)
-        return
-
     api_key    = os.environ.get("T212_API_KEY", "")
     api_secret = os.environ.get("T212_API_SECRET", "")
     if not api_key or not api_secret:
-        logger.warning("T212 Stocks: T212_API_KEY or T212_API_SECRET not set — skipping.")
-        _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
         return
 
     stock_entries = _stock_universe(config)
     if not stock_entries:
-        logger.info("T212 Stocks: no tradeable us_large_cap tickers — nothing to do.")
         return
 
-    # Map research ticker -> T212 instrument ticker (identity by default; overridden
-    # per watchlist entry via trading212_instrument where the T212 name differs).
     research_to_t212: dict[str, str] = {
         e["ticker"]: e.get("trading212_instrument", e["ticker"]) for e in stock_entries
     }
     t212_to_research: dict[str, str] = {v: k for k, v in research_to_t212.items()}
 
-    live                = stock_cfg.get("live", False)
-    max_position_gbp    = float(stock_cfg.get("max_position_gbp", 200))
-    max_deployed_pct     = float(stock_cfg.get("max_total_deployed", 0.3))
-    fractional_enabled  = bool(stock_cfg.get("fractional_shares", True))
-
-    regime_name         = get_latest_regime_name()
-    _entry_cfg          = resolve_entry_signal(stock_cfg, regime_name)
-    _exit_cfg           = stock_cfg.get("exit_signal", "SELL")
-    entry_signals       = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
-    if regime_name and regime_name in stock_cfg.get("entry_signal_overrides", {}):
-        logger.info(
-            "T212 Stocks: regime=%s — using entry_signal override %s (global default %s).",
-            regime_name, _entry_cfg, stock_cfg.get("entry_signal", "STRONG_BUY"),
-        )
-    immediate_exits     = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
+    live                 = stock_cfg.get("live", False)
+    _exit_cfg            = stock_cfg.get("exit_signal", "SELL")
+    immediate_exits      = ("SELL", "STRONG_SELL") if _exit_cfg == "SELL" else ("STRONG_SELL",)
     exit_on_signal       = bool(stock_cfg.get("exit_on_signal", True))
     time_limit_backstop  = bool(stock_cfg.get("time_limit_as_backstop", True))
     max_holding_days     = int(stock_cfg.get("max_holding_days", 30))
     confirmation_runs    = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
     confirmation_hours   = confirmation_runs * 3
 
-    # ── Connect and fetch account state ─────────────────────────────────────
     try:
         client = Trading212Client(live=live)
-
-        summary   = client.get_account_summary()
-        _s_cash   = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
-        _s_inv    = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
-        total_val = float(summary.get("totalValue", 0) or 0)
-        invested  = float(_s_inv.get("currentValue", 0) or 0)
-        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
-
         positions = client.get_positions()
         positions_by_t212: dict[str, dict] = {
             p.get("ticker", ""): p for p in (positions or [])
         }
-
         instruments = client.get_instruments()
         instrument_meta: dict[str, dict] = {
-            inst["ticker"]: inst
-            for inst in (instruments or [])
-            if "ticker" in inst
+            inst["ticker"]: inst for inst in (instruments or []) if "ticker" in inst
         }
-
     except Exception as exc:
-        logger.error("T212 Stocks: API error during setup — %s", exc, exc_info=True)
+        logger.error("T212 Stocks: API error during exit check — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
         _send_t212_error_email(str(exc), config)
         return
 
-    # ── Read all current signals and latest prices from DB ───────────────────
+    if not positions_by_t212:
+        return
+
+    logger.info("T212 Stocks: EXIT phase triggered by hourly job — checking open positions")
+
     try:
-        from sqlalchemy import text as sa_text
-        from data.database import get_engine
-        eng = get_engine()
-        with eng.connect() as conn:
-            sig_rows = conn.execute(sa_text("""
-                SELECT s.ticker, s.signal, s.confluence_score,
-                       COALESCE(s.regime, s.notes) AS regime
-                FROM signals s
-                INNER JOIN (
-                    SELECT ticker, MAX(date) AS md FROM signals GROUP BY ticker
-                ) latest ON s.ticker = latest.ticker AND s.date = latest.md
-            """)).mappings().all()
-
-            price_rows = conn.execute(sa_text("""
-                SELECT p.ticker, p.close
-                FROM price_data p
-                INNER JOIN (
-                    SELECT ticker, MAX(date) AS md FROM price_data GROUP BY ticker
-                ) latest ON p.ticker = latest.ticker AND p.date = latest.md
-            """)).mappings().all()
-
-            try:
-                order_rows = conn.execute(sa_text("""
-                    SELECT DISTINCT ticker FROM t212_invest_orders
-                    WHERE status IN ('PLACED', 'FILLED')
-                    AND placed_at > datetime('now', '-30 days')
-                """)).mappings().all()
-                open_order_tickers: set[str] = {r["ticker"] for r in order_rows}
-            except Exception:
-                open_order_tickers = set()
-
-            try:
-                fill_rows = conn.execute(sa_text("""
-                    SELECT t212_ticker, MIN(filled_at) AS first_fill
-                    FROM t212_invest_orders
-                    WHERE direction = 'BUY' AND status = 'FILLED'
-                    GROUP BY t212_ticker
-                """)).mappings().all()
-                first_fill_dates: dict[str, datetime] = {}
-                for _fr in fill_rows:
-                    if _fr["first_fill"]:
-                        try:
-                            first_fill_dates[_fr["t212_ticker"]] = datetime.fromisoformat(
-                                str(_fr["first_fill"])
-                            )
-                        except Exception:
-                            pass
-            except Exception:
-                first_fill_dates = {}
-
+        signals, prices = _load_signals_and_prices()
+        first_fill_dates = _load_first_fill_dates()
     except Exception as exc:
-        logger.error("T212 Stocks: DB read error — %s", exc, exc_info=True)
+        logger.error("T212 Stocks: DB read error during exit check — %s", exc, exc_info=True)
         _set_t212_error(f"DB read failed: {exc}")
         return
 
-    signals: dict[str, dict] = {r["ticker"]: dict(r) for r in sig_rows}
-    prices:  dict[str, float] = {
-        r["ticker"]: float(r["close"])
-        for r in price_rows if r["close"] is not None
-    }
     gbpusd        = prices.get("GBPUSD=X", 1.27)
     account_label = "LIVE" if live else "DEMO"
 
-    # ────────────────────────────────────────────────────────────────────────
-    # Phase 1 — EXIT (close existing long positions only). Always runs,
-    # regardless of the current regime — only the BUY phase below is
-    # regime-gated. Trigger priority is identical to maybe_place_t212_orders():
-    #   1. Immediate: SELL or STRONG_SELL signal
-    #   2. Confirmed: signal drops to NEUTRAL for confirmation_runs × 3 h
-    #   3. Backstop: position held > max_holding_days (if time_limit_as_backstop)
-    # ────────────────────────────────────────────────────────────────────────
     from data.database import (  # noqa: PLC0415
         set_metadata as _sm_set,
         get_metadata_str as _sm_get,
@@ -1450,6 +1431,13 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
         if not should_exit:
             continue
 
+        if _has_recent_sell_order(us_ticker):
+            logger.info(
+                "T212 Stocks: %s already has a recent SELL order — skipping duplicate.",
+                us_ticker,
+            )
+            continue
+
         close_qty = abs(current_qty)
         if close_qty <= 0:
             logger.warning(
@@ -1500,10 +1488,163 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
         )
 
         if status == "FAILED":
-            logger.warning("T212 Stocks: halting after sell-order failure.")
+            logger.warning("T212 Stocks: halting exit phase after sell-order failure.")
             return
 
         time.sleep(0.5)
+
+
+def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
+    """Place T212 Invest DEMO market orders for direct US large-cap stocks.
+
+    Parallel to maybe_place_t212_orders() (UCITS ETFs) but reads the
+    trading212_stocks config block, sources its ticker universe from
+    watchlist.us_large_cap instead of ucits_mapping, and supports fractional
+    share ordering where the T212 instruments API reports it.
+
+    Phase 1 — EXIT: delegates entirely to maybe_exit_stock_positions(), which
+    is also called every hour from _trade_alert_job() — see that function's
+    docstring for the trigger priority and the duplicate-SELL guard. Runs
+    here regardless of run_type, same as the hourly call; only new entries
+    are regime-gated.
+
+    Phase 2 — BUY: places new market orders for STRONG_BUY signals on tickers
+    in watchlist.us_large_cap, gated first by
+    trading212_stocks.allowed_entry_regimes (TRENDING_BULL only by default —
+    a materially stricter gate than the ETF path's TRENDING_BULL/BEAR/
+    HIGH_VOLATILITY, since a single stock's downside in a bear or high-vol
+    regime is far less diversified than an ETF's) and then by the resolved
+    entry_signal_overrides threshold.
+
+    Entry conditions (all must be true):
+      1. trading212_stocks.enabled: true in config.yaml
+      2. run_type == "full"  — only on EOD runs with fresh price data
+      3. T212_API_KEY and T212_API_SECRET environment variables are set
+      4. watchlist.us_large_cap has at least one tradeable, unclaimed ticker
+
+    Per-BUY-order conditions:
+      - Current regime is in allowed_entry_regimes
+      - Signal meets the resolved entry_signal_overrides threshold
+      - No existing T212 position for this instrument
+      - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
+      - Free cash covers at least £10
+      - Total deployed remains below max_total_deployed x account value
+
+    Order sizing: when trading212_stocks.fractional_shares is true and the
+    T212 instruments API reports maxQuantityPrecision > 0 for the ticker,
+    the order quantity is a decimal (position_gbp converted to USD via the
+    live GBPUSD rate, divided by price, rounded to that precision) rather
+    than floored to a whole share. Falls back to the same
+    floor-to-integer + minTradeQuantity guard used for UCITS ETFs when
+    precision is 0/absent or fractional_shares is false. This reuses
+    get_quantity_for_gbp()'s existing GBP->USD conversion and the same
+    /equity/orders/market endpoint as whole-share orders — T212's market
+    order endpoint accepts a decimal quantity directly for instruments that
+    support fractional trading, so no separate "value-based" order call is
+    needed or implemented here.
+
+    Shares the t212_invest_orders table with the ETF path (account_type
+    DEMO/LIVE, same schema, same 30-day duplicate-order window) — no
+    separate table.
+
+    EARNINGS GAP RISK: no earnings-calendar check is performed anywhere in
+    this pipeline. A stop loss can be gapped through overnight on an
+    earnings announcement — the next trade alert / EOD exit check will fill
+    at whatever price is then available, not the intended stop price. This
+    is a materially larger risk for individual stocks than for diversified
+    ETFs and is not currently mitigated in code.
+    """
+    stock_cfg = config.get("trading212_stocks", {})
+    if not stock_cfg.get("enabled", False):
+        return
+
+    if run_type != "full":
+        # The BUY phase below only ever runs on EOD ("full") runs — but exits
+        # must not wait for one. Delegate to the same unconditional exit
+        # check the hourly job uses.
+        maybe_exit_stock_positions(config)
+        logger.debug("T212 Stocks: skipping BUY-phase order placement on %s run (full only).", run_type)
+        return
+
+    api_key    = os.environ.get("T212_API_KEY", "")
+    api_secret = os.environ.get("T212_API_SECRET", "")
+    if not api_key or not api_secret:
+        logger.warning("T212 Stocks: T212_API_KEY or T212_API_SECRET not set — skipping.")
+        _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
+        return
+
+    stock_entries = _stock_universe(config)
+    if not stock_entries:
+        logger.info("T212 Stocks: no tradeable us_large_cap tickers — nothing to do.")
+        return
+
+    # Map research ticker -> T212 instrument ticker (identity by default; overridden
+    # per watchlist entry via trading212_instrument where the T212 name differs).
+    # Only the forward direction is needed here — the BUY phase below looks up
+    # by research ticker; the reverse mapping lives in maybe_exit_stock_positions().
+    research_to_t212: dict[str, str] = {
+        e["ticker"]: e.get("trading212_instrument", e["ticker"]) for e in stock_entries
+    }
+
+    live                = stock_cfg.get("live", False)
+    max_position_gbp    = float(stock_cfg.get("max_position_gbp", 200))
+    max_deployed_pct     = float(stock_cfg.get("max_total_deployed", 0.3))
+    fractional_enabled  = bool(stock_cfg.get("fractional_shares", True))
+
+    regime_name         = get_latest_regime_name()
+    _entry_cfg          = resolve_entry_signal(stock_cfg, regime_name)
+    entry_signals       = ("BUY", "STRONG_BUY") if _entry_cfg == "BUY" else ("STRONG_BUY",)
+    if regime_name and regime_name in stock_cfg.get("entry_signal_overrides", {}):
+        logger.info(
+            "T212 Stocks: regime=%s — using entry_signal override %s (global default %s).",
+            regime_name, _entry_cfg, stock_cfg.get("entry_signal", "STRONG_BUY"),
+        )
+
+    # ── Connect and fetch account state ─────────────────────────────────────
+    # Fetched BEFORE the maybe_exit_stock_positions() delegation below so a
+    # ticker sold during this call's own exit phase still reads as held in
+    # positions_by_t212 — it is skipped by the BUY phase's duplicate-position
+    # guard for the rest of this run rather than immediately re-bought.
+    try:
+        client = Trading212Client(live=live)
+
+        summary   = client.get_account_summary()
+        _s_cash   = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        _s_inv    = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_val = float(summary.get("totalValue", 0) or 0)
+        invested  = float(_s_inv.get("currentValue", 0) or 0)
+        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
+
+        positions = client.get_positions()
+        positions_by_t212: dict[str, dict] = {
+            p.get("ticker", ""): p for p in (positions or [])
+        }
+
+        instruments = client.get_instruments()
+        instrument_meta: dict[str, dict] = {
+            inst["ticker"]: inst
+            for inst in (instruments or [])
+            if "ticker" in inst
+        }
+
+    except Exception as exc:
+        logger.error("T212 Stocks: API error during setup — %s", exc, exc_info=True)
+        _set_t212_error(str(exc))
+        _send_t212_error_email(str(exc), config)
+        return
+
+    maybe_exit_stock_positions(config)
+
+    # ── Read current signals, latest prices, and recent orders from DB ───────
+    try:
+        signals, prices = _load_signals_and_prices()
+        open_order_tickers = _load_open_order_tickers()
+    except Exception as exc:
+        logger.error("T212 Stocks: DB read error — %s", exc, exc_info=True)
+        _set_t212_error(f"DB read failed: {exc}")
+        return
+
+    account_label = "LIVE" if live else "DEMO"
 
     # ────────────────────────────────────────────────────────────────────────
     # Phase 2 — BUY: open new long positions for STRONG_BUY signals on

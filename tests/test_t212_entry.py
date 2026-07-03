@@ -6,12 +6,12 @@ monkeypatch. All DB reads/writes go through the db_engine fixture's
 in-memory SQLite database — see tests/conftest.py.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.orm import Session
 
-from data.database import Signal
+from data.database import Signal, T212InvestOrder
 
 
 def _seed_signal(engine, *, ticker: str, signal: str, regime: str, confluence_score: float = 0.5) -> None:
@@ -123,3 +123,91 @@ def test_trending_bull_regime_buy_signal_triggers_order(db_engine, t212_mocks):
     args, _ = t212_mocks.place_market_order.call_args
     assert args[0] == "AAPLUCITS_EQ"
     assert args[1] > 0
+
+
+# ---------------------------------------------------------------------------
+# maybe_exit_t212_positions() — hourly exit check, independent of run_type.
+# ---------------------------------------------------------------------------
+
+def test_exit_sell_signal_triggers_immediate_sell_order(db_engine, t212_mocks):
+    """A SELL/STRONG_SELL signal on a held position triggers an immediate SELL."""
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_SELL", regime="MIXED")
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_called_once()
+    args, _ = t212_mocks.place_market_order.call_args
+    assert args[0] == "AAPLUCITS_EQ"
+    assert args[1] < 0  # negative quantity = SELL (position close)
+
+
+def test_exit_neutral_within_confirmation_window_does_not_sell(db_engine, t212_mocks):
+    """A NEUTRAL signal inside the reversal-confirmation window must not exit yet.
+
+    reversal_confirmation_runs=2 -> a 6h confirmation window; 1h ago is inside it.
+    """
+    from brokers.trading212 import maybe_exit_t212_positions
+    from data.database import set_metadata
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="NEUTRAL", regime="MIXED")
+    set_metadata(
+        "t212_neutral_since:AAPLUCITS_EQ",
+        (datetime.utcnow() - timedelta(hours=1)).isoformat(),
+    )
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_not_called()
+
+
+def test_exit_neutral_past_confirmation_window_sells(db_engine, t212_mocks):
+    """A NEUTRAL signal that has persisted past the confirmation window triggers an exit."""
+    from brokers.trading212 import maybe_exit_t212_positions
+    from data.database import set_metadata
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="NEUTRAL", regime="MIXED")
+    set_metadata(
+        "t212_neutral_since:AAPLUCITS_EQ",
+        (datetime.utcnow() - timedelta(hours=7)).isoformat(),
+    )
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_called_once()
+    args, _ = t212_mocks.place_market_order.call_args
+    assert args[0] == "AAPLUCITS_EQ"
+    assert args[1] < 0
+
+
+def test_exit_skips_duplicate_when_recent_sell_order_exists(db_engine, t212_mocks):
+    """An existing PLACED SELL order for the ticker blocks a duplicate SELL.
+
+    This is what keeps the hourly exit check and the EOD run's delegated
+    call to the same function from both selling the same position.
+    """
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_SELL", regime="MIXED")
+
+    with Session(db_engine) as session:
+        session.add(T212InvestOrder(
+            order_id="existing-1",
+            ticker="AAPL",
+            t212_ticker="AAPLUCITS_EQ",
+            direction="SELL",
+            quantity=5.0,
+            status="PLACED",
+            account_type="DEMO",
+            placed_at=datetime.utcnow(),
+        ))
+        session.commit()
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_not_called()
