@@ -33,7 +33,7 @@ class Regime(str, Enum):
 
 # Human-readable descriptions shown in the UI
 REGIME_DESCRIPTIONS: dict[str, str] = {
-    Regime.TRENDING_BULL:   "Market trending strongly upward — trend signals carry extra weight.",
+    Regime.TRENDING_BULL:   "Market trending strongly upward — macro and volatility signals carry extra weight.",
     Regime.TRENDING_BEAR:   "Market trending strongly downward — trend and volatility signals dominate.",
     Regime.RANGING_LOW_VOL: "Low-volatility consolidation — mean-reversion signals carry extra weight.",
     Regime.HIGH_VOLATILITY: "Elevated volatility or fear — volatility and macro signals dominate.",

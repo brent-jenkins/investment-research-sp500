@@ -740,7 +740,7 @@ trading212_invest:
   var_lookback_days: 252    # Trading days of price history used for the VaR estimate (~1 year)
   max_risk_pct: 0.01        # Max % of account value the expected holding-period loss may reach
   min_position_gbp: 50      # Floor — VaR sizing never sizes below this regardless of volatility
-  entry_signal: BUY        # global default — BUY = enter on BUY or STRONG_BUY; STRONG_BUY = STRONG_BUY only
+  entry_signal: STRONG_BUY # global default — always overridden by entry_signal_overrides below in practice, but STRONG_BUY reflects actual behaviour; BUY = enter on BUY or STRONG_BUY, STRONG_BUY = STRONG_BUY only
   # Per-regime override of entry_signal — same rationale and Regime-enum keys as
   # backtest.entry_signal_overrides above, kept in sync so both automation
   # paths apply the same conviction threshold per regime. See that block's comment
