@@ -377,6 +377,57 @@ def _ucits_entry(raw) -> "tuple[str, str]":
     return str(raw), "USD"
 
 
+def _compute_entry_stop(
+    us_ticker: str,
+    t212_ticker: str,
+    instrument_meta: dict,
+    prices: dict,
+    config: dict,
+) -> dict:
+    """Compute the GARCH (or ATR-fallback) stop for a new BUY order.
+
+    Uses the best available pre-fill price estimate — the T212 instrument's
+    own native-currency quote from get_instruments() metadata when
+    available (matching the currency/scale the eventual fill_price will be
+    in — see analysis/volatility.py's "Quantity sizing note" cross-
+    reference for why this matters), falling back to the research ticker's
+    stored close otherwise. Returns stop_price/stop_distance_pct/vol_source
+    all None when signals.use_garch_stops is not enabled, or when no price
+    estimate is available at all.
+
+    poll_placed_orders() recomputes this with the confirmed fill_price once
+    the order actually fills and overwrites the estimate stored here — this
+    initial value only matters for the (usually short) window between
+    placement and fill confirmation.
+    """
+    empty = {"stop_price": None, "stop_distance_pct": None, "vol_source": None}
+    if not config.get("signals", {}).get("use_garch_stops", False):
+        return empty
+
+    entry_price = instrument_meta.get(t212_ticker, {}).get("currentPrice") or prices.get(us_ticker)
+    if not entry_price:
+        return empty
+
+    try:
+        from analysis.volatility import compute_garch_stop, detect_change_points  # noqa: PLC0415
+        cpd = detect_change_points(us_ticker, config)
+        garch = compute_garch_stop(
+            ticker=us_ticker,
+            entry_price=float(entry_price),
+            direction="LONG",
+            config=config,
+            change_point_date=cpd.get("last_change_point"),
+        )
+        return {
+            "stop_price": garch["stop_price"],
+            "stop_distance_pct": garch["stop_distance_pct"],
+            "vol_source": garch["vol_source"],
+        }
+    except Exception as exc:
+        logger.warning("GARCH stop computation failed for %s: %s", us_ticker, exc)
+        return empty
+
+
 def _log_t212_order(
     *,
     ticker: str,
@@ -394,18 +445,28 @@ def _log_t212_order(
     currency_code: Optional[str] = None,
     exit_reason: Optional[str] = None,
     var_pct: Optional[float] = None,
+    stop_price: Optional[float] = None,
+    stop_distance_pct: Optional[float] = None,
+    vol_source: Optional[str] = None,
     error_message: Optional[str],
 ) -> None:
     """Insert one row into t212_invest_orders (best-effort; never raises).
 
     exit_reason is one of SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED /
-    TIME_LIMIT for SELL orders placed by maybe_exit_t212_positions() /
+    TIME_LIMIT / STOP_LOSS for SELL orders placed by maybe_exit_t212_positions() /
     maybe_exit_stock_positions(); left as None for BUY orders.
 
     var_pct is the holding-period VaR (as a fraction, e.g. -0.08) that
     analysis/volatility.py:compute_var_position_size() used to size this BUY
     order — left as None for SELL orders and for BUY orders placed under
     position_sizing: fixed.
+
+    stop_price / stop_distance_pct / vol_source come from
+    analysis/volatility.py:compute_garch_stop() — left as None for SELL
+    orders and for BUY orders placed with signals.use_garch_stops: false.
+    stop_price/stop_distance_pct computed here at placement time use an
+    estimated entry price; poll_placed_orders() recomputes and overwrites
+    both once the true fill price is confirmed.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -417,12 +478,14 @@ def _log_t212_order(
                     order_id, ticker, t212_ticker, direction,
                     quantity, estimated_price, estimated_value_gbp,
                     status, signal_type, confluence_score, regime,
-                    account_type, currency_code, exit_reason, var_pct, error_message, placed_at, created_at
+                    account_type, currency_code, exit_reason, var_pct,
+                    stop_price, stop_distance_pct, vol_source, error_message, placed_at, created_at
                 ) VALUES (
                     :order_id, :ticker, :t212_ticker, :direction,
                     :quantity, :estimated_price, :estimated_value_gbp,
                     :status, :signal_type, :confluence_score, :regime,
-                    :account_type, :currency_code, :exit_reason, :var_pct, :error_message, :now, :now
+                    :account_type, :currency_code, :exit_reason, :var_pct,
+                    :stop_price, :stop_distance_pct, :vol_source, :error_message, :now, :now
                 )
             """), {
                 "order_id":            order_id,
@@ -440,6 +503,9 @@ def _log_t212_order(
                 "currency_code":       currency_code,
                 "exit_reason":         exit_reason,
                 "var_pct":             var_pct,
+                "stop_price":          stop_price,
+                "stop_distance_pct":   stop_distance_pct,
+                "vol_source":          vol_source,
                 "error_message":       error_message,
                 "now":                 datetime.utcnow().isoformat(),
             })
@@ -517,6 +583,36 @@ def _load_first_fill_dates() -> "dict[str, datetime]":
                 except Exception:
                     pass
         return first_fill_dates
+    except Exception:
+        return {}
+
+
+def _load_stop_prices() -> "dict[str, float]":
+    """Most recent FILLED BUY order's stop_price per t212_ticker, across
+    ETFs and stocks alike — mirrors _load_first_fill_dates()'s query shape.
+
+    Rows with a NULL stop_price (positions opened before this feature, or
+    with signals.use_garch_stops: false) are excluded rather than returning
+    a spurious 0.0 — callers must treat a missing key as "no stop tracked",
+    not "stop at zero". Ordered ASC so the last write per ticker wins if a
+    ticker was ever bought, sold, and re-bought — the current open
+    position's own stop, not a stale one from a prior holding.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT t212_ticker, stop_price
+                FROM t212_invest_orders
+                WHERE direction = 'BUY' AND status = 'FILLED' AND stop_price IS NOT NULL
+                ORDER BY filled_at ASC
+            """)).mappings().all()
+        stop_prices: dict[str, float] = {}
+        for r in rows:
+            stop_prices[r["t212_ticker"]] = float(r["stop_price"])
+        return stop_prices
     except Exception:
         return {}
 
@@ -754,6 +850,36 @@ def poll_placed_orders(config: dict) -> int:
             ccy = row.get("currency_code") or "USD"
             actual_value = round(_native_to_gbp(fill_price * effective_qty, ccy), 2)
 
+        # Recompute the GARCH stop with the confirmed fill price for a newly-
+        # FILLED BUY order — the estimate _compute_entry_stop() logged at
+        # placement time used the pre-fill instrument quote, not the true
+        # fill price. COALESCE below preserves that initial estimate if this
+        # recompute fails rather than clobbering it with NULL.
+        new_stop_price: Optional[float] = None
+        new_stop_distance_pct: Optional[float] = None
+        new_vol_source: Optional[str] = None
+        if (new_status == "FILLED" and row.get("direction") == "BUY" and fill_price
+                and config.get("signals", {}).get("use_garch_stops", False)):
+            try:
+                from analysis.volatility import compute_garch_stop, detect_change_points  # noqa: PLC0415
+                _us_ticker = row.get("ticker")
+                _cpd = detect_change_points(_us_ticker, config)
+                _garch = compute_garch_stop(
+                    ticker=_us_ticker,
+                    entry_price=float(fill_price),
+                    direction="LONG",
+                    config=config,
+                    change_point_date=_cpd.get("last_change_point"),
+                )
+                new_stop_price        = _garch["stop_price"]
+                new_stop_distance_pct = _garch["stop_distance_pct"]
+                new_vol_source        = _garch["vol_source"]
+            except Exception as exc:
+                logger.warning(
+                    "poll_placed_orders: GARCH stop recompute failed for %s: %s",
+                    row.get("ticker"), exc,
+                )
+
         try:
             from sqlalchemy import text as sa_text
             from data.database import get_engine
@@ -764,6 +890,9 @@ def poll_placed_orders(config: dict) -> int:
                         fill_price          = COALESCE(:fill_price, fill_price),
                         filled_quantity     = COALESCE(:filled_qty, filled_quantity),
                         estimated_value_gbp = COALESCE(:actual_value, estimated_value_gbp),
+                        stop_price          = COALESCE(:new_stop_price, stop_price),
+                        stop_distance_pct   = COALESCE(:new_stop_distance_pct, stop_distance_pct),
+                        vol_source          = COALESCE(:new_vol_source, vol_source),
                         filled_at           = CASE WHEN :status = 'FILLED'
                                               THEN :time_mod ELSE filled_at END,
                         cancelled_at        = CASE WHEN :status IN ('CANCELLED', 'REJECTED')
@@ -774,6 +903,9 @@ def poll_placed_orders(config: dict) -> int:
                     "fill_price":   fill_price,
                     "filled_qty":   filled_qty,
                     "actual_value": actual_value,
+                    "new_stop_price":        new_stop_price,
+                    "new_stop_distance_pct": new_stop_distance_pct,
+                    "new_vol_source":        new_vol_source,
                     "time_mod":     time_mod,
                     "now":          now_iso,
                     "row_id":       row_id,
@@ -815,6 +947,13 @@ def maybe_exit_t212_positions(config: dict) -> None:
     never a naked short.
 
     Trigger priority:
+      0. GARCH stop loss: current price <= stop_price (see
+         analysis/volatility.py:compute_garch_stop()) — checked first and
+         overrides signal status entirely. T212 Invest is a cash account
+         with no native stop-loss order support, so this hourly check is
+         the actual stop-loss enforcement mechanism; a breach places an
+         emergency SELL within about an hour rather than any real-time
+         guarantee.
       1. Immediate: SELL or STRONG_SELL signal (per trading212_invest.exit_signal)
       2. Confirmed: signal drops to NEUTRAL for confirmation_runs x 3h
          (tracked per position in system_metadata as t212_neutral_since:<ucits>)
@@ -886,6 +1025,7 @@ def maybe_exit_t212_positions(config: dict) -> None:
     try:
         signals, prices = _load_signals_and_prices()
         first_fill_dates = _load_first_fill_dates()
+        stop_prices = _load_stop_prices()
     except Exception as exc:
         logger.error("T212 Invest: DB read error during exit check — %s", exc, exc_info=True)
         _set_t212_error(f"DB read failed: {exc}")
@@ -917,8 +1057,28 @@ def maybe_exit_t212_positions(config: dict) -> None:
         exit_reason_code: Optional[str] = None
         neutral_key      = f"t212_neutral_since:{ucits_ticker}"
 
+        # 0. GARCH stop loss — checked first; a breach overrides signal
+        # status entirely. Compares against the T212 instrument's own
+        # currentPrice (native currency, from the live positions snapshot),
+        # not the research ticker's price_data close — stop_price was
+        # computed/stored in the instrument's own currency (fill_price), so
+        # comparing it against a different-currency/scale price would be
+        # meaningless (same class of bug documented in CLAUDE.md's
+        # "Quantity sizing note").
+        instrument_price = position.get("currentPrice")
+        stop_price = stop_prices.get(ucits_ticker)
+        if stop_price and instrument_price is not None and float(instrument_price) <= stop_price:
+            should_exit = True
+            exit_reason_code = "STOP_LOSS"
+            exit_reason = f"price {float(instrument_price):.4f} <= GARCH stop {stop_price:.4f}"
+            logger.info(
+                "T212 Invest: %s price %.4f below GARCH stop %.4f — placing emergency SELL.",
+                us_ticker, float(instrument_price), stop_price,
+            )
+            _sm_clear(neutral_key)
+
         # 1. Immediate exit on strong sell signals
-        if sig_type in immediate_exits:
+        elif sig_type in immediate_exits:
             should_exit = True
             exit_reason = f"signal={sig_type}"
             exit_reason_code = f"{sig_type}_SIGNAL"
@@ -1285,6 +1445,7 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         # Prefer the live currencyCode from T212 instruments API; fall back to config.
         _api_ccy = instrument_meta.get(ucits_ticker, {}).get("currencyCode")
         _ccy_to_log = _api_ccy or instrument_currency or None
+        _stop = _compute_entry_stop(us_ticker, ucits_ticker, instrument_meta, prices, config)
         _log_t212_order(
             ticker=us_ticker,
             t212_ticker=ucits_ticker,
@@ -1300,6 +1461,9 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             account_type=account_label,
             currency_code=_ccy_to_log,
             var_pct=var_pct,
+            stop_price=_stop["stop_price"],
+            stop_distance_pct=_stop["stop_distance_pct"],
+            vol_source=_stop["vol_source"],
             error_message=error_msg,
         )
 
@@ -1341,9 +1505,9 @@ def maybe_exit_stock_positions(config: dict) -> None:
     """Close any open T212 Invest stock position whose signal or holding period calls for exit.
 
     Stock-path counterpart to maybe_exit_t212_positions() — same design and
-    trigger priority (immediate SELL/STRONG_SELL > confirmed NEUTRAL >
-    backstop time limit), same duplicate-SELL guard, same unconditional
-    (no run_type gate) execution. Called every hour from
+    trigger priority (GARCH stop loss > immediate SELL/STRONG_SELL >
+    confirmed NEUTRAL > backstop time limit), same duplicate-SELL guard,
+    same unconditional (no run_type gate) execution. Called every hour from
     data/scheduler.py:_trade_alert_job() and again from
     maybe_place_stock_orders() during the EOD run before its BUY phase.
     """
@@ -1408,6 +1572,7 @@ def maybe_exit_stock_positions(config: dict) -> None:
     try:
         signals, prices = _load_signals_and_prices()
         first_fill_dates = _load_first_fill_dates()
+        stop_prices = _load_stop_prices()
     except Exception as exc:
         logger.error("T212 Stocks: DB read error during exit check — %s", exc, exc_info=True)
         _set_t212_error(f"DB read failed: {exc}")
@@ -1439,8 +1604,24 @@ def maybe_exit_stock_positions(config: dict) -> None:
         exit_reason_code: Optional[str] = None
         neutral_key      = f"t212_stock_neutral_since:{t212_ticker}"
 
+        # 0. GARCH stop loss — checked first; a breach overrides signal
+        # status entirely. See maybe_exit_t212_positions() for why this
+        # compares against the instrument's own currentPrice, not the
+        # research ticker's price_data close.
+        instrument_price = position.get("currentPrice")
+        stop_price = stop_prices.get(t212_ticker)
+        if stop_price and instrument_price is not None and float(instrument_price) <= stop_price:
+            should_exit = True
+            exit_reason_code = "STOP_LOSS"
+            exit_reason = f"price {float(instrument_price):.4f} <= GARCH stop {stop_price:.4f}"
+            logger.info(
+                "T212 Stocks: %s price %.4f below GARCH stop %.4f — placing emergency SELL.",
+                us_ticker, float(instrument_price), stop_price,
+            )
+            _sm_clear(neutral_key)
+
         # 1. Immediate exit on strong sell signals
-        if sig_type in immediate_exits:
+        elif sig_type in immediate_exits:
             should_exit = True
             exit_reason = f"signal={sig_type}"
             exit_reason_code = f"{sig_type}_SIGNAL"
@@ -1834,6 +2015,7 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             _send_t212_error_email(error_msg, config)
 
         _ccy_to_log = meta.get("currencyCode") or "USD"
+        _stop = _compute_entry_stop(us_ticker, t212_ticker, instrument_meta, prices, config)
         _log_t212_order(
             ticker=us_ticker,
             t212_ticker=t212_ticker,
@@ -1849,6 +2031,9 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             account_type=account_label,
             currency_code=_ccy_to_log,
             var_pct=var_pct,
+            stop_price=_stop["stop_price"],
+            stop_distance_pct=_stop["stop_distance_pct"],
+            vol_source=_stop["vol_source"],
             error_message=error_msg,
         )
 

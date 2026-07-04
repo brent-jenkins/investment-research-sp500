@@ -449,8 +449,11 @@ class T212InvestOrder(Base):
     regime           = Column(String(20))
     account_type     = Column(String(10))           # DEMO / LIVE
     currency_code    = Column(String(10))           # instrument currency (USD, EUR, GBX, …)
-    exit_reason      = Column(String(20))           # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT; null for BUY orders
+    exit_reason      = Column(String(20))           # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT / STOP_LOSS; null for BUY orders
     var_pct          = Column(Float)                # holding-period VaR (as a fraction, e.g. -0.08 = -8%) used to size this BUY order; null for SELL orders and for orders placed under position_sizing: fixed
+    stop_price       = Column(Float)                # GARCH (or ATR-fallback) stop loss price, instrument-native currency; null for SELL orders and for BUY orders placed before this feature / with use_garch_stops: false
+    stop_distance_pct = Column(Float)               # stop distance as % of fill price (a percentage number, e.g. 3.5 = 3.5%); null alongside stop_price
+    vol_source       = Column(String(15))           # "garch" or "atr_fallback" — which method produced stop_price; null alongside stop_price
     error_message    = Column(Text)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     filled_at        = Column(DateTime)
@@ -487,7 +490,9 @@ class T212Pnl(Base):
     signal_type      = Column(String(15))               # signal on the BUY order (e.g. STRONG_BUY)
     confluence_score = Column(Float)                    # confluence score on the BUY order
     regime           = Column(String(20))               # regime on the BUY order
-    exit_reason      = Column(String(20))               # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT
+    exit_reason      = Column(String(20))               # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT / STOP_LOSS
+    stop_distance_pct = Column(Float)                    # stop distance (% of entry price) read from the BUY order row; null if opened before the GARCH-stop feature
+    vol_source       = Column(String(15))                # "garch" or "atr_fallback" read from the BUY order row; null alongside stop_distance_pct
     # Module scores as of the BUY fill date — not stored on t212_invest_orders
     # itself, so looked up from the nearest signals row for (ticker, date).
     trend_score           = Column(Integer)
@@ -647,6 +652,11 @@ def _apply_migrations(engine) -> None:
         ("t212_invest_orders", "currency_code",       "TEXT"),
         ("t212_invest_orders", "exit_reason",         "TEXT"),
         ("t212_invest_orders", "var_pct",             "FLOAT"),
+        ("t212_invest_orders", "stop_price",          "FLOAT"),
+        ("t212_invest_orders", "stop_distance_pct",   "FLOAT"),
+        ("t212_invest_orders", "vol_source",          "VARCHAR(15)"),
+        ("t212_pnl",           "stop_distance_pct",   "FLOAT"),
+        ("t212_pnl",           "vol_source",          "VARCHAR(15)"),
         ("backtest_trades",    "position_gbp",        "FLOAT"),
         ("backtest_trades",    "pnl_gbp",              "FLOAT"),
     ]

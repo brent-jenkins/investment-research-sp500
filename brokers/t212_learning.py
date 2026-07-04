@@ -117,7 +117,7 @@ def _reconstruct_t212_pnl(config: dict) -> int:
             order_rows = conn.execute(sa_text("""
                 SELECT id, ticker, t212_ticker, direction, filled_quantity, quantity,
                        fill_price, currency_code, signal_type, confluence_score,
-                       regime, exit_reason, filled_at
+                       regime, exit_reason, filled_at, stop_distance_pct, vol_source
                 FROM t212_invest_orders
                 WHERE status = 'FILLED' AND filled_at IS NOT NULL AND fill_price IS NOT NULL
                 ORDER BY ticker, filled_at ASC
@@ -211,6 +211,8 @@ def _reconstruct_t212_pnl(config: dict) -> int:
                     "confluence_score":  buy.get("confluence_score"),
                     "regime":            buy.get("regime"),
                     "exit_reason":       sell.get("exit_reason"),
+                    "stop_distance_pct": buy.get("stop_distance_pct"),
+                    "vol_source":        buy.get("vol_source"),
                     **module_scores,
                 }
 

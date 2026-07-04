@@ -3146,7 +3146,13 @@ def _render_trade_card(e: dict) -> None:
         score_html,
     ]
     if sl_price is not None:
-        detail_parts.append(html.escape(f"SL: {sl_price:,.4f}"))
+        _sl_dist_pct = e.get("stop_distance_pct")
+        _sl_label    = e.get("stop_label") or "ATR stop (fallback)"
+        _sl_str = f"SL: {sl_price:,.4f}"
+        if _sl_dist_pct is not None:
+            _sl_str += f" (-{float(_sl_dist_pct):.1f}%)"
+        _sl_str += f" · {_sl_label}"
+        detail_parts.append(html.escape(_sl_str))
     if tp_price is not None:
         detail_parts.append(html.escape(f"TP: {tp_price:,.4f}"))
     if live_rr is not None:
@@ -3211,6 +3217,25 @@ def _render_trade_card_compact(e: dict) -> None:
         pnl_html = "—"
         pnl_col  = "#6b7280"
 
+    # Stop-loss detail is only surfaced here when it's the active reason for
+    # the badge — otherwise this stays a single line by design (see
+    # docstring); full stop price/distance/label for every position lives on
+    # the Performance page's full _render_trade_card().
+    stop_html = ""
+    if status == "STOP LOSS":
+        _sl_price = e.get("stop_loss_price")
+        _sl_dist  = e.get("stop_distance_pct")
+        _sl_label = e.get("stop_label") or "ATR stop (fallback)"
+        if _sl_price is not None:
+            _sl_text = f"Stop: {_sl_price:,.4f}"
+            if _sl_dist is not None:
+                _sl_text += f" (-{float(_sl_dist):.1f}%)"
+            _sl_text += f" · {_sl_label}"
+            stop_html = (
+                f"<span style='color:#dc2626;font-size:0.78rem;font-weight:600'>"
+                f"{html.escape(_sl_text)}</span>"
+            )
+
     st.markdown(
         f"<div style='border-left:4px solid {colour};padding:6px 14px;"
         f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:6px;"
@@ -3221,6 +3246,7 @@ def _render_trade_card_compact(e: dict) -> None:
         f"<strong style='font-size:0.92rem'>{ticker}</strong>"
         f"<span style='color:#64748b;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
+        f"{stop_html}"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -3504,7 +3530,8 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         from sqlalchemy import text as _sa_t              # noqa: PLC0415
         with _get_eng().connect() as _tc:
             _entry_rows = _tc.execute(_sa_t("""
-                SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code, var_pct
+                SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code, var_pct,
+                       fill_price, stop_price, stop_distance_pct, vol_source
                 FROM t212_invest_orders
                 WHERE direction = 'BUY' AND status = 'FILLED'
                 ORDER BY filled_at ASC
@@ -3538,6 +3565,26 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         entry_signal  = entry_info.get("signal_type")  or "NEUTRAL"
         entry_score   = float(entry_info.get("confluence_score") or 0)
         entry_var_pct = entry_info.get("var_pct")  # None when placed under position_sizing: fixed
+
+        # Stop loss — prefer the stored GARCH/ATR-fallback stop computed at
+        # order time (analysis/volatility.py:compute_garch_stop()); fall back
+        # to an on-the-fly ATR stop for positions opened before this feature
+        # existed (stop_price is NULL for those rows).
+        _stored_stop_price = entry_info.get("stop_price")
+        if _stored_stop_price is not None:
+            stop_loss_price    = float(_stored_stop_price)
+            stop_distance_pct  = entry_info.get("stop_distance_pct")
+            stop_label         = "GARCH stop" if entry_info.get("vol_source") == "garch" else "ATR stop (fallback)"
+        else:
+            try:
+                from analysis.volatility import _atr_fallback_stop  # noqa: PLC0415
+                _fallback = _atr_fallback_stop(research_ticker, avg_price, "LONG", config)
+                stop_loss_price   = _fallback.get("stop_price")
+                stop_distance_pct = _fallback.get("stop_distance_pct")
+            except Exception:
+                stop_loss_price   = None
+                stop_distance_pct = None
+            stop_label = "ATR stop (fallback)"
 
         # Resolve instrument currency: prefer DB-stored value (set at order time from T212 API),
         # then fall back to config ucits_mapping currency field (ETF only; stocks default USD).
@@ -3578,7 +3625,12 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         _neutral_prefix  = "t212_neutral_since" if asset_type == "ETF" else "t212_stock_neutral_since"
         _neutral_key     = f"{_neutral_prefix}:{t212_ticker}"
 
-        if current_signal in ("SELL", "STRONG_SELL"):
+        # Stop loss takes priority over signal status — mirrors the hourly
+        # enforcement check in maybe_exit_t212_positions()/maybe_exit_stock_positions().
+        if (stop_loss_price is not None and current_price > 0
+                and current_price <= stop_loss_price):
+            status = "STOP LOSS"
+        elif current_signal in ("SELL", "STRONG_SELL"):
             status = "EXIT SIGNAL"
         elif _exit_on_signal and current_signal not in ("BUY", "STRONG_BUY"):
             # NEUTRAL — check whether the confirmation timer has elapsed
@@ -3634,8 +3686,10 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
             "status_priority":   status_priority,
             "account_name":      "T212 Invest" if asset_type == "ETF" else "T212 Stocks",
             "account_type":      "T212_INVEST",
-            "stop_loss_price":   None,
+            "stop_loss_price":   stop_loss_price,
             "stop_loss":         None,
+            "stop_distance_pct": stop_distance_pct,
+            "stop_label":        stop_label,
             "take_profit_price": None,
         })
 
@@ -5178,16 +5232,26 @@ def _render_performance_page(config: dict) -> None:
         show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
         show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
         show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
+        if "stop_distance_pct" in show_df.columns:
+            show_df["stop_distance_pct"] = show_df["stop_distance_pct"].round(2)
+        else:
+            show_df["stop_distance_pct"] = None
+        if "vol_source" in show_df.columns:
+            show_df["vol_source"] = show_df["vol_source"].map(
+                {"garch": "GARCH", "atr_fallback": "ATR Fallback"}
+            ).fillna("—")
+        else:
+            show_df["vol_source"] = "—"
 
         show_df = show_df[[
             "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
             "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
-            "signal_type", "regime", "exit_reason",
+            "signal_type", "regime", "exit_reason", "stop_distance_pct", "vol_source",
         ]]
         show_df.columns = [
             "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
             "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
-            "Entry Signal", "Regime", "Exit Reason",
+            "Entry Signal", "Regime", "Exit Reason", "Stop % at Entry", "Vol Source",
         ]
         st.dataframe(
             show_df.style

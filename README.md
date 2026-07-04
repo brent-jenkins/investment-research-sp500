@@ -139,6 +139,24 @@ trading212_invest:            # and, identically, trading212_stocks:
 
 The holding-period VaR used to size each order is stored on `t212_invest_orders.var_pct` and shown as "VaR at Entry" in the Status page's Recent Orders tables and the Performance page's Open Positions cards. See "VaR position sizing" in [CLAUDE.md](CLAUDE.md) for the full formula, the shared-core design that keeps live and backtested sizing from drifting apart, and how the backtest avoids look-ahead bias when reusing the same math.
 
+### GARCH stop loss
+
+Replaces the fixed `entry_price ± atr_stop_multiplier × ATR(14)` stop with a forward-looking GARCH(1,1) volatility forecast scaled to the position's holding period — GARCH models volatility clustering (elevated vol tends to persist before mean-reverting), so it reacts to a ticker's *current* regime rather than a flat trailing average. Controlled by `signals.use_garch_stops` (default `true` — `false` reverts to the old ATR stop with no code change).
+
+`analysis/volatility.py:compute_garch_stop()` fits `arch_model(returns, vol="Garch", p=1, q=1)`, extracts the 1-day-ahead volatility forecast, scales it by `√holding_days`, multiplies by `garch_stop_multiplier`, and clamps the result to `[min_stop_pct, max_stop_pct]` of entry price. Falls back to the old ATR-based stop (`vol_source: "atr_fallback"`) when there's too little data to fit GARCH or the fit itself fails to converge — logged as a warning, never raised. It also integrates with change point detection (see the Volatility module note under "Analysis pipeline" below): a recent structural break calibrates GARCH on post-break data only, so a ticker that just entered a new volatility regime gets a stop reflecting that regime.
+
+```yaml
+signals:
+  use_garch_stops: true
+  garch_lookback_days: 504
+  garch_stop_multiplier: 2.0
+  garch_min_observations: 100
+  min_stop_pct: 1.0    # floor, % of entry price
+  max_stop_pct: 25.0   # ceiling, % of entry price
+```
+
+**T212 Invest is a cash account with no native stop-loss order support** — the hourly trade-alert job is the actual enforcement mechanism. `maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` compare each open position's live price against its stored `stop_price` *before* checking signal status at all; a breach places an immediate SELL (`exit_reason: "STOP_LOSS"`) within about an hour, regardless of what the confluence signal currently says. See "GARCH stop loss" in [CLAUDE.md](CLAUDE.md) for the full mechanism, the order-time-estimate vs. fill-price-recompute flow, and why the backtest engine doesn't yet reflect this (same look-ahead-free-vectorization gap as change point detection, below).
+
 ---
 
 ## Analysis pipeline

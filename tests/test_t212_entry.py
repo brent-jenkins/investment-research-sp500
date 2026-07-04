@@ -243,3 +243,74 @@ def test_exit_immediate_sell_signal_stores_exit_reason(db_engine, t212_mocks):
     with Session(db_engine) as session:
         order = session.query(T212InvestOrder).filter_by(direction="SELL").one()
     assert order.exit_reason == "STRONG_SELL_SIGNAL"
+
+
+# ---------------------------------------------------------------------------
+# GARCH stop-loss enforcement — maybe_exit_t212_positions()
+# ---------------------------------------------------------------------------
+#
+# T212 Invest is a cash account with no native stop-loss order support, so
+# this hourly check (comparing the position's live currentPrice against the
+# stop_price stored on its FILLED BUY order) is the actual enforcement
+# mechanism. It is checked first — a breach overrides signal status
+# entirely — see brokers/trading212.py:maybe_exit_t212_positions()'s
+# docstring for the full trigger priority.
+
+def _seed_filled_buy_with_stop(engine, *, ticker: str, t212_ticker: str, stop_price: float) -> None:
+    with Session(engine) as session:
+        session.add(T212InvestOrder(
+            order_id="entry-1",
+            ticker=ticker,
+            t212_ticker=t212_ticker,
+            direction="BUY",
+            quantity=5.0,
+            status="FILLED",
+            fill_price=150.0,
+            stop_price=stop_price,
+            stop_distance_pct=3.3,
+            vol_source="garch",
+            account_type="DEMO",
+            placed_at=datetime.utcnow(),
+            filled_at=datetime.utcnow(),
+        ))
+        session.commit()
+
+
+def test_exit_stop_loss_triggers_sell_when_price_below_stop(db_engine, t212_mocks):
+    """currentPrice at or below the stored GARCH stop_price places an
+    emergency SELL regardless of signal status — a BUY signal here would
+    normally never trigger any other exit path."""
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [
+        {"ticker": "AAPLUCITS_EQ", "quantity": 5.0, "currentPrice": 140.0}
+    ]
+    _seed_signal(db_engine, ticker="AAPL", signal="BUY", regime="TRENDING_BULL")
+    _seed_filled_buy_with_stop(db_engine, ticker="AAPL", t212_ticker="AAPLUCITS_EQ", stop_price=145.0)
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_called_once()
+    args, _ = t212_mocks.place_market_order.call_args
+    assert args[0] == "AAPLUCITS_EQ"
+    assert args[1] < 0  # negative quantity = SELL (position close)
+
+    with Session(db_engine) as session:
+        order = session.query(T212InvestOrder).filter_by(direction="SELL").one()
+    assert order.exit_reason == "STOP_LOSS"
+
+
+def test_exit_no_sell_when_price_above_stop(db_engine, t212_mocks):
+    """currentPrice still above stop_price -- no stop-loss trigger, and (with
+    a BUY signal and no other exit condition active) no exit at all."""
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [
+        {"ticker": "AAPLUCITS_EQ", "quantity": 5.0, "currentPrice": 160.0}
+    ]
+    _seed_signal(db_engine, ticker="AAPL", signal="BUY", regime="TRENDING_BULL")
+    _seed_filled_buy_with_stop(db_engine, ticker="AAPL", t212_ticker="AAPLUCITS_EQ", stop_price=145.0)
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_not_called()
