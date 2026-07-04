@@ -944,9 +944,22 @@ def get_run_signals(run_id: int, ticker: Optional[str] = None) -> pd.DataFrame:
 
 
 def delete_run(run_id: int) -> None:
-    """Delete a backtest run and all its associated signals and trades."""
+    """Delete a backtest run and all its associated signals and trades.
+
+    Runs VACUUM after the delete transaction commits to reclaim the freed
+    page space on disk — backtest_signals in particular can accumulate a
+    large number of rows per run (one per ticker per date), so repeated
+    deletes without a VACUUM leave the .db file bloated with empty pages.
+    """
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM backtest_signals WHERE run_id = :id"), {"id": run_id})
         conn.execute(text("DELETE FROM backtest_trades  WHERE run_id = :id"), {"id": run_id})
         conn.execute(text("DELETE FROM backtest_runs    WHERE id     = :id"), {"id": run_id})
+
+    # VACUUM cannot run inside a transaction — must be on a fresh connection
+    # after the DELETE transaction above has already committed.
+    with get_engine().connect() as conn:
+        conn.execute(text("VACUUM"))
+        conn.commit()
+    logger.info("VACUUM complete after deleting backtest run %s", run_id)

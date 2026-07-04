@@ -4633,8 +4633,27 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             # Delete button
             with st.expander("Manage run"):
                 if st.button(f"Delete run #{sel_id}", key="bt_del"):
+                    db_path = config.get("database", {}).get("path", "database/investment_research.db")
+                    size_before = os.path.getsize(db_path) if os.path.exists(db_path) else None
+
                     delete_run(sel_id)
-                    st.success("Run deleted.")
+
+                    if size_before is not None and os.path.exists(db_path):
+                        size_after = os.path.getsize(db_path)
+                        reclaimed = size_before - size_after
+                        if reclaimed > 0:
+                            mb_before = size_before / (1024 * 1024)
+                            mb_after  = size_after / (1024 * 1024)
+                            mb_reclaimed = reclaimed / (1024 * 1024)
+                            st.success(
+                                f"✓ Run #{sel_id} deleted — database reduced from "
+                                f"{mb_before:.1f} MB to {mb_after:.1f} MB "
+                                f"(−{mb_reclaimed:.1f} MB reclaimed)"
+                            )
+                        else:
+                            st.success(f"✓ Run #{sel_id} deleted — database optimised.")
+                    else:
+                        st.success(f"✓ Run #{sel_id} deleted.")
                     st.rerun()
 
             # Metrics strip

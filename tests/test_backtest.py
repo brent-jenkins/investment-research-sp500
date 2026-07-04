@@ -330,3 +330,50 @@ def test_simulate_trades_exit_signal_defaults_to_sell_when_unset():
     trades = simulate_trades(df, "TESTX", cfg)
     assert len(trades) == 1
     assert trades[0]["exit_reason"] == "SIGNAL_REVERSAL"
+
+
+def test_delete_run_executes_vacuum_after_deletion(mocker):
+    """delete_run() must VACUUM after deleting a run's rows, to reclaim the
+    freed page space — backtest_signals in particular can accumulate a large
+    number of rows per run. The engine is mocked entirely; this test never
+    touches a real DB."""
+    from analysis.backtest import delete_run
+
+    mock_engine = mocker.MagicMock()
+    mocker.patch("analysis.backtest.get_engine", return_value=mock_engine)
+
+    delete_run(42)
+
+    begin_conn = mock_engine.begin.return_value.__enter__.return_value
+    delete_calls = [c for c in begin_conn.execute.call_args_list if "DELETE" in str(c.args[0])]
+    assert len(delete_calls) == 3
+
+    connect_conn = mock_engine.connect.return_value.__enter__.return_value
+    vacuum_calls = [c for c in connect_conn.execute.call_args_list if "VACUUM" in str(c.args[0])]
+    assert len(vacuum_calls) == 1
+    connect_conn.commit.assert_called_once()
+
+
+def test_delete_run_vacuum_runs_after_delete_transaction_commits_not_within_it():
+    """VACUUM must run on a fresh connection after the DELETE transaction has
+    already committed — SQLite cannot VACUUM from inside an open transaction.
+    Verified two ways: (1) VACUUM never appears on the same connection object
+    the DELETE statements ran on, and (2) every interaction with the DELETE
+    transaction's engine.begin() context happens before the first interaction
+    with the VACUUM's engine.connect() context, in call order."""
+    from unittest.mock import MagicMock, patch
+
+    from analysis.backtest import delete_run
+
+    mock_engine = MagicMock()
+    with patch("analysis.backtest.get_engine", return_value=mock_engine):
+        delete_run(7)
+
+    begin_conn = mock_engine.begin.return_value.__enter__.return_value
+    connect_conn = mock_engine.connect.return_value.__enter__.return_value
+    assert not any("VACUUM" in str(c.args[0]) for c in begin_conn.execute.call_args_list)
+
+    call_names = [c[0] for c in mock_engine.mock_calls]
+    last_begin_idx = max(i for i, n in enumerate(call_names) if n.startswith("begin"))
+    first_connect_idx = min(i for i, n in enumerate(call_names) if n.startswith("connect"))
+    assert last_begin_idx < first_connect_idx
