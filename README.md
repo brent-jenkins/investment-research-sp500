@@ -151,13 +151,15 @@ Each module returns a score of −1 (bearish), 0 (neutral), or +1 (bullish):
 |--------|-----------------|
 | **Trend** | SMA20/50/200 alignment, MACD histogram, ADX direction, golden/death cross |
 | **Mean Reversion** | RSI (oversold/overbought), Bollinger Band %B, 52-week z-score |
-| **Volatility** | ATR%, historical volatility, Bollinger Band width regime |
+| **Volatility** | ATR%, historical volatility, Bollinger Band width regime, change-point-aware structural break adjustment |
 | **Volume** | Volume vs 20-day SMA, OBV trend direction |
 | **Macro** | VIX regime, yield curve, plus 12 additional FRED series with per-ticker routing (see below) |
 | **Correlation** | Cross-asset pair status for pairs involving the ticker (CONFIRMING = +1, DIVERGING = −1, NEUTRAL = 0) |
 | **Regime** | Not directly scored per ticker; determines the weights applied to the other six modules |
 
 > **Trend module's golden/death cross vote is direction-aware, not purely positional.** A golden cross (SMA50 > SMA200) only votes bullish while SMA50 is rising — a declining SMA50 that's still above SMA200 from an earlier uptrend votes neutral (stale cross), or flips bearish if the two lines have converged within `signals.ma_cross_near_pct` (default 2%) of each other, since that's a warning of an imminent death cross rather than confirmation of bullish momentum. Death crosses are scored with the same logic mirrored. The slope lookback is `signals.ma_cross_slope_window` (default 10 trading days). The positional `golden_cross` flag shown on the Charts page indicator panel ("Golden ✓" / "Death ✗") is unchanged and reflects the raw SMA50-vs-SMA200 position; a "⚠ SMA50 declining/rising" caption appears underneath when the direction-aware vote disagrees with it.
+
+> **Volatility module distinguishes "always volatile" from "recently became volatile."** `detect_change_points()` locates the most recent structural break in a ticker's return-variance regime (cumulative-sum-of-squares statistic by default — see CLAUDE.md for why a textbook rolling-variance CUSUM was tried and rejected). A break within `signals.cpd_recent_window` (default 90 days) recomputes ATR from only the post-break data rather than the full fixed window, and adjusts the volatility score: vol expanding >1.5× after a break subtracts 1 (caution), vol compressing to <0.67× adds 1 (constructive). The Charts page indicator panel shows a colour-coded Vol Regime tile (LOW/NORMAL/HIGH/ELEVATED) and an amber "⚠ Regime shift detected" caption when a recent break is active. This is currently live-scoring only — `analysis/backtest.py`'s vectorized engine does not yet mirror change point detection, so backtested results don't reflect the score adjustment (see CLAUDE.md's "Volatility module" section).
 
 ### FRED macro series
 

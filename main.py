@@ -843,13 +843,33 @@ def _render_indicator_panel(ticker: str) -> None:
 
         # Volatility
         st.markdown("**Volatility**")
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("ATR (14)",    _v("atr",         "{:,.3f}"))
         c2.metric("ATR %",       _v("atr_pct",     "{:.2%}"))
         c3.metric("Hist Vol 20", _v("hist_vol_20", "{:.1%}"))
         vix_val   = row.get("vix_level")
         vix_reg   = row.get("vix_regime") or ""
         c4.metric("VIX", f"{float(vix_val):,.1f} ({vix_reg})" if vix_val is not None else "—")
+
+        vol_regime = (row.get("vol_regime") or "NORMAL").upper()
+        _vol_regime_colours = {
+            "LOW": "#26a69a", "NORMAL": "#6b7280", "HIGH": "#f59e0b", "ELEVATED": "#ef5350",
+        }
+        _vr_colour = _vol_regime_colours.get(vol_regime, "#6b7280")
+        c5.markdown(
+            f"<div style='font-size:0.78rem;color:#94a3b8'>Vol Regime</div>"
+            f"<div style='font-size:1.15rem;font-weight:600;color:{_vr_colour}'>{html.escape(vol_regime)}</div>",
+            unsafe_allow_html=True,
+        )
+
+        if row.get("structural_break"):
+            _days_since = row.get("days_since_change_point")
+            _days_str = str(int(_days_since)) if _days_since is not None else "an unknown number of"
+            st.markdown(
+                f"<div style='color:#f59e0b;font-size:0.78rem;margin-top:2px'>"
+                f"⚠ Regime shift detected {html.escape(_days_str)} days ago</div>",
+                unsafe_allow_html=True,
+            )
 
         # Volume
         st.markdown("**Volume**")

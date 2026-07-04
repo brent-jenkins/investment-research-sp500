@@ -61,7 +61,7 @@ def analyse_ticker(
 
     trend_res = compute_trend(df, config)
     mr_res    = compute_mean_reversion(df, config)
-    vol_res   = compute_volatility(df, config, vix_close=vix_close)
+    vol_res   = compute_volatility(df, config, vix_close=vix_close, ticker=ticker)
     volume_res = compute_volume(df, config)
     macro_res  = compute_macro(ticker, config)
 
@@ -94,6 +94,9 @@ def analyse_ticker(
         "hist_vol_20":  vol_res["hist_vol_20"],
         "vix_level":    vol_res["vix_level"],
         "vix_regime":   vol_res["vix_regime"],
+        "vol_regime":              vol_res["vol_regime"],
+        "structural_break":        int(vol_res["structural_break"]),
+        "days_since_change_point": vol_res["days_since_change_point"],
         # Volume
         "obv":          volume_res["obv"],
         "obv_trend":    volume_res["obv_trend"],

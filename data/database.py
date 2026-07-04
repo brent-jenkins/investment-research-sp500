@@ -117,6 +117,11 @@ class Indicator(Base):
     atr_pct = Column(Float)    # ATR / close
     hist_vol_20 = Column(Float)  # 20-day realised volatility (annualised)
 
+    # Change point detection (analysis/volatility.py:detect_change_points())
+    vol_regime = Column(String(10))            # LOW / NORMAL / HIGH / ELEVATED, relative to history
+    structural_break = Column(Integer)         # 0 or 1 — a change point within cpd_recent_window days
+    days_since_change_point = Column(Integer)  # NULL if no change point detected
+
     # Volume
     volume_sma_20 = Column(Float)
     volume_ratio = Column(Float)  # volume / volume_sma_20
@@ -603,6 +608,9 @@ def _apply_migrations(engine) -> None:
         ("indicators", "yield_curve_regime",  "VARCHAR(10)"),
         ("indicators", "golden_cross",        "FLOAT"),
         ("indicators", "ma_cross_score",      "FLOAT"),
+        ("indicators", "vol_regime",             "VARCHAR(10)"),
+        ("indicators", "structural_break",       "INTEGER"),
+        ("indicators", "days_since_change_point","INTEGER"),
         ("signals",    "regime",              "VARCHAR(20)"),
         ("signals",    "correlation_score",   "INTEGER"),
         ("trades",     "signal_type",         "VARCHAR(15)"),

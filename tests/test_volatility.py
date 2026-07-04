@@ -1,17 +1,24 @@
-"""Tests for VaR-based position sizing in analysis/volatility.py.
+"""Tests for analysis/volatility.py: VaR-based position sizing and change
+point detection (CPD).
 
 compute_var_position_size() (and its detailed sibling
 compute_var_position_size_detailed()) size a T212 order so its expected
 holding-period loss at a given confidence level stays within a configured
 % of account value — see that module's docstrings for the full formula.
+
+detect_change_points() (and its integration into compute_volatility())
+identifies structural breaks in a ticker's return-variance regime — see the
+"Change point detection" section further down and that module's docstrings.
+
 Tests here seed price_data directly via the db_engine fixture (in-memory
-SQLite — tests/conftest.py) since the function reads price history through
+SQLite — tests/conftest.py) since the functions read price history through
 data.ingestion.get_price_df(), never yfinance.
 """
 
 from datetime import datetime, timedelta
 
 import numpy as np
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from data.database import PriceData
@@ -222,3 +229,243 @@ def test_no_look_ahead_bias_in_backtest_var_sizing():
     spiked_position = trades_spiked[0]["position_gbp"]
 
     assert spiked_position == baseline_position
+
+
+# ---------------------------------------------------------------------------
+# Change point detection (detect_change_points(), and its integration into
+# compute_volatility()) — analysis/volatility.py
+# ---------------------------------------------------------------------------
+#
+# detect_change_points() identifies the most recent date a ticker's return
+# variance structurally shifted, via a cumulative-sum-of-squares statistic
+# (ICSS-style — see that function's docstring for why a literal rolling-
+# variance CUSUM control chart was tried first and rejected: it false-
+# triggers on the autocorrelation a rolling window itself introduces).
+
+_CPD_CONFIG = {
+    "signals": {
+        "atr_period": 14, "bollinger_period": 20, "bollinger_std": 2.0,
+        "cpd_lookback_days": 300, "cpd_threshold": 3.0, "cpd_recent_window": 90,
+    }
+}
+
+
+def _seed_ohlc_at(engine, ticker: str, closes: list[float], base: datetime) -> None:
+    """Insert one flat OHLC PriceData row per close, dated base - (n-i) days.
+
+    Takes an explicit *base* (rather than calling datetime.utcnow() itself,
+    as _seed_prices() above does) so tests can compute the exact expected
+    calendar date of a synthetic break using the same reference point used
+    for seeding, without a race against the wall clock.
+    """
+    n = len(closes)
+    with Session(engine) as session:
+        for i, close in enumerate(closes):
+            days_ago = n - i
+            session.add(PriceData(
+                ticker=ticker,
+                date=base - timedelta(days=days_ago),
+                open=close, high=close, low=close, close=close, volume=1_000_000,
+            ))
+        session.commit()
+
+
+def _closes_with_break(
+    seed: int, n: int, break_idx: int, vol_before: float, vol_after: float,
+) -> list[float]:
+    """Synthetic close series: vol_before daily vol for the first break_idx
+    days, vol_after for the rest."""
+    rng = np.random.default_rng(seed)
+    rets = np.empty(n)
+    rets[:break_idx] = rng.normal(0, vol_before, break_idx)
+    rets[break_idx:] = rng.normal(0, vol_after, n - break_idx)
+    return list(100 * np.exp(np.cumsum(rets)))
+
+
+def test_detect_change_points_finds_known_break_within_5_trading_days(db_engine):
+    """A synthetic series with an obvious variance shift (low vol first
+    portion, high vol second) must be located within +/-5 trading days of
+    the true break — the seed/break position here are empirically verified
+    (see the change-point prototyping in this feature's implementation) to
+    land within +/-1 day, well inside the required tolerance."""
+    from analysis.volatility import detect_change_points
+
+    n, break_idx = 300, 250
+    base = datetime.utcnow()
+    closes = _closes_with_break(seed=10, n=n, break_idx=break_idx, vol_before=0.01, vol_after=0.04)
+    _seed_ohlc_at(db_engine, "BREAKY", closes, base)
+
+    result = detect_change_points("BREAKY", _CPD_CONFIG)
+
+    assert result["last_change_point"] is not None
+    expected_date = (base - timedelta(days=n - break_idx)).date()
+    assert abs((result["last_change_point"] - expected_date).days) <= 5
+    # break is ~50 days before the latest stored date -- within the 90-day
+    # cpd_recent_window, so this also exercises the "recent" flag.
+    assert result["structural_break"] is True
+    assert result["pre_change_vol"] is not None
+    assert result["post_change_vol"] is not None
+    assert result["post_change_vol"] > result["pre_change_vol"]
+
+
+def test_detect_change_points_no_break_in_stable_series(db_engine):
+    """A series with constant volatility throughout must report no change
+    point at all, not a spurious one."""
+    from analysis.volatility import detect_change_points
+
+    n = 300
+    base = datetime.utcnow()
+    closes = _closes_with_break(seed=5, n=n, break_idx=150, vol_before=0.015, vol_after=0.015)
+    _seed_ohlc_at(db_engine, "STABLE", closes, base)
+
+    result = detect_change_points("STABLE", _CPD_CONFIG)
+
+    assert result["last_change_point"] is None
+    assert result["days_since_change"] is None
+    assert result["structural_break"] is False
+
+
+def test_structural_break_flag_only_true_within_recent_window(db_engine):
+    """structural_break must be True for a break inside cpd_recent_window
+    (90 days) and False for an equally-detectable break further back."""
+    from analysis.volatility import detect_change_points
+
+    n = 300
+    base = datetime.utcnow()
+
+    recent_closes = _closes_with_break(seed=10, n=n, break_idx=250, vol_before=0.01, vol_after=0.04)
+    _seed_ohlc_at(db_engine, "RECENTBREAK", recent_closes, base)
+    recent = detect_change_points("RECENTBREAK", _CPD_CONFIG)
+    assert recent["last_change_point"] is not None
+    assert recent["structural_break"] is True
+
+    old_closes = _closes_with_break(seed=3, n=n, break_idx=100, vol_before=0.01, vol_after=0.04)
+    _seed_ohlc_at(db_engine, "OLDBREAK", old_closes, base)
+    old = detect_change_points("OLDBREAK", _CPD_CONFIG)
+    assert old["last_change_point"] is not None
+    assert old["days_since_change"] > 90
+    assert old["structural_break"] is False
+
+
+def test_post_change_point_data_used_for_atr_when_recent_break(db_engine):
+    """A recent structural break must recompute ATR from only the post-break
+    slice, not the full fixed window — see compute_volatility()'s docstring.
+    hist_vol_20 is mathematically invariant to this slice (a trailing
+    rolling(20) read only ever looks at the last 20 rows, identical either
+    way), so this test checks atr_pct, the indicator that actually responds
+    to the slice via ATR's EWM smoothing."""
+    from analysis.volatility import compute_volatility
+    from data.ingestion import get_price_df
+
+    n, break_idx = 300, 272  # 28 rows post-break -- clears the 21-row floor
+    base = datetime.utcnow()
+    closes = _closes_with_break(seed=10, n=n, break_idx=break_idx, vol_before=0.01, vol_after=0.05)
+    _seed_ohlc_at(db_engine, "POSTCHANGE", closes, base)
+
+    df = get_price_df("POSTCHANGE", days=3650)
+
+    with_cpd = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker="POSTCHANGE")
+    without_cpd = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker=None)
+
+    assert with_cpd["structural_break"] is True
+    assert without_cpd["structural_break"] is False  # ticker=None skips CPD entirely
+    assert with_cpd["atr_pct"] != without_cpd["atr_pct"]
+
+
+def test_score_reduced_when_vol_expands_after_structural_break(mocker):
+    """post_change_vol > pre_change_vol * 1.5 after a recent break subtracts
+    1 from the volatility score. detect_change_points() is mocked with a
+    controlled result so this isolates just the score-adjustment branch from
+    the ATR/VIX percentile scoring exercised by the other tests above."""
+    from analysis.volatility import compute_volatility
+
+    n = 300
+    dates = list(pd.date_range("2023-01-01", periods=n, freq="D"))
+    closes = _closes_with_break(seed=0, n=n, break_idx=n, vol_before=0.012, vol_after=0.012)
+    df = pd.DataFrame({
+        "date": dates, "open": closes, "close": closes,
+        "high": [c * 1.005 for c in closes], "low": [c * 0.995 for c in closes],
+    })
+
+    baseline = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker=None)
+    assert baseline["score"] == 0  # seed=0 empirically verified neutral (see prototyping)
+
+    mocker.patch(
+        "analysis.volatility.detect_change_points",
+        return_value={
+            "last_change_point": dates[280].date(),
+            "days_since_change": 19,
+            "pre_change_vol": 0.15,
+            "post_change_vol": 0.30,  # 2x -- above the 1.5x expansion threshold
+            "vol_regime": "ELEVATED",
+            "structural_break": True,
+        },
+    )
+    result = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker="MOCKED")
+
+    assert result["score"] == baseline["score"] - 1
+
+
+def test_score_increased_when_vol_compresses_after_structural_break(mocker):
+    """post_change_vol < pre_change_vol * 0.67 after a recent break adds 1
+    to the volatility score."""
+    from analysis.volatility import compute_volatility
+
+    n = 300
+    dates = list(pd.date_range("2023-01-01", periods=n, freq="D"))
+    closes = _closes_with_break(seed=0, n=n, break_idx=n, vol_before=0.012, vol_after=0.012)
+    df = pd.DataFrame({
+        "date": dates, "open": closes, "close": closes,
+        "high": [c * 1.005 for c in closes], "low": [c * 0.995 for c in closes],
+    })
+
+    baseline = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker=None)
+    assert baseline["score"] == 0
+
+    mocker.patch(
+        "analysis.volatility.detect_change_points",
+        return_value={
+            "last_change_point": dates[280].date(),
+            "days_since_change": 19,
+            "pre_change_vol": 0.30,
+            "post_change_vol": 0.15,  # half -- below the 0.67x compression threshold
+            "vol_regime": "LOW",
+            "structural_break": True,
+        },
+    )
+    result = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker="MOCKED")
+
+    assert result["score"] == baseline["score"] + 1
+
+
+def test_change_point_detection_no_look_ahead_bias(db_engine):
+    """Appending further (non-eventful) trailing data after an already-
+    detected break must not retroactively relocate the detected break to a
+    new, spurious position — only a trailing/expanding window is ever used,
+    never a centered one that would let later data influence where an
+    earlier break is placed. Some small drift in the exact date is expected
+    even so: cpd_lookback_days is a fixed-length trailing window, so once 60
+    more days are appended the window itself slides forward and no longer
+    starts at exactly the same historical date — it's a materially
+    different (though overlapping) slice, not "the same data plus a tail",
+    so exact reproduction isn't the property being tested here."""
+    from analysis.volatility import detect_change_points
+
+    n, break_idx = 300, 250
+    base = datetime.utcnow()
+    closes = _closes_with_break(seed=10, n=n, break_idx=break_idx, vol_before=0.01, vol_after=0.04)
+    _seed_ohlc_at(db_engine, "NOLOOKAHEAD", closes, base)
+    short_result = detect_change_points("NOLOOKAHEAD", _CPD_CONFIG)
+    assert short_result["last_change_point"] is not None
+
+    # Extend with 60 more days in the SAME (post-break) vol regime -- no new
+    # break -- and re-seed under a fresh ticker with the later "today".
+    rng_extra = np.random.default_rng(99)
+    extra_rets = rng_extra.normal(0, 0.04, 60)
+    extended_closes = closes + list(closes[-1] * np.exp(np.cumsum(extra_rets)))
+    later_base = base + timedelta(days=60)
+    _seed_ohlc_at(db_engine, "NOLOOKAHEAD_EXT", extended_closes, later_base)
+    extended_result = detect_change_points("NOLOOKAHEAD_EXT", _CPD_CONFIG)
+
+    assert extended_result["last_change_point"] is not None
+    assert abs((extended_result["last_change_point"] - short_result["last_change_point"]).days) <= 5

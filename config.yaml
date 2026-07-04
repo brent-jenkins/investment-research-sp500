@@ -542,6 +542,11 @@ signals:
   # before EXIT_SIGNAL is confirmed and a T212 position is closed on reversal.
   # Set to 0 to disable (close immediately on first reversal signal).
   reversal_confirmation_runs: 2
+  # Change point detection (analysis/volatility.py:detect_change_points()) —
+  # identifies structural breaks in a ticker's return-variance regime.
+  cpd_lookback_days: 504    # ~2 trading years of history for change point detection
+  cpd_threshold: 3.0        # critical value for the standardised ICSS statistic (see detect_change_points())
+  cpd_recent_window: 90     # days — a change point within this window is flagged as "recent"
 
 notifications:
   email:

@@ -343,7 +343,7 @@ def score_ticker(
 
     trend_res  = compute_trend(df, config)
     mr_res     = compute_mean_reversion(df, config)
-    vol_res    = compute_volatility(df, config, vix_close=vix_close)
+    vol_res    = compute_volatility(df, config, vix_close=vix_close, ticker=ticker)
     volume_res = compute_volume(df, config)
     macro_res  = compute_macro(ticker, config)
     corr_res   = compute_correlations(ticker, config)

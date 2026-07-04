@@ -2,6 +2,8 @@
 
 import logging
 import math
+from datetime import datetime
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -35,10 +37,262 @@ def _pandas_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) 
     return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
+# ---------------------------------------------------------------------------
+# Change point detection (CPD)
+# ---------------------------------------------------------------------------
+#
+# Identifies when a ticker's return-variance structure has fundamentally
+# shifted, so volatility scoring can distinguish "always been volatile" from
+# "recently entered a new volatility regime". Structural context only for
+# now — see compute_volatility()'s docstring for the score adjustment this
+# feeds, and CLAUDE.md's "Change point detection" section for the planned
+# GARCH stop-loss calibration this is laying groundwork for.
+
+_CPD_EMPTY: dict = {
+    "last_change_point": None,
+    "days_since_change": None,
+    "pre_change_vol": None,
+    "post_change_vol": None,
+    "vol_regime": "NORMAL",
+    "structural_break": False,
+}
+
+# Cache keyed on (ticker, today's date, method) — detect_change_points() is
+# called once from analyse_ticker() (writes indicators) and again from
+# score_ticker() (confluence classification) for every ticker on every
+# analysis run, so this avoids recomputing the same CUSUM/variance-ratio
+# scan twice per ticker per run. Keyed on date (not run id) since there is
+# no run-scoped context passed down to this module — a new calendar date
+# naturally invalidates the cache since detect_change_points() would see
+# fresh price_data rows anyway.
+_cpd_cache: dict[tuple[str, str, str], dict] = {}
+
+
+def _icss_change_point(log_returns: np.ndarray, threshold: float) -> Optional[int]:
+    """Locate the most likely variance change point via cumulative-sum-of-squares.
+
+    This is the Inclan & Tiao (1994) ICSS statistic: Dk = Ck/CT - k/T, where
+    Ck is the cumulative sum of squared returns through observation k and CT
+    is the total. Under constant variance Dk fluctuates near zero; a genuine
+    variance break produces a sharp peak in |Dk|. The standardised statistic
+    sqrt(T/2) * max|Dk| is compared against *threshold* (config
+    signals.cpd_threshold, default 3.0 — deliberately stricter than the
+    classical 95%/99% asymptotic critical values of ~1.36/~1.63, so only
+    pronounced regime shifts qualify as a "structural break").
+
+    Deliberately NOT a textbook CUSUM control chart applied to the rolling
+    20-day variance series (the first design tried, matching a literal
+    reading of "apply CUSUM on the [rolling] variance series"): a rolling
+    window shares 19 of its 20 points with its neighbour, so the resulting
+    series is heavily autocorrelated, and a control-chart CUSUM (designed
+    for near-independent samples) drifts and false-triggers on that
+    autocorrelation alone — verified empirically, it flagged a change point
+    in a *stable*, no-break synthetic series on every trial and located true
+    breaks nowhere near the actual break date. Cumulative sum of squared
+    returns (this function) is the standard, well-behaved alternative for
+    exactly this problem and is still fundamentally a cumulative-sum method,
+    so the CUSUM name in the public API is kept.
+
+    Returns the 0-based integer position within *log_returns* of the most
+    likely change point, or None if no peak exceeds *threshold*.
+    """
+    n = len(log_returns)
+    if n < 50:
+        return None
+
+    x = np.asarray(log_returns, dtype=float) ** 2
+    total = x.sum()
+    if total == 0:
+        return None
+
+    cumulative = np.cumsum(x)
+    k = np.arange(1, n + 1)
+    deviation = cumulative / total - k / n
+    stat = np.sqrt(n / 2) * np.abs(deviation)
+
+    peak_idx = int(np.argmax(stat))
+    if stat[peak_idx] > threshold:
+        return peak_idx
+    return None
+
+
+def _variance_ratio_change_point(
+    log_returns: np.ndarray,
+    min_samples: int = 30,
+    stride: int = 5,
+) -> Optional[int]:
+    """Secondary/validation change-point detector via a scanning F-test.
+
+    Splits *log_returns* at each candidate point (stepping by *stride* for
+    speed), computes the variance on each side, and runs a two-sided F-test
+    for a significant variance difference (p < 0.05). Selects the split with
+    the STRONGEST evidence (largest F-statistic among significant splits) —
+    not simply the most recent qualifying split. A literal "most recent
+    significant split" (the first design tried) turns out to pick a point
+    near the very end of the scan range almost every time a real break
+    exists: once volatility has genuinely shifted, nearly every later split
+    still tests significant against an increasingly break-dominated "before"
+    segment, so "most recent" stops meaning "where the break happened" and
+    just means "near the end of the scannable range" — verified empirically
+    against synthetic data with a known break location. Selecting the
+    strongest (max F-statistic) split instead is the standard binary-
+    segmentation approach and locates the true break precisely.
+
+    Requires scipy (added to requirements.txt for this feature).
+
+    Returns the 0-based integer position within *log_returns* of the
+    highest-confidence change point, or None if no split is significant.
+    """
+    from scipy import stats  # noqa: PLC0415  optional heavy import, only needed for this method
+
+    n = len(log_returns)
+    if n < 2 * min_samples:
+        return None
+
+    values = np.asarray(log_returns, dtype=float)
+    best_idx: Optional[int] = None
+    best_f = 0.0
+    for split in range(min_samples, n - min_samples, stride):
+        before = values[:split]
+        after = values[split:]
+        var_before = before.var(ddof=1)
+        var_after = after.var(ddof=1)
+        if var_before == 0 or var_after == 0:
+            continue
+        f_stat = max(var_before, var_after) / min(var_before, var_after)
+        dfn = (len(before) if var_before >= var_after else len(after)) - 1
+        dfd = (len(after) if var_before >= var_after else len(before)) - 1
+        p_value = 2 * min(stats.f.sf(f_stat, dfn, dfd), 0.5)
+        if p_value < 0.05 and f_stat > best_f:
+            best_f = f_stat
+            best_idx = split
+
+    return best_idx
+
+
+def _classify_vol_regime(log_returns: pd.Series) -> str:
+    """Classify the most recent 20-day annualised realised vol against its
+    own history over the same lookback window — LOW (<25th pctile), NORMAL
+    (25th-75th), HIGH (75th-90th), or ELEVATED (>90th)."""
+    vol_series = (log_returns.rolling(20).std() * np.sqrt(252)).dropna()
+    if len(vol_series) < 30:
+        return "NORMAL"
+    current = vol_series.iloc[-1]
+    p25 = np.percentile(vol_series, 25)
+    p75 = np.percentile(vol_series, 75)
+    p90 = np.percentile(vol_series, 90)
+    if current >= p90:
+        return "ELEVATED"
+    if current >= p75:
+        return "HIGH"
+    if current <= p25:
+        return "LOW"
+    return "NORMAL"
+
+
+def detect_change_points(
+    ticker: str,
+    config: dict,
+    method: str = "cusum",
+) -> dict:
+    """Detect the most recent structural break in *ticker*'s return variance.
+
+    Reads the last signals.cpd_lookback_days (default 504, ~2 trading years)
+    of daily closes from price_data, computes daily log returns, and locates
+    the most recent variance change point via *method*:
+
+    - "cusum" (default, primary): cumulative-sum-of-squares (ICSS-style) —
+      see _icss_change_point(). Fast (O(n)), no distributional assumptions.
+    - "variance_ratio" (secondary/validation): scanning F-test binary
+      segmentation — see _variance_ratio_change_point(). Use to cross-check
+      a "cusum" result; not used automatically by compute_volatility().
+
+    A change point within signals.cpd_recent_window days (default 90) of the
+    most recent stored date sets structural_break=True, which is what
+    compute_volatility() acts on. Results are cached in-process per
+    (ticker, today's date, method) since this is called once from
+    analyse_ticker() and again from score_ticker() for every ticker on every
+    analysis run — see _cpd_cache above.
+
+    Returns a dict:
+        last_change_point       — date of the most recent structural break, or None
+        days_since_change       — trading days since that break, or None
+        pre_change_vol          — annualised vol before the break, or None
+        post_change_vol         — annualised vol after the break, or None
+        vol_regime              — "LOW" / "NORMAL" / "HIGH" / "ELEVATED", relative to history
+        structural_break        — True if a break falls within cpd_recent_window days
+    """
+    sig           = config.get("signals", {})
+    lookback_days = int(sig.get("cpd_lookback_days", 504))
+    threshold     = float(sig.get("cpd_threshold", 3.0))
+    recent_window = int(sig.get("cpd_recent_window", 90))
+
+    cache_key = (ticker, datetime.utcnow().strftime("%Y-%m-%d"), method)
+    if cache_key in _cpd_cache:
+        return _cpd_cache[cache_key]
+
+    from data.ingestion import get_price_df  # noqa: PLC0415  local import — keeps this module DB-free otherwise
+
+    # Fetch a generous calendar-day window (1.6x plus a buffer) so weekends/
+    # holidays don't shrink the trading-day count below lookback_days, then
+    # trim to exactly what's needed.
+    df = get_price_df(ticker, days=int(lookback_days * 1.6) + 30)
+    if df.empty or len(df) < 60:
+        _cpd_cache[cache_key] = dict(_CPD_EMPTY)
+        return _cpd_cache[cache_key]
+
+    df = df.sort_values("date").tail(lookback_days + 1).reset_index(drop=True)
+    close = df["close"].astype(float)
+
+    log_returns = np.log(close / close.shift(1)).iloc[1:].reset_index(drop=True)
+    ret_dates   = df["date"].iloc[1:].reset_index(drop=True)
+
+    if len(log_returns) < 60:
+        _cpd_cache[cache_key] = dict(_CPD_EMPTY)
+        return _cpd_cache[cache_key]
+
+    if method == "variance_ratio":
+        change_idx = _variance_ratio_change_point(log_returns.to_numpy())
+    else:
+        change_idx = _icss_change_point(log_returns.to_numpy(), threshold)
+
+    vol_regime = _classify_vol_regime(log_returns)
+
+    if change_idx is None:
+        result = dict(_CPD_EMPTY)
+        result["vol_regime"] = vol_regime
+        _cpd_cache[cache_key] = result
+        return result
+
+    pre  = log_returns.iloc[:change_idx]
+    post = log_returns.iloc[change_idx:]
+    pre_vol  = float(pre.std() * np.sqrt(252)) if len(pre) >= 5 else None
+    post_vol = float(post.std() * np.sqrt(252)) if len(post) >= 5 else None
+
+    days_since_change = len(log_returns) - 1 - change_idx
+    structural_break = days_since_change <= recent_window
+
+    change_date = ret_dates.iloc[change_idx]
+    if hasattr(change_date, "date"):
+        change_date = change_date.date()
+
+    result = {
+        "last_change_point": change_date,
+        "days_since_change": int(days_since_change),
+        "pre_change_vol":    pre_vol,
+        "post_change_vol":   post_vol,
+        "vol_regime":        vol_regime,
+        "structural_break":  bool(structural_break),
+    }
+    _cpd_cache[cache_key] = result
+    return result
+
+
 def compute_volatility(
     df: pd.DataFrame,
     config: dict,
     vix_close: float | None = None,
+    ticker: Optional[str] = None,
 ) -> dict:
     """Compute volatility indicators for the latest date in *df*.
 
@@ -47,17 +301,32 @@ def compute_volatility(
     - Bollinger Band width (requires bb_period from config)
     - 20-day realised volatility (annualised, based on log returns)
     - VIX level and regime (low / normal / high / extreme)
+    - Change-point-aware regime context (see detect_change_points()) when
+      *ticker* is supplied
 
     Scoring:
     - Low ATR percentile (<25th over 252 days) + low VIX  → +1 (benign, trend-friendly)
     - Extreme ATR percentile (>75th) OR VIX in 'extreme'  → -1 (caution)
     - Otherwise 0
+    - Structural-break adjustment (only when *ticker* is supplied — see
+      detect_change_points()): a recent change point (within
+      signals.cpd_recent_window days) with post_change_vol > pre_change_vol
+      * 1.5 subtracts 1 from the score (elevated vol after a break is a
+      warning); post_change_vol < pre_change_vol * 0.67 adds 1 (vol
+      compression after a break is constructive). No recent change point,
+      or a marginal one, leaves the score unchanged. The combined score is
+      clamped back to [-1, 1].
 
     Args:
         df: Price DataFrame sorted ascending with high / low / close columns.
         config: Loaded config.yaml dict.
         vix_close: Latest VIX closing price if already loaded; avoids a DB
             round-trip when called from the analysis engine.
+        ticker: Symbol to run change-point detection for. When omitted,
+            change-point fields are returned as neutral defaults and ATR/vol
+            are computed over the full window exactly as before this feature
+            existed — this keeps compute_volatility() backward compatible
+            for any caller that doesn't have a ticker handy.
 
     Returns:
         Dict with 'score' (-1/0/1) and raw indicator values for the latest row.
@@ -73,6 +342,8 @@ def compute_volatility(
         "atr": None, "atr_pct": None,
         "bb_width": None, "hist_vol_20": None,
         "vix_level": vix_close, "vix_regime": None,
+        "vol_regime": "NORMAL", "structural_break": False,
+        "days_since_change_point": None,
     }
 
     if df.empty or len(df) < atr_period + 5:
@@ -81,6 +352,26 @@ def compute_volatility(
     close = df["close"].astype(float)
     high  = df["high"].astype(float)
     low   = df["low"].astype(float)
+
+    # Change-point detection — run once up front so a recent break can swap
+    # in a post-change-point slice of df for the ATR/vol calculations below.
+    cpd = detect_change_points(ticker, config) if ticker else dict(_CPD_EMPTY)
+
+    calc_df = df
+    if cpd["structural_break"] and cpd.get("last_change_point") is not None:
+        post_df = df[df["date"] >= pd.Timestamp(cpd["last_change_point"])]
+        # hist_vol_20 needs 21 rows (a 20-day rolling window on returns, which
+        # are themselves one shorter than the price count) — a stricter floor
+        # than atr_period + 5 (19 at the default atr_period=14), so use
+        # whichever is larger rather than silently returning a NaN hist_vol_20
+        # for a break recent enough to clear the ATR floor but not this one.
+        min_rows_needed = max(atr_period + 5, 21)
+        if len(post_df) >= min_rows_needed:
+            calc_df = post_df
+
+    close = calc_df["close"].astype(float)
+    high  = calc_df["high"].astype(float)
+    low   = calc_df["low"].astype(float)
 
     # ATR
     if _TALIB_AVAILABLE:
@@ -98,12 +389,39 @@ def compute_volatility(
     std = close.rolling(bb_period).std()
     bb_width = 2 * bb_std_val * std  # upper - lower = 2 * k * std
 
-    # 20-day realised volatility (annualised log-return std)
+    # 20-day realised volatility (annualised log-return std). Note: this
+    # value is mathematically invariant to the calc_df slice swap above
+    # whenever the slice retains at least 21 rows (required for a non-NaN
+    # result in the first place) — a trailing rolling(20) read only looks at
+    # the last 20 rows, which are identical whether calc_df is the full
+    # window or a post-change-point slice of it (slicing only trims rows
+    # from the front). ATR (EWM-smoothed, below) is the indicator that
+    # actually responds to the slice, since EWM carries decaying influence
+    # from rows further back than its nominal period.
     log_ret     = np.log(close / close.shift(1))
     hist_vol_20 = log_ret.rolling(20).std() * np.sqrt(252)
 
-    # ATR percentile over look-back
-    history = atr_pct.dropna().tail(vol_lookback)
+    # ATR percentile over look-back (measured against the FULL window's own
+    # ATR% history, regardless of whether calc_df was swapped to a
+    # post-change-point slice above — percentile ranking needs the original
+    # df's longer history to mean anything). Reuses atr_pct directly when no
+    # slice swap happened (the common case); only recomputes ATR over the
+    # full df when calc_df is actually a post-change-point subset of it.
+    if calc_df is df:
+        full_atr_pct = atr_pct
+    else:
+        full_close = df["close"].astype(float)
+        full_high  = df["high"].astype(float)
+        full_low   = df["low"].astype(float)
+        if _TALIB_AVAILABLE:
+            full_atr_series = pd.Series(
+                talib.ATR(full_high.values, full_low.values, full_close.values, atr_period),
+                index=full_close.index,
+            )
+        else:
+            full_atr_series = _pandas_atr(full_high, full_low, full_close, atr_period)
+        full_atr_pct = full_atr_series / full_close.replace(0, np.nan)
+    history = full_atr_pct.dropna().tail(vol_lookback)
     current_atr_pct = float(atr_pct.iloc[-1]) if not np.isnan(atr_pct.iloc[-1]) else None
 
     atr_score = 0
@@ -135,6 +453,16 @@ def compute_volatility(
     else:
         score = 0
 
+    # Structural-break score adjustment — see docstring above.
+    pre_vol  = cpd.get("pre_change_vol")
+    post_vol = cpd.get("post_change_vol")
+    if cpd["structural_break"] and pre_vol is not None and post_vol is not None and pre_vol > 0:
+        if post_vol > pre_vol * 1.5:
+            score -= 1
+        elif post_vol < pre_vol * 0.67:
+            score += 1
+        score = max(-1, min(1, score))
+
     def _last(s: pd.Series):
         v = s.iloc[-1]
         return None if (v != v) else float(v)
@@ -147,6 +475,9 @@ def compute_volatility(
         "hist_vol_20": _last(hist_vol_20),
         "vix_level":   vix_close,
         "vix_regime":  regime_str,
+        "vol_regime":              cpd["vol_regime"],
+        "structural_break":        cpd["structural_break"],
+        "days_since_change_point": cpd["days_since_change"],
     }
 
 
