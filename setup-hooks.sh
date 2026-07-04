@@ -60,7 +60,7 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
             {
                 echo "[$(date -u +%FT%TZ)] Deploying to research.example.com"
                 ssh -i "$ssh_key" -o StrictHostKeyChecking=no "root@${vm_ip}" \
-                    "cd /root/investment-research && git pull origin main && systemctl restart investment-research investment-research-scheduler"
+                    "cd /root/investment-research && git pull origin main && python3.11 -m pip install -r requirements.txt --quiet && (python3.11 -m pip install TA-Lib --quiet 2>/dev/null || true) && systemctl restart investment-research investment-research-scheduler"
             } >> "$log_file" 2>&1
         ' _ "$SSH_KEY" "$VM_IP" "$LOG_FILE" >/dev/null 2>&1 &
         disown

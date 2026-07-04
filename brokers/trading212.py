@@ -745,13 +745,63 @@ def poll_placed_orders(config: dict) -> int:
                 # they become positions — 404 does NOT necessarily mean cancelled.
                 # Check for an active position before deciding the terminal status.
                 t212_ticker = row.get("t212_ticker") or ""
+                direction   = (row.get("direction") or "").upper()
                 position = None
                 if t212_ticker:
                     try:
                         position = client.get_position(t212_ticker)
                     except Exception:
                         pass
-                if position:
+
+                if direction == "SELL":
+                    # Inverse of the BUY case below: a SELL that fully closes a
+                    # position is *expected* to leave no position behind, so "no
+                    # position" here is evidence the sale filled, not that it was
+                    # cancelled. Only treat it as cancelled if the position is
+                    # somehow still there — i.e. the sale never actually took
+                    # effect. (The codebase never holds more than one open T212
+                    # position per ticker at a time, so there's no ambiguity from
+                    # a second concurrent position on the same ticker.)
+                    if position:
+                        logger.warning(
+                            "poll_placed_orders: order %s not found (404) but "
+                            "position still exists for %s after a SELL — "
+                            "marking CANCELLED.",
+                            order_id, t212_ticker,
+                        )
+                        resp = {"status": "CANCELLED"}
+                    else:
+                        # Position data is gone along with the closed position, so
+                        # there's no averagePrice/ppl to derive a fill price from
+                        # the way the BUY branch does — fall back to the
+                        # instrument's current quote (native currency, same as a
+                        # genuine fill price would be).
+                        fill_price_est: Optional[float] = None
+                        try:
+                            instruments = client.get_instruments()
+                            inst = next(
+                                (i for i in (instruments or [])
+                                 if i.get("ticker") == t212_ticker), None,
+                            )
+                            if inst:
+                                _raw = inst.get("currentPrice") or inst.get("price")
+                                if _raw:
+                                    fill_price_est = float(_raw)
+                        except Exception:
+                            pass
+                        logger.info(
+                            "poll_placed_orders: order %s not found (404), no "
+                            "position remains for %s after a SELL — marking "
+                            "FILLED at %s.",
+                            order_id, t212_ticker,
+                            f"{fill_price_est:.4f}" if fill_price_est is not None else "unknown",
+                        )
+                        resp = {
+                            "status":         "FILLED",
+                            "fillPrice":      fill_price_est,
+                            "filledQuantity": row.get("quantity"),
+                        }
+                elif position:
                     logger.debug(
                         "poll_placed_orders: position dict for %s: %s", t212_ticker, position,
                     )
