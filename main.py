@@ -4917,7 +4917,9 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     "stop_distance_pct", "vol_source",
                 ]].copy()
                 show_df["pnl_pct"] = (show_df["pnl_pct"] * 100).round(2)
-                show_df["stop_distance_pct"] = show_df["stop_distance_pct"].round(2)
+                show_df["stop_distance_pct"] = pd.to_numeric(
+                    show_df["stop_distance_pct"], errors="coerce"
+                ).round(2)
                 show_df.columns = [
                     "Ticker", "Dir", "Entry Date", "Exit Date",
                     "Entry Price", "Exit Price", "P&L %",
