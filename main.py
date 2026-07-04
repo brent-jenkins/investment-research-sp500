@@ -1921,9 +1921,9 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         _upgrade_sub += " · hmm_upgrade_enabled: false"
     elif _upgrade_bull_prob is not None:
         _upgrade_sub += f" · current bull confidence {_upgrade_bull_prob:.0%}"
-    _upgrade_col = st.columns(1)[0]
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
     _status_card(
-        _upgrade_col,
+        st,
         "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
         "Upgrade active" if _upgrade_triggered else "Upgrade inactive",
         _upgrade_sub,
