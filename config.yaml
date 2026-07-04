@@ -551,26 +551,51 @@ signals:
   # replaces the fixed ATR(14) x atr_stop_multiplier stop with a forward-looking
   # 1-day GARCH volatility forecast scaled to the position's holding period.
   garch_lookback_days: 504      # ~2 trading years for GARCH calibration
-  garch_stop_multiplier: 2.0    # multiplier on GARCH holding-period vol (start same as ATR multiplier)
   garch_min_observations: 60    # minimum data points required to fit GARCH (60 comfortably fits GARCH(1,1)'s 3 parameters and lets a change point within cpd_recent_window's 90 days still leave enough post-break rows)
+  # Per-holding-period GARCH stop multipliers. The very first calibration
+  # (garch_stop_multiplier: 2.0, one value for every ticker) deteriorated
+  # backtest performance — see the disable rationale below — because GARCH's
+  # sqrt(holding_days) time-scaling has no ATR equivalent, so a single
+  # multiplier tuned against a 14-day ATR window produced stops 4-8x wider
+  # than ATR's once holding_days entered the formula. An empirical
+  # calibration (2026-07-04: compute both stop formulas for every
+  # T212-eligible ticker at today's close, using each ticker's actual
+  # get_max_holding_days() bucket) found the GARCH/ATR ratio is driven almost
+  # entirely by which holding-period bucket a ticker falls into, not by the
+  # ticker itself — median ratio 3.80 for the 30-day (stock) bucket, 6.81 for
+  # the 90-day (ETF) bucket, 7.85 for the 45-day (bond ETF) bucket. Each
+  # bucket multiplier below is 2.0 / that bucket's median ratio, so a
+  # bucket's GARCH stop lands back in the same magnitude the ATR stop
+  # occupied before this feature, while still letting GARCH's actual value
+  # (reacting to a ticker's current vol regime, not a flat trailing average)
+  # come through undiluted by the holding-period scaling artifact.
+  garch_stop_multiplier_stocks: 0.53   # 30-day hold (watchlist.us_large_cap)
+  garch_stop_multiplier_bonds: 0.25    # 45-day hold (TLT, IEF, SHY, TIP, LQD, JNK, EMB, MUB, HYG)
+  garch_stop_multiplier_etfs: 0.29     # 90-day hold (ucits_mapping, non-bond)
+  garch_stop_multiplier: 0.35          # global fallback for any ticker outside the three buckets above (e.g. forex/crypto holding windows)
   min_stop_pct: 1.0             # floor: stop never tighter than 1% of entry price
   max_stop_pct: 25.0            # ceiling: stop never wider than 25% of entry price
-  # Disabled: a full-history backtest comparison (2019-present, tradeable
-  # assets, same code/data) showed GARCH stops (garch_stop_multiplier: 2.0)
-  # deteriorate risk-adjusted performance vs. the ATR stop despite a higher
-  # win rate — 239 trades/59.4% win rate/PF 2.11/Sharpe 0.59/max drawdown
-  # -56.69% vs. ATR's 253 trades/47.4%/PF 2.51/Sharpe 0.799/max drawdown
-  # -30.29%. Cause: GARCH's sqrt(holding_days) scaling makes its stop
-  # distance structurally much wider than ATR's (no comparable time
-  # scaling) — STOP_LOSS exits dropped from 118/253 trades (avg 2.6% away)
-  # under ATR to just 2/239 (avg 10.3% away) under GARCH, so most losing
-  # trades that ATR would have cut quickly instead rode to MAX_HOLDING or
-  # SIGNAL_REVERSAL, nearly doubling max drawdown. This affects live
-  # trading identically (same shared config key, same stop formula), which
-  # is why it's disabled here rather than only in a backtest-specific
-  # setting. Revisit by lowering garch_stop_multiplier (or widening
-  # min_stop_pct less aggressively) and re-running the backtest comparison
-  # before re-enabling — see CLAUDE.md's "Backtesting engine" section.
+  # Still disabled. A full-history backtest comparison (2019-present,
+  # tradeable assets, same code/data) after switching to these per-bucket
+  # multipliers — see above — is a large improvement over the original
+  # flat-multiplier attempt (max drawdown -56.7% -> -36.3%, STOP_LOSS exit
+  # rate 0.8% -> 38.4%) but still falls short of the ATR baseline on every
+  # risk-adjusted metric: profit factor 2.44 vs 2.51, Sharpe 0.753 vs 0.799,
+  # max drawdown -36.3% vs -30.29%, STOP_LOSS exit rate 38.4% vs a ~49%
+  # target. Root cause: each bucket multiplier is calibrated to that
+  # bucket's MEDIAN GARCH/ATR ratio, but within-bucket dispersion is real
+  # (stdev ~1.88 around the overall mean ratio of ~5.6 in the empirical
+  # calibration) — roughly half of a bucket's tickers still get a GARCH stop
+  # wider than their true ATR-equivalent, which is what's muting the
+  # STOP_LOSS trigger rate below target and widening drawdowns on the
+  # trades that ride further before exiting. Win rate did improve (53.1% vs
+  # 47.4%), consistent with GARCH's actual value (reacting to a ticker's
+  # current vol regime) coming through, just not yet with matching risk
+  # control. See CLAUDE.md's "GARCH/CPD stop loss in the backtest" section
+  # for the full before/after comparison table and a next-step suggestion
+  # (calibrating each bucket multiplier against a tighter percentile than
+  # the median, e.g. the 25th, to target the more-volatile tail of each
+  # bucket rather than its centre) before attempting a third calibration.
   use_garch_stops: false
 
 notifications:

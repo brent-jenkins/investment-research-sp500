@@ -627,6 +627,37 @@ def _garch_daily_vol_core(log_returns: np.ndarray) -> Optional[float]:
     return daily_vol
 
 
+def _garch_stop_multiplier_for_holding_days(holding_days: int, config: dict) -> float:
+    """Select the GARCH stop multiplier bucket matching *holding_days*.
+
+    GARCH's sqrt(holding_days) time-scaling has no ATR equivalent, so a
+    single multiplier tuned against ATR's flat 14-day window produces stops
+    of very different relative width depending on how long a position is
+    meant to be held — verified empirically (2026-07-04) by computing both
+    stop formulas across the full T212-eligible ticker universe: the
+    GARCH/ATR ratio was driven almost entirely by holding-period bucket
+    (median ~3.8x at 30 days, ~7.9x at 45 days, ~6.8x at 90 days), not by
+    the individual ticker. Each bucket multiplier is calibrated so that
+    bucket's GARCH stop lands back in the same magnitude the ATR stop
+    occupied, rather than one multiplier being right for stocks and
+    structurally too wide/narrow for ETFs or bond ETFs.
+
+    holding_days comes from analysis.regime.get_max_holding_days(ticker,
+    config) — 30 (watchlist.us_large_cap stocks), 45 (bond ETFs), and 90
+    (other ucits_mapping ETFs) are the three tuned buckets; anything else
+    (forex 5-day, crypto 14-day, or any ticker outside those config-driven
+    values) falls back to the untuned global garch_stop_multiplier.
+    """
+    sig = config.get("signals", {})
+    if holding_days == 30:
+        return float(sig.get("garch_stop_multiplier_stocks", sig.get("garch_stop_multiplier", 2.0)))
+    if holding_days == 45:
+        return float(sig.get("garch_stop_multiplier_bonds", sig.get("garch_stop_multiplier", 2.0)))
+    if holding_days == 90:
+        return float(sig.get("garch_stop_multiplier_etfs", sig.get("garch_stop_multiplier", 2.0)))
+    return float(sig.get("garch_stop_multiplier", 2.0))
+
+
 def compute_garch_stop(
     ticker: str,
     entry_price: float,
@@ -636,10 +667,15 @@ def compute_garch_stop(
 ) -> dict:
     """Compute a GARCH(1,1)-based dynamic stop loss for *ticker*.
 
-    Stop distance = garch_stop_multiplier x GARCH 1-day-ahead volatility
-    forecast x sqrt(holding_days) x entry_price — a forward-looking estimate
-    that weights recent volatility more heavily during volatile periods and
-    less during calm ones, unlike a flat trailing ATR(14) average.
+    Stop distance = stop_multiplier x GARCH 1-day-ahead volatility forecast
+    x sqrt(holding_days) x entry_price — a forward-looking estimate that
+    weights recent volatility more heavily during volatile periods and less
+    during calm ones, unlike a flat trailing ATR(14) average. stop_multiplier
+    is selected per holding-period bucket by
+    _garch_stop_multiplier_for_holding_days() (see its docstring) rather than
+    a single global garch_stop_multiplier — a flat multiplier tuned for one
+    holding period is structurally wrong for another, since sqrt(holding_days)
+    has no ATR equivalent to counterbalance it.
 
     Args:
         ticker: Research ticker to calibrate GARCH on (its own OHLC history
@@ -675,12 +711,12 @@ def compute_garch_stop(
     """
     sig               = config.get("signals", {})
     lookback_days     = int(sig.get("garch_lookback_days", 504))
-    stop_multiplier   = float(sig.get("garch_stop_multiplier", 2.0))
     min_observations  = int(sig.get("garch_min_observations", _MIN_GARCH_OBSERVATIONS_DEFAULT))
     recent_window     = int(sig.get("cpd_recent_window", 90))
 
     from analysis.regime import get_max_holding_days  # noqa: PLC0415  local import — avoid circular import
     holding_days = get_max_holding_days(ticker, config)
+    stop_multiplier = _garch_stop_multiplier_for_holding_days(holding_days, config)
 
     def _fallback(reason: str) -> dict:
         logger.warning(

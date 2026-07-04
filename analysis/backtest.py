@@ -620,14 +620,16 @@ def _resolve_entry_stop(
 
     When signals.use_garch_stops is true and the cached GARCH vol for the
     nearest prior month-end is available, sizes the stop the same way
-    compute_garch_stop() does live: garch_stop_multiplier x holding_vol
-    (daily vol scaled by sqrt(holding_days)), clamped to
-    [min_stop_pct, max_stop_pct] of entry price. Otherwise (feature
-    disabled, or no GARCH vol cached for this month — e.g. too little
-    history that early in the backtest) falls back to the pre-existing
-    atr_stop_multiplier x ATR formula, UNCHANGED from before this feature —
-    unbounded by min/max_stop_pct, matching "retain existing ATR behaviour
-    exactly" for the use_garch_stops: false case.
+    compute_garch_stop() does live: a holding-period-bucketed stop
+    multiplier (see analysis.volatility._garch_stop_multiplier_for_holding_
+    days() — shared with the live path so the two never calibrate
+    differently for the same holding_days) x holding_vol (daily vol scaled
+    by sqrt(holding_days)), clamped to [min_stop_pct, max_stop_pct] of entry
+    price. Otherwise (feature disabled, or no GARCH vol cached for this
+    month — e.g. too little history that early in the backtest) falls back
+    to the pre-existing atr_stop_multiplier x ATR formula, UNCHANGED from
+    before this feature — unbounded by min/max_stop_pct, matching "retain
+    existing ATR behaviour exactly" for the use_garch_stops: false case.
     """
     sig = config.get("signals", {})
     use_garch = bool(sig.get("use_garch_stops", False))
@@ -636,7 +638,8 @@ def _resolve_entry_stop(
     daily_vol = cached.get("garch_daily_vol") if cached else None
 
     if use_garch and daily_vol is not None:
-        stop_multiplier = float(sig.get("garch_stop_multiplier", 2.0))
+        from analysis.volatility import _garch_stop_multiplier_for_holding_days  # noqa: PLC0415  local import — avoid circular import
+        stop_multiplier = _garch_stop_multiplier_for_holding_days(holding_days, config)
         min_stop_pct = float(sig.get("min_stop_pct", 1.0)) / 100.0
         max_stop_pct = float(sig.get("max_stop_pct", 25.0)) / 100.0
         holding_vol = daily_vol * math.sqrt(max(holding_days, 1))
