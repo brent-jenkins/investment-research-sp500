@@ -155,7 +155,7 @@ signals:
   max_stop_pct: 25.0   # ceiling, % of entry price
 ```
 
-**T212 Invest is a cash account with no native stop-loss order support** — the hourly trade-alert job is the actual enforcement mechanism. `maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` compare each open position's live price against its stored `stop_price` *before* checking signal status at all; a breach places an immediate SELL (`exit_reason: "STOP_LOSS"`) within about an hour, regardless of what the confluence signal currently says. See "GARCH stop loss" in [CLAUDE.md](CLAUDE.md) for the full mechanism, the order-time-estimate vs. fill-price-recompute flow, and why the backtest engine doesn't yet reflect this (same look-ahead-free-vectorization gap as change point detection, below).
+**T212 Invest is a cash account with no native stop-loss order support** — the hourly trade-alert job is the actual enforcement mechanism. `maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` compare each open position's live price against its stored `stop_price` *before* checking signal status at all; a breach places an immediate SELL (`exit_reason: "STOP_LOSS"`) within about an hour, regardless of what the confluence signal currently says. See "GARCH stop loss" in [CLAUDE.md](CLAUDE.md) for the full mechanism, the order-time-estimate vs. fill-price-recompute flow, and "GARCH/CPD stop loss in the backtest" for why it's currently disabled (`use_garch_stops: false`) — a full-history backtest comparison showed it deteriorates risk-adjusted performance (nearly doubled max drawdown) despite a higher win rate.
 
 ---
 

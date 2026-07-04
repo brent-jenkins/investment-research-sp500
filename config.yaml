@@ -555,7 +555,23 @@ signals:
   garch_min_observations: 60    # minimum data points required to fit GARCH (60 comfortably fits GARCH(1,1)'s 3 parameters and lets a change point within cpd_recent_window's 90 days still leave enough post-break rows)
   min_stop_pct: 1.0             # floor: stop never tighter than 1% of entry price
   max_stop_pct: 25.0            # ceiling: stop never wider than 25% of entry price
-  use_garch_stops: true         # set false to revert to ATR stops without code change
+  # Disabled: a full-history backtest comparison (2019-present, tradeable
+  # assets, same code/data) showed GARCH stops (garch_stop_multiplier: 2.0)
+  # deteriorate risk-adjusted performance vs. the ATR stop despite a higher
+  # win rate — 239 trades/59.4% win rate/PF 2.11/Sharpe 0.59/max drawdown
+  # -56.69% vs. ATR's 253 trades/47.4%/PF 2.51/Sharpe 0.799/max drawdown
+  # -30.29%. Cause: GARCH's sqrt(holding_days) scaling makes its stop
+  # distance structurally much wider than ATR's (no comparable time
+  # scaling) — STOP_LOSS exits dropped from 118/253 trades (avg 2.6% away)
+  # under ATR to just 2/239 (avg 10.3% away) under GARCH, so most losing
+  # trades that ATR would have cut quickly instead rode to MAX_HOLDING or
+  # SIGNAL_REVERSAL, nearly doubling max drawdown. This affects live
+  # trading identically (same shared config key, same stop formula), which
+  # is why it's disabled here rather than only in a backtest-specific
+  # setting. Revisit by lowering garch_stop_multiplier (or widening
+  # min_stop_pct less aggressively) and re-running the backtest comparison
+  # before re-enabling — see CLAUDE.md's "Backtesting engine" section.
+  use_garch_stops: false
 
 notifications:
   email:

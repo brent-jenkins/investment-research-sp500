@@ -588,6 +588,45 @@ def _atr_fallback_stop(
     return result
 
 
+def _garch_daily_vol_core(log_returns: np.ndarray) -> Optional[float]:
+    """Fit GARCH(1,1) on already-computed log returns and return the 1-day-
+    ahead volatility forecast (a fraction, e.g. 0.02 = 2%), or None if
+    fitting fails or doesn't converge.
+
+    Pure — no DB access — so it's safe to call both from compute_garch_stop()
+    below (live path, log returns from get_price_df() relative to today) and
+    from analysis/backtest.py's monthly vol cache (log returns sliced
+    strictly before a historical month-end, to stay look-ahead-free). This
+    is the same shared-core pattern _var_position_size_core() below uses for
+    VaR position sizing, for the same reason: the DB-fetching wrapper reads
+    relative to "now", which a backtest can never use directly.
+    """
+    try:
+        from arch import arch_model  # noqa: PLC0415  optional heavy import, only needed for GARCH stops
+        # arch's optimizer performs best when the input scale is roughly
+        # between 1 and 1000. A single fixed multiplier can't hit that target
+        # for every ticker (a calm bond ETF and a volatile stock need very
+        # different factors), so rescale=True lets arch pick its own factor
+        # per fit — recorded on the result as res.scale — rather than a
+        # hardcoded x100 that still triggered DataScaleWarning for calm
+        # tickers (verified empirically against SHY/IEF/MUB). forecast()
+        # returns variance in that internally-rescaled space, so it must be
+        # divided by res.scale (not 100) to get back to a decimal fraction.
+        am = arch_model(np.asarray(log_returns, dtype=float), vol="Garch", p=1, q=1, dist="normal", rescale=True)
+        res = am.fit(disp="off", show_warning=False)
+        if res.convergence_flag != 0:
+            return None
+        forecast = res.forecast(horizon=1)
+        scale = res.scale if res.scale else 1.0
+        daily_vol = float(forecast.variance.iloc[-1, 0] ** 0.5) / scale
+    except Exception:
+        return None
+
+    if not np.isfinite(daily_vol) or daily_vol <= 0:
+        return None
+    return daily_vol
+
+
 def compute_garch_stop(
     ticker: str,
     entry_price: float,
@@ -666,16 +705,14 @@ def compute_garch_stop(
                 df = post_df
             # else: not enough post-break data to calibrate on alone — keep
             # the full lookback window rather than shrinking below the
-            # minimum observation count. NOTE: with the shipped config
-            # defaults (cpd_recent_window: 90, garch_min_observations: 100)
-            # this branch is the common case, not the exception — a break
-            # young enough to count as "recent" (<= 90 days old) can supply
-            # at most ~91 post-break rows, always short of the 100-row
-            # minimum, so post-change-only calibration essentially never
-            # activates out of the box. This isn't a bug; it just means
-            # garch_min_observations needs lowering (or cpd_recent_window
-            # raising) in config.yaml for this integration to actually bite
-            # — verified empirically while writing this feature's tests.
+            # minimum observation count. With the shipped defaults
+            # (cpd_recent_window: 90, garch_min_observations: 60) a break
+            # within the 90-day recent window can supply up to ~91 post-break
+            # rows, comfortably above the 60-row minimum, so this branch
+            # activates in the normal case rather than being the fallback —
+            # garch_min_observations was originally 100, which made this
+            # branch effectively unreachable (a "recent" break could never
+            # supply 100 rows); lowered to 60 to fix that.
 
     close = df["close"].astype(float)
     log_returns = np.log(close / close.shift(1)).dropna()
@@ -683,29 +720,9 @@ def compute_garch_stop(
     if len(log_returns) < min_observations:
         return _fallback(f"only {len(log_returns)} return observations, need >= {min_observations}")
 
-    try:
-        from arch import arch_model  # noqa: PLC0415  optional heavy import, only needed for GARCH stops
-        # arch's optimizer performs best when the input scale is roughly
-        # between 1 and 1000. A single fixed multiplier can't hit that target
-        # for every ticker (a calm bond ETF and a volatile stock need very
-        # different factors), so rescale=True lets arch pick its own factor
-        # per fit — recorded on the result as res.scale — rather than a
-        # hardcoded x100 that still triggered DataScaleWarning for calm
-        # tickers (verified empirically against SHY/IEF/MUB). forecast()
-        # returns variance in that internally-rescaled space, so it must be
-        # divided by res.scale (not 100) to get back to a decimal fraction.
-        am = arch_model(log_returns.to_numpy(), vol="Garch", p=1, q=1, dist="normal", rescale=True)
-        res = am.fit(disp="off", show_warning=False)
-        if res.convergence_flag != 0:
-            return _fallback(f"GARCH did not converge (flag={res.convergence_flag})")
-        forecast = res.forecast(horizon=1)
-        scale = res.scale if res.scale else 1.0
-        daily_vol = float(forecast.variance.iloc[-1, 0] ** 0.5) / scale
-    except Exception as exc:
-        return _fallback(f"GARCH fitting failed ({exc})")
-
-    if not np.isfinite(daily_vol) or daily_vol <= 0:
-        return _fallback("GARCH produced a non-finite or non-positive volatility forecast")
+    daily_vol = _garch_daily_vol_core(log_returns.to_numpy())
+    if daily_vol is None:
+        return _fallback("GARCH fitting failed or did not converge")
 
     holding_vol = daily_vol * math.sqrt(max(holding_days, 1))
     distance_frac = stop_multiplier * holding_vol

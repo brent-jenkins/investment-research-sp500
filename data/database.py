@@ -414,6 +414,8 @@ class BacktestTrade(Base):
     pnl_pct = Column(Float)
     position_gbp = Column(Float)  # VaR-scaled position size used to size this simulated trade — see analysis/volatility.py:compute_var_position_size()
     pnl_gbp = Column(Float)       # position_gbp * pnl_pct — realised £ P&L for this simulated trade
+    stop_distance_pct = Column(Float)  # stop distance used at entry, as % of entry price — GARCH or ATR, see analysis/backtest.py:_resolve_entry_stop()
+    vol_source = Column(String(15))    # "garch" or "atr_fallback" — which formula sized stop_distance_pct
     regime_at_entry = Column(String(30))
     trend_at_entry = Column(Integer)
     mean_reversion_at_entry = Column(Integer)
@@ -659,6 +661,8 @@ def _apply_migrations(engine) -> None:
         ("t212_pnl",           "vol_source",          "VARCHAR(15)"),
         ("backtest_trades",    "position_gbp",        "FLOAT"),
         ("backtest_trades",    "pnl_gbp",              "FLOAT"),
+        ("backtest_trades",    "stop_distance_pct",   "FLOAT"),
+        ("backtest_trades",    "vol_source",          "VARCHAR(15)"),
     ]
 
     for table, column, col_type in new_columns:

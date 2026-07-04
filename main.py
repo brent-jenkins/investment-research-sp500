@@ -4654,10 +4654,12 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
         _entry_signal   = _bt_cfg.get("entry_signal", "STRONG_BUY")
         _allowed_regimes = _bt_cfg.get("allowed_entry_regimes")
         _regime_note = f"{'/'.join(_allowed_regimes)} only" if _allowed_regimes else "all regimes"
+        _use_garch_stops = config.get("signals", {}).get("use_garch_stops", False)
+        _stops_note = "GARCH" if _use_garch_stops else f"ATR {_atr_mult:.1f}×"
         st.caption(
             f"Using live config: ETF max hold {_etf_max_hold}d · "
             f"Stock max hold {_stock_max_hold}d · Bond max hold {_bond_max_hold}d · "
-            f"ATR stop {_atr_mult:.1f}× · entry {_entry_signal} · {_regime_note}"
+            f"entry {_entry_signal} · {_regime_note} · stops: {_stops_note}"
         )
 
         if st.button("Run Backtest", type="primary", key="bt_run"):
@@ -4756,16 +4758,27 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
 
                 # Trades table
                 st.markdown("#### Simulated Trades")
-                show_df = df[[
+                show_df = df.copy()
+                if "stop_distance_pct" not in show_df.columns:
+                    show_df["stop_distance_pct"] = None
+                if "vol_source" not in show_df.columns:
+                    show_df["vol_source"] = None
+                show_df["vol_source"] = show_df["vol_source"].map(
+                    {"garch": "GARCH", "atr_fallback": "ATR fallback"}
+                ).fillna("—")
+                show_df = show_df[[
                     "ticker", "direction", "entry_date", "exit_date",
                     "entry_price", "exit_price", "pnl_pct",
                     "exit_reason", "regime_at_entry", "holding_days", "is_win",
+                    "stop_distance_pct", "vol_source",
                 ]].copy()
                 show_df["pnl_pct"] = (show_df["pnl_pct"] * 100).round(2)
+                show_df["stop_distance_pct"] = show_df["stop_distance_pct"].round(2)
                 show_df.columns = [
                     "Ticker", "Dir", "Entry Date", "Exit Date",
                     "Entry Price", "Exit Price", "P&L %",
                     "Exit Reason", "Regime", "Hold Days", "Win",
+                    "Stop Distance %", "Vol Source",
                 ]
                 st.dataframe(
                     show_df.style.map(lambda v: "color:#16a34a" if v is True else ("color:#dc2626" if v is False else ""), subset=["Win"])
@@ -5001,12 +5014,14 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 if _erb.empty:
                     st.info("Not enough trade data for an exit reason breakdown.")
                 else:
+                    _has_stop_dist = "avg_stop_distance_pct" in _erb.columns
                     _erb_df = _erb.reset_index().rename(columns={
-                        "exit_reason": "Exit Reason",
-                        "trades":      "Trades",
-                        "win_rate":    "Win Rate",
-                        "avg_return":  "Avg Return",
-                        "avg_hold":    "Avg Hold (days)",
+                        "exit_reason":           "Exit Reason",
+                        "trades":                "Trades",
+                        "win_rate":               "Win Rate",
+                        "avg_return":             "Avg Return",
+                        "avg_hold":               "Avg Hold (days)",
+                        "avg_stop_distance_pct":  "Avg Stop Distance %",
                     })
 
                     def _style_erb_return(val):
@@ -5014,20 +5029,35 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                         return ("color:#16a34a;font-weight:bold" if val > 0
                                 else "color:#dc2626;font-weight:bold" if val < 0 else "")
 
+                    _erb_format = {
+                        "Win Rate":        "{:.1f}%",
+                        "Avg Return":      "{:+.2f}%",
+                        "Avg Hold (days)": "{:.1f}",
+                    }
+                    if _has_stop_dist:
+                        _erb_format["Avg Stop Distance %"] = "{:.2f}%"
+
                     st.dataframe(
-                        _erb_df.style.map(_style_erb_return, subset=["Avg Return"]).format({
-                            "Win Rate":        "{:.1f}%",
-                            "Avg Return":      "{:+.2f}%",
-                            "Avg Hold (days)": "{:.1f}",
-                        }),
+                        _erb_df.style.map(_style_erb_return, subset=["Avg Return"]).format(_erb_format),
                         width="stretch", hide_index=True,
                     )
-                    st.caption(
-                        "If MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the ATR stop "
-                        "may be cutting profitable trades short — consider widening `backtest.atr_stop_multiplier` "
-                        "in config.yaml. If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding "
-                        "losers too long."
-                    )
+                    _garch_enabled = config.get("signals", {}).get("use_garch_stops", False)
+                    if _has_stop_dist and _garch_enabled:
+                        st.caption(
+                            "Avg Stop Distance % shows how wide the GARCH (or ATR-fallback) stop was at entry "
+                            "for trades that exited each way — compare STOP_LOSS's distance against the others "
+                            "to see whether GARCH stops are calibrated sensibly for this ticker set. If "
+                            "MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the stop may be "
+                            "cutting profitable trades short — consider widening `signals.garch_stop_multiplier`. "
+                            "If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding losers too long."
+                        )
+                    else:
+                        st.caption(
+                            "If MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the ATR stop "
+                            "may be cutting profitable trades short — consider widening `backtest.atr_stop_multiplier` "
+                            "in config.yaml. If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding "
+                            "losers too long."
+                        )
 
                 # Histogram
                 bins = decay.get("hold_bins", [])

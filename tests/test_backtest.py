@@ -1,20 +1,27 @@
 """Tests for entry_signal_overrides gating in analysis/backtest.py:simulate_trades(),
-and for the config-driven settings (max holding days, ATR stop multiplier,
+for the config-driven settings (max holding days, ATR stop multiplier,
 exit_signal) that make the backtest mirror the live system rather than
-accepting independent runtime override parameters.
+accepting independent runtime override parameters, and for the GARCH/CPD
+stop loss mirroring (_build_monthly_vol_cache(), _resolve_entry_stop()).
 
 simulate_trades() takes a pre-built signal DataFrame (as produced by
 compute_signal_history()) and a plain config dict — it never touches the DB,
-yfinance, or any broker API, so these tests build the signal history
-directly with pandas.
+yfinance, or any broker API, so most tests here build the signal history
+directly with pandas. _build_monthly_vol_cache() and simulate_trades()'s
+GARCH-stop path DO read price history via data.ingestion.get_price_df(), so
+those tests use the db_engine fixture (in-memory SQLite — tests/conftest.py).
 """
 
 import inspect
+from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
+from sqlalchemy.orm import Session
 
 from analysis.backtest import run_backtest, simulate_trades
 from analysis.regime import get_max_holding_days
+from data.database import PriceData
 
 _CONFIG = {
     "backtest": {
@@ -377,3 +384,252 @@ def test_delete_run_vacuum_runs_after_delete_transaction_commits_not_within_it()
     last_begin_idx = max(i for i, n in enumerate(call_names) if n.startswith("begin"))
     first_connect_idx = min(i for i, n in enumerate(call_names) if n.startswith("connect"))
     assert last_begin_idx < first_connect_idx
+
+
+# ---------------------------------------------------------------------------
+# Monthly CPD/GARCH vol cache — mirrors the live GARCH stop in the backtest
+# ---------------------------------------------------------------------------
+#
+# _build_monthly_vol_cache() / _resolve_entry_stop() replace simulate_trades()'s
+# fixed ATR stop with a GARCH(1,1) stop calibrated at monthly granularity
+# (see that function's module docstring in analysis/backtest.py for why —
+# per-trade GARCH refitting would be O(n^2) across 64 tickers x 7 years).
+
+_GARCH_BT_CONFIG = {
+    "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30, "entry_signal": "STRONG_BUY"},
+    "signals": {
+        "use_garch_stops": True,
+        "cpd_lookback_days": 300, "cpd_threshold": 3.0, "cpd_recent_window": 90,
+        "garch_lookback_days": 300, "garch_min_observations": 60,
+        "garch_stop_multiplier": 2.0, "min_stop_pct": 1.0, "max_stop_pct": 25.0,
+    },
+}
+
+
+def _seed_ohlc(engine, ticker: str, closes: list[float], base: datetime) -> None:
+    """Insert one flat-ish OHLC PriceData row per close, dated
+    base - (n-i) days — one calendar day apart, matching the pattern used
+    throughout this suite (tests/test_volatility.py's _seed_ohlc_at())."""
+    n = len(closes)
+    with Session(engine) as session:
+        for i, close in enumerate(closes):
+            days_ago = n - i
+            session.add(PriceData(
+                ticker=ticker,
+                date=base - timedelta(days=days_ago),
+                open=close, high=close * 1.01, low=close * 0.99, close=close, volume=1_000_000,
+            ))
+        session.commit()
+
+
+def test_monthly_vol_cache_no_look_ahead(db_engine):
+    """A price spike injected strictly AFTER a month-end must not change
+    that month-end's cached GARCH vol — verified by comparing two tickers
+    with identical price history up to the month-end and a huge spike
+    injected only after it in one of them."""
+    from analysis.backtest import _build_monthly_vol_cache, _MONTHLY_VOL_CACHE, _TICKER_PRICE_CACHE
+
+    base = datetime.utcnow()
+    n = 400
+    rng = np.random.default_rng(1)
+    closes_calm = list(100 * np.exp(np.cumsum(rng.normal(0, 0.01, n))))
+
+    month_end = (pd.Timestamp(base) - pd.offsets.MonthEnd(2)).date()
+
+    _seed_ohlc(db_engine, "MONTHENDCALM", closes_calm, base)
+
+    closes_spiked = list(closes_calm)
+    spike_rng = np.random.default_rng(99)
+    for i in range(n):
+        d = (base - timedelta(days=n - i)).date()
+        if d > month_end:
+            remaining = n - i
+            spike_returns = spike_rng.normal(0, 0.3, remaining)  # 30x the calm daily vol
+            closes_spiked[i:] = list(closes_spiked[i - 1] * np.exp(np.cumsum(spike_returns)))
+            break
+    _seed_ohlc(db_engine, "MONTHENDSPIKED", closes_spiked, base)
+
+    cache_calm = _build_monthly_vol_cache("MONTHENDCALM", month_end, month_end, _GARCH_BT_CONFIG)
+    _MONTHLY_VOL_CACHE.clear()
+    _TICKER_PRICE_CACHE.clear()
+    cache_spiked = _build_monthly_vol_cache("MONTHENDSPIKED", month_end, month_end, _GARCH_BT_CONFIG)
+
+    assert cache_calm[month_end]["garch_daily_vol"] is not None
+    assert cache_calm[month_end]["garch_daily_vol"] == cache_spiked[month_end]["garch_daily_vol"]
+
+
+def test_monthly_vol_cache_identifies_known_change_point_from_correct_month(db_engine):
+    """A synthetic series with an obvious volatility shift must show
+    change_point_date: None for month-ends before the break, and a
+    change_point_date close to the true break for every month-end from the
+    first one after the break onward."""
+    from analysis.backtest import _build_monthly_vol_cache
+
+    base = datetime.utcnow()
+    n, break_idx = 500, 350
+    rng = np.random.default_rng(5)
+    rets = np.empty(n)
+    rets[:break_idx] = rng.normal(0, 0.01, break_idx)
+    rets[break_idx:] = rng.normal(0, 0.05, n - break_idx)
+    closes = list(100 * np.exp(np.cumsum(rets)))
+    _seed_ohlc(db_engine, "KNOWNBREAKMONTHLY", closes, base)
+
+    true_break_date = (base - timedelta(days=n - break_idx)).date()
+    start_date = (base - timedelta(days=n - 60)).date()
+    end_date   = (base - timedelta(days=10)).date()
+
+    cache = _build_monthly_vol_cache("KNOWNBREAKMONTHLY", start_date, end_date, _GARCH_BT_CONFIG)
+    assert len(cache) >= 6  # sanity check the range produced multiple month-ends
+
+    before_break = {k: v for k, v in cache.items() if k < true_break_date}
+    after_break  = {k: v for k, v in cache.items() if k >= true_break_date}
+    assert before_break, "expected at least one month-end before the break"
+    assert after_break, "expected at least one month-end after the break"
+
+    assert all(v["change_point_date"] is None for v in before_break.values())
+    assert all(v["change_point_date"] is not None for v in after_break.values())
+    for v in after_break.values():
+        assert abs((v["change_point_date"] - true_break_date).days) <= 20
+
+
+def test_simulate_trades_uses_garch_stop_when_enabled_atr_when_disabled(db_engine):
+    """The exact same signal history and entry must produce a GARCH-sourced
+    stop when signals.use_garch_stops is true, and the pre-existing
+    ATR-based stop, unchanged, when it's false."""
+    base = datetime.utcnow()
+    n = 400
+    rng = np.random.default_rng(3)
+    closes = list(100 * np.exp(np.cumsum(rng.normal(0, 0.012, n))))
+    _seed_ohlc(db_engine, "GARCHVSATR", closes, base)
+
+    dates = pd.date_range(end=base - timedelta(days=1), periods=n, freq="D")
+    entry_idx = 350
+    rows = [
+        {
+            "close": closes[i], "atr": 1.5, "regime": "TRENDING_BULL",
+            "signal": "STRONG_BUY" if i == entry_idx else "NEUTRAL",
+            "trend_score": 1, "mean_reversion_score": 0, "volatility_score": 0,
+            "volume_score": 0, "macro_score": 0,
+        }
+        for i in range(n)
+    ]
+    df = pd.DataFrame(rows, index=dates)
+
+    garch_cfg = _GARCH_BT_CONFIG
+    atr_cfg = {
+        "backtest": _GARCH_BT_CONFIG["backtest"],
+        "signals": {**_GARCH_BT_CONFIG["signals"], "use_garch_stops": False},
+    }
+
+    trades_garch = simulate_trades(df, "GARCHVSATR", garch_cfg)
+    trades_atr   = simulate_trades(df, "GARCHVSATR", atr_cfg)
+
+    assert len(trades_garch) == 1
+    assert len(trades_atr) == 1
+    assert trades_garch[0]["vol_source"] == "garch"
+    assert trades_atr[0]["vol_source"] == "atr_fallback"
+    # Both must still be present and bounded — a functioning stop either way.
+    assert trades_garch[0]["stop_distance_pct"] > 0
+    assert trades_atr[0]["stop_distance_pct"] > 0
+
+
+def test_simulate_trades_falls_back_to_atr_with_too_few_observations(db_engine):
+    """Fewer than garch_min_observations daily returns available at entry
+    time -> vol_source: atr_fallback even with use_garch_stops: true, not an
+    attempted (and unstable) GARCH fit on a thin sample."""
+    base = datetime.utcnow()
+    n = 40  # well below garch_min_observations (60)
+    rng = np.random.default_rng(4)
+    closes = list(100 * np.exp(np.cumsum(rng.normal(0, 0.012, n))))
+    _seed_ohlc(db_engine, "THINSIMDATA", closes, base)
+
+    dates = pd.date_range(end=base - timedelta(days=1), periods=n, freq="D")
+    entry_idx = 35
+    rows = [
+        {
+            "close": closes[i], "atr": 1.5, "regime": "TRENDING_BULL",
+            "signal": "STRONG_BUY" if i == entry_idx else "NEUTRAL",
+            "trend_score": 1, "mean_reversion_score": 0, "volatility_score": 0,
+            "volume_score": 0, "macro_score": 0,
+        }
+        for i in range(n)
+    ]
+    df = pd.DataFrame(rows, index=dates)
+
+    trades = simulate_trades(df, "THINSIMDATA", _GARCH_BT_CONFIG)
+
+    assert len(trades) == 1
+    assert trades[0]["vol_source"] == "atr_fallback"
+
+
+def test_backtest_performance_stays_within_budget(db_engine):
+    """A full run_backtest() call across several tickers over several years
+    must complete quickly — regression protection against the monthly vol
+    cache accidentally reverting to a per-trade (or per-day) GARCH refit,
+    which would be O(n^2) and far too slow (measured during development:
+    eagerly precomputing every month-end for a ticker's full date range
+    took ~6.5s per ticker on its own; the current lazy, one-month-at-a-time
+    design measured under 3s of GARCH-specific overhead for 12 real tickers
+    over 7 years).
+
+    Uses seeded synthetic data (self-contained — this suite never touches
+    the real project database, per tests/conftest.py's db_engine fixture
+    and CLAUDE.md's testing conventions) rather than the real 64-ticker/
+    7-year production backtest the performance budget is actually specified
+    against — that was verified manually during development instead: a
+    real production run completed in ~35s after also fixing a discovered,
+    unrelated pre-existing bottleneck in _store_signals_batch() (see
+    CLAUDE.md's "Backtesting engine performance" note), comfortably inside
+    the target's 60s (2x budget) test tolerance.
+    """
+    import time
+
+    base = datetime.utcnow()
+    n_days = 365 * 3
+    tickers = [f"PERFTEST{i}" for i in range(8)]
+    for i, ticker in enumerate(tickers):
+        rng = np.random.default_rng(i)
+        closes = list(100 * np.exp(np.cumsum(rng.normal(0.0003, 0.015, n_days))))
+        _seed_ohlc(db_engine, ticker, closes, base)
+
+    rng_gspc = np.random.default_rng(100)
+    _seed_ohlc(db_engine, "^GSPC", list(100 * np.exp(np.cumsum(rng_gspc.normal(0.0003, 0.012, n_days)))), base)
+    rng_vix = np.random.default_rng(101)
+    _seed_ohlc(db_engine, "^VIX", list(15 + np.cumsum(rng_vix.normal(0, 0.3, n_days))), base)
+
+    config = {
+        "signals": {
+            "atr_period": 14, "bollinger_period": 20, "bollinger_std": 2.0, "rsi_period": 14,
+            "macd_fast": 12, "macd_slow": 26, "macd_signal": 9, "adx_period": 14,
+            "adx_trend_threshold": 25, "volume_avg_period": 20,
+            "ma_cross_slope_window": 10, "ma_cross_near_pct": 0.02,
+            "use_garch_stops": True,
+            "cpd_lookback_days": 300, "cpd_threshold": 3.0, "cpd_recent_window": 90,
+            "garch_lookback_days": 300, "garch_min_observations": 60,
+            "garch_stop_multiplier": 2.0, "min_stop_pct": 1.0, "max_stop_pct": 25.0,
+        },
+        "backtest": {
+            "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0, "max_holding_days": 30,
+            "entry_signal": "STRONG_BUY", "entry_signal_overrides": {}, "allowed_entry_regimes": None,
+        },
+        "confluence": {"regime_thresholds": {
+            "TRENDING_BULL":   {"buy_threshold": 0.55, "sell_threshold": 0.70},
+            "TRENDING_BEAR":   {"buy_threshold": 0.70, "sell_threshold": 0.55},
+            "MIXED":           {"buy_threshold": 0.60, "sell_threshold": 0.60},
+            "HIGH_VOLATILITY": {"buy_threshold": 0.70, "sell_threshold": 0.70},
+            "RANGING_LOW_VOL": {"buy_threshold": 0.55, "sell_threshold": 0.55},
+        }},
+        "trading212_invest": {
+            "var_confidence": 0.95, "var_lookback_days": 252, "max_risk_pct": 0.01,
+            "min_position_gbp": 50, "max_position_gbp": 500, "exit_signal": "SELL",
+        },
+    }
+
+    start_date = base - timedelta(days=n_days - 30)
+    end_date   = base - timedelta(days=1)
+
+    t0 = time.time()
+    run_id = run_backtest(tickers, start_date, end_date, config=config, name="perf-budget-test")
+    elapsed = time.time() - t0
+
+    assert elapsed < 15, f"8-ticker/3-year synthetic backtest took {elapsed:.1f}s, expected well under 15s"

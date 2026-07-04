@@ -619,13 +619,13 @@ def test_garch_stop_uses_only_post_change_point_data(db_engine):
     pre-break segment is a dramatically different regime (here: a crash
     followed by a calm period).
 
-    Uses a lower garch_min_observations (60, vs. the config.yaml default of
-    100) than the shipped default specifically so a break within
-    cpd_recent_window (90 days) can supply enough post-break rows to
-    qualify — with the shipped defaults (recent_window 90 < min_observations
-    100) a break young enough to count as "recent" can never supply 100
-    post-break rows, so post-change-only calibration would never activate at
-    all (see the code comment in compute_garch_stop() next to this check).
+    Overrides this test file's own _GARCH_CONFIG (garch_min_observations:
+    100, used elsewhere in this file for test isolation) down to 60 so a
+    break within cpd_recent_window (90 days) can supply enough post-break
+    rows to qualify — 60 is what config.yaml itself now ships (lowered from
+    an original 100, which made this branch unreachable: a break young
+    enough to count as "recent" could never supply 100 post-break rows —
+    see the code comment in compute_garch_stop() next to this check).
     """
     from analysis.volatility import compute_garch_stop
 

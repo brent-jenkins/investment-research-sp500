@@ -396,20 +396,37 @@ def exit_reason_breakdown(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame indexed by exit_reason with columns:
             trades, win_rate (pct, e.g. 62.5), avg_return (pct, e.g. 1.23),
-            avg_hold (days)
+            avg_hold (days), avg_stop_distance_pct (pct, e.g. 8.4 — only
+            present when df has a stop_distance_pct column; older
+            backtest_trades rows predating GARCH stops don't have one, so
+            this key is simply omitted from each row dict rather than
+            filled with a misleading 0.0 — the same "additive, don't
+            reinterpret missing data as zero" pattern compute_metrics()
+            uses for its pnl_gbp-derived keys).
+
+    Comparing avg_stop_distance_pct for STOP_LOSS rows against other exit
+    reasons shows whether GARCH stops are calibrated sensibly — a STOP_LOSS
+    average distance far wider or narrower than what MAX_HOLDING/
+    SIGNAL_REVERSAL trades typically move by is a signal worth checking
+    garch_stop_multiplier / min_stop_pct / max_stop_pct against.
     """
     if df is None or df.empty or "exit_reason" not in df.columns:
         return pd.DataFrame()
 
+    has_stop_distance = "stop_distance_pct" in df.columns and df["stop_distance_pct"].notna().any()
+
     rows = []
     for reason, sub in df.groupby("exit_reason"):
-        rows.append({
+        row = {
             "exit_reason": reason,
             "trades":      len(sub),
             "win_rate":    round(float(sub["is_win"].mean()) * 100, 1)   if "is_win" in sub.columns      else 0.0,
             "avg_return":  round(float(sub["pnl_pct"].mean()) * 100, 2)  if "pnl_pct" in sub.columns      else 0.0,
             "avg_hold":    round(float(sub["holding_days"].mean()), 1)   if "holding_days" in sub.columns else 0.0,
-        })
+        }
+        if has_stop_distance:
+            row["avg_stop_distance_pct"] = round(float(sub["stop_distance_pct"].mean()), 2)
+        rows.append(row)
 
     return pd.DataFrame(rows).set_index("exit_reason") if rows else pd.DataFrame()
 
