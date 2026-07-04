@@ -145,12 +145,14 @@ Each `Regime` carries a `REGIME_WEIGHTS` dict that sums to 1.0 across the six an
 
 | Module | TRENDING_BULL | TRENDING_BEAR | RANGING_LOW_VOL | HIGH_VOLATILITY | MIXED |
 |--------|:---:|:---:|:---:|:---:|:---:|
-| trend | 0.30 | 0.25 | 0.10 | 0.10 | 0.18 |
-| mean_reversion | 0.10 | 0.15 | 0.35 | 0.15 | 0.18 |
-| volatility | 0.15 | 0.20 | 0.15 | 0.35 | 0.18 |
-| volume | 0.20 | 0.15 | 0.15 | 0.15 | 0.18 |
-| macro | 0.15 | 0.15 | 0.15 | 0.15 | 0.18 |
+| trend | 0.20 | 0.25 | 0.10 | 0.10 | 0.18 |
+| mean_reversion | 0.05 | 0.15 | 0.35 | 0.15 | 0.18 |
+| volatility | 0.20 | 0.20 | 0.15 | 0.35 | 0.18 |
+| volume | 0.15 | 0.15 | 0.15 | 0.15 | 0.18 |
+| macro | 0.30 | 0.15 | 0.15 | 0.15 | 0.18 |
 | correlation | 0.10 | 0.10 | 0.10 | 0.10 | 0.10 |
+
+**TRENDING_BULL weights rebalanced 2026-07-04** based on module-attribution analysis of 347 TRENDING_BULL-only backtest trades: `trend` (100% agreement rate with the LONG direction) and `volume` (98.8% agreement) confirm the regime but showed zero/minimal discriminating power between winning and losing entries, so both were reduced (trend 0.30→0.20, volume 0.20→0.15). `mean_reversion` is almost always contrarian in a trending market (0.6% agreement) and was cut to the floor (0.10→0.05) so a low mean-reversion score — the normal state in this regime — doesn't meaningfully penalise otherwise-good entries. `macro` showed the highest discriminating power of any module — only 0.9% agreement, but a 66.7% win rate when it did agree vs. 41.6% when it disagreed — and was doubled (0.15→0.30) to reflect that. `volatility` (70.3% agreement, 42.6% vs 39.8% win rate) was increased slightly (0.15→0.20) as a moderate-discrimination counterbalance. Other regimes' weights are unchanged.
 
 ### Regime overlays
 

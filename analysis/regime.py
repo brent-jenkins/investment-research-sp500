@@ -46,11 +46,21 @@ REGIME_COLOURS: dict[str, str] = {
 # with the savings taken from the dominant module(s) in each regime.
 REGIME_WEIGHTS: dict[str, dict[str, float]] = {
     Regime.TRENDING_BULL: {
-        "trend":          0.30,  # was 0.35
-        "mean_reversion": 0.10,
-        "volatility":     0.15,
-        "volume":         0.20,  # was 0.25
-        "macro":          0.15,
+        # Rebalanced 2026-07-04 from 347-trade TRENDING_BULL-only backtest
+        # module attribution — see CLAUDE.md's REGIME_WEIGHTS table note
+        # for the full rationale. Trend/volume near-
+        # universally agree with the LONG direction in this regime (100%
+        # and 98.8% agreement respectively) so they confirm the regime but
+        # do not discriminate between good and bad entries; mean reversion
+        # is almost always contrarian (0.6% agreement) and slightly drags
+        # scores down; macro has by far the highest discriminating power
+        # (66.7% win rate when agreeing vs. 41.6% when disagreeing, despite
+        # only 0.9% agreement) so it is weighted highest.
+        "trend":          0.20,  # was 0.30 — 100% agreement, zero discrimination
+        "mean_reversion": 0.05,  # was 0.10 — almost always contrarian in trends
+        "volatility":     0.20,  # was 0.15 — moderate discriminating power
+        "volume":         0.15,  # was 0.20 — 98.8% agreement, low discrimination
+        "macro":          0.30,  # was 0.15 — highest discriminating power
         "correlation":    0.10,
     },
     Regime.TRENDING_BEAR: {
