@@ -542,6 +542,45 @@ signals:
   # before EXIT_SIGNAL is confirmed and a T212 position is closed on reversal.
   # Set to 0 to disable (close immediately on first reversal signal).
   reversal_confirmation_runs: 2
+  # HMM regime confidence layer (analysis/hmm_regime.py) — a 3-state Gaussian
+  # HMM fit on ^GSPC's own daily indicator history, run alongside (never
+  # replacing) the rule-based regime detection in analysis/regime.py. The
+  # rule-based ADX/VIX/SMA200 thresholds create sharp regime boundaries
+  # (ADX 24.9 is MIXED, ADX 25.1 is TRENDING_BULL) — HMM state probabilities
+  # are continuous and provide a confidence check on TRENDING_BULL calls only;
+  # every other regime is left untouched (informational only there).
+  hmm_min_training_days: 504           # ~2 years minimum ^GSPC history before a model will be fit at all
+  hmm_bull_confidence_threshold: 0.60  # a rule-based TRENDING_BULL call is downgraded to MIXED when HMM's bull-state probability falls below this
+  hmm_refit_interval_days: 7           # refit weekly (Sunday summary job) rather than on every analysis run — a full re-fit is too expensive to run every 3 hours
+  # Disabled. A full-history backtest comparison (2019-present, tradeable
+  # assets, identical code/data, only this one config key changed) showed
+  # the confidence gate deteriorates every metric versus the pre-HMM
+  # baseline: 165 trades vs 236, win rate 42.4% vs 45.8%, profit factor 1.69
+  # vs 2.62, Sharpe 0.548 vs 0.80, max drawdown -33.1% vs -29.5%. The gate
+  # downgraded 45.3% of all rule-based TRENDING_BULL calls (15,360 of
+  # 33,920 evaluated) to MIXED — and because allowed_entry_regimes is
+  # ["TRENDING_BULL"] only (see "Regime entry gate" in CLAUDE.md), a
+  # downgrade to MIXED doesn't just lower conviction, it blocks the entry
+  # outright, so the gate ended up vetoing a large fraction of entries
+  # rather than selectively filtering weak ones. Likely root cause: the
+  # live model was observed to fit two nearly-identical "bull-like" states
+  # (state means for close_sma200_ratio/adx differing by <0.01 in
+  # standardised units) rather than a clean 3-way separation — a known HMM
+  # label-switching/instability failure mode when the true underlying
+  # process doesn't actually have 3 well-separated regimes. Since each
+  # calendar month refits independently (see "Backtesting engine" ->
+  # "HMM confidence gate in the backtest" in CLAUDE.md), this instability
+  # can make the same underlying market condition score above threshold in
+  # one month and below it in an adjacent month for no substantive reason,
+  # producing what looks like a noisy veto rather than a genuine confidence
+  # signal. The code remains fully implemented and tested (live and
+  # backtest) — re-enabling is a config-only change (hmm_enabled: true).
+  # Candidate next steps before re-attempting: calibrate/monitor state-mean
+  # separation before trusting a given month's fit (e.g. skip gating a
+  # month whose two closest state means are below some separation
+  # threshold), or try a stability check across consecutive months' labels
+  # before applying the gate. See CLAUDE.md's HMM section for detail.
+  hmm_enabled: false
   # Change point detection (analysis/volatility.py:detect_change_points()) —
   # identifies structural breaks in a ticker's return-variance regime.
   cpd_lookback_days: 504    # ~2 trading years of history for change point detection

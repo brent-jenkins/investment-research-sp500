@@ -207,7 +207,7 @@ The Macro Dashboard tags each card: **✓ Signals** for series with ticker-speci
 
 ### Regime detection
 
-Reads the most recent stored ^GSPC indicators. Priority order:
+Two layers. **Rule-based (primary)** reads the most recent stored ^GSPC indicators and applies a priority-ordered classification:
 
 1. VIX > 30 → `HIGH_VOLATILITY`
 2. price > SMA200, ADX > 25, VIX < 20 → `TRENDING_BULL`
@@ -216,6 +216,8 @@ Reads the most recent stored ^GSPC indicators. Priority order:
 5. else → `MIXED`
 
 The ADX thresholds (> 25 for trending, < 20 for ranging) are intentionally strict. ADX in the 20–25 range correctly produces `MIXED`, which signals that regime certainty is low and keeps position sizing conservative.
+
+**HMM confidence gate (validator, not a replacement)** — a 3-state Gaussian HMM fit on ^GSPC's own daily indicator history (`analysis/hmm_regime.py`) provides a continuous confidence score that can downgrade a rule-based `TRENDING_BULL` call to `MIXED` when its bull-state probability falls below `signals.hmm_bull_confidence_threshold`; every other regime is left untouched (informational only). This exists because the rule-based thresholds above create sharp boundaries — ADX 24.9 is `MIXED`, ADX 25.1 is `TRENDING_BULL` — that a single noisy reading can flip, while the HMM's state probabilities are continuous and reflect the broader feature pattern. **Currently disabled** (`signals.hmm_enabled: false`) — a full-history backtest showed the gate deteriorates every metric versus the rule-only baseline (165 trades vs 236, profit factor 1.69 vs 2.62, max drawdown -33.1% vs -29.5%), likely due to HMM label instability across the model's independent monthly/weekly refits. See CLAUDE.md's "HMM regime confidence layer" section for the full mechanism and disable rationale.
 
 ### Regime weights (sum to 1.0 per regime)
 

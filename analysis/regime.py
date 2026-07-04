@@ -2,8 +2,10 @@
 
 import logging
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from sqlalchemy import text
 
 from data.database import get_engine, get_metadata_str, set_metadata
@@ -12,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 # Reference asset for regime detection — must exist in the watchlist
 _REFERENCE_TICKER = "^GSPC"
+
+
+def _load_config() -> dict:
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
 
 
 class Regime(str, Enum):
@@ -98,25 +106,84 @@ REGIME_WEIGHTS: dict[str, dict[str, float]] = {
 }
 
 
-def detect_regime() -> dict:
-    """Detect the current market regime using stored ^GSPC indicators.
-
-    Reads the most recent row from the ``indicators`` table for ^GSPC and
-    classifies using the following priority-ordered rules:
+def _detect_regime_rules(details: dict) -> Regime:
+    """Apply the priority-ordered ADX/VIX/SMA200 rules to already-fetched
+    indicator values. Pure — no DB access — so it can be unit tested and
+    reused independently of where ``details`` came from.
 
     1. HIGH_VOLATILITY  — VIX > 30 (overrides all other conditions)
     2. TRENDING_BULL    — price > SMA200, ADX > 25, VIX < 20
     3. TRENDING_BEAR    — price < SMA200, ADX > 25, VIX > 20
     4. RANGING_LOW_VOL  — ADX < 20, VIX < 15
     5. MIXED            — fallback when indicators are unavailable or ambiguous
+    """
+    price   = details.get("price")
+    sma_200 = details.get("sma_200")
+    adx     = details.get("adx")
+    vix     = details.get("vix")
+
+    if vix is not None and float(vix) > 30:
+        return Regime.HIGH_VOLATILITY
+    if (
+        price is not None and sma_200 is not None
+        and adx is not None and vix is not None
+        and float(price) > float(sma_200)
+        and float(adx) > 25
+        and float(vix) < 20
+    ):
+        return Regime.TRENDING_BULL
+    if (
+        price is not None and sma_200 is not None
+        and adx is not None and vix is not None
+        and float(price) < float(sma_200)
+        and float(adx) > 25
+        and float(vix) > 20
+    ):
+        return Regime.TRENDING_BEAR
+    if (
+        adx is not None and vix is not None
+        and float(adx) < 20
+        and float(vix) < 15
+    ):
+        return Regime.RANGING_LOW_VOL
+    return Regime.MIXED
+
+
+def detect_regime() -> dict:
+    """Detect the current market regime using stored ^GSPC indicators.
+
+    Two layers, in order:
+
+    1. **Rule-based (primary)** — ``_detect_regime_rules()`` applies the
+       priority-ordered ADX/VIX/SMA200 thresholds described there. This is
+       always computed and is never overridden except by step 2 below.
+    2. **HMM confidence gate (validator, not a replacement)** — when
+       ``signals.hmm_enabled`` is true (default), a rule-based
+       ``TRENDING_BULL`` call is downgraded to ``MIXED`` if
+       ``analysis.hmm_regime.get_hmm_regime_confidence()`` reports a
+       bull-state probability below ``signals.hmm_bull_confidence_threshold``
+       (default 0.60). Every other rule-based regime is left untouched — the
+       HMM is informational only outside TRENDING_BULL. This exists because
+       the rule-based thresholds create sharp regime boundaries (ADX 24.9 is
+       MIXED, ADX 25.1 is TRENDING_BULL) that a single noisy data point can
+       flip; the HMM's continuous state probability smooths that boundary
+       by validating whether the broader feature pattern actually looks like
+       a genuine bull regime before trusting the rule's call. See
+       analysis/hmm_regime.py's module docstring and CLAUDE.md for the full
+       design.
 
     Returns:
         Dict with:
-        - ``regime``      — :class:`Regime` enum value
+        - ``regime``      — final :class:`Regime` (post-HMM-gate)
         - ``weights``     — module weight dict for this regime
         - ``description`` — human-readable regime explanation
         - ``colour``      — hex accent colour for the UI
         - ``details``     — raw indicator values used for classification
+        - ``hmm``         — dict with the full HMM confidence output (see
+          analysis.hmm_regime.get_hmm_regime_confidence()) plus
+          ``hmm_downgraded`` (bool) and ``rule_regime`` (the pre-gate
+          :class:`Regime` name) — empty dict when hmm_enabled is false or
+          the HMM check itself failed
     """
     details: dict = {
         "ticker": _REFERENCE_TICKER,
@@ -143,45 +210,43 @@ def detect_regime() -> dict:
         logger.error("Regime detection DB query failed: %s", exc)
         row = None
 
-    if row is None:
-        regime = Regime.MIXED
-        return _build_result(regime, details)
+    if row is not None:
+        details.update({
+            "price": row.get("price"), "sma_200": row.get("sma_200"),
+            "adx": row.get("adx"), "vix": row.get("vix_level"),
+        })
 
-    price   = row.get("price")
-    sma_200 = row.get("sma_200")
-    adx     = row.get("adx")
-    vix     = row.get("vix_level")
-    details.update({"price": price, "sma_200": sma_200, "adx": adx, "vix": vix})
+    rule_regime = _detect_regime_rules(details)
+    final_regime = rule_regime
+    downgraded = False
+    hmm_info: dict = {}
 
-    # Priority-ordered classification
-    if vix is not None and float(vix) > 30:
-        regime = Regime.HIGH_VOLATILITY
-    elif (
-        price is not None and sma_200 is not None
-        and adx is not None and vix is not None
-        and float(price) > float(sma_200)
-        and float(adx) > 25
-        and float(vix) < 20
-    ):
-        regime = Regime.TRENDING_BULL
-    elif (
-        price is not None and sma_200 is not None
-        and adx is not None and vix is not None
-        and float(price) < float(sma_200)
-        and float(adx) > 25
-        and float(vix) > 20
-    ):
-        regime = Regime.TRENDING_BEAR
-    elif (
-        adx is not None and vix is not None
-        and float(adx) < 20
-        and float(vix) < 15
-    ):
-        regime = Regime.RANGING_LOW_VOL
-    else:
-        regime = Regime.MIXED
+    try:
+        config = _load_config()
+    except Exception as exc:
+        logger.warning("Regime detection: could not load config for HMM gate: %s", exc)
+        config = {}
 
-    return _build_result(regime, details)
+    if config.get("signals", {}).get("hmm_enabled", True):
+        try:
+            from analysis.hmm_regime import get_hmm_regime_confidence  # noqa: PLC0415  local import — avoid a module-load-time dependency on hmmlearn for callers that never enable this feature
+            hmm_info = get_hmm_regime_confidence(config)
+            threshold = float(config.get("signals", {}).get("hmm_bull_confidence_threshold", 0.60))
+            if (
+                rule_regime == Regime.TRENDING_BULL
+                and hmm_info.get("hmm_model_available")
+                and hmm_info.get("hmm_bull_probability") is not None
+                and hmm_info["hmm_bull_probability"] < threshold
+            ):
+                final_regime = Regime.MIXED
+                downgraded = True
+        except Exception as exc:
+            logger.warning("HMM regime confidence check failed: %s", exc)
+            hmm_info = {}
+
+    result = _build_result(final_regime, details)
+    result["hmm"] = {**hmm_info, "hmm_downgraded": downgraded, "rule_regime": rule_regime.name}
+    return result
 
 
 def get_latest_regime_name() -> Optional[str]:

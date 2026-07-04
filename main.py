@@ -412,6 +412,50 @@ def _hex_rgba(hx: str, alpha: float) -> str:
     return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
 
 
+def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> str:
+    """Build the inline HMM confidence pill shown alongside the regime badge
+    on the Daily Briefing status bar and the Signals page header block —
+    see analysis/regime.py:detect_regime()'s 'hmm' dict and CLAUDE.md's HMM
+    confidence gate section.
+
+    Three cases:
+    - Rule-based regime was TRENDING_BULL and HMM confirmed it: green
+      "✓ HMM NN% confident".
+    - Rule-based regime was TRENDING_BULL but HMM downgraded it to MIXED:
+      amber "⚠ Downgraded from TRENDING_BULL (HMM NN% bull confidence)".
+    - Any other regime — HMM is informational only, never a veto there:
+      grey "HMM: NN% <state> (informational only)".
+
+    Returns "" (nothing rendered) when hmm_enabled is false or the model
+    hasn't been fit yet (hmm_model_available is False) — there is nothing
+    meaningful to show in either case.
+    """
+    hmm = regime_result.get("hmm") or {}
+    if not hmm.get("hmm_model_available"):
+        return ""
+
+    rule_regime = hmm.get("rule_regime", "")
+    downgraded  = hmm.get("hmm_downgraded", False)
+    dominant    = hmm.get("hmm_dominant_state", "UNCERTAIN")
+    confidence  = hmm.get("hmm_confidence", 0.0) or 0.0
+    bull_prob   = hmm.get("hmm_bull_probability", 0.0) or 0.0
+
+    if downgraded:
+        colour = "#f59e0b"
+        text = f"⚠ Downgraded from {rule_regime.replace('_', ' ')} (HMM {bull_prob:.0%} bull confidence)"
+    elif rule_regime == "TRENDING_BULL":
+        colour = "#16a34a"
+        text = f"✓ HMM {confidence:.0%} confident"
+    else:
+        colour = "#6b7280"
+        text = f"HMM: {confidence:.0%} {dominant.lower()} (informational only)"
+
+    return (
+        f'<span style="color:{colour};font-size:{font_size};font-weight:600;'
+        f'white-space:nowrap">{html.escape(text)}</span>'
+    )
+
+
 
 def _has_price_data() -> bool:
     """Return True if the price_data table contains at least one row."""
@@ -1004,7 +1048,36 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f"<span style='color:#94a3b8;font-size:0.78rem'> — {_dd}</span></div>"
         )
 
-    intel_strips = overlay_strips + catch_up_strips
+    hmm_strip = ""
+    _hmm = regime_result.get("hmm") or {}
+    if _hmm.get("hmm_model_available"):
+        _hmm_states = [
+            ("BULL",      _hmm.get("hmm_bull_probability", 0.0) or 0.0,      "#16a34a"),
+            ("BEAR",      _hmm.get("hmm_bear_probability", 0.0) or 0.0,      "#ef5350"),
+            ("UNCERTAIN", _hmm.get("hmm_uncertain_probability", 0.0) or 0.0, "#6b7280"),
+        ]
+        _hmm_pills = "".join(
+            f"<span style='background:{c}18;border:1px solid {c}55;color:{c};padding:1px 7px;"
+            f"border-radius:3px;font-size:0.72rem;font-weight:700;white-space:nowrap;margin-right:4px'>"
+            f"{lbl} {p:.0%}</span>"
+            for lbl, p, c in _hmm_states
+        )
+        _hmm_rule = _hmm.get("rule_regime", "")
+        _hmm_note = (
+            f"downgraded {_hmm_rule.replace('_', ' ')} to MIXED — bull confidence below threshold"
+            if _hmm.get("hmm_downgraded")
+            else f"confirms dominant state {_hmm.get('hmm_dominant_state', 'UNCERTAIN')}"
+        )
+        hmm_strip = (
+            "<div style='border-left:3px solid #6366f1;padding:3px 10px;"
+            f"background:{_hex_rgba('#6366f1', 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
+            "<span style='background:#6366f1;color:#fff;padding:0 5px;"
+            "border-radius:2px;font-size:0.64rem;font-weight:800'>HMM CONFIDENCE</span> "
+            f"{_hmm_pills}"
+            f"<span style='color:#94a3b8;font-size:0.78rem'>{html.escape(_hmm_note)}</span></div>"
+        )
+
+    intel_strips = overlay_strips + catch_up_strips + hmm_strip
 
     dist_pills = "".join(
         f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
@@ -1770,6 +1843,58 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.cache_data.clear()
                 except Exception as _exc:
                     st.error(f"Analysis failed: {_exc}")
+
+    # ── HMM Model ──────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### HMM Model")
+    st.caption(
+        "3-state Gaussian HMM regime confidence layer — validates (never replaces) "
+        "the rule-based regime detection above. See analysis/hmm_regime.py."
+    )
+
+    try:
+        from analysis.hmm_regime import get_hmm_regime_confidence as _get_hmm_conf
+        _hmm_status = _get_hmm_conf(config)
+    except Exception:
+        _hmm_status = {"hmm_model_available": False}
+
+    _hmm_last_fit = get_metadata("hmm_last_fit")
+    _hmm_col1, _hmm_col2, _hmm_col3 = st.columns(3)
+    _status_card(
+        _hmm_col1, "Last Fit",
+        _fmt_uk(_hmm_last_fit, "%Y-%m-%d %H:%M") if _hmm_last_fit else "Never",
+        "Refits weekly (Sunday) or on demand",
+        "ok" if _hmm_last_fit else "warn",
+    )
+    _status_card(
+        _hmm_col2, "Training Days",
+        str(_hmm_status.get("model_trained_on_days", 0)) if _hmm_status.get("hmm_model_available") else "—",
+        "^GSPC daily history used for the current fit",
+        "ok" if _hmm_status.get("hmm_model_available") else "warn",
+    )
+    if _hmm_status.get("hmm_model_available"):
+        _hmm_probs_str = (
+            f"BULL {_hmm_status['hmm_bull_probability']:.0%} · "
+            f"BEAR {_hmm_status['hmm_bear_probability']:.0%} · "
+            f"UNCERTAIN {_hmm_status['hmm_uncertain_probability']:.0%}"
+        )
+        _status_card(_hmm_col3, "Current State", _hmm_status.get("hmm_dominant_state", "—"), _hmm_probs_str, "info")
+    else:
+        _status_card(_hmm_col3, "Current State", "Not available",
+                     "Model not yet fit — needs signals.hmm_min_training_days of ^GSPC history", "warn")
+
+    if st.button("Refit HMM Now", key="status_refit_hmm"):
+        with st.spinner("Refitting HMM…"):
+            try:
+                from analysis.hmm_regime import fit_hmm as _fit_hmm_now
+                _model = _fit_hmm_now(_load_config())
+                if _model is not None:
+                    st.success("HMM model refit complete.")
+                    st.cache_data.clear()
+                else:
+                    st.warning("Refit skipped — not enough ^GSPC history yet (see signals.hmm_min_training_days).")
+            except Exception as _exc:
+                st.error(f"HMM refit failed: {_exc}")
 
     # ── Email notification test ────────────────────────────────────────────
     notif_cfg = config.get("notifications", {}).get("email", {})
@@ -2629,6 +2754,24 @@ def _initialise() -> None:
             _prefetch_fx_rates()
         except Exception as exc:
             logger.warning("FX rate pre-fetch failed: %s", exc)
+
+        # First-run HMM fit — fires in a background thread so it never blocks
+        # the page load; a full EM fit can take several seconds and there's
+        # no need for the user to wait on it (get_hmm_regime_confidence()'s
+        # own uniform-probability fallback is a safe placeholder in the
+        # meantime — see analysis/hmm_regime.py). Only fires when no cached
+        # model exists yet — the weekly scheduler job keeps it fresh after
+        # that.
+        if get_metadata_str("hmm_model_params") is None:
+            try:
+                import threading  # noqa: PLC0415
+                from analysis.hmm_regime import fit_hmm  # noqa: PLC0415
+                _cfg = _load_config()
+                threading.Thread(
+                    target=fit_hmm, args=(_cfg,), name="hmm-startup-fit", daemon=True,
+                ).start()
+            except Exception as exc:
+                logger.warning("Could not start background HMM fit: %s", exc)
 
         # Run analysis on startup only on the very first run (last_analysis_run is None),
         # i.e. a fresh install where price data exists but has never been analysed.
@@ -3759,6 +3902,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
         f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
         f'{regime.replace("_", " ")}</span>'
+        + _hmm_status_pill_html(regime_result)
         + (f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
         + (f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
         + f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>'

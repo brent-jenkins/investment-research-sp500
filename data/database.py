@@ -390,6 +390,8 @@ class BacktestSignal(Base):
     macro_score = Column(Integer)
     close_price = Column(Float)
     atr = Column(Float)
+    hmm_bull_probability = Column(Float)  # HMM P(bull state) as of this date; NULL for non-TRENDING_BULL rule dates — see analysis/hmm_regime.py
+    hmm_downgraded = Column(Integer)      # 0/1 — 1 if the rule-based TRENDING_BULL call this date was downgraded to MIXED by the HMM confidence gate
 
     __table_args__ = (
         UniqueConstraint("run_id", "ticker", "date", name="uq_bt_signal_run_ticker_date"),
@@ -663,6 +665,8 @@ def _apply_migrations(engine) -> None:
         ("backtest_trades",    "pnl_gbp",              "FLOAT"),
         ("backtest_trades",    "stop_distance_pct",   "FLOAT"),
         ("backtest_trades",    "vol_source",          "VARCHAR(15)"),
+        ("backtest_signals",   "hmm_bull_probability","FLOAT"),
+        ("backtest_signals",   "hmm_downgraded",      "INTEGER"),
     ]
 
     for table, column, col_type in new_columns:

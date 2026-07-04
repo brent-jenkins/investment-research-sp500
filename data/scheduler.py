@@ -637,12 +637,31 @@ def _trade_alert_job() -> None:
 
 
 def _weekly_summary_job() -> None:
-    """Every Sunday at 10:00 UTC — send the weekly performance summary email."""
+    """Every Sunday at 10:00 UTC — send the weekly performance summary email
+    and refit the HMM regime confidence model (analysis/hmm_regime.py).
+
+    The HMM refit is weekly (not per analysis run) because a full EM fit is
+    too expensive to run every ~3 hours — see analysis/hmm_regime.py's
+    module docstring and CLAUDE.md's HMM section. Refitting here, and never
+    raising on failure, is a deliberate belt-and-braces pairing with
+    get_hmm_regime_confidence()'s own on-demand refit-if-stale check (see
+    analysis/hmm_regime.py:_load_or_refit_hmm()) — if this job is ever
+    skipped (deploy downtime spanning a Sunday, etc.) the next call to
+    detect_regime() during a normal analysis run will refit anyway once
+    signals.hmm_refit_interval_days has elapsed.
+    """
     logger.info("Weekly summary job starting…")
     config = _load_config()
     from output.briefing import send_weekly_summary_email  # noqa: PLC0415
     ok, msg = send_weekly_summary_email(config)
     logger.info("Weekly summary: %s — %s", "sent" if ok else "failed", msg)
+
+    try:
+        from analysis.hmm_regime import fit_hmm  # noqa: PLC0415
+        fit_hmm(config)
+        logger.info("HMM model refit complete (weekly)")
+    except Exception as exc:
+        logger.error("HMM refit failed: %s", exc, exc_info=True)
 
 
 def _fomc_reaction_job() -> None:
