@@ -487,16 +487,22 @@ _LEVEL_COLOUR = {
 }
 
 
-def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") -> None:
-    """Render a colour-coded status card into a Streamlit column."""
+def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok", max_width: str | None = None) -> None:
+    """Render a colour-coded status card into a Streamlit column.
+
+    max_width caps the card's width when rendered full-bleed (e.g. passed
+    `st` directly instead of a column from st.columns()) — the 2x3 status
+    grid and other column-wrapped callers leave it unset and are unaffected.
+    """
     colour  = _LEVEL_COLOUR.get(level, "#6b7280")
     sub_html = (
         f'<div style="font-size:0.78rem;color:#64748b;margin-top:3px">'
         f'{html.escape(sub)}</div>'
     ) if sub else ""
+    width_style = f'max-width:{max_width};' if max_width else ''
     col.markdown(
         f'<div style="border-left:3px solid {colour};background:{colour}18;'
-        f'padding:10px 14px;border-radius:0 6px 6px 0;min-height:72px">'
+        f'padding:10px 14px;border-radius:0 6px 6px 0;min-height:72px;{width_style}">'
         f'<div style="font-size:0.68rem;color:{colour};text-transform:uppercase;'
         f'letter-spacing:0.08em;font-weight:700;margin-bottom:4px">'
         f'{html.escape(label)}</div>'
@@ -1928,7 +1934,9 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         "Upgrade active" if _upgrade_triggered else "Upgrade inactive",
         _upgrade_sub,
         "ok" if _upgrade_triggered else ("warn" if _upgrade_enabled_cfg else "error"),
+        max_width="460px",
     )
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
     if st.button("Refit HMM Now", key="status_refit_hmm"):
         with st.spinner("Refitting HMM…"):
