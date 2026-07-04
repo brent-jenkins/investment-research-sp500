@@ -270,16 +270,18 @@ def _macro_scores(
 
 def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: dict) -> pd.DataFrame:
     """Return a date-indexed DataFrame with 'regime', 'hmm_bull_probability',
-    and 'hmm_downgraded' columns.
+    'hmm_downgraded', and 'hmm_upgraded' columns.
 
     'regime' is the rule-based ADX/VIX/SMA200 classification (unchanged from
     before the HMM feature), gated afterward by _resolve_hmm_gate() exactly
     the way analysis.regime.detect_regime() gates its own live rule-based
-    call — see that function's docstring for the full rationale. Since this
-    is computed ONCE per backtest run from the single shared ^GSPC series
-    (not once per ticker — every ticker's compute_signal_history() call
-    reuses this same DataFrame), the HMM gate here is also only ever
-    evaluated once per run, not multiplied by the ticker count.
+    call in both directions (TRENDING_BULL -> MIXED downgrade, MIXED ->
+    TRENDING_BULL upgrade) — see that function's docstring for the full
+    rationale. Since this is computed ONCE per backtest run from the single
+    shared ^GSPC series (not once per ticker — every ticker's
+    compute_signal_history() call reuses this same DataFrame), the HMM gate
+    here is also only ever evaluated once per run, not multiplied by the
+    ticker count.
     """
     sig     = config["signals"]
     close   = gspc_df["close"].astype(float)
@@ -310,13 +312,14 @@ def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: d
 
     hmm_bull_probability = np.full(len(close), np.nan)
     hmm_downgraded = np.zeros(len(close), dtype=bool)
+    hmm_upgraded = np.zeros(len(close), dtype=bool)
 
     if sig.get("hmm_enabled", True):
         try:
             from analysis.hmm_regime import _build_features as _hmm_build_features
             full_features = _hmm_build_features(gspc_df, config)
             if not full_features.empty:
-                regime, hmm_bull_probability, hmm_downgraded = _resolve_hmm_gate(
+                regime, hmm_bull_probability, hmm_downgraded, hmm_upgraded = _resolve_hmm_gate(
                     regime, close.index, full_features, config,
                 )
         except Exception as exc:
@@ -329,6 +332,7 @@ def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: d
             "regime": regime,
             "hmm_bull_probability": hmm_bull_probability,
             "hmm_downgraded": hmm_downgraded,
+            "hmm_upgraded": hmm_upgraded,
         },
         index=close.index,
     )
@@ -421,41 +425,53 @@ def _build_monthly_hmm_cache(
 
 def _resolve_hmm_gate(
     regime_array: np.ndarray, dates: pd.DatetimeIndex, full_features: pd.DataFrame, config: dict,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Apply the HMM confidence gate to a rule-based regime array — the
     backtest mirror of analysis.regime.detect_regime()'s live gate. Returns
-    (gated_regime, hmm_bull_probability, hmm_downgraded), all aligned to
-    *dates*.
+    (gated_regime, hmm_bull_probability, hmm_downgraded, hmm_upgraded), all
+    aligned to *dates*.
 
-    Only TRENDING_BULL dates are ever checked (mirrors the live gate exactly
-    — every other regime is informational-only and left untouched). For
-    each such date, the observation array passed to predict_proba() ends
-    exactly at that date — never later — even though dates within the same
-    calendar month share one fitted model (see _build_monthly_hmm_cache()):
+    Two independent directions are checked, mirroring the live gate exactly:
+
+    - TRENDING_BULL dates: downgraded to MIXED when HMM bull probability
+      falls below signals.hmm_bull_confidence_threshold.
+    - MIXED dates (only when signals.hmm_upgrade_enabled): upgraded to
+      TRENDING_BULL when HMM bull probability is at/above
+      signals.hmm_upgrade_threshold.
+
+    Every other regime (TRENDING_BEAR, RANGING_LOW_VOL, HIGH_VOLATILITY) is
+    informational-only and left untouched, same as live. For each checked
+    date, the observation array passed to predict_proba() ends exactly at
+    that date — never later — even though dates within the same calendar
+    month share one fitted model (see _build_monthly_hmm_cache()):
     hmmlearn's predict_proba() is a forward-BACKWARD smoother, not a pure
     forward filter, so an array extending past date d would let its
     reported probability for d be influenced by observations *after* d, a
     genuine look-ahead leak. Grouping only the model FIT by month (not the
     per-date predict_proba call) avoids this while still keeping the
-    number of HMM fits bounded by month count rather than TRENDING_BULL
-    date count.
+    number of HMM fits bounded by month count rather than per-date checks.
     """
     sig = config.get("signals", {})
-    threshold = float(sig.get("hmm_bull_confidence_threshold", 0.60))
+    threshold         = float(sig.get("hmm_bull_confidence_threshold", 0.60))
+    upgrade_enabled   = bool(sig.get("hmm_upgrade_enabled", True))
+    upgrade_threshold = float(sig.get("hmm_upgrade_threshold", 0.90))
 
     gated = regime_array.copy()
-    bull_prob = np.full(len(dates), np.nan)
+    bull_prob  = np.full(len(dates), np.nan)
     downgraded = np.zeros(len(dates), dtype=bool)
+    upgraded   = np.zeros(len(dates), dtype=bool)
 
-    bull_positions = np.where(regime_array == "TRENDING_BULL")[0]
-    if len(bull_positions) == 0:
-        return gated, bull_prob, downgraded
+    bull_positions  = np.where(regime_array == "TRENDING_BULL")[0]
+    mixed_positions = np.where(regime_array == "MIXED")[0] if upgrade_enabled else np.array([], dtype=int)
+    check_positions = np.union1d(bull_positions, mixed_positions)
+    if len(check_positions) == 0:
+        return gated, bull_prob, downgraded, upgraded
 
-    start_range = dates[bull_positions[0]].date()
-    end_range   = dates[bull_positions[-1]].date()
+    start_range = dates[check_positions[0]].date()
+    end_range   = dates[check_positions[-1]].date()
     month_cache = _build_monthly_hmm_cache(full_features, start_range, end_range, config)
 
-    for pos in bull_positions:
+    for pos in check_positions:
         d = dates[pos]
         month_end_key = (pd.Timestamp(d) + pd.offsets.MonthEnd(-1)).date()
         entry = month_cache.get(month_end_key)
@@ -480,11 +496,16 @@ def _resolve_hmm_gate(
                 break
 
         bull_prob[pos] = p_bull
-        if p_bull < threshold:
-            gated[pos] = "MIXED"
-            downgraded[pos] = True
+        if regime_array[pos] == "TRENDING_BULL":
+            if p_bull < threshold:
+                gated[pos] = "MIXED"
+                downgraded[pos] = True
+        elif regime_array[pos] == "MIXED":
+            if p_bull >= upgrade_threshold:
+                gated[pos] = "TRENDING_BULL"
+                upgraded[pos] = True
 
-    return gated, bull_prob, downgraded
+    return gated, bull_prob, downgraded, upgraded
 
 
 # ---------------------------------------------------------------------------
@@ -558,18 +579,18 @@ def compute_signal_history(
     macro_sc    = _macro_scores(df, ticker, vix_s, macro_df)
 
     regime_aligned = regime_hist["regime"].reindex(df.index).ffill().fillna("MIXED")
-    # hmm_bull_probability/hmm_downgraded are NOT forward-filled like regime
-    # above: _resolve_hmm_gate() (analysis/backtest.py) only ever populates
-    # hmm_bull_probability on dates the rule-based regime was actually
-    # TRENDING_BULL — every other date is a deliberate NaN meaning "the gate
-    # was never evaluated here" (informational-only regimes don't need an
-    # HMM opinion). Forward-filling would replace that "not evaluated" NaN
-    # with a stale probability from the last time it *was* evaluated,
-    # misrepresenting every subsequent MIXED/BEAR/etc. date as if the HMM had
-    # just given a fresh (but actually days- or weeks-old) opinion on it —
-    # a plain reindex (only introduces NaN for the rare case a ticker's own
-    # trading calendar has a date ^GSPC's doesn't) preserves the sparse,
-    # accurate signal instead.
+    # hmm_bull_probability/hmm_downgraded/hmm_upgraded are NOT forward-filled
+    # like regime above: _resolve_hmm_gate() (analysis/backtest.py) only ever
+    # populates hmm_bull_probability on dates the rule-based regime was
+    # actually TRENDING_BULL or MIXED — every other date is a deliberate NaN
+    # meaning "the gate was never evaluated here" (informational-only
+    # regimes don't need an HMM opinion). Forward-filling would replace that
+    # "not evaluated" NaN with a stale probability from the last time it
+    # *was* evaluated, misrepresenting every subsequent BEAR/etc. date as if
+    # the HMM had just given a fresh (but actually days- or weeks-old)
+    # opinion on it — a plain reindex (only introduces NaN for the rare case
+    # a ticker's own trading calendar has a date ^GSPC's doesn't) preserves
+    # the sparse, accurate signal instead.
     if "hmm_bull_probability" in regime_hist.columns:
         hmm_bull_probability_aligned = regime_hist["hmm_bull_probability"].reindex(df.index)
     else:
@@ -578,6 +599,10 @@ def compute_signal_history(
         hmm_downgraded_aligned = regime_hist["hmm_downgraded"].reindex(df.index).fillna(False).astype(bool)
     else:
         hmm_downgraded_aligned = pd.Series(False, index=df.index)
+    if "hmm_upgraded" in regime_hist.columns:
+        hmm_upgraded_aligned = regime_hist["hmm_upgraded"].reindex(df.index).fillna(False).astype(bool)
+    else:
+        hmm_upgraded_aligned = pd.Series(False, index=df.index)
 
     # Build per-date weight series for the five modules included in backtest.
     # Correlation module (weight=0.10) is excluded; remaining weights are
@@ -636,6 +661,7 @@ def compute_signal_history(
         "macro_score":          macro_sc,
         "hmm_bull_probability": hmm_bull_probability_aligned,
         "hmm_downgraded":       hmm_downgraded_aligned,
+        "hmm_upgraded":         hmm_upgraded_aligned,
     })
     result.index.name = "date"
     return result.dropna(subset=["close", "confluence_score"])
@@ -1153,11 +1179,11 @@ _SIGNALS_UPSERT_SQL = text("""
     INSERT INTO backtest_signals
         (run_id, ticker, date, regime, confluence_score, signal, trend_score,
          mean_reversion_score, volatility_score, volume_score, macro_score, close_price, atr,
-         hmm_bull_probability, hmm_downgraded)
+         hmm_bull_probability, hmm_downgraded, hmm_upgraded)
     VALUES
         (:run_id, :ticker, :date, :regime, :confluence_score, :signal, :trend_score,
          :mean_reversion_score, :volatility_score, :volume_score, :macro_score, :close_price, :atr,
-         :hmm_bull_probability, :hmm_downgraded)
+         :hmm_bull_probability, :hmm_downgraded, :hmm_upgraded)
     ON CONFLICT(run_id, ticker, date) DO UPDATE SET
         confluence_score = excluded.confluence_score,
         signal            = excluded.signal
@@ -1201,6 +1227,7 @@ def _store_signals_batch(engine, run_id: int, ticker: str, signals: pd.DataFrame
             "atr":                  float(row["atr"]) if pd.notna(row["atr"]) else None,
             "hmm_bull_probability": float(row["hmm_bull_probability"]) if "hmm_bull_probability" in row and pd.notna(row["hmm_bull_probability"]) else None,
             "hmm_downgraded":       int(bool(row["hmm_downgraded"])) if "hmm_downgraded" in row else 0,
+            "hmm_upgraded":         int(bool(row["hmm_upgraded"])) if "hmm_upgraded" in row else 0,
         })
     if not rows:
         return
@@ -1323,6 +1350,7 @@ def run_backtest(
                 "regime": pd.Series(dtype=str),
                 "hmm_bull_probability": pd.Series(dtype=float),
                 "hmm_downgraded": pd.Series(dtype=bool),
+                "hmm_upgraded": pd.Series(dtype=bool),
             })
 
         macro_df = _load_macro_history()

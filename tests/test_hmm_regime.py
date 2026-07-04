@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import pytest
 from sqlalchemy.orm import Session
 
 from data.database import Indicator, PriceData
@@ -296,6 +297,165 @@ def test_confidence_gate_does_not_override_trending_bear(db_engine, monkeypatch)
     assert result["hmm"]["hmm_downgraded"] is False
 
 
+def _hmm_conf(bull: float, bear: float, uncertain: float, dominant: str, model_available: bool = True) -> dict:
+    return {
+        "hmm_bull_probability": bull, "hmm_bear_probability": bear,
+        "hmm_uncertain_probability": uncertain, "hmm_dominant_state": dominant,
+        "hmm_confidence": max(bull, bear, uncertain), "hmm_agrees_with_rules": False,
+        "hmm_state_means": [], "model_trained_on_days": 500,
+        "hmm_model_available": model_available,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Upgrade path — analysis/regime.py:detect_regime() (MIXED -> TRENDING_BULL)
+# ---------------------------------------------------------------------------
+
+def test_upgrade_path_upgrades_mixed_to_trending_bull_at_high_confidence(db_engine, monkeypatch):
+    """A rule-based MIXED call with HMM bull probability at/above
+    hmm_upgrade_threshold must be upgraded to TRENDING_BULL, with
+    hmm_upgraded=True and rule_regime='MIXED' recorded — the inverse of the
+    existing downgrade gate."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.95, 0.02, 0.03, "BULL"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=100, sma_200=100, adx=22, vix=18)  # rule -> MIXED
+
+    result = detect_regime()
+    assert result["regime"] == Regime.TRENDING_BULL
+    assert result["hmm"]["hmm_upgraded"] is True
+    assert result["hmm"]["hmm_downgraded"] is False
+    assert result["hmm"]["rule_regime"] == "MIXED"
+
+
+def test_upgrade_path_does_not_upgrade_below_threshold(db_engine, monkeypatch):
+    """A rule-based MIXED call with HMM bull probability below
+    hmm_upgrade_threshold must remain MIXED."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.75, 0.10, 0.15, "BULL"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=100, sma_200=100, adx=22, vix=18)  # rule -> MIXED
+
+    result = detect_regime()
+    assert result["regime"] == Regime.MIXED
+    assert result["hmm"]["hmm_upgraded"] is False
+
+
+def test_upgrade_path_disabled_by_config_flag(db_engine, monkeypatch):
+    """hmm_upgrade_enabled: false must disable the upgrade path entirely —
+    MIXED stays MIXED no matter how high the HMM bull probability is. The
+    downgrade gate is a separate config key and is unaffected by this flag."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": False}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.99, 0.0, 0.01, "BULL"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=100, sma_200=100, adx=22, vix=18)  # rule -> MIXED
+
+    result = detect_regime()
+    assert result["regime"] == Regime.MIXED
+    assert result["hmm"]["hmm_upgraded"] is False
+
+
+def test_upgraded_regime_passes_entry_allowed_check():
+    """An upgraded regime must be genuinely TRENDING_BULL for downstream
+    automation — is_entry_allowed() has no notion of 'upgraded', it just
+    sees Regime.TRENDING_BULL.value and must allow it under the shipped
+    allowed_entry_regimes the same as a rule-confirmed TRENDING_BULL would."""
+    from analysis.regime import is_entry_allowed, Regime
+
+    config = {"trading212_invest": {"allowed_entry_regimes": ["TRENDING_BULL"]}}
+    assert is_entry_allowed(config, Regime.TRENDING_BULL.value, "trading212_invest") is True
+
+
+def test_upgrade_path_does_not_apply_to_trending_bear(db_engine, monkeypatch):
+    """The upgrade path only ever fires on a rule-based MIXED call — a
+    rule-based TRENDING_BEAR must never be upgraded, even with a very high
+    reported HMM bull probability."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.99, 0.00, 0.01, "BULL"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=90, sma_200=100, adx=30, vix=25)  # rule -> TRENDING_BEAR
+
+    result = detect_regime()
+    assert result["regime"] == Regime.TRENDING_BEAR
+    assert result["hmm"]["hmm_upgraded"] is False
+
+
+def test_upgrade_path_does_not_apply_to_ranging_low_vol(db_engine, monkeypatch):
+    """Same as TRENDING_BEAR above, for RANGING_LOW_VOL — HMM is
+    informational only outside TRENDING_BULL/MIXED."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.99, 0.00, 0.01, "BULL"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=100, sma_200=100, adx=10, vix=10)  # rule -> RANGING_LOW_VOL
+
+    result = detect_regime()
+    assert result["regime"] == Regime.RANGING_LOW_VOL
+    assert result["hmm"]["hmm_upgraded"] is False
+
+
+def test_upgrade_path_does_not_apply_to_high_volatility(db_engine, monkeypatch):
+    """Same as TRENDING_BEAR/RANGING_LOW_VOL above, for HIGH_VOLATILITY."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.99, 0.00, 0.01, "BULL"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=100, sma_200=100, adx=30, vix=35)  # rule -> HIGH_VOLATILITY
+
+    result = detect_regime()
+    assert result["regime"] == Regime.HIGH_VOLATILITY
+    assert result["hmm"]["hmm_upgraded"] is False
+
+
+def test_downgrade_path_unaffected_by_upgrade_config_being_present(db_engine, monkeypatch):
+    """The existing downgrade gate (TRENDING_BULL -> MIXED) must behave
+    identically whether or not the new upgrade keys are present in config —
+    both gates are independent per-call paths in the same codebase."""
+    from analysis.regime import detect_regime, Regime
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    monkeypatch.setattr("analysis.regime._load_config", lambda: config)
+    monkeypatch.setattr(
+        "analysis.hmm_regime.get_hmm_regime_confidence",
+        lambda cfg: _hmm_conf(0.30, 0.10, 0.60, "UNCERTAIN"),
+    )
+    _seed_gspc_indicator_row(db_engine, price=110, sma_200=100, adx=30, vix=15)  # rule -> TRENDING_BULL
+
+    result = detect_regime()
+    assert result["regime"] == Regime.MIXED
+    assert result["hmm"]["hmm_downgraded"] is True
+    assert result["hmm"]["hmm_upgraded"] is False
+    assert result["hmm"]["rule_regime"] == "TRENDING_BULL"
+
+
 def test_hmm_enabled_false_bypasses_gate_entirely(db_engine, monkeypatch):
     """signals.hmm_enabled: false must skip the HMM check altogether —
     detect_regime() returns the rule-based regime unchanged, and no
@@ -447,3 +607,125 @@ def test_monthly_hmm_cache_returns_none_model_with_insufficient_history():
     early_month_end = (base - pd.offsets.MonthEnd(1))
     cache = _build_monthly_hmm_cache(features, early_month_end.date(), early_month_end.date(), _HMM_CONFIG)
     assert cache[early_month_end.date()]["model"] is None
+
+
+# ---------------------------------------------------------------------------
+# Upgrade path — analysis/backtest.py:_resolve_hmm_gate() (the backtest
+# mirror of the live MIXED -> TRENDING_BULL upgrade gate in detect_regime())
+# ---------------------------------------------------------------------------
+
+class _FakeGateModel:
+    """A stand-in for a fitted GaussianHMM whose predict_proba() always
+    reports the BULL-labelled state (index 1) as dominant for the last row
+    of whatever window it's given — regardless of the actual feature
+    values. Used to isolate _resolve_hmm_gate()'s branching logic (which
+    dates get checked, which direction each gets pushed) from real HMM
+    fit-quality variance, which is already covered separately by
+    test_monthly_hmm_cache_no_look_ahead and the label-stability tests
+    above; a real fit's fitted state separation is not this test's concern.
+    """
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        n = len(X)
+        proba = np.zeros((n, 3))
+        proba[:, 2] = 1.0        # earlier rows: fully UNCERTAIN (irrelevant — only the last row is read)
+        proba[-1] = [0.03, 0.95, 0.02]  # last row: BULL (state 1) dominant
+        return proba
+
+
+class _AlwaysHasFakeEntry(dict):
+    """A dict that returns the same fake monthly-cache entry for ANY key —
+    sidesteps the real _build_monthly_hmm_cache()'s month-end alignment
+    bookkeeping entirely, which is irrelevant to testing the gate's
+    direction logic itself."""
+
+    def __init__(self, entry: dict):
+        super().__init__()
+        self._entry = entry
+
+    def get(self, key, default=None):
+        return self._entry
+
+
+def test_resolve_hmm_gate_upgrades_mixed_dates_with_high_bull_probability(monkeypatch):
+    """_resolve_hmm_gate() must upgrade MIXED-labelled dates to
+    TRENDING_BULL when the (fitted) model reports bull-state probability
+    at/above hmm_upgrade_threshold.
+
+    The rule-based label fed in here is arbitrary (regime_array is a plain
+    input the function trusts) — marking the tail of the series MIXED and
+    verifying it gets upgraded, while the untouched TRENDING_BEAR-labelled
+    dates earlier in the series are left exactly as they were, is what
+    proves the gate only acts on MIXED (never TRENDING_BEAR)."""
+    import analysis.backtest as backtest_mod
+
+    n = 120
+    dates = pd.date_range(end=pd.Timestamp(datetime.utcnow()), periods=n, freq="D")
+    full_features = pd.DataFrame(
+        {"close_sma200_ratio": 1.0, "adx": 30.0, "atr_pct": 0.01, "rsi": 60.0, "macd": 1.0},
+        index=dates,
+    )
+
+    regime_array = np.full(n, "TRENDING_BEAR", dtype=object)
+    regime_array[-30:] = "MIXED"
+
+    fake_entry = {
+        "model": _FakeGateModel(),
+        "feature_mean": np.zeros(5),
+        "feature_std": np.ones(5),
+        "state_labels": {0: "BEAR", 1: "BULL", 2: "UNCERTAIN"},
+    }
+    monkeypatch.setattr(
+        backtest_mod, "_build_monthly_hmm_cache",
+        lambda *a, **kw: _AlwaysHasFakeEntry(fake_entry),
+    )
+
+    config = {"signals": {"hmm_bull_confidence_threshold": 0.60, "hmm_upgrade_threshold": 0.90, "hmm_upgrade_enabled": True}}
+    gated, bull_prob, downgraded, upgraded = backtest_mod._resolve_hmm_gate(
+        regime_array, dates, full_features, config,
+    )
+
+    assert gated[-1] == "TRENDING_BULL"
+    assert bool(upgraded[-1]) is True
+    assert bull_prob[-1] == pytest.approx(0.95)
+    assert not bool(downgraded.any())  # no TRENDING_BULL dates existed, so downgrade never fires
+    # Every TRENDING_BEAR-labelled date is untouched — the gate never checks them.
+    assert list(gated[:-30]) == list(regime_array[:-30])
+    # Every MIXED date got the same fake 0.95 bull probability and was upgraded.
+    assert all(gated[-30:] == "TRENDING_BULL")
+    assert bool(upgraded[-30:].all())
+
+
+def test_resolve_hmm_gate_upgrade_disabled_leaves_mixed_dates_untouched():
+    """signals.hmm_upgrade_enabled: false must stop _resolve_hmm_gate() from
+    even considering MIXED dates for upgrade — mirrors the live gate's
+    hmm_upgrade_enabled behaviour in analysis/regime.py:detect_regime()."""
+    from analysis.backtest import _resolve_hmm_gate, _MONTHLY_HMM_CACHE
+    from analysis.hmm_regime import _build_features
+
+    _MONTHLY_HMM_CACHE.clear()
+    base = pd.Timestamp(datetime.utcnow())
+    n = 600
+    closes = _trending_closes(seed=43, n=n, drift=0.0015, vol=0.006)
+    dates = pd.date_range(end=base, periods=n, freq="D")
+    price_df = pd.DataFrame(
+        {
+            "close": closes,
+            "high": [c * 1.005 for c in closes],
+            "low":  [c * 0.995 for c in closes],
+            "open": closes,
+        },
+        index=dates,
+    )
+
+    features = _build_features(price_df, _HMM_CONFIG)
+    regime_array = np.full(len(features), "TRENDING_BEAR", dtype=object)
+    regime_array[-65:] = "MIXED"
+
+    config = {"signals": {**_HMM_CONFIG["signals"], "hmm_upgrade_threshold": 0.60, "hmm_upgrade_enabled": False}}
+    gated, bull_prob, downgraded, upgraded = _resolve_hmm_gate(
+        regime_array, features.index, features, config,
+    )
+
+    assert not bool(upgraded.any())
+    assert list(gated) == list(regime_array)  # entirely unchanged — no dates were even checked

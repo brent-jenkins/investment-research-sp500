@@ -418,11 +418,13 @@ def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> st
     see analysis/regime.py:detect_regime()'s 'hmm' dict and CLAUDE.md's HMM
     confidence gate section.
 
-    Three cases:
-    - Rule-based regime was TRENDING_BULL and HMM confirmed it: green
-      "✓ HMM NN% confident".
+    Four cases:
     - Rule-based regime was TRENDING_BULL but HMM downgraded it to MIXED:
       amber "⚠ Downgraded from TRENDING_BULL (HMM NN% bull confidence)".
+    - Rule-based regime was MIXED but HMM upgraded it to TRENDING_BULL:
+      amber "↑ HMM upgraded from MIXED (NN% bull confidence)".
+    - Rule-based regime was TRENDING_BULL and HMM confirmed it: green
+      "✓ HMM NN% confident".
     - Any other regime — HMM is informational only, never a veto there:
       grey "HMM: NN% <state> (informational only)".
 
@@ -436,6 +438,7 @@ def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> st
 
     rule_regime = hmm.get("rule_regime", "")
     downgraded  = hmm.get("hmm_downgraded", False)
+    upgraded    = hmm.get("hmm_upgraded", False)
     dominant    = hmm.get("hmm_dominant_state", "UNCERTAIN")
     confidence  = hmm.get("hmm_confidence", 0.0) or 0.0
     bull_prob   = hmm.get("hmm_bull_probability", 0.0) or 0.0
@@ -443,6 +446,9 @@ def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> st
     if downgraded:
         colour = "#f59e0b"
         text = f"⚠ Downgraded from {rule_regime.replace('_', ' ')} (HMM {bull_prob:.0%} bull confidence)"
+    elif upgraded:
+        colour = "#f59e0b"
+        text = f"↑ HMM upgraded from {rule_regime.replace('_', ' ')} ({bull_prob:.0%} bull confidence)"
     elif rule_regime == "TRENDING_BULL":
         colour = "#16a34a"
         text = f"✓ HMM {confidence:.0%} confident"
@@ -1063,17 +1069,32 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             for lbl, p, c in _hmm_states
         )
         _hmm_rule = _hmm.get("rule_regime", "")
-        _hmm_note = (
-            f"downgraded {_hmm_rule.replace('_', ' ')} to MIXED — bull confidence below threshold"
-            if _hmm.get("hmm_downgraded")
-            else f"confirms dominant state {_hmm.get('hmm_dominant_state', 'UNCERTAIN')}"
-        )
+        if _hmm.get("hmm_downgraded"):
+            _hmm_note = f"downgraded {_hmm_rule.replace('_', ' ')} to MIXED — bull confidence below threshold"
+        elif _hmm.get("hmm_upgraded"):
+            _hmm_note = f"upgraded {_hmm_rule.replace('_', ' ')} to TRENDING_BULL — bull confidence above upgrade threshold"
+        else:
+            _hmm_note = f"confirms dominant state {_hmm.get('hmm_dominant_state', 'UNCERTAIN')}"
+
+        _hmm_gate_badge = ""
+        if _hmm.get("hmm_downgraded"):
+            _hmm_gate_badge = (
+                "<span style='background:#f59e0b;color:#fff;padding:1px 6px;border-radius:3px;"
+                "font-size:0.68rem;font-weight:800;margin-right:6px'>↓ DOWNGRADED</span>"
+            )
+        elif _hmm.get("hmm_upgraded"):
+            _hmm_gate_badge = (
+                "<span style='background:#f59e0b;color:#fff;padding:1px 6px;border-radius:3px;"
+                "font-size:0.68rem;font-weight:800;margin-right:6px'>↑ UPGRADED</span>"
+            )
+
         hmm_strip = (
             "<div style='border-left:3px solid #6366f1;padding:3px 10px;"
             f"background:{_hex_rgba('#6366f1', 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
             "<span style='background:#6366f1;color:#fff;padding:0 5px;"
             "border-radius:2px;font-size:0.64rem;font-weight:800'>HMM CONFIDENCE</span> "
             f"{_hmm_pills}"
+            f"{_hmm_gate_badge}"
             f"<span style='color:#94a3b8;font-size:0.78rem'>{html.escape(_hmm_note)}</span></div>"
         )
 
@@ -1882,6 +1903,32 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     else:
         _status_card(_hmm_col3, "Current State", "Not available",
                      "Model not yet fit — needs signals.hmm_min_training_days of ^GSPC history", "warn")
+
+    # ── Upgrade gate (MIXED → TRENDING_BULL) ────────────────────────────────
+    _sig_cfg = config.get("signals", {})
+    _upgrade_enabled_cfg = bool(_sig_cfg.get("hmm_upgrade_enabled", True))
+    _upgrade_threshold_cfg = float(_sig_cfg.get("hmm_upgrade_threshold", 0.90))
+    _upgrade_bull_prob = (
+        _hmm_status.get("hmm_bull_probability") if _hmm_status.get("hmm_model_available") else None
+    )
+    _upgrade_triggered = (
+        _upgrade_enabled_cfg
+        and _upgrade_bull_prob is not None
+        and _upgrade_bull_prob >= _upgrade_threshold_cfg
+    )
+    _upgrade_sub = f"Threshold {_upgrade_threshold_cfg:.0%}"
+    if not _upgrade_enabled_cfg:
+        _upgrade_sub += " · hmm_upgrade_enabled: false"
+    elif _upgrade_bull_prob is not None:
+        _upgrade_sub += f" · current bull confidence {_upgrade_bull_prob:.0%}"
+    _upgrade_col = st.columns(1)[0]
+    _status_card(
+        _upgrade_col,
+        "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
+        "Upgrade active" if _upgrade_triggered else "Upgrade inactive",
+        _upgrade_sub,
+        "ok" if _upgrade_triggered else ("warn" if _upgrade_enabled_cfg else "error"),
+    )
 
     if st.button("Refit HMM Now", key="status_refit_hmm"):
         with st.spinner("Refitting HMM…"):
@@ -3858,6 +3905,13 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     regime_result = detect_regime()
     regime  = regime_result["regime"]
     colour  = regime_result["colour"]
+    # An HMM-upgraded TRENDING_BULL (rule-based call was MIXED) is rendered
+    # amber rather than the normal green — this is an HMM-driven entry, not
+    # a rule-confirmed bull market, and that distinction matters when
+    # interpreting position performance later.
+    _hmm_upgraded_flag = bool((regime_result.get("hmm") or {}).get("hmm_upgraded"))
+    if _hmm_upgraded_flag:
+        colour = "#f59e0b"
     details = regime_result["details"]
     price   = details.get("price")
     sma_200 = details.get("sma_200")
@@ -3901,7 +3955,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         f'border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px;margin-bottom:4px">'
         f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
         f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
-        f'{regime.replace("_", " ")}</span>'
+        f'{regime.replace("_", " ")}{" ↑" if _hmm_upgraded_flag else ""}</span>'
         + _hmm_status_pill_html(regime_result)
         + (f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
         + (f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
@@ -3942,8 +3996,16 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         note = f" ({'/'.join(allowed)} only)" if allowed else ""
         if is_entry_allowed(config, regime.value, section):
             eff = resolve_entry_signal(cfg, regime.value)
-            overridden = regime.value in cfg.get("entry_signal_overrides", {})
-            _auto_bits.append(f"{label} {eff}{' (override)' if overridden else ''}{note}")
+            if _hmm_upgraded_flag:
+                # An HMM-driven upgrade always takes priority over the normal
+                # "(override)" annotation so it's always visible that this
+                # regime's entries are HMM-driven, not rule-confirmed — see
+                # CLAUDE.md's "HMM regime confidence layer" section.
+                suffix = " (HMM upgrade)"
+            else:
+                overridden = regime.value in cfg.get("entry_signal_overrides", {})
+                suffix = " (override)" if overridden else ""
+            _auto_bits.append(f"{label} {eff}{suffix}{note}")
         else:
             _auto_bits.append(f"{label} blocked{note}")
             _blocked_paths.append(label)

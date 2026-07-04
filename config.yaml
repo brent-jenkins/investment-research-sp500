@@ -547,39 +547,51 @@ signals:
   # replacing) the rule-based regime detection in analysis/regime.py. The
   # rule-based ADX/VIX/SMA200 thresholds create sharp regime boundaries
   # (ADX 24.9 is MIXED, ADX 25.1 is TRENDING_BULL) — HMM state probabilities
-  # are continuous and provide a confidence check on TRENDING_BULL calls only;
-  # every other regime is left untouched (informational only there).
+  # are continuous and provide a confidence check in both directions:
+  # a TRENDING_BULL call can be DOWNGRADED to MIXED when HMM bull confidence
+  # is low, and a MIXED call can be UPGRADED to TRENDING_BULL when HMM bull
+  # confidence is very high. Every other rule-based regime (TRENDING_BEAR,
+  # RANGING_LOW_VOL, HIGH_VOLATILITY) is left untouched — HMM is
+  # informational only there. See CLAUDE.md's "HMM regime confidence layer"
+  # section for the full mechanism and the backtest evidence behind both
+  # gates.
   hmm_min_training_days: 504           # ~2 years minimum ^GSPC history before a model will be fit at all
   hmm_bull_confidence_threshold: 0.60  # a rule-based TRENDING_BULL call is downgraded to MIXED when HMM's bull-state probability falls below this
+  hmm_upgrade_threshold: 0.90          # a rule-based MIXED call is upgraded to TRENDING_BULL when HMM's bull-state probability is at/above this (deliberately much stricter than the downgrade threshold — an upgrade opens a new entry the rules alone would have blocked, so it should only fire on very high confidence)
+  hmm_upgrade_enabled: true            # the upgrade mechanism's own on/off switch — kept true so it's ready the moment hmm_enabled flips on; inert while hmm_enabled is false, same as every other signals.hmm_* key below
   hmm_refit_interval_days: 7           # refit weekly (Sunday summary job) rather than on every analysis run — a full re-fit is too expensive to run every 3 hours
-  # Disabled. A full-history backtest comparison (2019-present, tradeable
-  # assets, identical code/data, only this one config key changed) showed
-  # the confidence gate deteriorates every metric versus the pre-HMM
-  # baseline: 165 trades vs 236, win rate 42.4% vs 45.8%, profit factor 1.69
-  # vs 2.62, Sharpe 0.548 vs 0.80, max drawdown -33.1% vs -29.5%. The gate
-  # downgraded 45.3% of all rule-based TRENDING_BULL calls (15,360 of
-  # 33,920 evaluated) to MIXED — and because allowed_entry_regimes is
-  # ["TRENDING_BULL"] only (see "Regime entry gate" in CLAUDE.md), a
-  # downgrade to MIXED doesn't just lower conviction, it blocks the entry
-  # outright, so the gate ended up vetoing a large fraction of entries
-  # rather than selectively filtering weak ones. Likely root cause: the
-  # live model was observed to fit two nearly-identical "bull-like" states
-  # (state means for close_sma200_ratio/adx differing by <0.01 in
-  # standardised units) rather than a clean 3-way separation — a known HMM
-  # label-switching/instability failure mode when the true underlying
-  # process doesn't actually have 3 well-separated regimes. Since each
-  # calendar month refits independently (see "Backtesting engine" ->
-  # "HMM confidence gate in the backtest" in CLAUDE.md), this instability
-  # can make the same underlying market condition score above threshold in
-  # one month and below it in an adjacent month for no substantive reason,
-  # producing what looks like a noisy veto rather than a genuine confidence
-  # signal. The code remains fully implemented and tested (live and
-  # backtest) — re-enabling is a config-only change (hmm_enabled: true).
-  # Candidate next steps before re-attempting: calibrate/monitor state-mean
-  # separation before trusting a given month's fit (e.g. skip gating a
-  # month whose two closest state means are below some separation
-  # threshold), or try a stability check across consecutive months' labels
-  # before applying the gate. See CLAUDE.md's HMM section for detail.
+  # Still disabled — adding the upgrade path (2026-07-04) made things WORSE,
+  # not better. A full-history backtest (2019-present, tradeable assets,
+  # identical code/data, only hmm_enabled changed) with both the downgrade
+  # gate and the new upgrade gate active produced 443 trades at 36.3% win
+  # rate, profit factor 1.36, Sharpe 0.31, max drawdown -80.8% — every
+  # metric worse than both the no-HMM baseline (236 trades, 45.8% win,
+  # PF 2.62, Sharpe 0.80, DD -29.5%) AND the previously-tested downgrade-only
+  # gate (165 trades, 42.4% win, PF 1.69, Sharpe 0.548, DD -33.1%). Splitting
+  # the 443 trades by cause: 287 were HMM-upgraded MIXED->TRENDING_BULL
+  # entries (34.2% win, PF 1.28, DD -60.7%) and 156 were genuine rule-based
+  # TRENDING_BULL entries that survived the downgrade gate (40.4% win,
+  # PF 1.57, DD -37.5%) — the upgraded subset alone is worse than either.
+  # Root cause: allowed_entry_regimes is ["TRENDING_BULL"] only specifically
+  # *because* a full-history backtest showed MIXED has no edge (416 trades,
+  # 37.5% win, PF 0.123, -91.26% DD — see "Regime entry gate" in CLAUDE.md).
+  # The upgrade path's 34.2% win rate on 287 trades is a near-exact match
+  # for that MIXED-regime baseline — the HMM's bull-state probability does
+  # not appear to discriminate the small number of MIXED days that are
+  # genuinely bull-like from the much larger pool that isn't; it is
+  # effectively re-admitting the same low-edge MIXED entries the gate was
+  # built to keep out. This is consistent with the label-switching
+  # instability already diagnosed for the downgrade gate (two
+  # nearly-identical "bull-like" fitted states) — the same instability that
+  # makes a low-confidence TRENDING_BULL an unreliable downgrade signal
+  # apparently also makes a high-confidence MIXED an unreliable upgrade
+  # signal. The mechanism (this config block, analysis/regime.py's gate,
+  # analysis/backtest.py's monthly cache, and the full pytest suite) remains
+  # implemented and tested either way — re-enabling is still a config-only
+  # change (hmm_enabled: true), but should not be done without first
+  # re-validating against full history the same way, per this file's own
+  # standing rule for regime-detection changes. See CLAUDE.md's "HMM regime
+  # confidence layer" section for the full write-up.
   hmm_enabled: false
   # Change point detection (analysis/volatility.py:detect_change_points()) —
   # identifies structural breaks in a ticker's return-variance regime.
