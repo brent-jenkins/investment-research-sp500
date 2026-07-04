@@ -552,7 +552,7 @@ signals:
   # 1-day GARCH volatility forecast scaled to the position's holding period.
   garch_lookback_days: 504      # ~2 trading years for GARCH calibration
   garch_stop_multiplier: 2.0    # multiplier on GARCH holding-period vol (start same as ATR multiplier)
-  garch_min_observations: 100   # minimum data points required to fit GARCH
+  garch_min_observations: 60    # minimum data points required to fit GARCH (60 comfortably fits GARCH(1,1)'s 3 parameters and lets a change point within cpd_recent_window's 90 days still leave enough post-break rows)
   min_stop_pct: 1.0             # floor: stop never tighter than 1% of entry price
   max_stop_pct: 25.0            # ceiling: stop never wider than 25% of entry price
   use_garch_stops: true         # set false to revert to ATR stops without code change
