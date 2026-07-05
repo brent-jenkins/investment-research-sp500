@@ -30,10 +30,19 @@ def compute_mean_reversion(df: pd.DataFrame, config: dict) -> dict:
     - Bollinger Band width (upper - lower)
     - 52-week Z-score: (close - 252-day mean) / 252-day std
 
-    Scoring (all three must agree for a signal):
+    Scoring (RSI + Z-score must agree for a signal — see the correlation
+    note below for why Bollinger %B was dropped from this calculation):
     - RSI oversold (<30) → bullish; overbought (>70) → bearish
-    - Price below lower BB → bullish; above upper BB → bearish
     - 52-week Z-score < -1.5 → bullish; > +1.5 → bearish
+
+    bb_pct_b and bb_width are still computed and returned for storage/display
+    (Charts page indicator panel) but no longer feed the score: a production
+    correlation analysis (200 rows, 49 tickers, 2026-07-05) measured RSI vs
+    Bollinger %B at 0.927 — the two are redundant measurements of the same
+    overbought/oversold signal, so keeping both as scoring votes double-
+    counted one underlying signal rather than adding an independent one.
+    Dropping %B rebalances the module to two genuinely distinct components:
+    momentum extremity (RSI) and long-run price dislocation (52-week Z).
 
     Args:
         df: Price DataFrame sorted ascending with a 'close' column.
@@ -102,9 +111,11 @@ def compute_mean_reversion(df: pd.DataFrame, config: dict) -> dict:
     last_lower  = _last(bb_lower)
     last_z      = _last(z_score)
 
-    # Scoring — require RSI + at least one other signal to agree
+    # Scoring — 50% RSI + 50% 52-week Z-score; both must agree for a signal.
+    # bb_signal is intentionally not computed here — see the docstring above
+    # for the correlation rationale (bb_pct_b is still returned below for
+    # storage/display, just excluded from the score).
     rsi_signal  = 0
-    bb_signal   = 0
     z_signal    = 0
 
     if last_rsi is not None:
@@ -113,25 +124,15 @@ def compute_mean_reversion(df: pd.DataFrame, config: dict) -> dict:
         elif last_rsi > rsi_overbought:
             rsi_signal = -1
 
-    if last_upper is not None and last_lower is not None:
-        if last_close < last_lower:
-            bb_signal = 1
-        elif last_close > last_upper:
-            bb_signal = -1
-
     if last_z is not None:
         if last_z < -z_thr:
             z_signal = 1
         elif last_z > z_thr:
             z_signal = -1
 
-    votes = [rsi_signal, bb_signal, z_signal]
-    bullish = votes.count(1)
-    bearish = votes.count(-1)
-    # RSI must agree and at least one more
-    if rsi_signal == 1 and bullish >= 2:
+    if rsi_signal == 1 and z_signal == 1:
         score = 1
-    elif rsi_signal == -1 and bearish >= 2:
+    elif rsi_signal == -1 and z_signal == -1:
         score = -1
     else:
         score = 0

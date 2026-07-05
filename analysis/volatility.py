@@ -304,7 +304,9 @@ def compute_volatility(
     - Change-point-aware regime context (see detect_change_points()) when
       *ticker* is supplied
 
-    Scoring:
+    Scoring — an equal-weight combination of three genuinely distinct
+    components (ATR% percentile, VIX regime, change-point adjustment); see
+    the correlation note below for why hist_vol_20 was dropped as a fourth:
     - Low ATR percentile (<25th over 252 days) + low VIX  → +1 (benign, trend-friendly)
     - Extreme ATR percentile (>75th) OR VIX in 'extreme'  → -1 (caution)
     - Otherwise 0
@@ -316,6 +318,16 @@ def compute_volatility(
       compression after a break is constructive). No recent change point,
       or a marginal one, leaves the score unchanged. The combined score is
       clamped back to [-1, 1].
+
+    hist_vol_20 (20-day annualised realised vol) is still computed and
+    returned for storage/display (Charts page indicator panel) but no longer
+    feeds the score: a production correlation analysis (200 rows, 49
+    tickers, 2026-07-05) measured ATR% vs hist_vol_20 at 0.929 — both are
+    trailing realised-volatility measures over similar windows, so scoring
+    on both double-counted one signal rather than adding an independent one.
+    Dropping it rebalances the module to three distinct components: ATR%
+    percentile (range-based vol), VIX regime (forward-looking/market-implied
+    vol), and the change-point adjustment (structural regime-shift context).
 
     Args:
         df: Price DataFrame sorted ascending with high / low / close columns.

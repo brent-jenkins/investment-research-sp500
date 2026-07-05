@@ -156,32 +156,38 @@ def _trend_scores(df: pd.DataFrame, config: dict) -> pd.Series:
 
 
 def _mean_rev_scores(df: pd.DataFrame, config: dict) -> pd.Series:
+    """50% RSI + 50% 52-week Z-score — mirrors compute_mean_reversion()'s live
+    scoring. Bollinger %B is deliberately not computed here: a production
+    correlation analysis (200 rows, 49 tickers, 2026-07-05) measured RSI vs
+    Bollinger %B at 0.927, so it was dropped from the score in both the live
+    and backtest paths — see analysis/mean_reversion.py's docstring."""
     sig     = config["signals"]
     close   = df["close"].astype(float)
 
     rsi_s   = _rsi(close, sig["rsi_period"])
-    bb_mid  = close.rolling(sig["bollinger_period"]).mean()
-    bb_std  = close.rolling(sig["bollinger_period"]).std()
-    bb_up   = bb_mid + sig["bollinger_std"] * bb_std
-    bb_lo   = bb_mid - sig["bollinger_std"] * bb_std
     roll252 = close.rolling(252)
     z_score = (close - roll252.mean()) / roll252.std().replace(0, np.nan)
 
     rsi_sig = pd.Series(np.where(rsi_s < 30, 1, np.where(rsi_s > 70, -1, 0)), index=close.index)
-    bb_sig  = pd.Series(np.where(close < bb_lo, 1, np.where(close > bb_up, -1, 0)), index=close.index)
     z_sig   = pd.Series(np.where(z_score < -1.5, 1, np.where(z_score > 1.5, -1, 0)), index=close.index)
 
-    bull = (rsi_sig == 1).astype(int) + (bb_sig == 1).astype(int) + (z_sig == 1).astype(int)
-    bear = (rsi_sig == -1).astype(int) + (bb_sig == -1).astype(int) + (z_sig == -1).astype(int)
     raw  = pd.Series(
-        np.where((rsi_sig == 1) & (bull >= 2), 1,
-        np.where((rsi_sig == -1) & (bear >= 2), -1, 0)),
+        np.where((rsi_sig == 1) & (z_sig == 1), 1,
+        np.where((rsi_sig == -1) & (z_sig == -1), -1, 0)),
         index=close.index,
     )
     return raw.astype(int)
 
 
 def _vol_scores(df: pd.DataFrame, vix_s: Optional[pd.Series], config: dict) -> pd.Series:
+    """ATR% percentile + VIX regime (equal-weight combination, mirroring
+    compute_volatility()'s live scoring minus its change-point adjustment —
+    see the "Scope note" in CLAUDE.md's Volatility module section for why
+    CPD isn't vectorised into the backtest). hist_vol_20 was never a scoring
+    input here to begin with (only ATR% and VIX ever were) — the production
+    correlation analysis that dropped hist_vol_20 from the live score
+    (ATR% vs hist_vol_20: 0.929, see analysis/volatility.py's docstring)
+    changes nothing on this path."""
     sig     = config["signals"]
     close   = df["close"].astype(float)
     high    = df["high"].astype(float)

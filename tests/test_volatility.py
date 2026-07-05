@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import pytest
 from sqlalchemy.orm import Session
 
 from data.database import PriceData
@@ -436,6 +437,50 @@ def test_score_increased_when_vol_compresses_after_structural_break(mocker):
     result = compute_volatility(df, _CPD_CONFIG, vix_close=None, ticker="MOCKED")
 
     assert result["score"] == baseline["score"] + 1
+
+
+def test_hist_vol_20_disagreement_has_no_effect_on_score():
+    """compute_volatility()'s score is an equal-weight combination of ATR%
+    percentile, VIX regime, and the change-point adjustment — hist_vol_20
+    (20-day annualised realised vol) is computed and returned for storage/
+    display only (Charts page indicator panel), never fed into the score. A
+    production correlation analysis (200 rows, 49 tickers, 2026-07-05)
+    measured ATR% vs hist_vol_20 at 0.929 — both are trailing realised-
+    volatility measures, so scoring both would double-count one signal.
+
+    Feeds two OHLC series that share an identical wide intraday wick
+    (+/-5%, which dominates True Range and therefore ATR%/atr_score) but
+    very different close-to-close volatility (0.1% vs 3% daily std, which
+    is all hist_vol_20 reads) — a deliberate ATR%/hist_vol_20 divergence.
+    Both must score identically despite hist_vol_20 swinging from ~1% to
+    ~37% annualised, proving hist_vol_20 has no effect on the score."""
+    from analysis.volatility import compute_volatility
+
+    def _build(n: int, close_noise_std: float, wick_pct: float, seed: int) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        log_rets = rng.normal(0, close_noise_std, n)
+        closes = 100 * np.exp(np.cumsum(log_rets))
+        dates = pd.date_range("2015-01-01", periods=n, freq="B")
+        return pd.DataFrame({
+            "date": dates, "close": closes,
+            "high": closes * (1 + wick_pct), "low": closes * (1 - wick_pct), "open": closes,
+        })
+
+    config = {"signals": {"atr_period": 14, "bollinger_period": 20, "bollinger_std": 2.0}}
+
+    df_calm_close = _build(300, close_noise_std=0.001, wick_pct=0.05, seed=1)
+    df_vol_close  = _build(300, close_noise_std=0.03,  wick_pct=0.05, seed=1)
+
+    result_calm = compute_volatility(df_calm_close, config, vix_close=15.0, ticker=None)
+    result_vol  = compute_volatility(df_vol_close, config, vix_close=15.0, ticker=None)
+
+    # Sanity: hist_vol_20 genuinely diverges between the two series (~1% vs
+    # ~37% annualised) while atr_pct barely moves (dominated by the shared
+    # wick, not the close path).
+    assert result_vol["hist_vol_20"] > result_calm["hist_vol_20"] * 10
+    assert result_calm["atr_pct"] == pytest.approx(result_vol["atr_pct"], rel=0.02)
+
+    assert result_calm["score"] == result_vol["score"]
 
 
 def test_change_point_detection_no_look_ahead_bias(db_engine):
