@@ -412,13 +412,61 @@ def _hex_rgba(hx: str, alpha: float) -> str:
     return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
 
 
-def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> str:
+def _hmm_display_dict(config: dict, regime_result: dict) -> dict:
+    """Return an HMM confidence dict for UI display, shaped like
+    analysis/regime.py:detect_regime()'s 'hmm' sub-dict, but never silently
+    hiding a fitted model just because signals.hmm_enabled is false.
+
+    When hmm_enabled is true, detect_regime() already populated
+    regime_result["hmm"] correctly (real confidence + genuine
+    hmm_downgraded/hmm_upgraded flags), so that dict is reused as-is with
+    "hmm_enabled": True added.
+
+    When hmm_enabled is false, detect_regime() never calls the confidence
+    function at all (see that function's own hmm_enabled check), so
+    regime_result["hmm"] carries no confidence data whatsoever even though a
+    fitted model may well exist — data/scheduler.py:_weekly_summary_job()
+    refits weekly regardless of hmm_enabled. This calls
+    analysis.hmm_regime.get_hmm_regime_confidence() directly to surface that
+    model's output for informational display, forcing hmm_downgraded/
+    hmm_upgraded to False (neither gate is ever actually applied while
+    disabled — showing otherwise would misrepresent live behaviour) and
+    tagging "hmm_enabled": False so every caller can render an unambiguous
+    "(disabled — informational only)" qualifier rather than implying this
+    confidence reading is affecting regime detection.
+    """
+    hmm_enabled = bool(config.get("signals", {}).get("hmm_enabled", False))
+    if hmm_enabled:
+        return {**(regime_result.get("hmm") or {}), "hmm_enabled": True}
+
+    try:
+        from analysis.hmm_regime import get_hmm_regime_confidence
+        hmm_info = get_hmm_regime_confidence(config)
+    except Exception:
+        hmm_info = {}
+
+    rule_regime = regime_result.get("regime")
+    rule_regime_name = rule_regime.value if hasattr(rule_regime, "value") else str(rule_regime)
+    return {
+        **hmm_info,
+        "hmm_downgraded": False,
+        "hmm_upgraded": False,
+        "rule_regime": rule_regime_name,
+        "hmm_enabled": False,
+    }
+
+
+def _hmm_status_pill_html(regime_result: dict, config: dict, font_size: str = "0.78rem") -> str:
     """Build the inline HMM confidence pill shown alongside the regime badge
     on the Daily Briefing status bar and the Signals page header block —
-    see analysis/regime.py:detect_regime()'s 'hmm' dict and CLAUDE.md's HMM
-    confidence gate section.
+    see _hmm_display_dict() above and CLAUDE.md's HMM confidence gate
+    section.
 
-    Four cases:
+    Five cases:
+    - signals.hmm_enabled is false: grey "HMM: NN% <state> (disabled —
+      informational only)" — a fitted model's reading may still exist (see
+      _hmm_display_dict()) but it never gates live regime detection, so this
+      is always the informational-only styling regardless of dominant state.
     - Rule-based regime was TRENDING_BULL but HMM downgraded it to MIXED:
       amber "⚠ Downgraded from TRENDING_BULL (HMM NN% bull confidence)".
     - Rule-based regime was MIXED but HMM upgraded it to TRENDING_BULL:
@@ -428,11 +476,10 @@ def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> st
     - Any other regime — HMM is informational only, never a veto there:
       grey "HMM: NN% <state> (informational only)".
 
-    Returns "" (nothing rendered) when hmm_enabled is false or the model
-    hasn't been fit yet (hmm_model_available is False) — there is nothing
-    meaningful to show in either case.
+    Returns "" (nothing rendered) when the model hasn't been fit yet
+    (hmm_model_available is False) — there is nothing meaningful to show.
     """
-    hmm = regime_result.get("hmm") or {}
+    hmm = _hmm_display_dict(config, regime_result)
     if not hmm.get("hmm_model_available"):
         return ""
 
@@ -442,8 +489,12 @@ def _hmm_status_pill_html(regime_result: dict, font_size: str = "0.78rem") -> st
     dominant    = hmm.get("hmm_dominant_state", "UNCERTAIN")
     confidence  = hmm.get("hmm_confidence", 0.0) or 0.0
     bull_prob   = hmm.get("hmm_bull_probability", 0.0) or 0.0
+    disabled    = not hmm.get("hmm_enabled", True)
 
-    if downgraded:
+    if disabled:
+        colour = "#6b7280"
+        text = f"HMM: {confidence:.0%} {dominant.lower()} (disabled — informational only)"
+    elif downgraded:
         colour = "#f59e0b"
         text = f"⚠ Downgraded from {rule_regime.replace('_', ' ')} (HMM {bull_prob:.0%} bull confidence)"
     elif upgraded:
@@ -1055,7 +1106,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         )
 
     hmm_strip = ""
-    _hmm = regime_result.get("hmm") or {}
+    _hmm = _hmm_display_dict(config, regime_result)
     if _hmm.get("hmm_model_available"):
         _hmm_states = [
             ("BULL",      _hmm.get("hmm_bull_probability", 0.0) or 0.0,      "#16a34a"),
@@ -1069,12 +1120,19 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             for lbl, p, c in _hmm_states
         )
         _hmm_rule = _hmm.get("rule_regime", "")
+        # hmm_downgraded/hmm_upgraded are always forced False by
+        # _hmm_display_dict() when signals.hmm_enabled is false — neither
+        # gate is ever actually applied in that state — so this naturally
+        # falls into the "confirms" branch below, which then gets the
+        # explicit disabled qualifier appended.
         if _hmm.get("hmm_downgraded"):
             _hmm_note = f"downgraded {_hmm_rule.replace('_', ' ')} to MIXED — bull confidence below threshold"
         elif _hmm.get("hmm_upgraded"):
             _hmm_note = f"upgraded {_hmm_rule.replace('_', ' ')} to TRENDING_BULL — bull confidence above upgrade threshold"
         else:
             _hmm_note = f"confirms dominant state {_hmm.get('hmm_dominant_state', 'UNCERTAIN')}"
+        if not _hmm.get("hmm_enabled", True):
+            _hmm_note += " (disabled — informational only)"
 
         _hmm_gate_badge = ""
         if _hmm.get("hmm_downgraded"):
@@ -1906,6 +1964,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     # ── Upgrade gate (MIXED → TRENDING_BULL) ────────────────────────────────
     _sig_cfg = config.get("signals", {})
+    _hmm_enabled_cfg = bool(_sig_cfg.get("hmm_enabled", False))
     _upgrade_enabled_cfg = bool(_sig_cfg.get("hmm_upgrade_enabled", True))
     _upgrade_threshold_cfg = float(_sig_cfg.get("hmm_upgrade_threshold", 0.90))
     _upgrade_bull_prob = (
@@ -1916,20 +1975,61 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         and _upgrade_bull_prob is not None
         and _upgrade_bull_prob >= _upgrade_threshold_cfg
     )
-    _upgrade_sub = f"Threshold {_upgrade_threshold_cfg:.0%}"
-    if not _upgrade_enabled_cfg:
-        _upgrade_sub += " · hmm_upgrade_enabled: false"
-    elif _upgrade_bull_prob is not None:
-        _upgrade_sub += f" · current bull confidence {_upgrade_bull_prob:.0%}"
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
     _upgrade_col, _, _ = st.columns(3)
-    _status_card(
-        _upgrade_col,
-        "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
-        "Upgrade active" if _upgrade_triggered else "Upgrade inactive",
-        _upgrade_sub,
-        "ok" if _upgrade_triggered else ("warn" if _upgrade_enabled_cfg else "error"),
-    )
+
+    if not _hmm_enabled_cfg:
+        # signals.hmm_enabled is false, so analysis/regime.py:detect_regime()
+        # never calls the HMM confidence gate at all — whatever the upgrade
+        # condition below evaluates to (using the still-live model fit from
+        # the weekly refit job) is purely hypothetical and must never be
+        # rendered as "Upgrade active"/"Upgrade inactive", which would wrongly
+        # imply it's affecting live entries. See CLAUDE.md's "HMM confidence
+        # gate — why it's disabled" for why hmm_enabled ships false.
+        if not _hmm_status.get("hmm_model_available"):
+            _gate_value = "HMM disabled — no fitted model available"
+            _gate_sub = "Nothing to preview; entries are governed by rule-based regime detection alone."
+        elif not _upgrade_enabled_cfg:
+            _gate_value = "HMM disabled — upgrade gate's own sub-toggle is also off"
+            _gate_sub = (
+                f"hmm_upgrade_enabled: false — entries remain governed by rule-based "
+                f"{regime_name} regime detection alone."
+            )
+        elif _upgrade_triggered:
+            _gate_value = (
+                f"HMM disabled — upgrade gate would fire "
+                f"({_upgrade_bull_prob:.0%} > {_upgrade_threshold_cfg:.0%} threshold) but HMM is not active."
+            )
+            _gate_sub = f"Entries remain governed by rule-based {regime_name} regime detection."
+        else:
+            _gate_value = (
+                f"HMM disabled — upgrade gate would not fire "
+                f"({_upgrade_bull_prob:.0%} vs {_upgrade_threshold_cfg:.0%} threshold)"
+            )
+            _gate_sub = (
+                f"HMM is not active regardless; entries are governed by rule-based "
+                f"{regime_name} regime detection."
+            )
+        _status_card(
+            _upgrade_col,
+            "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
+            _gate_value,
+            _gate_sub,
+            "info",
+        )
+    else:
+        _upgrade_sub = f"Threshold {_upgrade_threshold_cfg:.0%}"
+        if not _upgrade_enabled_cfg:
+            _upgrade_sub += " · hmm_upgrade_enabled: false"
+        elif _upgrade_bull_prob is not None:
+            _upgrade_sub += f" · current bull confidence {_upgrade_bull_prob:.0%}"
+        _status_card(
+            _upgrade_col,
+            "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
+            "Upgrade active" if _upgrade_triggered else "Upgrade inactive",
+            _upgrade_sub,
+            "ok" if _upgrade_triggered else ("warn" if _upgrade_enabled_cfg else "error"),
+        )
     st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
     if st.button("Refit HMM Now", key="status_refit_hmm"):
@@ -3959,7 +4059,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
         f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
         f'{regime.replace("_", " ")}{" ↑" if _hmm_upgraded_flag else ""}</span>'
-        + _hmm_status_pill_html(regime_result)
+        + _hmm_status_pill_html(regime_result, config)
         + (f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
         + (f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
         + f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>'
