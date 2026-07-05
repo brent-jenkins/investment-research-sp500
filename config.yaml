@@ -259,6 +259,16 @@ watchlist:
       exchange: "NYSE"
       tradeable: true
 
+  factor_etfs:
+    - ticker: "SPMO"
+      name: "Invesco S&P 500 Momentum ETF"
+      exchange: "NYSE"
+      tradeable: false
+    - ticker: "MTUM"
+      name: "iShares MSCI USA Momentum Factor ETF"
+      exchange: "NYSE"
+      tradeable: false
+
   international_expanded:
     - ticker: "FXI"
       name: "iShares China Large-Cap ETF"

@@ -3167,6 +3167,7 @@ _GROUP_LABELS = {
     "tech_subsectors":       "Tech Sub-Sectors",
     "financial_subsectors":  "Financial Sub-Sectors",
     "healthcare_subsectors": "Healthcare Sub-Sectors",
+    "factor_etfs":           "Factor ETFs",
     "international_expanded": "International (Expanded)",
     "real_assets":           "Real Assets",
     "fixed_income_expanded": "Fixed Income (Expanded)",

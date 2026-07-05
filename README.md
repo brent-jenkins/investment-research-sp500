@@ -8,7 +8,7 @@ Live at [research.example.com](https://research.example.com) (password protected
 
 ## What it does
 
-The app tracks ~104 assets across 20 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on eight scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy.
+The app tracks ~106 assets across 21 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, factor ETFs, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on eight scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy.
 
 ---
 
@@ -487,7 +487,7 @@ The Daily Briefing and the Status page's T212 Invest Account section both show a
 
 ### Tradeable vs analysis-only
 
-Each watchlist entry has a `tradeable: true/false` flag. **`tradeable: true` means "eligible for automated T212 Invest orders"** — the ticker is in `trading212_invest.ucits_mapping` or `watchlist.us_large_cap`; everything else is `tradeable: false`. Assets with `tradeable: false` are still fully analysed — signals, correlations, macro scoring, regime detection — but are excluded from opportunity filtering and can never receive an automated order. The Signals page shows all assets with a tradeable sub-count on each signal distribution. Currently 64 of the 104 watchlist tickers are `tradeable: true` (33 `ucits_mapping` + 31 `us_large_cap`).
+Each watchlist entry has a `tradeable: true/false` flag. **`tradeable: true` means "eligible for automated T212 Invest orders"** — the ticker is in `trading212_invest.ucits_mapping` or `watchlist.us_large_cap`; everything else is `tradeable: false`. Assets with `tradeable: false` are still fully analysed — signals, correlations, macro scoring, regime detection — but are excluded from opportunity filtering and can never receive an automated order. The Signals page shows all assets with a tradeable sub-count on each signal distribution. Currently 64 of the 106 watchlist tickers are `tradeable: true` (33 `ucits_mapping` + 31 `us_large_cap`).
 
 ---
 
