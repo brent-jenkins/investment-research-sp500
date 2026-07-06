@@ -618,11 +618,23 @@ def _load_stop_prices() -> "dict[str, float]":
 
 
 def _has_recent_sell_order(us_ticker: str, hours: int = 24) -> bool:
-    """True if a PLACED or FILLED SELL order exists for *us_ticker* within *hours*.
+    """True if a PLACED, FILLED, or FAILED SELL order exists for *us_ticker* within *hours*.
 
     Guards against the hourly exit check (maybe_exit_t212_positions /
     maybe_exit_stock_positions) and the EOD run's own delegated call to the
     same functions both placing a SELL for the same position in one window.
+
+    FAILED is included alongside PLACED/FILLED (added after a production
+    incident) so a SELL that fails for a structural reason — e.g. T212
+    reporting a live position via get_positions() while its order-placement
+    endpoint simultaneously rejects the order with
+    'selling-equity-not-owned, owned: 0.0' (a genuine T212-side positions/
+    orders inconsistency, not a bug in this DB's bookkeeping) — is retried
+    at most once per `hours` window instead of every single hourly exit
+    check indefinitely. A real transient failure (network blip, momentary
+    rate limit) waits up to `hours` for its retry too, which is an
+    acceptable trade-off given positions here are held for weeks, not
+    minutes.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -632,7 +644,7 @@ def _has_recent_sell_order(us_ticker: str, hours: int = 24) -> bool:
             row = conn.execute(sa_text("""
                 SELECT 1 FROM t212_invest_orders
                 WHERE ticker = :ticker AND direction = 'SELL'
-                AND status IN ('PLACED', 'FILLED')
+                AND status IN ('PLACED', 'FILLED', 'FAILED')
                 AND placed_at > datetime('now', :window)
                 LIMIT 1
             """), {"ticker": us_ticker, "window": f"-{hours} hours"}).fetchone()
@@ -1011,8 +1023,10 @@ def maybe_exit_t212_positions(config: dict) -> None:
          time_limit_as_backstop: true; overrides confirmed-only logic)
 
     Idempotent: _has_recent_sell_order() skips a ticker that already has a
-    PLACED or FILLED SELL order within the last 24 hours, so the hourly job
-    and a same-window EOD call never both sell the same position.
+    PLACED, FILLED, or FAILED SELL order within the last 24 hours, so the
+    hourly job and a same-window EOD call never both sell the same position,
+    and a structurally-failing SELL (e.g. T212 rejecting an order for a
+    position get_positions() still reports as held) doesn't retry every hour.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):

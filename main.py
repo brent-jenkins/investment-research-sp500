@@ -2592,13 +2592,21 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 )
                 _dot, _badge = "#16a34a", "OK"
 
-            # Overdue flag for EOD: last_full_refresh > 26 h on a weekday
+            # Overdue flag for EOD: last_full_refresh > 26 h on a weekday.
+            # Exempt Monday before today's own 21:30 UTC EOD run — no EOD job
+            # runs Sat/Sun, so last_full_refresh is *always* >26h old every
+            # Monday morning/afternoon (Friday 21:30 UTC -> Monday is ~58h)
+            # with nothing actually wrong; without this exemption the row
+            # falsely reads OVERDUE every single week until Monday's own EOD
+            # run completes.
             if _job.id == "scheduled_eod":
                 _ref_age = (
                     (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
                     if last_refresh else float("inf")
                 )
-                if _ref_age > 26 and datetime.utcnow().weekday() < 5:
+                _now_u = datetime.utcnow()
+                _monday_before_eod = _now_u.weekday() == 0 and (_now_u.hour, _now_u.minute) < (21, 30)
+                if _ref_age > 26 and _now_u.weekday() < 5 and not _monday_before_eod:
                     _dot, _badge = "#dc2626", "OVERDUE"
 
             _sh_rows.append(
@@ -2675,7 +2683,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
                     if last_refresh else float("inf")
                 )
-                if _ref_age2 > 26 and datetime.utcnow().weekday() < 5:
+                # See the matching in-process-scheduler branch above for why
+                # Monday before today's own EOD run is exempted.
+                _now_u2 = datetime.utcnow()
+                _monday_before_eod2 = _now_u2.weekday() == 0 and (_now_u2.hour, _now_u2.minute) < (21, 30)
+                if _ref_age2 > 26 and _now_u2.weekday() < 5 and not _monday_before_eod2:
                     _dot, _badge = "#dc2626", "OVERDUE"
 
             _sh_rows_d.append(
