@@ -189,6 +189,20 @@ class Trading212Client:
         r = self._request("GET", f"/equity/orders/{order_id}")
         return r.json()
 
+    def get_order_history(self, limit: int = 50) -> list:
+        """Return the most recent resolved orders (with real fill data) from T212's history endpoint.
+
+        Unlike get_order()/get_positions() — which only reflect currently-active
+        orders/positions and 404/disappear once an order is fully resolved and
+        the position (if any) is closed — this endpoint retains the true fill
+        price, quantity, and timestamp indefinitely. It's the authoritative
+        source for backfilling a fill once GET /equity/orders/{id} 404s and no
+        live position remains to estimate a price from (see poll_placed_orders()).
+        """
+        r = self._request("GET", "/equity/history/orders", params={"limit": limit})
+        data = r.json()
+        return data.get("items", []) if isinstance(data, dict) else (data or [])
+
     @staticmethod
     def _fx_rates() -> tuple[float, float]:
         """Return (gbpusd, eurusd) — latest close prices from price_data.
@@ -672,6 +686,36 @@ def _has_recent_sell_order(us_ticker: str, hours: int = 24) -> bool:
 # Fill-status polling — called hourly and on Refresh Account
 # ---------------------------------------------------------------------------
 
+def _historical_fill(client: "Trading212Client", order_id: str) -> Optional[dict]:
+    """Look up *order_id* in T212's order-history endpoint.
+
+    Returns a dict shaped like a live GET /equity/orders/{id} response
+    (status / fillPrice / filledQuantity / filledAt), built from the real
+    fill record — or None if the order isn't in the most recent page (or the
+    history call itself fails), in which case the caller falls back to
+    position/instrument-based estimation.
+    """
+    try:
+        items = client.get_order_history(limit=50)
+    except Exception as exc:
+        logger.debug("poll_placed_orders: order-history lookup failed: %s", exc)
+        return None
+    for item in items:
+        order = item.get("order") or {}
+        if str(order.get("id")) != str(order_id):
+            continue
+        fill = item.get("fill") or {}
+        hist_status = (order.get("status") or "").upper()
+        qty = fill.get("quantity")
+        return {
+            "status":         hist_status if hist_status in ("FILLED", "CANCELLED", "REJECTED") else "FILLED",
+            "fillPrice":      fill.get("price"),
+            "filledQuantity": abs(qty) if qty is not None else None,
+            "filledAt":       fill.get("filledAt"),
+        }
+    return None
+
+
 def poll_placed_orders(config: dict) -> int:
     """Poll T212 API to update status of PLACED orders.
 
@@ -769,17 +813,38 @@ def poll_placed_orders(config: dict) -> int:
             if http_status == 404:
                 # T212 removes filled market orders from the orders endpoint once
                 # they become positions — 404 does NOT necessarily mean cancelled.
-                # Check for an active position before deciding the terminal status.
+                # get_order_history() retains the true fill price/quantity/date
+                # indefinitely, so it's tried first as the authoritative source;
+                # the position/instrument-based guessing below is a fallback for
+                # when the order has scrolled past the history page fetched here
+                # (or the history call itself fails) — this used to be the only
+                # path, and its instrument-currentPrice guess was found in
+                # production to reliably return null for these UCITS instruments,
+                # permanently leaving fill_price NULL on an otherwise-FILLED SELL
+                # (which then silently excluded that closed position from
+                # _reconstruct_t212_pnl()'s `fill_price IS NOT NULL` filter — see
+                # CLAUDE.md "T212 P&L reconstruction").
                 t212_ticker = row.get("t212_ticker") or ""
                 direction   = (row.get("direction") or "").upper()
+                hist_resp   = _historical_fill(client, order_id)
+
                 position = None
-                if t212_ticker:
+                if hist_resp is None and t212_ticker:
                     try:
                         position = client.get_position(t212_ticker)
                     except Exception:
                         pass
 
-                if direction == "SELL":
+                if hist_resp is not None:
+                    logger.info(
+                        "poll_placed_orders: order %s not found (404) — resolved via "
+                        "order history: %s at %s.",
+                        order_id, hist_resp["status"],
+                        f"{hist_resp['fillPrice']:.4f}"
+                        if hist_resp.get("fillPrice") is not None else "unknown",
+                    )
+                    resp = hist_resp
+                elif direction == "SELL":
                     # Inverse of the BUY case below: a SELL that fully closes a
                     # position is *expected* to leave no position behind, so "no
                     # position" here is evidence the sale filled, not that it was
