@@ -5586,7 +5586,16 @@ def _render_performance_page(config: dict) -> None:
         show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
         show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
         if "stop_distance_pct" in show_df.columns:
-            show_df["stop_distance_pct"] = show_df["stop_distance_pct"].round(2)
+            # Positions opened under use_garch_stops: false (the shipped
+            # default) have stop_distance_pct = NULL for every row, making
+            # this an all-None object-dtype column — Series.round() on an
+            # object dtype applies Python's round() per element, and
+            # round(None, 2) raises TypeError. pd.to_numeric coerces to a
+            # proper float64 (NaN for missing) first so .round() is the
+            # normal vectorized numeric path either way.
+            show_df["stop_distance_pct"] = pd.to_numeric(
+                show_df["stop_distance_pct"], errors="coerce"
+            ).round(2)
         else:
             show_df["stop_distance_pct"] = None
         if "vol_source" in show_df.columns:
