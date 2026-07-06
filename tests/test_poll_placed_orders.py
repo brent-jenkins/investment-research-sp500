@@ -158,3 +158,61 @@ def test_sell_404_resolved_via_order_history_gets_real_fill_price(db_engine, pol
         assert row.status == "FILLED"
         assert row.fill_price == 142.12
         assert row.filled_quantity == 12.0
+        # T212's history endpoint returns filledAt with a trailing "Z"
+        # ("...T...Z"); stored as-is, datetime.fromisoformat() would parse it
+        # timezone-aware while every other filled_at in this DB is naive,
+        # breaking _reconstruct_t212_pnl()'s holding_days subtraction (see
+        # test below). It must be normalised to naive before it reaches the
+        # DB (the ORM auto-parses the stored TEXT back into a datetime here,
+        # so tzinfo is the observable signal; _reconstruct_t212_pnl() reads
+        # the same column via raw SQL and sees the underlying string instead
+        # — see the next test for that path).
+        assert row.filled_at is not None
+        assert row.filled_at.tzinfo is None
+
+
+def test_sell_resolved_via_history_does_not_break_pnl_reconstruction(db_engine, poll_mocks):
+    """End-to-end regression: a SELL resolved via order history must not
+    leave a filled_at that crashes _reconstruct_t212_pnl()'s holding_days
+    calculation with 'can't subtract offset-naive and offset-aware datetimes'.
+
+    This bug was introduced by the order-history fix itself (T212's history
+    filledAt is "...Z"-suffixed, i.e. timezone-aware once parsed) and caught
+    live in production immediately after deploying that fix: EWG and PDBC's
+    real closes both failed to reconstruct with exactly this error the first
+    time poll_placed_orders() resolved them via history.
+    """
+    from brokers.trading212 import poll_placed_orders
+    from brokers.t212_learning import _reconstruct_t212_pnl
+
+    with Session(db_engine) as session:
+        session.add(T212InvestOrder(
+            order_id="buy-hist-test",
+            ticker="XLF",
+            t212_ticker="STZXs_EQ",
+            direction="BUY",
+            quantity=12.0,
+            filled_quantity=12.0,
+            fill_price=125.0,
+            currency_code="USD",
+            status="FILLED",
+            signal_type="STRONG_BUY",
+            regime="TRENDING_BULL",
+            account_type="DEMO",
+            filled_at=datetime(2026, 7, 1),
+        ))
+        session.commit()
+
+    _seed_placed_order(db_engine, direction="SELL")
+    poll_mocks.get_position.return_value = None
+    poll_mocks.get_order_history.return_value = [
+        {
+            "order": {"id": "order-404-test", "status": "FILLED"},
+            "fill": {"price": 142.12, "quantity": -12.0, "filledAt": "2026-07-03T10:00:05.000Z"},
+        },
+    ]
+
+    poll_placed_orders(_config())
+
+    inserted = _reconstruct_t212_pnl(_config())  # must not raise
+    assert inserted == 1

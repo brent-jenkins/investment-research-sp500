@@ -707,11 +707,25 @@ def _historical_fill(client: "Trading212Client", order_id: str) -> Optional[dict
         fill = item.get("fill") or {}
         hist_status = (order.get("status") or "").upper()
         qty = fill.get("quantity")
+        # T212's history endpoint returns filledAt as "...T...Z" (e.g.
+        # "2026-07-06T07:04:54.000Z"). Python 3.11+'s datetime.fromisoformat()
+        # parses a trailing "Z" into a timezone-AWARE datetime, while every
+        # other filled_at in this DB is naive (datetime.utcnow().isoformat()).
+        # _reconstruct_t212_pnl()'s `(exit_dt - entry_dt).days` raises
+        # "can't subtract offset-naive and offset-aware datetimes" if the two
+        # sides don't match — normalise to the same space-separated, no-"Z"
+        # naive-UTC string the rest of the codebase already uses before this
+        # ever reaches the DB.
+        filled_at_raw = fill.get("filledAt")
+        filled_at = (
+            filled_at_raw.replace("T", " ").replace("Z", "")
+            if filled_at_raw else None
+        )
         return {
             "status":         hist_status if hist_status in ("FILLED", "CANCELLED", "REJECTED") else "FILLED",
             "fillPrice":      fill.get("price"),
             "filledQuantity": abs(qty) if qty is not None else None,
-            "filledAt":       fill.get("filledAt"),
+            "filledAt":       filled_at,
         }
     return None
 
