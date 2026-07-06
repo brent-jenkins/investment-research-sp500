@@ -51,6 +51,7 @@ from typing import Optional
 import requests
 
 from analysis.regime import get_latest_regime_name, is_entry_allowed, resolve_entry_signal
+from analysis.risk import compute_drawdown_scale_factor
 from analysis.volatility import compute_var_position_size_detailed
 
 logger = logging.getLogger(__name__)
@@ -1533,6 +1534,22 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
             position_gbp = min(position_gbp, free_cash * 0.25)
         else:
             position_gbp = min(max_position_gbp, free_cash * 0.25)
+
+        # Mechanical drawdown-based position scaling — reduces new position sizes
+        # while the account is in drawdown from its own peak, independent of the
+        # signal/regime logic above. See analysis/risk.py:compute_drawdown_scale_factor().
+        if t212_cfg.get("drawdown_scaling", {}).get("enabled", False):
+            _dd_scale, _dd_pct, _dd_status = compute_drawdown_scale_factor(
+                account_value_gbp=total_val, config=config, section="trading212_invest",
+            )
+            if _dd_scale < 1.0:
+                logger.info(
+                    "T212 Invest: drawdown scaling active — %.1f%% drawdown from peak, "
+                    "scaling position sizes to %.0f%% (%s).",
+                    _dd_pct * 100, _dd_scale * 100, _dd_status,
+                )
+                position_gbp = max(position_gbp * _dd_scale, float(t212_cfg.get("min_position_gbp", 50)))
+
         if position_gbp < 10:
             logger.warning(
                 "T212 Invest: insufficient free cash (£%.2f) — stopping new orders.", free_cash,
@@ -2102,6 +2119,21 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
             position_gbp = min(position_gbp, free_cash * 0.25)
         else:
             position_gbp = min(max_position_gbp, free_cash * 0.25)
+
+        # Mechanical drawdown-based position scaling — same mechanism as the ETF
+        # path above. See analysis/risk.py:compute_drawdown_scale_factor().
+        if stock_cfg.get("drawdown_scaling", {}).get("enabled", False):
+            _dd_scale, _dd_pct, _dd_status = compute_drawdown_scale_factor(
+                account_value_gbp=total_val, config=config, section="trading212_stocks",
+            )
+            if _dd_scale < 1.0:
+                logger.info(
+                    "T212 Stocks: drawdown scaling active — %.1f%% drawdown from peak, "
+                    "scaling position sizes to %.0f%% (%s).",
+                    _dd_pct * 100, _dd_scale * 100, _dd_status,
+                )
+                position_gbp = max(position_gbp * _dd_scale, float(stock_cfg.get("min_position_gbp", 50)))
+
         if position_gbp < 10:
             logger.warning(
                 "T212 Stocks: insufficient free cash (£%.2f) — stopping new orders.", free_cash,

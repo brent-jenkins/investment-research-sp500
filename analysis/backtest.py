@@ -937,6 +937,7 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
          asset-class limits read from config).
     """
     from analysis.regime import get_max_holding_days, is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
+    from analysis.risk import _drawdown_tier_from_pct  # noqa: PLC0415  shared drawdown-tier math — see that module's docstring
     from analysis.volatility import _MIN_VAR_RETURNS, _var_position_size_core  # noqa: PLC0415  shared VaR math — see that module's docstring for why this is imported rather than reimplemented
 
     bt_cfg   = config.get("backtest", {})
@@ -960,6 +961,26 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
     min_position_gbp  = float(var_cfg.get("min_position_gbp", 50))
     max_position_gbp  = float(var_cfg.get("max_position_gbp", 500))
     close_series      = signals["close"].astype(float)
+
+    # Drawdown-based position scaling — mirrors the live mechanism (see
+    # analysis/risk.py:compute_drawdown_scale_factor()), reusing
+    # trading212_invest.drawdown_scaling for the same reason var_cfg above
+    # reuses trading212_invest for VaR risk parameters: entry-gating is kept
+    # separate under backtest: because it can go LONG or SHORT, but risk
+    # tolerance is not direction-specific. Unlike the live path (one shared
+    # T212 account), simulate_trades() runs one ticker at a time with no
+    # cross-ticker portfolio (see the VaR position sizing note above) — so
+    # "drawdown" here is tracked against a running per-ticker notional
+    # equity curve (starting_capital + this ticker's own realised pnl_gbp so
+    # far in this run), not a real shared account balance. This is the same
+    # scoping limitation starting_capital_gbp already has; it lets the
+    # backtest show whether the mechanism would have helped or hurt on a
+    # per-ticker basis, not a true multi-asset portfolio effect.
+    dd_cfg      = var_cfg.get("drawdown_scaling", {})
+    dd_enabled  = bool(dd_cfg.get("enabled", False))
+    dd_equity   = starting_capital
+    dd_peak     = starting_capital
+    dd_tier     = "NORMAL"
 
     _BULL   = frozenset({"BUY", "STRONG_BUY"})
     _BEAR   = frozenset({"SELL", "STRONG_SELL"})
@@ -1039,6 +1060,14 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
             else:
                 position_gbp = round(max_position_gbp * 0.5, 2)
 
+            dd_pct_at_entry = max(0.0, (dd_peak - dd_equity) / dd_peak) if dd_peak > 0 else 0.0
+            if dd_enabled:
+                dd_tier, dd_scale = _drawdown_tier_from_pct(dd_pct_at_entry, dd_cfg, dd_tier)
+                if dd_scale < 1.0:
+                    position_gbp = max(position_gbp * dd_scale, min_position_gbp)
+            else:
+                dd_scale = 1.0
+
             open_trade = {
                 "ticker":                   ticker,
                 "direction":                direction,
@@ -1049,6 +1078,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "stop_distance_pct":        stop_distance_pct,
                 "vol_source":               vol_source,
                 "position_gbp":             position_gbp,
+                "drawdown_scale_factor":    dd_scale,
+                "drawdown_pct_at_entry":    dd_pct_at_entry,
                 "regime_at_entry":          str(row["regime"]),
                 "trend_at_entry":           int(row["trend_score"]),
                 "mean_reversion_at_entry":  int(row["mean_reversion_score"]),
@@ -1101,6 +1132,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
                 "stop_distance_pct":        open_trade["stop_distance_pct"],
                 "vol_source":               open_trade["vol_source"],
+                "drawdown_scale_factor":    open_trade["drawdown_scale_factor"],
+                "drawdown_pct_at_entry":    open_trade["drawdown_pct_at_entry"],
                 "regime_at_entry":          open_trade["regime_at_entry"],
                 "trend_at_entry":           open_trade["trend_at_entry"],
                 "mean_reversion_at_entry":  open_trade["mean_reversion_at_entry"],
@@ -1110,6 +1143,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "holding_days":             holding_days,
                 "is_win":                   pnl_pct > 0,
             })
+            dd_equity += open_trade["position_gbp"] * float(pnl_pct)
+            dd_peak    = max(dd_peak, dd_equity)
             open_trade = None
 
     # Close any still-open position at end of data
@@ -1134,6 +1169,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
             "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
             "stop_distance_pct":        open_trade["stop_distance_pct"],
             "vol_source":               open_trade["vol_source"],
+            "drawdown_scale_factor":    open_trade["drawdown_scale_factor"],
+            "drawdown_pct_at_entry":    open_trade["drawdown_pct_at_entry"],
             "regime_at_entry":          open_trade["regime_at_entry"],
             "trend_at_entry":           open_trade["trend_at_entry"],
             "mean_reversion_at_entry":  open_trade["mean_reversion_at_entry"],

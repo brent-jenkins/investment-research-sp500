@@ -139,6 +139,29 @@ trading212_invest:            # and, identically, trading212_stocks:
 
 The holding-period VaR used to size each order is stored on `t212_invest_orders.var_pct` and shown as "VaR at Entry" in the Status page's Recent Orders tables and the Performance page's Open Positions cards. See "VaR position sizing" in [CLAUDE.md](CLAUDE.md) for the full formula, the shared-core design that keeps live and backtested sizing from drifting apart, and how the backtest avoids look-ahead bias when reusing the same math.
 
+### Drawdown-based position scaling
+
+A mechanical, non-predictive risk control layered on top of VaR sizing (`analysis/risk.py`): new T212 BUY position sizes are automatically reduced while the account is in drawdown from its own high water mark, regardless of regime or signal strength. This responds to whatever caused the drawdown — a regime transition, a late-cycle bull rollover, an unexpected event — without needing to predict the cause, since it only ever looks at the account's own equity curve.
+
+Three graduated tiers step position size down progressively as drawdown deepens, rather than a single on/off cliff edge:
+
+```yaml
+trading212_invest:            # and, identically, trading212_stocks:
+  drawdown_scaling:
+    enabled: true
+    threshold_1: 0.05    # 5% drawdown from peak  -> scale to 75%
+    scale_factor_1: 0.75
+    threshold_2: 0.10    # 10% drawdown from peak -> scale to 50%
+    scale_factor_2: 0.50
+    threshold_3: 0.15    # 15% drawdown from peak -> scale to 25%
+    scale_factor_3: 0.25
+    recovery_buffer: 0.02 # hysteresis — see below
+```
+
+Escalating to a more severe tier happens immediately; recovering to a less severe tier requires drawdown to clear that tier's own boundary by `recovery_buffer` first — this prevents rapid oscillation for an account sitting right at a threshold. The account's peak value is a simple, monotonic high water mark stored in `system_metadata` (`t212_peak_value_gbp`/`t212_peak_value_date`), updated on every scheduler account-snapshot refresh — it only ever rises and never decays with time. `maybe_place_t212_orders()`/`maybe_place_stock_orders()` apply the resulting scale factor to the VaR (or fixed) position size right before placing a BUY order, then **re-floor at `min_position_gbp`** — the same floor VaR sizing uses, so a severely-scaled position never drops below the minimum an order is worth placing at. Exit logic is unaffected — only new entries are ever scaled.
+
+A full-history backtest comparison (2019–present, tradeable assets) showed this is mathematically neutral on win rate/profit factor/Sharpe/max-drawdown-% — those metrics come from `pnl_pct`, which drawdown scaling never touches, only `position_gbp`/`pnl_gbp` — and, in this backtest's per-ticker notional-equity scoping (`simulate_trades()` runs one ticker at a time with no shared cross-ticker portfolio, the same limitation `starting_capital_gbp` already has), zero of 253 trades actually triggered scaling. See "Drawdown-based position scaling" in [CLAUDE.md](CLAUDE.md) for the full mechanism and why this backtest result is a "confirms no regression" check only, not a portfolio-level validation.
+
 ### GARCH stop loss
 
 Replaces the fixed `entry_price ± atr_stop_multiplier × ATR(14)` stop with a forward-looking GARCH(1,1) volatility forecast scaled to the position's holding period — GARCH models volatility clustering (elevated vol tends to persist before mean-reverting), so it reacts to a ticker's *current* regime rather than a flat trailing average. Controlled by `signals.use_garch_stops` (default `true` — `false` reverts to the old ATR stop with no code change).

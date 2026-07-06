@@ -59,6 +59,7 @@ from output.performance import (
     get_latest_price,
 )
 from analysis.macro import get_macro_dashboard, fetch_and_store_macro_indicators, SIGNALS_ACTIVE
+from analysis.risk import compute_drawdown_scale_factor
 from analysis.backtest import (
     delete_run,
     get_all_runs,
@@ -2147,6 +2148,24 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 f"Position sizing: **Fixed** "
                 f"(flat £{float(_t212_cfg.get('max_position_gbp', 500)):.0f} per order)"
             )
+
+        _dd_status_row = _get_drawdown_status(config)
+        if _dd_status_row:
+            if _dd_status_row["enabled"]:
+                _dd_when = ""
+                if _dd_status_row["peak_date"]:
+                    try:
+                        _dd_when = f" ({_fmt_uk(datetime.fromisoformat(_dd_status_row['peak_date']))})"
+                    except (ValueError, TypeError):
+                        pass
+                st.caption(
+                    f"Drawdown scaling: **{_dd_status_row['status']}** — "
+                    f"{_dd_status_row['drawdown_pct'] * 100:.1f}% drawdown from peak, "
+                    f"scale factor **{_dd_status_row['scale_factor'] * 100:.0f}%** "
+                    f"(peak £{_dd_status_row['peak_value_gbp']:,.0f}{_dd_when})"
+                )
+            else:
+                st.caption("Drawdown scaling: **disabled** (`drawdown_scaling.enabled: false`)")
         st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
 
         if _t212_error:
@@ -3771,6 +3790,48 @@ def _t212_ccy_to_gbp(amount: float, currency: str) -> float:
     return amount  # fallback: return unconverted rather than zero
 
 
+def _get_drawdown_status(config: dict) -> "dict | None":
+    """Return the current drawdown-scaling status for display, or None if unavailable.
+
+    Reads account value from the scheduler-maintained t212_account_snapshot (no
+    direct T212 API calls from the UI thread — same pattern as
+    _get_t212_invest_brief_cards() above). Uses trading212_invest's
+    drawdown_scaling thresholds — trading212_stocks ships with identical
+    defaults (see analysis/risk.py) so this single call is representative of
+    both automation paths for display purposes.
+    """
+    snap_raw = get_metadata_str("t212_account_snapshot")
+    if not snap_raw:
+        return None
+    try:
+        import json as _json
+        summary = _json.loads(snap_raw)
+        total_val = float(summary.get("totalValue", 0) or 0)
+    except Exception:
+        return None
+    if total_val <= 0:
+        return None
+
+    scale_factor, drawdown_pct, status = compute_drawdown_scale_factor(
+        account_value_gbp=total_val, config=config, section="trading212_invest",
+    )
+    peak_str = get_metadata_str("t212_peak_value_gbp")
+    peak_val = float(peak_str) if peak_str else total_val
+    peak_date_str = get_metadata_str("t212_peak_value_date")
+
+    return {
+        "status": status,
+        "scale_factor": scale_factor,
+        "drawdown_pct": drawdown_pct,
+        "peak_value_gbp": peak_val,
+        "peak_date": peak_date_str,
+        "current_value_gbp": total_val,
+        "enabled": bool(
+            config.get("trading212_invest", {}).get("drawdown_scaling", {}).get("enabled", False)
+        ),
+    }
+
+
 def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
     """Return enriched trade-card dicts for open T212 Invest positions.
 
@@ -4137,6 +4198,33 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         st.caption(f"Automation entry: {' · '.join(_auto_bits)}")
     if _blocked_paths:
         st.caption(f"⛔ Entries blocked — {regime.replace('_', ' ')} regime ({', '.join(_blocked_paths)})")
+
+    # ── Portfolio risk row (drawdown-based position scaling) ────────────────
+    # Mechanical, non-predictive risk control — see analysis/risk.py. Shown
+    # only when a T212 account snapshot exists; informational even when
+    # drawdown_scaling.enabled is false (still shows the actual drawdown).
+    _dd_status = _get_drawdown_status(config)
+    if _dd_status:
+        _dd_colour = {
+            "NORMAL": "#16a34a", "CAUTION": "#f59e0b",
+            "REDUCED": "#f97316", "MINIMAL": "#dc2626",
+        }.get(_dd_status["status"], "#6b7280")
+        _dd_line = (
+            f"Portfolio Risk: {_dd_status['status']} · "
+            f"Peak £{_dd_status['peak_value_gbp']:,.0f} · "
+            f"Current £{_dd_status['current_value_gbp']:,.0f} · "
+            f"Drawdown {_dd_status['drawdown_pct'] * 100:.1f}%"
+        )
+        if _dd_status["enabled"] and _dd_status["scale_factor"] < 1.0:
+            _dd_line += f" · New positions scaled to {_dd_status['scale_factor'] * 100:.0f}%"
+            _dd_prefix = "⚠ "
+        else:
+            _dd_prefix = ""
+        st.markdown(
+            f'<span style="color:{_dd_colour};font-size:0.85rem;font-weight:600">'
+            f'{_dd_prefix}{html.escape(_dd_line)}</span>',
+            unsafe_allow_html=True,
+        )
 
     # Active overlay detail strips
     for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
@@ -5561,6 +5649,16 @@ def _render_performance_page(config: dict) -> None:
 
     # ── Section 1: Open Positions ───────────────────────────────────────────
     st.markdown("### Open Positions")
+
+    _dd_perf_status = _get_drawdown_status(config)
+    if _dd_perf_status and _dd_perf_status["enabled"] and _dd_perf_status["scale_factor"] < 1.0:
+        st.caption(
+            f"⚠ Portfolio drawdown {_dd_perf_status['drawdown_pct'] * 100:.1f}% from peak "
+            f"(£{_dd_perf_status['peak_value_gbp']:,.0f}) — new positions are currently scaled "
+            f"to {_dd_perf_status['scale_factor'] * 100:.0f}% of normal size "
+            f"({_dd_perf_status['status']}). Existing positions below are unaffected."
+        )
+
     open_cards = _get_t212_invest_brief_cards(config)
     if not open_cards:
         st.info("No open T212 Invest positions.")

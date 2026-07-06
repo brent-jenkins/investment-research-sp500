@@ -209,6 +209,16 @@ def _fetch_t212_snapshot(config: dict) -> None:
         set_metadata("t212_snapshot_fetched_at", datetime.utcnow().isoformat())
         n_pos = len(positions) if isinstance(positions, list) else 0
         logger.info("T212 account snapshot updated (%d position(s)).", n_pos)
+
+        # Update the drawdown-scaling high water mark on every snapshot refresh —
+        # see analysis/risk.py:update_peak_portfolio_value().
+        try:
+            from analysis.risk import update_peak_portfolio_value  # noqa: PLC0415
+            _total_val = float((summary or {}).get("totalValue", 0) or 0)
+            if _total_val > 0:
+                update_peak_portfolio_value(_total_val, config)
+        except Exception as exc:
+            logger.warning("Drawdown peak update failed: %s", exc)
     except Exception as exc:
         logger.error("T212 snapshot fetch failed: %s", exc)
         set_metadata("t212_invest_error", str(exc))

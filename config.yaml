@@ -780,6 +780,23 @@ trading212_invest:
   # in any regime.
   allowed_entry_regimes:
     - TRENDING_BULL
+  # Mechanical, non-predictive risk control: scale new BUY position sizes down while
+  # the account is in drawdown from its own high water mark, independent of regime or
+  # signal strength. Three graduated tiers rather than a single cliff-edge threshold —
+  # position size steps down progressively as drawdown deepens. See
+  # analysis/risk.py:compute_drawdown_scale_factor() for the mechanism and
+  # CLAUDE.md's "Drawdown-based position scaling" section for the rationale and
+  # backtest validation.
+  drawdown_scaling:
+    enabled: true
+    lookback_days: 90           # peak portfolio value lookback window (see analysis/risk.py docstring for the current monotonic-HWM implementation note)
+    threshold_1: 0.05           # 5% drawdown from peak -> scale to 75% of normal size
+    scale_factor_1: 0.75
+    threshold_2: 0.10           # 10% drawdown from peak -> scale to 50% of normal size
+    scale_factor_2: 0.50
+    threshold_3: 0.15           # 15% drawdown from peak -> scale to 25% of normal size
+    scale_factor_3: 0.25
+    recovery_buffer: 0.02       # must recover past a tier's own boundary by this much before scaling steps back down (hysteresis — prevents oscillation right at a threshold)
   exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
   max_holding_days: 90     # Backstop time limit (3× CFD limit — no leverage/swap costs)
   exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs
@@ -864,6 +881,20 @@ trading212_stocks:
     - TRENDING_BULL
   entry_signal_overrides:
     TRENDING_BULL: STRONG_BUY
+  # Mechanical drawdown-based position scaling — identical mechanism and shape as
+  # trading212_invest.drawdown_scaling above, sized independently here in case stock
+  # risk tolerance ever needs to diverge from the ETF path (both currently ship with
+  # identical values, matching the existing VaR-sizing precedent in this section).
+  drawdown_scaling:
+    enabled: true
+    lookback_days: 90
+    threshold_1: 0.05
+    scale_factor_1: 0.75
+    threshold_2: 0.10
+    scale_factor_2: 0.50
+    threshold_3: 0.15
+    scale_factor_3: 0.25
+    recovery_buffer: 0.02
   # Fractional share support — if the T212 instruments API reports maxQuantityPrecision > 0
   # for a ticker, orders are sized as a decimal quantity (position_gbp converted to USD via
   # the live GBPUSD rate, divided by price, rounded to that precision) instead of being

@@ -419,6 +419,8 @@ class BacktestTrade(Base):
     pnl_gbp = Column(Float)       # position_gbp * pnl_pct — realised £ P&L for this simulated trade
     stop_distance_pct = Column(Float)  # stop distance used at entry, as % of entry price — GARCH or ATR, see analysis/backtest.py:_resolve_entry_stop()
     vol_source = Column(String(15))    # "garch" or "atr_fallback" — which formula sized stop_distance_pct
+    drawdown_scale_factor = Column(Float)   # position-size scale factor applied at entry (1.0 = no scaling, down to 0.25) — see analysis/risk.py:compute_drawdown_scale_factor()
+    drawdown_pct_at_entry = Column(Float)   # ticker-level notional drawdown from its own running peak at entry time, as a fraction (0.05 = 5%) — see analysis/backtest.py's drawdown-scaling note
     regime_at_entry = Column(String(30))
     trend_at_entry = Column(Integer)
     mean_reversion_at_entry = Column(Integer)
@@ -666,6 +668,8 @@ def _apply_migrations(engine) -> None:
         ("backtest_trades",    "pnl_gbp",              "FLOAT"),
         ("backtest_trades",    "stop_distance_pct",   "FLOAT"),
         ("backtest_trades",    "vol_source",          "VARCHAR(15)"),
+        ("backtest_trades",    "drawdown_scale_factor", "FLOAT"),
+        ("backtest_trades",    "drawdown_pct_at_entry", "FLOAT"),
         ("backtest_signals",   "hmm_bull_probability","FLOAT"),
         ("backtest_signals",   "hmm_downgraded",      "INTEGER"),
         ("backtest_signals",   "hmm_upgraded",        "INTEGER"),
