@@ -618,23 +618,35 @@ def _load_stop_prices() -> "dict[str, float]":
 
 
 def _has_recent_sell_order(us_ticker: str, hours: int = 24) -> bool:
-    """True if a PLACED, FILLED, or FAILED SELL order exists for *us_ticker* within *hours*.
+    """True if *us_ticker* has an unresolved SELL, or a resolved one within *hours*.
 
     Guards against the hourly exit check (maybe_exit_t212_positions /
     maybe_exit_stock_positions) and the EOD run's own delegated call to the
     same functions both placing a SELL for the same position in one window.
 
-    FAILED is included alongside PLACED/FILLED (added after a production
-    incident) so a SELL that fails for a structural reason — e.g. T212
-    reporting a live position via get_positions() while its order-placement
-    endpoint simultaneously rejects the order with
-    'selling-equity-not-owned, owned: 0.0' (a genuine T212-side positions/
-    orders inconsistency, not a bug in this DB's bookkeeping) — is retried
-    at most once per `hours` window instead of every single hourly exit
-    check indefinitely. A real transient failure (network blip, momentary
-    rate limit) waits up to `hours` for its retry too, which is an
-    acceptable trade-off given positions here are held for weeks, not
-    minutes.
+    Two different conditions block a duplicate, on purpose:
+      - status = 'PLACED', **regardless of age**. A PLACED order is a real
+        still-open order at T212 until it resolves to FILLED/CANCELLED/
+        REJECTED — production data showed T212's demo account can leave a
+        market SELL sitting in PLACED for 60+ hours before poll_placed_orders()
+        ever sees it resolve (four SELLs placed in the same batch on
+        2026-07-03 16:00 UTC — XLU, XLE, EWG, PDBC — were all still PLACED
+        three days later; XLU/XLE only resolved to FILLED the morning of
+        2026-07-06). The original 24h-only window let that original order
+        "age out" of the dedup check well before it actually resolved, so
+        the next hourly exit check placed a second, duplicate SELL on top
+        of the still-pending first one — which T212 then rejected with
+        'selling-equity-not-owned, owned: 0.0' (the shares were already
+        spoken for by the first, still-unresolved order) — repeating every
+        subsequent hour, once per ticker, for as long as the original order
+        stayed unresolved.
+      - status IN ('FILLED', 'FAILED') AND placed_at within `hours`. Once an
+        order has actually resolved, only a short cooldown is needed — to
+        stop the hourly job and a same-window EOD call from both selling
+        the same position, or a single FAILED attempt (transient network
+        blip, momentary rate limit — both already retried internally by
+        `_request()` before ever reaching FAILED) from retrying every single
+        hour instead of at most once per `hours`.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -644,8 +656,10 @@ def _has_recent_sell_order(us_ticker: str, hours: int = 24) -> bool:
             row = conn.execute(sa_text("""
                 SELECT 1 FROM t212_invest_orders
                 WHERE ticker = :ticker AND direction = 'SELL'
-                AND status IN ('PLACED', 'FILLED', 'FAILED')
-                AND placed_at > datetime('now', :window)
+                AND (
+                    status = 'PLACED'
+                    OR (status IN ('FILLED', 'FAILED') AND placed_at > datetime('now', :window))
+                )
                 LIMIT 1
             """), {"ticker": us_ticker, "window": f"-{hours} hours"}).fetchone()
         return row is not None
@@ -1022,11 +1036,13 @@ def maybe_exit_t212_positions(config: dict) -> None:
       3. Backstop: position held > max_holding_days (only when
          time_limit_as_backstop: true; overrides confirmed-only logic)
 
-    Idempotent: _has_recent_sell_order() skips a ticker that already has a
-    PLACED, FILLED, or FAILED SELL order within the last 24 hours, so the
+    Idempotent: _has_recent_sell_order() skips a ticker that already has an
+    unresolved (PLACED) SELL order, however old — T212's demo account has
+    been observed leaving a SELL in PLACED for 60+ hours before resolving it
+    — or a resolved (FILLED/FAILED) one within the last 24 hours, so the
     hourly job and a same-window EOD call never both sell the same position,
-    and a structurally-failing SELL (e.g. T212 rejecting an order for a
-    position get_positions() still reports as held) doesn't retry every hour.
+    and neither a still-pending original order nor a structurally-failing
+    retry gets duplicated on every subsequent hourly run.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):

@@ -229,6 +229,72 @@ def test_exit_skips_duplicate_when_recent_sell_order_exists(db_engine, t212_mock
     t212_mocks.place_market_order.assert_not_called()
 
 
+def test_exit_skips_duplicate_when_placed_sell_order_is_older_than_24h(db_engine, t212_mocks):
+    """A still-PLACED (unresolved) SELL blocks a duplicate no matter its age.
+
+    Regression test for a production incident: T212's demo account left SELL
+    orders sitting in PLACED for 60+ hours before poll_placed_orders() ever
+    saw them resolve. The original 24h-only dedup window let those orders
+    "age out," so the next hourly exit check placed a second, duplicate SELL
+    on top of the still-pending first one — which T212 rejected with
+    'selling-equity-not-owned' since the shares were already committed to
+    the first order. A PLACED order must block regardless of placed_at age;
+    only resolved (FILLED/FAILED) orders should be subject to the 24h window.
+    """
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_SELL", regime="MIXED")
+
+    with Session(db_engine) as session:
+        session.add(T212InvestOrder(
+            order_id="existing-old-placed",
+            ticker="AAPL",
+            t212_ticker="AAPLUCITS_EQ",
+            direction="SELL",
+            quantity=5.0,
+            status="PLACED",
+            account_type="DEMO",
+            placed_at=datetime.utcnow() - timedelta(hours=63),
+        ))
+        session.commit()
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_not_called()
+
+
+def test_exit_retries_sell_when_prior_failed_attempt_is_older_than_24h(db_engine, t212_mocks):
+    """A FAILED SELL older than 24h no longer blocks a fresh attempt.
+
+    Unlike a still-open PLACED order, a resolved FAILED order is only meant
+    to suppress retries for the cooldown window — once that window passes,
+    the position may still genuinely need exiting, so a new attempt must be
+    allowed through.
+    """
+    from brokers.trading212 import maybe_exit_t212_positions
+
+    t212_mocks.get_positions.return_value = [{"ticker": "AAPLUCITS_EQ", "quantity": 5.0}]
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_SELL", regime="MIXED")
+
+    with Session(db_engine) as session:
+        session.add(T212InvestOrder(
+            order_id="existing-old-failed",
+            ticker="AAPL",
+            t212_ticker="AAPLUCITS_EQ",
+            direction="SELL",
+            quantity=5.0,
+            status="FAILED",
+            account_type="DEMO",
+            placed_at=datetime.utcnow() - timedelta(hours=25),
+        ))
+        session.commit()
+
+    maybe_exit_t212_positions(_config())
+
+    t212_mocks.place_market_order.assert_called_once()
+
+
 def test_exit_immediate_sell_signal_stores_exit_reason(db_engine, t212_mocks):
     """A SELL order placed via the immediate-signal branch stores a structured
     exit_reason (SELL_SIGNAL or STRONG_SELL_SIGNAL, derived from sig_type) on
