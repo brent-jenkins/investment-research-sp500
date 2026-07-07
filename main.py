@@ -1157,7 +1157,36 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f"<span style='color:#94a3b8;font-size:0.78rem'>{html.escape(_hmm_note)}</span></div>"
         )
 
-    intel_strips = overlay_strips + catch_up_strips + hmm_strip
+    macro_regional_strip = ""
+    try:
+        _macro_region_dash = get_macro_dashboard(config)
+    except Exception:
+        _macro_region_dash = {}
+    _region_scores_sig = (
+        _macro_region_dash.get("region_scores", {}) if _macro_region_dash.get("has_data") else {}
+    )
+    if _region_scores_sig:
+        _REGION_COLOUR_SIG = {"us": "#16a34a", "europe": "#6366f1", "asia": "#f59e0b"}
+        _REGION_LABEL_SIG   = {"us": "US", "europe": "EUROPE", "asia": "ASIA"}
+        _region_pills = "".join(
+            f"<span style='background:{_REGION_COLOUR_SIG.get(r, '#6b7280')}18;"
+            f"border:1px solid {_REGION_COLOUR_SIG.get(r, '#6b7280')}55;"
+            f"color:{_REGION_COLOUR_SIG.get(r, '#6b7280')};padding:1px 7px;"
+            f"border-radius:3px;font-size:0.72rem;font-weight:700;white-space:nowrap;margin-right:4px'>"
+            f"{_REGION_LABEL_SIG.get(r, r.upper())} {((v + 1) / 2):.0%}</span>"
+            for r, v in _region_scores_sig.items()
+        )
+        macro_regional_strip = (
+            "<div style='border-left:3px solid #0ea5e9;padding:3px 10px;"
+            f"background:{_hex_rgba('#0ea5e9', 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
+            "<span style='background:#0ea5e9;color:#fff;padding:0 5px;"
+            "border-radius:2px;font-size:0.64rem;font-weight:800'>MACRO REGIONS</span> "
+            f"{_region_pills}"
+            "<span style='color:#94a3b8;font-size:0.78rem'>bullishness by region "
+            "(macro_regional_weights) — see Macro Dashboard for detail</span></div>"
+        )
+
+    intel_strips = overlay_strips + catch_up_strips + hmm_strip + macro_regional_strip
 
     dist_pills = "".join(
         f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
@@ -4639,6 +4668,28 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             unsafe_allow_html=True,
         )
 
+        # Regional breakdown — see analysis/macro.py's "Regional grouping" section
+        _REGION_LABEL = {"us": "US", "europe": "Europe", "asia": "Asia"}
+        region_scores       = macro_dash.get("region_scores", {}) or {}
+        region_weights_cfg  = macro_dash.get("region_weights_config", {}) or {}
+        if region_scores:
+            _region_bits = " · ".join(
+                f"{_REGION_LABEL.get(r, r.title())}: {v:+.2f}"
+                for r, v in region_scores.items()
+            )
+            _weight_bits = " · ".join(
+                f"{_REGION_LABEL.get(r, r.title())} {w:.0%}"
+                for r, w in region_weights_cfg.items()
+            )
+            st.markdown(
+                f"<div style='font-size:0.78rem;color:#94a3b8;margin:-2px 0 8px 0'>"
+                f"{html.escape(_region_bits)}"
+                + (f"<br><span style='color:#64748b'>Regional weights: {html.escape(_weight_bits)}</span>"
+                   if _weight_bits else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
         # Plain-English summary
         summary = html.escape(macro_dash.get("summary", ""))
         st.markdown(
@@ -4677,6 +4728,15 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 f"<div style='font-size:0.76rem;color:#64748b'>{html.escape(sub)}</div>"
                 f"</div>"
             )
+
+        _region_pct = lambda r: f" ({region_weights_cfg[r]:.0%})" if r in region_weights_cfg else ""
+
+        st.markdown(
+            f"<div style='font-size:0.76rem;font-weight:700;color:#94a3b8;"
+            f"text-transform:uppercase;letter-spacing:0.04em;margin:4px 0 4px 0'>"
+            f"🇺🇸 United States{_region_pct('us')}</div>",
+            unsafe_allow_html=True,
+        )
 
         # Row 1: Real yields | Breakeven | HY Credit spread
         c1, c2, c3 = st.columns(3)
@@ -4745,8 +4805,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 unsafe_allow_html=True,
             )
 
-        # Row 3: PERMIT (specialty) | Fed Rate (specialty) | first extra series (dynamic)
+        # Row 3: PERMIT (specialty) | Fed Rate (specialty) | first US extra series (dynamic)
         extra_series = macro_dash.get("extra_series", [])
+        us_extra     = [e for e in extra_series if e.get("region", "us") == "us"]
+        europe_extra = [e for e in extra_series if e.get("region") == "europe"]
+        asia_extra   = [e for e in extra_series if e.get("region") == "asia"]
         permit_val   = macro_dash.get("permit")
         permit_pct   = macro_dash.get("permit_pct1m")
         permit_sc    = macro_dash.get("permit_score")
@@ -4755,7 +4818,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         fed_rate_trend = macro_dash.get("fed_rate_trend", "unchanged")
         fed_rate_sc    = macro_dash.get("fed_rate_score")
 
-        if permit_val is not None or fed_rate_val is not None or extra_series:
+        if permit_val is not None or fed_rate_val is not None or us_extra:
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             c7, c8, c9 = st.columns(3)
             with c7:
@@ -4797,8 +4860,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 else:
                     st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#6b7280", tag="signals"), unsafe_allow_html=True)
             with c9:
-                if extra_series:
-                    es   = extra_series[0]
+                if us_extra:
+                    es   = us_extra[0]
                     es_c = "#16a34a" if es["score"] == 1 else "#ef5350" if es["score"] == -1 else "#f59e0b"
                     ar   = _TREND_ARROW.get(es["trend"], "→")
                     dv   = es["display_value"]
@@ -4813,12 +4876,10 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                         unsafe_allow_html=True,
                     )
 
-        # Remaining extra series — render in rows of 3
-        for _row_start in range(1, len(extra_series), 3):
-            _chunk = extra_series[_row_start:_row_start + 3]
+        def _render_extra_tile_row(chunk: list[dict]) -> None:
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             _ecols = st.columns(3)
-            for _ec, _es in zip(_ecols, _chunk):
+            for _ec, _es in zip(_ecols, chunk):
                 with _ec:
                     _es_c = "#16a34a" if _es["score"] == 1 else "#ef5350" if _es["score"] == -1 else "#f59e0b"
                     _ar   = _TREND_ARROW.get(_es["trend"], "→")
@@ -4833,6 +4894,32 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                         ),
                         unsafe_allow_html=True,
                     )
+
+        # Remaining US extra series (row 3's slot already used us_extra[0])
+        for _row_start in range(1, len(us_extra), 3):
+            _render_extra_tile_row(us_extra[_row_start:_row_start + 3])
+
+        # ── Europe / Asia groups — one tile per configured series in that
+        # region, same as the US tiles above (a series with no stored data
+        # yet, e.g. no FRED key or a failed fetch, shows a "No data" tile
+        # rather than being hidden — consistent with how PERMIT/Fed Rate
+        # above already behave). The section header itself is only omitted
+        # when config.yaml defines no series at all for that region.
+        for _region_key, _region_flag, _region_label, _region_tiles in (
+            ("europe", "🇪🇺", "Europe", europe_extra),
+            ("asia",   "🌏", "Asia",   asia_extra),
+        ):
+            if not _region_tiles:
+                continue
+            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='font-size:0.76rem;font-weight:700;color:#94a3b8;"
+                f"text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px'>"
+                f"{_region_flag} {_region_label}{_region_pct(_region_key)}</div>",
+                unsafe_allow_html=True,
+            )
+            for _row_start in range(0, len(_region_tiles), 3):
+                _render_extra_tile_row(_region_tiles[_row_start:_row_start + 3])
 
     st.divider()
 

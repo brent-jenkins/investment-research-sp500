@@ -247,25 +247,62 @@ def _macro_scores(
     ticker: str,
     vix_s: Optional[pd.Series],
     macro_df: Optional[pd.DataFrame],
+    config: dict,
 ) -> pd.Series:
+    """Vectorized mirror of analysis/macro.py:compute_macro()'s regional
+    weighting (2026-07-07) — grouped by region, blended via
+    signals.macro_regional_weights, with per-date graceful degradation when a
+    region has no data yet (e.g. before its first FRED observation), exactly
+    like the live _regional_macro_score() but computed once across the whole
+    date index instead of once per date. This mirrors analysis/macro.py's own
+    per-series region tags (imported directly, not re-hardcoded) — the same
+    "shared core, no re-implementation of the mapping" pattern already used
+    for VaR sizing and GARCH stops elsewhere in this file.
+    """
+    from analysis.macro import _regional_weights, _series_region
+
     _MACRO_SKIP = frozenset({"^VIX", "TLT", "IEF", "HYG"})
     close = df["close"].astype(float)
 
     if ticker in _MACRO_SKIP:
         return pd.Series(0, index=close.index, dtype=int)
 
-    vix_sc = pd.Series(0.0, index=close.index)
+    region_series: dict[str, list[pd.Series]] = {}
+
     if vix_s is not None:
         va = vix_s.reindex(close.index).ffill()
         vix_sc = pd.Series(np.where(va < 12, 1.0, np.where(va < 20, 0.0, -1.0)), index=close.index)
+        region_series.setdefault("us", []).append(vix_sc)  # VIX is a US-sourced index
 
-    components = [vix_sc]
     if macro_df is not None and not macro_df.empty:
-        aligned = macro_df.reindex(close.index).ffill().fillna(0)
+        aligned = macro_df.reindex(close.index).ffill()
         for col in aligned.columns:
-            components.append(aligned[col].astype(float))
+            region_series.setdefault(_series_region(col, config), []).append(aligned[col].astype(float))
 
-    avg = pd.concat(components, axis=1).mean(axis=1)
+    if not region_series:
+        return pd.Series(0, index=close.index, dtype=int)
+
+    # Per-region average — NaN on any date before that region's first series
+    # has reported at all (nothing yet to ffill from).
+    region_avg = pd.concat(
+        {region: pd.concat(series_list, axis=1).mean(axis=1) for region, series_list in region_series.items()},
+        axis=1,
+    )
+
+    weights_cfg = _regional_weights(config)
+    weight_row  = pd.Series({r: weights_cfg.get(r, 0.0) for r in region_avg.columns})
+    avail       = region_avg.notna()
+    applied_w   = avail.mul(weight_row, axis=1)
+    weight_sum  = applied_w.sum(axis=1)
+
+    # Graceful degradation, vectorized: dates where the configured weights
+    # available sum to 0 (e.g. every region with data has a 0 configured
+    # weight) fall back to a flat average across whatever regions do have
+    # data that date, mirroring _regional_macro_score()'s own fallback.
+    flat_fallback = region_avg.mean(axis=1)
+    weighted = (region_avg.fillna(0.0) * applied_w).sum(axis=1) / weight_sum.replace(0, np.nan)
+    avg = weighted.fillna(flat_fallback).fillna(0.0)
+
     raw = pd.Series(np.where(avg >= 0.25, 1, np.where(avg <= -0.25, -1, 0)), index=close.index)
     return raw.astype(int)
 
@@ -582,7 +619,7 @@ def compute_signal_history(
     mean_rev_sc = _mean_rev_scores(df, config)
     vol_sc      = _vol_scores(df, vix_s, config)
     volume_sc   = _volume_scores(df, config)
-    macro_sc    = _macro_scores(df, ticker, vix_s, macro_df)
+    macro_sc    = _macro_scores(df, ticker, vix_s, macro_df, config)
 
     regime_aligned = regime_hist["regime"].reindex(df.index).ffill().fillna("MIXED")
     # hmm_bull_probability/hmm_downgraded/hmm_upgraded are NOT forward-filled

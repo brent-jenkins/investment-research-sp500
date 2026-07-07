@@ -194,7 +194,7 @@ Each module returns a score of −1 (bearish), 0 (neutral), or +1 (bullish):
 | **Mean Reversion** | RSI (oversold/overbought), Bollinger Band %B, 52-week z-score |
 | **Volatility** | ATR%, historical volatility, Bollinger Band width regime, change-point-aware structural break adjustment |
 | **Volume** | Volume vs 20-day SMA, OBV trend direction |
-| **Macro** | VIX regime, yield curve, plus 12 additional FRED series with per-ticker routing (see below) |
+| **Macro** | VIX regime, yield curve, plus 15 additional FRED series (17 total), regionally grouped (US/Europe/Asia) and blended via portfolio-proportional weights, with per-ticker routing on several US series (see below) |
 | **Correlation** | Cross-asset pair status for pairs involving the ticker (CONFIRMING = +1, DIVERGING = −1, NEUTRAL = 0) |
 | **Regime** | Not directly scored per ticker; determines the weights applied to the other six modules |
 
@@ -202,31 +202,37 @@ Each module returns a score of −1 (bearish), 0 (neutral), or +1 (bullish):
 
 > **Volatility module distinguishes "always volatile" from "recently became volatile."** `detect_change_points()` locates the most recent structural break in a ticker's return-variance regime (cumulative-sum-of-squares statistic by default — see CLAUDE.md for why a textbook rolling-variance CUSUM was tried and rejected). A break within `signals.cpd_recent_window` (default 90 days) recomputes ATR from only the post-break data rather than the full fixed window, and adjusts the volatility score: vol expanding >1.5× after a break subtracts 1 (caution), vol compressing to <0.67× adds 1 (constructive). The Charts page indicator panel shows a colour-coded Vol Regime tile (LOW/NORMAL/HIGH/ELEVATED) and an amber "⚠ Regime shift detected" caption when a recent break is active. This is currently live-scoring only — `analysis/backtest.py`'s vectorized engine does not yet mirror change point detection, so backtested results don't reflect the score adjustment (see CLAUDE.md's "Volatility module" section).
 
-### FRED macro series
+### FRED macro series (regional grouping)
 
-The macro module fetches and scores these series (stored in `macro_indicators` table). Beyond the composite average score, several series apply ticker-specific adjustments inside `compute_macro()`:
+The macro module fetches and scores 17 FRED series (13 US + 4 international), stored in the `macro_indicators` table. Each series carries a `region` (`us`/`europe`/`asia`) in `config.yaml`'s `macro.fred_series`; a series with no `region` field defaults to `us` for backward compatibility. Rather than averaging every series into one flat composite regardless of region, `analysis/macro.py:_regional_macro_score()` averages each region's own series first, then blends the three regional averages using `signals.macro_regional_weights` (default `us: 0.60`, `europe: 0.25`, `asia: 0.15` — proportional to the portfolio's actual US/European/Asian exposure). If a region has no data available (e.g. FRED unreachable), its weight is redistributed proportionally across the remaining regions rather than treated as neutral. Beyond the regional blend, several US series also apply ticker-specific adjustments inside `compute_macro()`:
 
-| Series | What it is | Scoring / ticker-specific routing |
-|--------|-----------|----------------------------------|
-| T10Y2Y | 10Y−2Y yield spread | Bearish when inverted; drives regime detection |
-| T10Y3M | 10Y−3M yield spread | Bearish when inverted; drives regime detection |
-| DFII10 | 10-year real yield | Bearish when > 2% or z-score > 1 |
-| T10YIE | 10-year breakeven inflation | Bearish when < 1% or > 3.5% |
-| BAMLH0A0HYM2 | HY credit OAS | Bearish on rapid widening or > 5%; CREDIT_STRESS overlay trigger |
-| BAMLC0A0CM | IG credit OAS | Bearish when > 1.5% |
-| CFNAI | Chicago Fed National Activity Index | Equity-group boost +0.10 (> 0.20) / penalty −0.10 (< −0.20) / −0.20 (< −0.70); RECESSION_RISK overlay trigger |
-| DFEDTARU | Fed funds rate (upper bound) | Rising rates: −0.10 VNQ/XLRE/ITB/rate-bearish, +0.10 KBE/KRE/XLF; falling rates: opposite |
-| M2SL | M2 money supply | Growing > 0.5% MoM: +0.10 crypto, +0.05 gold; shrinking < −0.5%: −0.10 crypto |
-| PERMIT | Housing permits (SAAR) | Falling > 5% MoM: −0.10 penalty for VNQ, XLRE, ITB |
-| DTWEXBGS | Trade-weighted dollar | Bearish when rising (z-score > 0.5); EM_STRESS overlay trigger when 30d change > +3% |
-| DPCREDIT | Fed discount window rate | Composite score contribution; shown as rate % vs Fed Funds spread |
-| BOGMBASE | Monetary base | Composite score contribution |
+| Series | Region | What it is | Scoring / ticker-specific routing |
+|--------|--------|-----------|----------------------------------|
+| T10Y2Y | US | 10Y−2Y yield spread | Bearish when inverted; drives regime detection |
+| T10Y3M | US | 10Y−3M yield spread | Bearish when inverted; drives regime detection |
+| DFII10 | US | 10-year real yield | Bearish when > 2% or z-score > 1 |
+| T10YIE | US | 10-year breakeven inflation | Bearish when < 1% or > 3.5% |
+| BAMLH0A0HYM2 | US | HY credit OAS | Bearish on rapid widening or > 5%; CREDIT_STRESS overlay trigger |
+| BAMLC0A0CM | US | IG credit OAS | Bearish when > 1.5% |
+| CFNAI | US | Chicago Fed National Activity Index | Equity-group boost +0.10 (> 0.20) / penalty −0.10 (< −0.20) / −0.20 (< −0.70); RECESSION_RISK overlay trigger |
+| DFEDTARU | US | Fed funds rate (upper bound) | Rising rates: −0.10 VNQ/XLRE/ITB/rate-bearish, +0.10 KBE/KRE/XLF; falling rates: opposite |
+| M2SL | US | M2 money supply | Growing > 0.5% MoM: +0.10 crypto, +0.05 gold; shrinking < −0.5%: −0.10 crypto |
+| PERMIT | US | Housing permits (SAAR) | Falling > 5% MoM: −0.10 penalty for VNQ, XLRE, ITB |
+| DTWEXBGS | US | Trade-weighted dollar | Bearish when rising (z-score > 0.5); EM_STRESS overlay trigger when 30d change > +3% |
+| DPCREDIT | US | Fed discount window rate | Composite score contribution; shown as rate % vs Fed Funds spread |
+| BOGMBASE | US | Monetary base | Composite score contribution |
+| ECBDFR | Europe | ECB Deposit Facility Rate | Bearish on hikes, bullish on cuts (same pattern as DFEDTARU) — composite (regional) only |
+| IRLTLT01DEM156N | Europe | Germany 10Y Bund yield | Scored off its own 2-year z-score (no natural "good" level) — composite (regional) only |
+| IRSTCB01JPM156N | Asia | BoJ policy rate | Bearish on hikes (carry-trade-unwind risk), bullish on cuts — composite (regional) only |
+| CHNGDPNQDSMEI | Asia | China nominal GDP (quarterly) | Scored off quarter-over-quarter growth — composite (regional) only |
 
-VIX is sourced from the local `price_data` table (^VIX ticker), not FRED.
+VIX is sourced from the local `price_data` table (^VIX ticker), not FRED, and is always folded into the US region.
+
+International series can lag by more than one reporting period (quarterly China GDP especially) — the fetch uses a ~6-year lookback for non-US series instead of the ~2-year window used for US series, and scores whatever the last available observation is regardless of age. The dashboard flags an international tile as stale past 90 days old (35 days for US series) purely for display; this never blocks or affects scoring.
 
 Self-referential macro tickers (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0.
 
-The Macro Dashboard tags each card: **✓ Signals** for series with ticker-specific routing or overlay triggers; **Composite** for series that contribute to the average score only.
+The Macro Dashboard tags each card: **✓ Signals** for series with ticker-specific routing or overlay triggers; **Composite** for series that contribute to the (regional) average score only. Indicator tiles are grouped under 🇺🇸 United States / 🇪🇺 Europe / 🌏 Asia headers, each labelled with its configured weight.
 
 ### Regime detection
 

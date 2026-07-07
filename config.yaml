@@ -452,18 +452,25 @@ macro:
   fred_api_key: ""
 
   # FRED series pulled on each EOD scheduler run and stored in macro_indicators table.
-  # Each entry: label (display name), category (groups the UI), and optional thresholds.
-  # Remove or comment-out a series to stop pulling it; add a new series_id key to include it.
+  # Each entry: label (display name), category (groups the UI), region (which
+  # regional group it feeds into — see signals.macro_regional_weights below and
+  # CLAUDE.md's "Macro module — regional grouping" section), and optional
+  # thresholds. Remove or comment-out a series to stop pulling it; add a new
+  # series_id key to include it. A series with no region field defaults to "us"
+  # (backward compatible with config predating regional grouping).
   fred_series:
     DFII10:
       label: "10Y Real Yield (TIPS)"
       category: "real_yields"
+      region: "us"
     T10YIE:
       label: "10Y Breakeven Inflation"
       category: "real_yields"
+      region: "us"
     BAMLH0A0HYM2:
       label: "High Yield OAS"
       category: "credit_spreads"
+      region: "us"
       # Values in % (1.0 = 100 bps). Stress flags fire if current value exceeds threshold
       # or rises more than the jump threshold within 30 days.
       stress_threshold_pct: 5.0    # 500 bps
@@ -471,36 +478,86 @@ macro:
     BAMLC0A0CM:
       label: "Investment Grade OAS"
       category: "credit_spreads"
+      region: "us"
     M2SL:
       label: "M2 Money Supply"
       category: "liquidity"
+      region: "us"
     DPCREDIT:
       label: "Fed Discount Window"
       category: "liquidity"
+      region: "us"
     T10Y2Y:
       label: "10Y-2Y Yield Spread"
       category: "yield_curve"
+      region: "us"
     T10Y3M:
       label: "10Y-3M Yield Spread"
       category: "yield_curve"
+      region: "us"
     # USALOLITONOSTSAM and USSLIND were removed — both discontinued by their
     # publishers. Replaced with CFNAI (Chicago Fed National Activity Index),
     # a composite of 85 monthly economic indicators.
     CFNAI:
       label: "Chicago Fed National Activity Index"
       category: "leading_indicators"
+      region: "us"
     PERMIT:
       label: "Housing Permits (Total)"
       category: "leading_indicators"
+      region: "us"
     DTWEXBGS:
       label: "Trade Weighted Dollar (Broad)"
       category: "dollar"
+      region: "us"
     BOGMBASE:
       label: "Monetary Base"
       category: "liquidity"
+      region: "us"
     DFEDTARU:
       label: "Fed Funds Rate (Upper Bound)"
       category: "monetary_policy"
+      region: "us"
+
+    # ── International series (2026-07-07) ────────────────────────────────
+    # Scored in analysis/macro.py:_score_fred_series() same as every US series
+    # above; grouped by region and blended via signals.macro_regional_weights
+    # below instead of counting equally in one flat average. See CLAUDE.md's
+    # "Macro module — regional grouping" section for the full rationale.
+    ECBDFR:
+      label: "ECB Deposit Facility Rate"
+      category: "monetary_policy"
+      region: "europe"
+      # Higher rate = tighter Eurozone conditions = bearish (same "cut is
+      # bullish / hike is bearish" logic as DFEDTARU, applied to the ECB).
+    IRLTLT01DEM156N:
+      label: "Germany 10Y Bund Yield"
+      category: "real_yields"
+      region: "europe"
+      # Not a real yield like DFII10 — no natural "good" level, so this is
+      # scored purely off its own 2-year z-score (context-dependent).
+    IRSTCB01JPM156N:
+      label: "BoJ Policy Rate"
+      category: "monetary_policy"
+      region: "asia"
+      # Substituted for the originally-proposed "MOPJPY", which is not a real
+      # FRED series ID (verified — no such series exists). This is FRED's
+      # actual BoJ policy-rate series: "Interest Rates: Immediate Rates
+      # (< 24 Hours): Central Bank Rates: Total for Japan" (OECD source,
+      # monthly). A BoJ hike raises carry-trade-unwind risk for global risk
+      # assets (see e.g. August 2024); a cut eases it — bearish_high, same
+      # direction as ECBDFR/DFEDTARU.
+    CHNGDPNQDSMEI:
+      label: "China GDP (Nominal, Quarterly)"
+      category: "leading_indicators"
+      region: "asia"
+      # OECD-sourced quarterly nominal GDP level for China (current prices) —
+      # a level series like M2SL/BOGMBASE, scored off quarter-over-quarter
+      # growth, not the level itself. Higher growth = bullish for commodities
+      # and EM exposure (FXI, EEM). Quarterly data can lag by more than one
+      # quarter — fetched with a longer lookback window and scored from the
+      # last available value regardless of age; see
+      # analysis/macro.py:fetch_and_store_macro_indicators().
 
 confluence:
   # Minimum number of signals that must agree for a BUY/SELL call
@@ -658,6 +715,24 @@ signals:
   # the median, e.g. the 25th, to target the more-volatile tail of each
   # bucket rather than its centre) before attempting a third calibration.
   use_garch_stops: false
+
+  # Regional weighting for the macro module's composite score (2026-07-07).
+  # analysis/macro.py groups every scored FRED series (+ VIX, always "us") by
+  # its macro.fred_series.<id>.region field, averages each region, then blends
+  # the regional averages using these weights — proportional to actual
+  # portfolio exposure (predominantly US, with VGK/EWG-style European exposure
+  # and FXI/EEM/commodity-linked Asian exposure) rather than every series
+  # counting equally regardless of region. Must sum to 1.0. A region with no
+  # available data (e.g. FRED unreachable for international series) is
+  # dropped and its weight redistributed proportionally across the remaining
+  # regions — see analysis/macro.py:_regional_macro_score(). Applies to both
+  # compute_macro()'s per-ticker score (feeds the confluence macro module —
+  # no new confluence weight needed, the macro module's total weight is
+  # unchanged) and get_macro_dashboard()'s composite health score.
+  macro_regional_weights:
+    us: 0.60
+    europe: 0.25
+    asia: 0.15
 
 notifications:
   email:

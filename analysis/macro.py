@@ -233,6 +233,60 @@ def _score_fred_series(
             return -1
         return 0
 
+    if series_id == "ECBDFR":
+        # ECB Deposit Facility Rate: identical "cut is bullish / hike is
+        # bearish" logic to DFEDTARU below, applied to the Eurozone's policy
+        # rate instead of the Fed's.
+        if (pct_30d or 0) < -2.0:
+            return 1
+        if (pct_30d or 0) > 2.0:
+            return -1
+        if z_score < -1.0:
+            return 1
+        if z_score > 1.0:
+            return -1
+        return 0
+
+    if series_id == "IRLTLT01DEM156N":
+        # Germany 10Y Bund yield: unlike DFII10 (a *real* yield with a
+        # natural "cheap money" band), a nominal Bund yield has no inherent
+        # good/bad level — direction depends entirely on context, so this is
+        # scored purely off its own 2-year z-score. Well above its own recent
+        # history = tightening/inflation-risk signal (bearish); well below =
+        # easing signal (bullish).
+        if z_score > 1.0:
+            return -1
+        if z_score < -1.0:
+            return 1
+        return 0
+
+    if series_id == "IRSTCB01JPM156N":
+        # BoJ policy rate ("Interest Rates: Immediate Rates (< 24 Hours):
+        # Central Bank Rates: Total for Japan"). A hike raises carry-trade-
+        # unwind risk for global risk assets (see e.g. the August 2024
+        # selloff); a cut eases it — same direction/threshold logic as
+        # ECBDFR/DFEDTARU.
+        if (pct_30d or 0) < -2.0:
+            return 1
+        if (pct_30d or 0) > 2.0:
+            return -1
+        if z_score < -1.0:
+            return 1
+        if z_score > 1.0:
+            return -1
+        return 0
+
+    if series_id == "CHNGDPNQDSMEI":
+        # China nominal GDP (current prices, quarterly level) — a level
+        # series like M2SL/BOGMBASE, so only quarter-over-quarter growth is
+        # meaningful, not the level itself. Higher growth = bullish for
+        # commodities/EM exposure (FXI, EEM).
+        if (pct_30d or 0) > 1.0:
+            return 1
+        if (pct_30d or 0) < -1.0:
+            return -1
+        return 0
+
     if series_id == "DFEDTARU":
         # Fed Funds Target Rate upper bound.  A recent cut (pct_30d < 0) is
         # bullish; a recent hike is bearish.  When no change occurred, compare
@@ -250,6 +304,119 @@ def _score_fred_series(
 
     logger.debug("No scoring rule for FRED series %s — scoring neutral", series_id)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Regional grouping — international FRED series are weighted by how much of
+# the actual portfolio's exposure that region represents, rather than every
+# series (US and international alike) counting equally in one flat average.
+# See CLAUDE.md's "Macro module — regional grouping" section for rationale.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_REGIONAL_WEIGHTS = {"us": 0.60, "europe": 0.25, "asia": 0.15}
+
+# Display-only staleness thresholds (days) per region — international series
+# (especially quarterly ones like China GDP) can lag by more than one
+# reporting period, so they get a much longer grace period than the mostly
+# daily/monthly US series before being flagged stale in the dashboard. This
+# never blocks scoring — a stale-but-available value is still used (see
+# fetch_and_store_macro_indicators()'s longer international lookback below).
+_STALE_THRESHOLD_DAYS = {"us": 35, "europe": 90, "asia": 90}
+
+
+def _regional_weights(config: dict) -> dict[str, float]:
+    weights = config.get("signals", {}).get("macro_regional_weights")
+    return weights if weights else dict(_DEFAULT_REGIONAL_WEIGHTS)
+
+
+def _series_region(series_id: str, config: dict) -> str:
+    """Region a FRED series belongs to. Defaults to 'us' when the series has
+    no 'region' field — backward compatible with config written before
+    regional grouping existed."""
+    meta = config.get("macro", {}).get("fred_series", {}).get(series_id, {})
+    return meta.get("region") or "us"
+
+
+def _row_age_days(row: Optional[dict]) -> Optional[int]:
+    """Age in days of a stored macro_indicators row's date, or None if unknown."""
+    if not row:
+        return None
+    d = row.get("date")
+    if d is None:
+        return None
+    try:
+        ts = pd.Timestamp(d)
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        return (datetime.utcnow() - ts.to_pydatetime()).days
+    except Exception:
+        return None
+
+
+def _regional_macro_score(
+    rows: dict[str, dict],
+    vix_score: Optional[int],
+    config: dict,
+    extra_scores_by_region: Optional[dict[str, list[int]]] = None,
+) -> dict:
+    """Group per-series FRED scores (+ VIX, always 'us') by region, then
+    combine the regional averages via config's macro_regional_weights.
+
+    Graceful degradation: a configured region with no available data is
+    dropped and its weight is redistributed proportionally across the
+    remaining regions that do have data, rather than treating missing data
+    as a neutral 0 (a genuinely-neutral European reading and "Europe fetch
+    failed entirely" should not look identical) or raising.
+
+    Returns:
+        {"region_scores": {region: avg}, "region_weights": {region: weight
+        actually applied}, "weighted_score": float}
+    """
+    region_scores_raw: dict[str, list[int]] = {}
+
+    def _add(region: str, score: int) -> None:
+        region_scores_raw.setdefault(region, []).append(score)
+
+    if vix_score is not None:
+        _add("us", vix_score)  # VIX is a US-sourced index
+
+    for sid, row in rows.items():
+        sc = row.get("score")
+        if sc is not None:
+            _add(_series_region(sid, config), int(sc))
+
+    for region, extra_scores in (extra_scores_by_region or {}).items():
+        for sc in extra_scores:
+            _add(region, sc)
+
+    region_avgs = {
+        region: sum(scores) / len(scores)
+        for region, scores in region_scores_raw.items()
+        if scores
+    }
+
+    configured_weights = _regional_weights(config)
+    available = {r: w for r, w in configured_weights.items() if r in region_avgs and w > 0}
+    total_w = sum(available.values())
+
+    if total_w > 0:
+        applied_weights = {r: w / total_w for r, w in available.items()}
+    elif region_avgs:
+        # No configured region with a positive weight has data (e.g. every
+        # weight is 0, or region_avgs contains a region key not present in
+        # macro_regional_weights at all) — fall back to a flat average across
+        # whatever regions do have data rather than silently returning 0.
+        applied_weights = {r: 1.0 / len(region_avgs) for r in region_avgs}
+    else:
+        applied_weights = {}
+
+    weighted_score = sum(region_avgs[r] * w for r, w in applied_weights.items())
+
+    return {
+        "region_scores":  region_avgs,
+        "region_weights": applied_weights,
+        "weighted_score": weighted_score,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +460,20 @@ def _upsert_macro_indicator(
 def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str, bool]:
     """Fetch all configured FRED series, compute stats, upsert to macro_indicators.
 
-    Fetches 2 years of history per series to compute the z-score baseline.
-    Only the latest observation is written to the DB; historical rows are used
-    in-memory to derive pct_change_30d and z_score_2y.
+    Fetches 2 years of history per series (~6 years for international series —
+    see below) to compute the z-score baseline. Only the latest observation is
+    written to the DB; historical rows are used in-memory to derive
+    pct_change_30d and z_score_2y.
+
+    International series (region != "us", e.g. quarterly China GDP) use a
+    longer ~6-year lookback rather than the US series' 2 years: a fixed
+    2-year observation_start would silently exclude every row FRED has for a
+    series that lags by more than a couple of quarters, making it report
+    "insufficient data" forever even though a perfectly usable last-known
+    value exists further back. There is no freshness requirement on the
+    resulting value — the last available observation is used and scored
+    regardless of age (see _STALE_THRESHOLD_DAYS above for the
+    display-only staleness note this implies in the dashboard).
 
     Returns:
         Dict mapping series_id → True (stored) or False (failed).
@@ -321,11 +499,13 @@ def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str,
         return {}
 
     fred = Fred(api_key=fred_key)
-    start = (datetime.today() - timedelta(days=730)).strftime("%Y-%m-%d")
     results: dict[str, bool] = {}
 
     for series_id, series_meta in series_cfg.items():
         try:
+            region = series_meta.get("region") or "us"
+            lookback_days = 730 if region == "us" else 2190  # ~6 years for international series — see docstring
+            start = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
             raw = fred.get_series(series_id, observation_start=start).dropna()
             if len(raw) < 5:
                 logger.warning("Insufficient FRED data for %s (%d points).", series_id, len(raw))
@@ -423,7 +603,12 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
     - hy_oas_pct, hy_oas_bps, hy_oas_pct_30d, credit_status
     - ig_oas_pct, ig_oas_bps
     - t10y2y, t10y2y_shape, t10y3m, t10y3m_shape
-    - composite_score  (float ∈ [-1, +1], not discretised)
+    - composite_score  (float ∈ [-1, +1], not discretised — regional weighted blend)
+    - region_scores    (dict, e.g. {"us": 0.5, "europe": 0.25, "asia": 0.1} — only
+                        regions with at least one scored series)
+    - region_weights   (dict — the weights actually applied after any
+                        graceful-degradation redistribution; sums to 1.0)
+    - region_weights_config (dict — the nominal config.yaml weights, for display)
     - n_bullish, n_bearish, n_neutral, n_series
     - summary          (plain-English one-liner)
     - series_data      (raw dict of all stored rows)
@@ -512,6 +697,7 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         pct  = _get(sid, "pct_change_30d")
         sc   = int(_get(sid, "score") or 0)
         label = scfg.get("label", sid)
+        region = _series_region(sid, config)
         trend = ("rising" if (pct or 0) > 0 else "falling" if (pct or 0) < 0 else "flat")
         if val is None:
             display_value = "—"
@@ -521,14 +707,22 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
             display_value = (f"{pct:+.1f}% MoM" if pct is not None else "—")
         else:
             display_value = f"{val:+.2f}"
+        context = _extra_context(sid, val, pct, sc) if val is not None else "No data"
+        age_days = _row_age_days(rows.get(sid))
+        is_stale = age_days is not None and age_days > _STALE_THRESHOLD_DAYS.get(region, 90)
+        if is_stale:
+            context += f" (stale — {age_days}d old)"
         extra_series.append({
             "series_id":     sid,
             "label":         label,
             "display_value": display_value,
             "trend":         trend,
-            "context":       _extra_context(sid, val, pct, sc) if val is not None else "No data",
+            "context":       context,
             "score":         sc,
             "in_signals":    sid in SIGNALS_ACTIVE,
+            "region":        region,
+            "stale":         is_stale,
+            "age_days":      age_days,
         })
 
     permit_val    = _get("PERMIT",  "value")
@@ -570,10 +764,11 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
             return "flat"
         return "inverted"
 
-    # ── Composite macro health score ─────────────────────────────────────────
+    # ── Composite macro health score (regional weighting) ─────────────────────
     # Include VIX score alongside stored FRED series scores
     scores: list[int] = []
     vix_level = _vix_from_db()
+    vix_sc: Optional[int] = None
     if vix_level is not None:
         _, vix_sc = _classify_vix(vix_level)
         scores.append(vix_sc)
@@ -583,7 +778,8 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         if sc is not None:
             scores.append(int(sc))
 
-    composite = sum(scores) / len(scores) if scores else 0.0
+    regional  = _regional_macro_score(rows, vix_sc, config)
+    composite = regional["weighted_score"]
     n_bullish  = sum(1 for s in scores if s > 0)
     n_bearish  = sum(1 for s in scores if s < 0)
     n_neutral  = sum(1 for s in scores if s == 0)
@@ -640,6 +836,9 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "fed_rate_score":    fed_rate_score,
         "fed_rate_z":        fed_rate_z,
         "composite_score":   round(composite, 3),
+        "region_scores":     {r: round(v, 3) for r, v in regional["region_scores"].items()},
+        "region_weights":    {r: round(v, 3) for r, v in regional["region_weights"].items()},
+        "region_weights_config": _regional_weights(config),
         "n_bullish":         n_bullish,
         "n_bearish":         n_bearish,
         "n_neutral":         n_neutral,
@@ -661,7 +860,10 @@ def compute_macro(ticker: str, config: Optional[dict] = None) -> dict:
     EOD scheduler run).  VIX is always sourced from the local price_data table.
 
     Scoring:
-        Composite = average of all available indicator scores (VIX + stored series).
+        Composite = regional-weighted blend of all available indicator scores
+        (VIX + stored series, grouped by region and combined via
+        signals.macro_regional_weights — see _regional_macro_score() and
+        CLAUDE.md's "Macro module — regional grouping" section).
         Classified: ≥ 0.25 → +1, ≤ -0.25 → -1, else 0.
 
     Macro assets (^VIX, TLT, IEF, HYG) are returned as neutral to avoid
@@ -691,17 +893,12 @@ def compute_macro(ticker: str, config: Optional[dict] = None) -> dict:
         vix_regime, vix_score = _classify_vix(vix_level)
 
     # Stored FRED indicator scores
-    rows      = _get_stored_rows(config)
-    all_scores = [vix_score]
-
-    for row in rows.values():
-        sc = row.get("score")
-        if sc is not None:
-            all_scores.append(int(sc))
+    rows = _get_stored_rows(config)
 
     # Yield curve spread/regime for backward-compat storage in indicators table
     yc_spread = None
     yc_regime = None
+    fallback_scores_by_region: dict[str, list[int]] = {}
 
     t10y2y_row = rows.get("T10Y2Y")
     if t10y2y_row and t10y2y_row.get("value") is not None:
@@ -714,11 +911,14 @@ def compute_macro(ticker: str, config: Optional[dict] = None) -> dict:
             yc_spread = _yield_curve_from_fred(fred_key)
             if yc_spread is not None:
                 yc_regime, yc_score_fallback = _classify_yield_curve(yc_spread)
-                all_scores.append(yc_score_fallback)
+                fallback_scores_by_region.setdefault(
+                    _series_region("T10Y2Y", config), []
+                ).append(yc_score_fallback)
 
-    # Base composite score
-    avg   = sum(all_scores) / len(all_scores) if all_scores else 0.0
-    group = _ticker_group(ticker, config)
+    # Base composite score — regional weighted blend, not a flat average
+    regional = _regional_macro_score(rows, vix_score, config, fallback_scores_by_region)
+    avg      = regional["weighted_score"]
+    group    = _ticker_group(ticker, config)
 
     # Per-ticker adjustments from FRED indicators that weren't previously routed
     ticker_adj = 0.0

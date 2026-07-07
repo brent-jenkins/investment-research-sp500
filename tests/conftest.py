@@ -32,6 +32,7 @@ _GET_ENGINE_BINDINGS = (
     "analysis.backtest.get_engine",
     "data.ingestion.get_engine",
     "output.performance.get_engine",
+    "analysis.macro.get_engine",
 )
 
 
