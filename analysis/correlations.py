@@ -398,6 +398,108 @@ RELATIONSHIP_MAP: list[dict] = [
             "through to Indian equity prices via the INR channel"
         ),
     },
+    # ── New pairs added 2026-07-08: momentum factor, carry trade, ECB rate, ─────
+    # ── and sector-concentration coverage ────────────────────────────────────
+    {
+        "ticker_a": "SPMO",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "Momentum Factor (SPMO) vs S&P 500",
+        "desc": "positive — momentum ETF tracking equities; underperformance signals rotation away from momentum",
+        "diverge_template": (
+            "Momentum factor and equities diverging — SPMO underperforming the broad market "
+            "signals rotation away from momentum, often an early regime-change warning"
+        ),
+        "confirm_template": (
+            "Momentum factor tracking the broad market — momentum is being rewarded as expected"
+        ),
+    },
+    {
+        "ticker_a": "MTUM",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "Momentum Factor (MTUM) vs S&P 500",
+        "desc": "positive — second momentum factor confirmation using a different methodology than SPMO",
+        "diverge_template": (
+            "Momentum factor (MTUM) and equities diverging — combined with the SPMO pair, both "
+            "momentum ETFs underperforming simultaneously is a stronger rotation warning than "
+            "either alone"
+        ),
+        "confirm_template": (
+            "Momentum factor (MTUM) tracking the broad market — momentum is being rewarded as "
+            "expected"
+        ),
+    },
+    {
+        "ticker_a": "USDJPY=X",
+        "ticker_b": "^GSPC",
+        "expected_sign": 1,
+        "label": "USD/JPY vs S&P 500",
+        "desc": (
+            "positive — carry trade proxy; BoJ hikes strengthen JPY (falling USDJPY) and unwind "
+            "the yen carry trade, pressuring global risk assets"
+        ),
+        "diverge_template": (
+            "USD/JPY and equities diverging — USDJPY falling while equities hold up (or vice "
+            "versa) breaks the usual carry-trade linkage; watch for a delayed carry-unwind hit "
+            "to risk assets"
+        ),
+        "confirm_template": (
+            "USD/JPY tracking equities — carry trade dynamics and risk appetite are aligned as "
+            "expected"
+        ),
+    },
+    {
+        "ticker_a": "VGK",
+        "ticker_b": "ECBDFR",
+        "expected_sign": -1,
+        "label": "European Equities vs ECB Rate",
+        "desc": (
+            "inverse — ECB rate hikes tighten European financial conditions and pressure VGK; "
+            "cuts are bullish for European equities"
+        ),
+        "diverge_template": (
+            "European equities and the ECB deposit rate moving in the same direction — rate "
+            "sensitivity is breaking down; VGK may be pricing in factors beyond ECB policy "
+            "(earnings, energy costs, external demand)"
+        ),
+        "confirm_template": (
+            "European equities inversely tracking the ECB rate — monetary policy is driving "
+            "VGK valuations as expected"
+        ),
+    },
+    {
+        "ticker_a": "NVDA",
+        "ticker_b": "SOXX",
+        "expected_sign": 1,
+        "label": "NVIDIA vs Semiconductor ETF",
+        "desc": "positive — concentration risk monitor; NVDA now dominates SOXX weighting",
+        "diverge_template": (
+            "NVIDIA and the semiconductor ETF diverging — either NVDA-specific risk (single-name "
+            "event) or semiconductor performance is narrowing/broadening beyond the single "
+            "largest constituent"
+        ),
+        "confirm_template": (
+            "NVIDIA tracking the semiconductor ETF — the sector's largest name is moving in line "
+            "with the group as expected"
+        ),
+    },
+    {
+        "ticker_a": "JPM",
+        "ticker_b": "KBE",
+        "expected_sign": 1,
+        "label": "JPMorgan vs Bank Stocks ETF (KBE)",
+        "desc": "positive — bank sector rotation signal; large-cap vs broader bank-sector coherence",
+        "diverge_template": (
+            "JPMorgan and the bank sector ETF diverging — JPM outperforming KBE signals flight "
+            "to quality within financials (credit concerns); KBE outperforming JPM signals "
+            "confidence in the broader bank sector and rate-sensitive lending"
+        ),
+        "confirm_template": (
+            "JPMorgan tracking the bank sector ETF — large-cap and broader bank performance are "
+            "coherent, no rotation signal"
+        ),
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -501,7 +603,7 @@ CATCH_UP_MAP: dict[tuple[str, str], dict] = {
 # FRED macro series IDs used as one leg in a pair.  These are sourced from
 # macro_indicators, not price_data, and must be excluded from the price-based
 # correlation matrix and _ALL_PAIR_TICKERS.
-_FRED_PAIR_SERIES: frozenset[str] = frozenset({"T10Y2Y", "DFII10"})
+_FRED_PAIR_SERIES: frozenset[str] = frozenset({"T10Y2Y", "DFII10", "ECBDFR"})
 
 # All unique price-data tickers referenced across the relationship map.
 # FRED series legs are excluded — they are not in the price_data table.
