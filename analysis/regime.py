@@ -90,6 +90,25 @@ REGIME_WEIGHTS: dict[str, dict[str, float]] = {
         # live) rather than the newly-available time-varying history, so
         # this table's weights are unchanged pending a full six-weight
         # re-tuning study — deferred, out of scope here.
+        #
+        # A structured re-tuning study WAS run (2026-07-08, same day) using
+        # genuine full-history module attribution (all five modules showing
+        # real score variance, avoiding the degenerate-constant problem
+        # latest-observation-only mode has for attribution purposes — see
+        # CLAUDE.md's "TRENDING_BULL module weight re-tuning study
+        # (2026-07-08)" section) to derive two candidate weight sets, each
+        # tested against the actual production backtest path (latest-
+        # observation-only). Both underperformed this baseline on every
+        # risk-adjusted metric (attribution-derived: PF 2.13, Sharpe 0.667,
+        # max drawdown -43.7%; conservative macro-floor fallback: PF 2.16,
+        # Sharpe 0.675, max drawdown -73.4% — vs. this baseline's 2.48/
+        # 0.792/-30.3%). These weights remain the best available pending
+        # more T212 execution data — see that section for the full
+        # methodology, both candidates' numbers, and why the study is
+        # inconclusive rather than negative (attribution was computed on
+        # frozen 2026-07 real conditions, not resampled across market
+        # regimes; a repeat once 20+ real T212 closed positions exist would
+        # attribute against actual executed outcomes instead).
         "trend":          0.20,  # was 0.30 — 100% agreement, zero discrimination
         "mean_reversion": 0.05,  # was 0.10 — almost always contrarian in trends
         "volatility":     0.20,  # was 0.15 — moderate discriminating power
