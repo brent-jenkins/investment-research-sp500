@@ -6,6 +6,7 @@ per-ticker analysis loops.
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -13,9 +14,8 @@ from typing import Optional
 import pandas as pd
 import yaml
 from sqlalchemy import text
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import MacroIndicator, get_engine
+from data.database import get_engine
 from data.ingestion import get_price_df
 
 logger = logging.getLogger(__name__)
@@ -423,34 +423,270 @@ def _regional_macro_score(
 # DB upsert helper
 # ---------------------------------------------------------------------------
 
-def _upsert_macro_indicator(
-    series_id: str,
-    date: datetime,
-    value: float,
-    pct_change_30d: Optional[float],
-    z_score_2y: float,
-    score: int,
-) -> None:
+_MACRO_UPSERT_SQL = text("""
+    INSERT INTO macro_indicators (series_id, date, value, pct_change_30d, z_score_2y, score)
+    VALUES (:series_id, :date, :value, :pct_change_30d, :z_score_2y, :score)
+    ON CONFLICT(series_id, date) DO UPDATE SET
+        value          = excluded.value,
+        pct_change_30d = excluded.pct_change_30d,
+        z_score_2y     = excluded.z_score_2y,
+        score          = excluded.score
+""")
+
+
+def _bulk_upsert_macro_rows(rows: list[dict]) -> None:
+    """Upsert many macro_indicators rows in one statement.
+
+    Uses raw SQL with a list-of-dicts parameter set (conn.execute(text(...),
+    rows)) rather than sqlite_insert(MacroIndicator).values([...]) — the
+    same fix, for the same reason, as analysis/backtest.py's
+    _store_signals_batch(): the SQLAlchemy Core/ORM multi-row VALUES + ON
+    CONFLICT construct measured far slower purely from query-building
+    overhead, independent of row count. Passing a list of dicts here instead
+    dispatches through the DBAPI's executemany() with one prepared statement
+    reused across all rows. Matters here because a full historical backfill
+    can write thousands of rows for a single daily series.
+    """
+    if not rows:
+        return
     engine = get_engine()
-    stmt = sqlite_insert(MacroIndicator).values(
-        series_id=series_id,
-        date=date,
-        value=value,
-        pct_change_30d=pct_change_30d,
-        z_score_2y=z_score_2y,
-        score=score,
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["series_id", "date"],
-        set_={
-            "value":          stmt.excluded.value,
-            "pct_change_30d": stmt.excluded.pct_change_30d,
-            "z_score_2y":     stmt.excluded.z_score_2y,
-            "score":          stmt.excluded.score,
-        },
-    )
     with engine.begin() as conn:
-        conn.execute(stmt)
+        conn.execute(_MACRO_UPSERT_SQL, rows)
+
+
+def _last_stored_date(series_id: str) -> Optional[datetime]:
+    """Most recent stored date for series_id in macro_indicators, or None if
+    the series has no history yet (fresh install, or newly added to
+    config.yaml and never backfilled or fetched before)."""
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT MAX(date) AS d FROM macro_indicators WHERE series_id = :sid"),
+                {"sid": series_id},
+            ).mappings().first()
+    except Exception:
+        return None
+    d = row.get("d") if row else None
+    if not d:
+        return None
+    try:
+        ts = pd.Timestamp(d)
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        return ts.to_pydatetime()
+    except Exception:
+        return None
+
+
+def _scored_df_to_rows(series_id: str, scored: pd.DataFrame) -> list[dict]:
+    """Convert a _fetch_scored_series() DataFrame into macro_indicators row dicts.
+
+    Dates are formatted via strftime("%Y-%m-%d %H:%M:%S.%f") rather than
+    passed through as raw datetime objects. This bulk path writes through
+    raw SQL (_bulk_upsert_macro_rows(), for executemany() performance — see
+    its docstring), which bypasses SQLAlchemy's own DateTime type decorator
+    and hands the DBAPI a plain Python datetime instead; sqlite3's default
+    adapter renders that via isoformat(), which *omits* the fractional-
+    second component entirely when microsecond == 0 (true for every one of
+    these daily/monthly FRED observations). SQLAlchemy's own SQLite dialect,
+    by contrast, always renders a DateTime column WITH the ".000000" suffix
+    — so without this explicit strftime, this path silently wrote a
+    different literal string format than every row inserted via the ORM
+    (e.g. the pre-backfill single-snapshot fetches this table already had),
+    mixing "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DD HH:MM:SS.000000" in the same
+    column. pandas' to_datetime() caches a format from the first values it
+    sees when applied to a whole column, then raises on the first value that
+    doesn't match once dates from both formats interleave in date order —
+    exactly what broke analysis/backtest.py:_load_macro_history()'s
+    pd.to_datetime(df["date"]) the first time this was backfilled. The same
+    class of bug is documented elsewhere in this codebase (see CLAUDE.md's
+    "Cutoff comparison uses strftime, not isoformat()" note) — explicit
+    strftime formatting matching the dialect's own convention is the fix
+    every time it comes up.
+    """
+    rows = []
+    for idx, row in scored.iterrows():
+        d = idx.to_pydatetime() if hasattr(idx, "to_pydatetime") else idx
+        pct = row["pct_change_30d"]
+        rows.append({
+            "series_id":      series_id,
+            "date":           d.strftime("%Y-%m-%d %H:%M:%S.%f"),
+            "value":          float(row["value"]),
+            "pct_change_30d": float(pct) if pd.notna(pct) else None,
+            "z_score_2y":     float(row["z_score_2y"]),
+            "score":          int(row["score"]),
+        })
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Shared FRED fetch + scoring core — used by both the incremental EOD fetch
+# and the full historical backfill, so neither can silently drift from the
+# other's scoring logic.
+# ---------------------------------------------------------------------------
+
+def _fetch_scored_series(
+    fred,
+    series_id: str,
+    series_meta: dict,
+    observation_start: str,
+    observation_end: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
+    """Fetch one FRED series over [observation_start, observation_end] and
+    compute per-date value/pct_change_30d/z_score_2y/score, vectorized
+    across the whole fetched window.
+
+    z_score_2y is a TRAILING rolling statistic (window ending at each date —
+    ~2 years for US series, ~6 years for international, matching the region
+    lookback used elsewhere in this module), not a single whole-window mean/
+    std applied to every date. Using the whole fetched span's statistics for
+    every historical date would let an early date's z-score be computed
+    using knowledge of years of *future* data relative to that date — a
+    genuine look-ahead bias that would contaminate any backtest built on
+    this history (this codebase's backtest engine is otherwise carefully
+    look-ahead free — see analysis/backtest.py throughout). A rolling
+    trailing window keeps every date's stats computed only from data
+    available as of that date, mirroring what the live incremental fetch
+    would actually have produced had it been run fresh on each of those
+    historical days.
+
+    Returns a DataFrame indexed by date with columns [value, pct_change_30d,
+    z_score_2y, score], or None if there isn't enough data to score at all.
+    """
+    kwargs: dict = {"observation_start": observation_start}
+    if observation_end:
+        kwargs["observation_end"] = observation_end
+    raw = fred.get_series(series_id, **kwargs).dropna()
+    if len(raw) < 5:
+        return None
+
+    # Monthly/quarterly series have far fewer observations than daily ones
+    is_monthly = len(raw) < 100
+    lookback   = 1 if is_monthly else 30
+    pct_chg    = raw.pct_change(periods=lookback) * 100
+
+    region      = series_meta.get("region") or "us"
+    window_days = 730 if region == "us" else 2190  # ~6 years for international — see module docstring
+    roll_mean   = raw.rolling(f"{window_days}D").mean()
+    roll_std    = raw.rolling(f"{window_days}D").std()
+    z_score     = ((raw - roll_mean) / roll_std).where(roll_std > 0, 0.0).fillna(0.0)
+
+    aug_meta = dict(series_meta)
+    scores = [
+        _score_fred_series(
+            series_id, float(v),
+            float(p) if pd.notna(p) else 0.0,
+            float(z), aug_meta,
+        )
+        for v, p, z in zip(raw.to_numpy(), pct_chg.to_numpy(), z_score.to_numpy())
+    ]
+
+    return pd.DataFrame({
+        "value":          raw.astype(float),
+        "pct_change_30d": pct_chg,
+        "z_score_2y":     z_score,
+        "score":          scores,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Full historical backfill — one-off (or re-run whenever a series is added)
+# ---------------------------------------------------------------------------
+
+def backfill_macro_indicators(config: Optional[dict] = None, start_date: str = "2019-01-01") -> dict[str, int]:
+    """One-off full-history backfill of every configured FRED series into
+    macro_indicators, from start_date through today.
+
+    fetch_and_store_macro_indicators() (the function that runs on every EOD
+    job) historically only ever wrote each series' single latest
+    observation — fine for keeping the live per-ticker macro score current,
+    but it meant macro_indicators held almost no history beyond however long
+    the EOD job itself had been running. Since analysis/backtest.py's
+    _macro_scores() reads this exact table for its own vectorized macro
+    scoring (see "Backtest mirroring" in CLAUDE.md's "Macro module" section),
+    a 2019-present backtest was effectively macro-blind (VIX only, since VIX
+    is read fresh from price_data rather than macro_indicators) for nearly
+    its entire span. This function fixes that retroactively — run it via the
+    Status page's "Backfill FRED History" button after a fresh deployment,
+    or whenever a new series is added to config.yaml.
+
+    Every date's pct_change_30d/z_score_2y/score is computed from a TRAILING
+    window ending at that date (see _fetch_scored_series()'s docstring), not
+    the whole fetched span's statistics — so the backfilled history stays
+    look-ahead free and safe to feed into the backtest.
+
+    Rate-limited to roughly one series per 0.5s between fetches (17 series
+    -> ~8s of throttling, comfortably inside FRED's request limits) — see
+    _fetch_scored_series() for the actual per-series FRED call.
+
+    Returns:
+        Dict mapping series_id -> number of rows written (0 on failure or
+        insufficient data — a failed series never aborts the remaining ones).
+    """
+    if config is None:
+        config = _load_config()
+
+    macro_cfg  = config.get("macro", {})
+    fred_key   = macro_cfg.get("fred_api_key", "") or os.environ.get("FRED_API_KEY", "")
+    series_cfg = macro_cfg.get("fred_series", {})
+
+    if not fred_key:
+        logger.info("No FRED API key — skipping macro backfill.")
+        return {}
+    if not series_cfg:
+        logger.info("No fred_series configured — skipping macro backfill.")
+        return {}
+
+    try:
+        from fredapi import Fred
+    except ImportError:
+        logger.warning("fredapi not installed — skipping macro backfill.")
+        return {}
+
+    fred       = Fred(api_key=fred_key)
+    today      = datetime.today().strftime("%Y-%m-%d")
+    series_ids = list(series_cfg.keys())
+    results: dict[str, int] = {}
+
+    for i, series_id in enumerate(series_ids):
+        series_meta = series_cfg[series_id]
+        try:
+            scored = _fetch_scored_series(
+                fred, series_id, series_meta,
+                observation_start=start_date, observation_end=today,
+            )
+            if scored is None or scored.empty:
+                logger.warning("Backfill: insufficient FRED data for %s.", series_id)
+                results[series_id] = 0
+            else:
+                rows = _scored_df_to_rows(series_id, scored)
+                _bulk_upsert_macro_rows(rows)
+                results[series_id] = len(rows)
+                logger.info(
+                    "Backfilling %s: fetched %d observations from %s to %s",
+                    series_id, len(rows),
+                    scored.index.min().strftime("%Y-%m-%d"),
+                    scored.index.max().strftime("%Y-%m-%d"),
+                )
+        except Exception as exc:
+            logger.warning("Backfill failed for %s: %s", series_id, exc)
+            results[series_id] = 0
+
+        if i < len(series_ids) - 1:
+            time.sleep(0.5)  # FRED API rate-limit courtesy delay between series
+
+    successes  = sum(1 for n in results.values() if n > 0)
+    total_rows = sum(results.values())
+    if successes:
+        from data.database import set_metadata as _set_meta
+        _set_meta("last_fred_backfill", datetime.today().strftime("%Y-%m-%dT%H:%M:%S"))
+    logger.info(
+        "Macro backfill complete: %d/%d series stored, %d total observations.",
+        successes, len(results), total_rows,
+    )
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -458,25 +694,36 @@ def _upsert_macro_indicator(
 # ---------------------------------------------------------------------------
 
 def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str, bool]:
-    """Fetch all configured FRED series, compute stats, upsert to macro_indicators.
+    """Fetch all configured FRED series and upsert new observations into
+    macro_indicators. Runs on every EOD scheduler job.
 
-    Fetches 2 years of history per series (~6 years for international series —
-    see below) to compute the z-score baseline. Only the latest observation is
-    written to the DB; historical rows are used in-memory to derive
-    pct_change_30d and z_score_2y.
+    Incremental (2026-07-08): rather than writing only each series' single
+    latest observation (the original behaviour — and still what happens on
+    a series' very first-ever fetch, see below), this writes every
+    observation from _fetch_scored_series()'s fetched window whose date
+    falls on or after (last stored date − 7 days). The 7-day buffer catches
+    FRED revisions to recent observations that can arrive after their
+    original publish date. A series with no stored history yet (no backfill
+    has been run, or the series was just added to config.yaml) falls back to
+    writing the whole fetched window, matching backfill_macro_indicators()'s
+    own behaviour — so a fresh deployment self-heals into full history
+    incrementally even without ever clicking the Status page's backfill
+    button, just far more slowly (one EOD run's worth of window at a time).
 
-    International series (region != "us", e.g. quarterly China GDP) use a
-    longer ~6-year lookback rather than the US series' 2 years: a fixed
-    2-year observation_start would silently exclude every row FRED has for a
-    series that lags by more than a couple of quarters, making it report
-    "insufficient data" forever even though a perfectly usable last-known
-    value exists further back. There is no freshness requirement on the
-    resulting value — the last available observation is used and scored
-    regardless of age (see _STALE_THRESHOLD_DAYS above for the
-    display-only staleness note this implies in the dashboard).
+    This still fetches the full ~2-year (~6-year for international series)
+    window from FRED every run, exactly as before — narrowing the *fetch
+    itself* to only the days since the last stored date (a literal reading
+    of "fetch since last stored date") was considered and rejected:
+    pct_change_30d and z_score_2y are trailing-window statistics that need
+    that much history as context to compute correctly for the newest
+    date(s); fetching only the last week would leave nothing to compute a
+    30-day change or a multi-year z-score against. Only the *write* volume
+    is reduced by this change — the FRED API call cost per run is unchanged
+    from before.
 
     Returns:
-        Dict mapping series_id → True (stored) or False (failed).
+        Dict mapping series_id → True (stored — including "nothing new to
+        write since last run") or False (failed).
     """
     if config is None:
         config = _load_config()
@@ -506,43 +753,35 @@ def fetch_and_store_macro_indicators(config: Optional[dict] = None) -> dict[str,
             region = series_meta.get("region") or "us"
             lookback_days = 730 if region == "us" else 2190  # ~6 years for international series — see docstring
             start = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-            raw = fred.get_series(series_id, observation_start=start).dropna()
-            if len(raw) < 5:
-                logger.warning("Insufficient FRED data for %s (%d points).", series_id, len(raw))
+
+            scored = _fetch_scored_series(fred, series_id, series_meta, observation_start=start)
+            if scored is None or scored.empty:
+                logger.warning("Insufficient FRED data for %s.", series_id)
                 results[series_id] = False
                 continue
 
-            # Monthly series have far fewer observations than daily ones
-            is_monthly = len(raw) < 100
-            lookback   = 1 if is_monthly else 30
+            last_stored = _last_stored_date(series_id)
+            if last_stored is not None:
+                cutoff   = last_stored - timedelta(days=7)
+                to_write = scored[scored.index >= cutoff]
+            else:
+                to_write = scored  # first-ever fetch for this series
 
-            current_value = float(raw.iloc[-1])
-            pct_chg = (
-                float(raw.pct_change(periods=lookback).iloc[-1] * 100)
-                if len(raw) > lookback else None
-            )
+            if to_write.empty:
+                results[series_id] = True
+                continue
 
-            mean_2y = float(raw.mean())
-            std_2y  = float(raw.std())
-            z_score = float((current_value - mean_2y) / std_2y) if std_2y > 0 else 0.0
-
-            aug_meta = dict(series_meta)
-            score = _score_fred_series(
-                series_id, current_value, pct_chg or 0.0, z_score, aug_meta
-            )
-
-            # Convert pandas Timestamp → datetime
-            last_date = raw.index[-1]
-            if hasattr(last_date, "to_pydatetime"):
-                last_date = last_date.to_pydatetime()
-
-            _upsert_macro_indicator(series_id, last_date, current_value, pct_chg, z_score, score)
+            rows = _scored_df_to_rows(series_id, to_write)
+            _bulk_upsert_macro_rows(rows)
             results[series_id] = True
+
+            latest     = scored.iloc[-1]
+            latest_pct = latest["pct_change_30d"]
             logger.info(
-                "Macro indicator %s: value=%.4f pct30d=%s z=%.2f score=%d",
-                series_id, current_value,
-                f"{pct_chg:.2f}%" if pct_chg is not None else "N/A",
-                z_score, score,
+                "Macro indicator %s: value=%.4f pct30d=%s z=%.2f score=%d (%d row(s) written)",
+                series_id, float(latest["value"]),
+                f"{latest_pct:.2f}%" if pd.notna(latest_pct) else "N/A",
+                float(latest["z_score_2y"]), int(latest["score"]), len(rows),
             )
         except Exception as exc:
             logger.warning("Failed to fetch FRED series %s: %s", series_id, exc)

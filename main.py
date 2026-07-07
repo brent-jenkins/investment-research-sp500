@@ -58,7 +58,12 @@ from output.performance import (
     get_current_signal,
     get_latest_price,
 )
-from analysis.macro import get_macro_dashboard, fetch_and_store_macro_indicators, SIGNALS_ACTIVE
+from analysis.macro import (
+    backfill_macro_indicators,
+    fetch_and_store_macro_indicators,
+    get_macro_dashboard,
+    SIGNALS_ACTIVE,
+)
 from analysis.risk import compute_drawdown_scale_factor
 from analysis.backtest import (
     delete_run,
@@ -1903,7 +1908,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.divider()
     st.markdown("### Manual Controls")
     st.caption("Trigger the analysis pipeline immediately without waiting for the next scheduled run.")
-    _mc1, _mc2 = st.columns(2)
+    _mc1, _mc2, _mc3 = st.columns(3)
 
     with _mc1:
         if st.button("Run Analysis Now", width="stretch", type="primary",
@@ -1952,6 +1957,47 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     st.cache_data.clear()
                 except Exception as _exc:
                     st.error(f"Analysis failed: {_exc}")
+
+    with _mc3:
+        if st.button(
+            "Backfill FRED History", width="stretch",
+            key="status_backfill_fred",
+            help=(
+                "Pulls full 2019-present history for all 17 FRED macro series "
+                "(currently the EOD job only stores each series' latest value, "
+                "so the backtest's macro scoring is otherwise blind for most of "
+                "its date range). Run once after a fresh deployment or after "
+                "adding a new series to config.yaml. Estimated time: ~30 seconds."
+            ),
+        ):
+            _cfg = _load_config()
+            with st.spinner("Backfilling FRED history since 2019-01-01 (~30s)…"):
+                try:
+                    _backfill_results = backfill_macro_indicators(_cfg)
+                    if not _backfill_results:
+                        st.warning(
+                            "Backfill did not run — no FRED API key configured, or no "
+                            "fred_series entries in config.yaml."
+                        )
+                    else:
+                        from sqlalchemy import text as _sa_backfill_text
+                        _total_rows = sum(_backfill_results.values())
+                        _n_ok       = sum(1 for n in _backfill_results.values() if n > 0)
+                        with get_engine().connect() as _conn:
+                            _min_date = _conn.execute(
+                                _sa_backfill_text("SELECT MIN(date) AS d FROM macro_indicators")
+                            ).mappings().first()
+                        _earliest = _min_date["d"] if _min_date and _min_date["d"] else "—"
+                        st.success(
+                            f"✓ Backfill complete — {_total_rows} observations stored across "
+                            f"{_n_ok} series (earliest: {_earliest})."
+                        )
+                        _failed = [sid for sid, n in _backfill_results.items() if n == 0]
+                        if _failed:
+                            st.warning(f"No data for: {', '.join(_failed)}")
+                        st.cache_data.clear()
+                except Exception as _exc:
+                    st.error(f"Backfill failed: {_exc}")
 
     # ── HMM Model ──────────────────────────────────────────────────────────
     st.divider()

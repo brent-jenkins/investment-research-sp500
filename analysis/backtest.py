@@ -252,12 +252,31 @@ def _macro_scores(
     """Vectorized mirror of analysis/macro.py:compute_macro()'s regional
     weighting (2026-07-07) — grouped by region, blended via
     signals.macro_regional_weights, with per-date graceful degradation when a
-    region has no data yet (e.g. before its first FRED observation), exactly
-    like the live _regional_macro_score() but computed once across the whole
-    date index instead of once per date. This mirrors analysis/macro.py's own
-    per-series region tags (imported directly, not re-hardcoded) — the same
-    "shared core, no re-implementation of the mapping" pattern already used
-    for VaR sizing and GARCH stops elsewhere in this file.
+    region has no data yet, mirroring the live _regional_macro_score(). This
+    mirrors analysis/macro.py's own per-series region tags (imported
+    directly, not re-hardcoded) — the same "shared core, no re-implementation
+    of the mapping" pattern already used for VaR sizing and GARCH stops
+    elsewhere in this file.
+
+    Reverted to latest-observation-only (2026-07-08): each FRED series'
+    single most recent stored value is broadcast as a CONSTANT across the
+    whole backtest date range, rather than read as a genuinely time-varying
+    history from macro_indicators. This deliberately matches what the live
+    system has always done — analysis/macro.py:compute_macro() only ever
+    reads the latest row per series, never a historical lookup for a given
+    past date — and is a regression from feeding this function the full,
+    now-backfilled history: doing so exposed real historical macro variation
+    to the backtest for the first time, and every TRENDING_BULL macro weight
+    tried against it (0.30 down to 0.00, redistributed several different
+    ways) produced materially worse results than the documented 253-trade
+    baseline — see CLAUDE.md's "Macro module regime-weight rebalance
+    (2026-07-08)" section for the full investigation and all four weight
+    variants' results. Until a full six-weight (and possibly threshold)
+    re-tuning study is done — deferred, out of scope here — this reverts to
+    reproducing that baseline. analysis/macro.py:backfill_macro_indicators()
+    and the historical depth it stores are kept in place regardless: they're
+    the necessary groundwork for that deferred study, even though this
+    function doesn't consume the historical depth yet.
     """
     from analysis.macro import _regional_weights, _series_region
 
@@ -275,9 +294,13 @@ def _macro_scores(
         region_series.setdefault("us", []).append(vix_sc)  # VIX is a US-sourced index
 
     if macro_df is not None and not macro_df.empty:
-        aligned = macro_df.reindex(close.index).ffill()
-        for col in aligned.columns:
-            region_series.setdefault(_series_region(col, config), []).append(aligned[col].astype(float))
+        latest = macro_df.ffill().iloc[-1]  # each series' single most-recent observation
+        for col in macro_df.columns:
+            val = latest[col]
+            if pd.isna(val):
+                continue
+            const_series = pd.Series(float(val), index=close.index)
+            region_series.setdefault(_series_region(col, config), []).append(const_series)
 
     if not region_series:
         return pd.Series(0, index=close.index, dtype=int)
@@ -570,7 +593,15 @@ def _load_macro_history() -> Optional[pd.DataFrame]:
         return None
 
     df = pd.DataFrame([dict(r) for r in rows])
-    df["date"] = pd.to_datetime(df["date"])
+    # format="mixed": macro_indicators can hold rows written through more than
+    # one code path with different literal datetime string formats (ORM
+    # inserts always include a ".000000" suffix; some bulk/raw-SQL paths
+    # historically didn't — see analysis/macro.py:_scored_df_to_rows()'s
+    # docstring for the exact mechanism). A plain pd.to_datetime() caches a
+    # format from the first values in the column and raises the moment a
+    # differently-formatted value appears once rows from both are sorted
+    # together by date; format="mixed" parses each value independently instead.
+    df["date"] = pd.to_datetime(df["date"], format="mixed")
     try:
         wide = df.pivot(index="date", columns="series_id", values="score")
         return wide.astype(float)

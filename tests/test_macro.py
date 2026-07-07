@@ -16,9 +16,11 @@ and the real region tags on DFII10/T10Y2Y/ECBDFR/IRSTCB01JPM156N.
 """
 
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from analysis.backtest import _macro_scores
@@ -26,7 +28,9 @@ from analysis.macro import (
     _regional_macro_score,
     _regional_weights,
     _series_region,
+    backfill_macro_indicators,
     compute_macro,
+    fetch_and_store_macro_indicators,
     get_macro_dashboard,
 )
 from data.database import MacroIndicator
@@ -250,6 +254,16 @@ def test_new_international_series_are_not_self_referentially_excluded(db_engine)
 # independent vectorized re-implementation that must mirror the live
 # regional weighting itself, the same way _ma_cross_vote() and
 # _mean_rev_scores() already mirror their own live counterparts.
+#
+# Reverted 2026-07-08 to latest-observation-only (see CLAUDE.md's "Macro
+# module regime-weight rebalance (2026-07-08)" section): each series'
+# single most recent value is broadcast as a CONSTANT across the whole
+# backtest date range, matching what analysis/macro.py:compute_macro() does
+# live — rather than a time-varying per-date history. Feeding the backtest
+# genuine historical macro variation (the natural next step once
+# backfill_macro_indicators() existed) produced materially worse results
+# than the documented baseline under every TRENDING_BULL macro weight
+# tried, so this was rolled back pending a full weight re-tuning study.
 # ---------------------------------------------------------------------------
 
 _BT_CFG = {
@@ -274,7 +288,9 @@ def _flat_df(n: int, value: float = 100.0) -> pd.DataFrame:
 def test_backtest_macro_scores_mirror_regional_weighting():
     """_macro_scores() must apply the same regional blend as
     _regional_macro_score() — US-neutral/Europe-bullish/Asia-bullish nets to
-    the same moderated +0.40, not a flat average."""
+    the same moderated +0.40, not a flat average. Every date in macro_df is
+    identical here, so this doesn't yet distinguish latest-observation-only
+    from time-varying — see the dedicated test below for that."""
     df = _flat_df(10)
     macro_df = pd.DataFrame(
         {"BT_US": [0] * 10, "BT_EU": [1] * 10, "BT_ASIA": [1] * 10},
@@ -285,25 +301,29 @@ def test_backtest_macro_scores_mirror_regional_weighting():
     assert (scores == 1).all()
 
 
-def test_backtest_macro_scores_graceful_degradation_before_region_history_starts():
-    """A region with no data yet for the first few rows (nothing to ffill
-    from) must not silently score neutral for those dates — its weight is
-    redistributed across the regions that do have data, exactly like the
-    live path, then the region catches up once its first observation lands."""
+def test_backtest_macro_scores_uses_latest_observation_only_not_time_varying():
+    """Reverted behaviour (2026-07-08): each series' single most recent
+    value is broadcast as a CONSTANT across the whole backtest date range —
+    not read as a time-varying history. A region whose data only starts
+    partway through macro_df must still score using its one latest value
+    for *every* date, including dates before that value's own timestamp,
+    exactly matching how the live compute_macro() only ever reads the
+    latest stored row regardless of which date is being analysed."""
     df = _flat_df(6)
     macro_df = pd.DataFrame(
         {
-            "BT_US": [np.nan, np.nan, 1, 1, 1, 1],   # US series starts reporting on day 3
-            "BT_EU": [-1] * 6,
+            "BT_US": [np.nan, np.nan, 1, 1, 1, -1],  # latest (last row) value is -1
+            "BT_EU": [-1] * 6,                        # latest value is -1
         },
         index=df.index,
     )
     scores = _macro_scores(df, "SOME_TICKER", vix_s=None, macro_df=macro_df, config=_BT_CFG)
-    # First two days: only Europe has data -> weighted score = -1.0 (bearish)
-    assert scores.iloc[0] == -1
-    assert scores.iloc[1] == -1
-    # From day 3: US (0.60) + Europe (0.25) -> weighted = 1*0.60 + -1*0.25 = 0.35 -> bullish
-    assert scores.iloc[2] == 1
+    # Latest US value -1, latest Europe value -1 -> every date scores the
+    # same constant weighted blend, including day 0 (which the OLD
+    # time-varying behaviour would have scored differently, since BT_US had
+    # no data yet on day 0).
+    assert (scores == -1).all()
+    assert scores.iloc[0] == scores.iloc[-1]
 
 
 def test_backtest_macro_scores_backward_compat_config_with_no_macro_section():
@@ -324,3 +344,222 @@ def test_backtest_macro_scores_self_referential_tickers_stay_neutral():
     for ticker in ("TLT", "IEF", "HYG", "^VIX"):
         scores = _macro_scores(df, ticker, vix_s=None, macro_df=macro_df, config=_BT_CFG)
         assert (scores == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# FRED historical backfill (2026-07-08) — backfill_macro_indicators() and
+# fetch_and_store_macro_indicators()'s incremental behaviour.
+#
+# fredapi.Fred is mocked throughout (no network calls — see CLAUDE.md's
+# testing conventions): backfill_macro_indicators()/fetch_and_store_macro_
+# indicators() both do `from fredapi import Fred` *inside* the function, so
+# patching the `Fred` class on the `fredapi` module itself (rather than a
+# module-level name on analysis.macro, which doesn't exist) is what actually
+# takes effect at call time.
+# ---------------------------------------------------------------------------
+
+def _fake_fred(dates, values) -> MagicMock:
+    """A fredapi.Fred stand-in whose get_series() always returns the same
+    fixed series regardless of the observation_start/observation_end it's
+    called with — sufficient for testing this module's own storage/upsert
+    logic, which doesn't depend on FRED performing the date filtering itself."""
+    series = pd.Series(list(values), index=pd.DatetimeIndex(dates))
+    fake = MagicMock()
+    fake.get_series.return_value = series
+    return fake
+
+
+def _row_count(engine, series_id: str) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT COUNT(*) FROM macro_indicators WHERE series_id = :sid"),
+            {"sid": series_id},
+        ).scalar()
+
+
+_BACKFILL_CFG = {
+    "macro": {
+        "fred_api_key": "test-key",
+        "fred_series": {"DFII10": {"region": "us"}},
+    },
+}
+
+
+def test_backfill_fetches_from_configured_start_date(db_engine, mocker):
+    """backfill_macro_indicators() must call FRED with observation_start set
+    to the requested start_date, and store one row per returned observation."""
+    dates = pd.date_range("2019-01-01", periods=200, freq="B")
+    fake = _fake_fred(dates, np.linspace(1.0, 2.0, len(dates)))
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    results = backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+
+    assert results == {"DFII10": len(dates)}
+    fake.get_series.assert_called_once()
+    _, kwargs = fake.get_series.call_args
+    assert kwargs["observation_start"] == "2019-01-01"
+    assert _row_count(db_engine, "DFII10") == len(dates)
+
+
+def test_backfill_upsert_does_not_duplicate_rows_when_run_twice(db_engine, mocker):
+    """Running the backfill twice against identical FRED data must leave the
+    same row count — on_conflict_do_update, not a duplicate insert."""
+    dates = pd.date_range("2019-01-01", periods=50, freq="B")
+    fake = _fake_fred(dates, np.linspace(1.0, 2.0, len(dates)))
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+    backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+
+    assert _row_count(db_engine, "DFII10") == len(dates)
+
+
+def test_backfill_updates_values_on_second_run_not_just_leaves_rows_unchanged(db_engine, mocker):
+    """The upsert must genuinely update stored values on conflict, not just
+    silently no-op on an existing (series_id, date) row."""
+    dates = pd.date_range("2019-01-01", periods=10, freq="B")
+    fake = _fake_fred(dates, [1.0] * len(dates))
+    mocker.patch("fredapi.Fred", return_value=fake)
+    backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+
+    fake.get_series.return_value = pd.Series([9.0] * len(dates), index=pd.DatetimeIndex(dates))
+    backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+
+    with db_engine.connect() as conn:
+        value = conn.execute(
+            text("SELECT value FROM macro_indicators WHERE series_id='DFII10' ORDER BY date LIMIT 1")
+        ).scalar()
+    assert value == 9.0
+
+
+def test_backfill_one_series_failure_does_not_abort_remaining_series(db_engine, mocker):
+    """A series whose FRED fetch raises must be logged and skipped, not
+    prevent the rest of the configured series from backfilling."""
+    dates = pd.date_range("2019-01-01", periods=30, freq="B")
+    good_series = pd.Series(np.linspace(1.0, 2.0, len(dates)), index=dates)
+
+    fake = MagicMock()
+
+    def _get_series(series_id, **kwargs):
+        if series_id == "BROKEN_SERIES":
+            raise RuntimeError("simulated FRED API failure")
+        return good_series
+
+    fake.get_series.side_effect = _get_series
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    cfg = {
+        "macro": {
+            "fred_api_key": "test-key",
+            "fred_series": {
+                "BROKEN_SERIES": {"region": "us"},
+                "DFII10": {"region": "us"},
+            },
+        },
+    }
+    results = backfill_macro_indicators(cfg, start_date="2019-01-01")
+
+    assert results["BROKEN_SERIES"] == 0
+    assert results["DFII10"] == len(dates)
+    assert _row_count(db_engine, "BROKEN_SERIES") == 0
+    assert _row_count(db_engine, "DFII10") == len(dates)
+
+
+def test_backfill_insufficient_data_scores_zero_rows_not_a_crash(db_engine, mocker):
+    """Fewer than 5 observations (matching the existing insufficient-data
+    guard) must be reported as 0 rows, not raise."""
+    dates = pd.date_range("2026-01-01", periods=3, freq="D")
+    fake = _fake_fred(dates, [1.0, 1.1, 1.2])
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    results = backfill_macro_indicators(_BACKFILL_CFG, start_date="2026-01-01")
+    assert results == {"DFII10": 0}
+
+
+def test_incremental_fetch_first_time_with_no_prior_data_writes_whole_window(db_engine, mocker):
+    """A series with nothing stored yet (fresh install, or newly added to
+    config.yaml, no backfill run) falls back to writing every row in the
+    fetched window — same as backfill's own behaviour."""
+    dates = pd.date_range("2024-01-01", "2024-03-01", freq="D")
+    fake = _fake_fred(dates, np.linspace(1.0, 2.0, len(dates)))
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    results = fetch_and_store_macro_indicators(_BACKFILL_CFG)
+
+    assert results == {"DFII10": True}
+    assert _row_count(db_engine, "DFII10") == len(dates)
+
+
+def test_incremental_fetch_only_writes_since_last_stored_date_minus_buffer(db_engine, mocker):
+    """With an existing stored row, the incremental fetch must only write
+    observations from (last_stored_date - 7 days) onward — not silently
+    rewrite the whole multi-year fetched window on every EOD run."""
+    with Session(db_engine) as session:
+        session.add(MacroIndicator(
+            series_id="DFII10", date=datetime(2026, 6, 1),
+            value=1.0, pct_change_30d=0.0, z_score_2y=0.0, score=0,
+        ))
+        session.commit()
+
+    dates = pd.date_range("2024-01-01", "2026-07-01", freq="D")
+    fake = _fake_fred(dates, np.linspace(1.0, 2.0, len(dates)))
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    fetch_and_store_macro_indicators(_BACKFILL_CFG)
+
+    with db_engine.connect() as conn:
+        min_date = conn.execute(
+            text("SELECT MIN(date) FROM macro_indicators WHERE series_id='DFII10'")
+        ).scalar()
+        n_rows = _row_count(db_engine, "DFII10")
+
+    # Cutoff = 2026-06-01 - 7 days = 2026-05-25; nothing before that should
+    # have been (re)written, and the total row count must be far below the
+    # full ~900-day fetched window (a handful of weeks, not years).
+    assert pd.Timestamp(min_date) >= pd.Timestamp("2026-05-25")
+    assert n_rows < 60
+
+
+def test_incremental_fetch_no_new_observations_still_reports_success(db_engine, mocker):
+    """A series whose fetched window has nothing on/after the cutoff (e.g. a
+    quarterly series between reporting dates, already stored ahead of
+    whatever the fetch happens to return) must still report True — the
+    fetch itself succeeded, there was simply nothing new to write."""
+    with Session(db_engine) as session:
+        session.add(MacroIndicator(
+            series_id="DFII10", date=datetime(2026, 7, 10),
+            value=1.0, pct_change_30d=0.0, z_score_2y=0.0, score=0,
+        ))
+        session.commit()
+
+    # Cutoff = 2026-07-10 - 7 days = 2026-07-03; fetched window ends 2026-07-01,
+    # entirely before the cutoff -> nothing new to write.
+    dates = pd.date_range("2024-01-01", "2026-07-01", freq="D")
+    fake = _fake_fred(dates, np.linspace(1.0, 2.0, len(dates)))
+    mocker.patch("fredapi.Fred", return_value=fake)
+
+    results = fetch_and_store_macro_indicators(_BACKFILL_CFG)
+
+    assert results == {"DFII10": True}
+    assert _row_count(db_engine, "DFII10") == 1  # only the pre-seeded row
+
+
+def test_backfilled_history_is_look_ahead_free_rolling_zscore():
+    """z_score_2y for an early date must not be influenced by values that
+    only exist later in the fetched window — i.e. it's a trailing rolling
+    statistic, not the whole-window mean/std applied uniformly."""
+    from analysis.macro import _fetch_scored_series
+
+    dates = pd.date_range("2019-01-01", periods=800, freq="B")
+    # Flat at 1.0 for the first ~300 obs, then a large permanent step up —
+    # a whole-window mean/std would pull *every* early z-score toward
+    # reflecting the future jump; a trailing window must not.
+    values = [1.0] * 300 + [100.0] * (len(dates) - 300)
+    fake = _fake_fred(dates, values)
+
+    scored = _fetch_scored_series(
+        fake, "DFII10", {"region": "us"},
+        observation_start="2019-01-01", observation_end="2021-12-31",
+    )
+    early_z = scored["z_score_2y"].iloc[5]
+    assert abs(early_z) < 1e-6  # flat, unchanging history so far -> ~0, not skewed by the future jump

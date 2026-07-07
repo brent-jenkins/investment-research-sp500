@@ -64,11 +64,37 @@ REGIME_WEIGHTS: dict[str, dict[str, float]] = {
         # scores down; macro has by far the highest discriminating power
         # (66.7% win rate when agreeing vs. 41.6% when disagreeing, despite
         # only 0.9% agreement) so it is weighted highest.
+        #
+        # UNCHANGED as of 2026-07-08 despite a full investigation prompted
+        # by discovering that macro's 0.9% agreement rate above was itself a
+        # symptom of a bug (fetch_and_store_macro_indicators() only ever
+        # stored each FRED series' latest snapshot, so macro_indicators held
+        # almost no real history and the module scored near-neutral on
+        # nearly every historical date). A genuine multi-year backfill
+        # (analysis/macro.py:backfill_macro_indicators(), still shipped and
+        # in place) gave the backtest real macro variation for the first
+        # time — and every weight tried against it (0.30, 0.15, 0.10, and
+        # 0.00 with the freed weight redistributed proportionally across
+        # the rest) produced materially worse results than the documented
+        # 253-trade baseline, including with macro's influence removed
+        # entirely. See CLAUDE.md's "Macro module regime-weight rebalance
+        # (2026-07-08)" section for the full four-attempt table. Conclusion:
+        # this was never really about macro's specific weight — the whole
+        # TRENDING_BULL scheme (all six weights, possibly the 0.55
+        # STRONG_BUY threshold too) was implicitly tuned around a macro
+        # module that was silently near-inert, and no single-module
+        # adjustment can cleanly re-derive that equilibrium. Reverted:
+        # analysis/backtest.py:_macro_scores() now deliberately uses each
+        # series' latest observation only (broadcast as a constant across
+        # the whole backtest, matching what compute_macro() has always done
+        # live) rather than the newly-available time-varying history, so
+        # this table's weights are unchanged pending a full six-weight
+        # re-tuning study — deferred, out of scope here.
         "trend":          0.20,  # was 0.30 — 100% agreement, zero discrimination
         "mean_reversion": 0.05,  # was 0.10 — almost always contrarian in trends
         "volatility":     0.20,  # was 0.15 — moderate discriminating power
         "volume":         0.15,  # was 0.20 — 98.8% agreement, low discrimination
-        "macro":          0.30,  # was 0.15 — highest discriminating power
+        "macro":          0.30,  # was 0.15 — highest discriminating power (see caveat above)
         "correlation":    0.10,
     },
     Regime.TRENDING_BEAR: {
