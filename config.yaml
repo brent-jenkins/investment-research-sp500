@@ -609,112 +609,27 @@ signals:
   # before EXIT_SIGNAL is confirmed and a T212 position is closed on reversal.
   # Set to 0 to disable (close immediately on first reversal signal).
   reversal_confirmation_runs: 2
-  # HMM regime confidence layer (analysis/hmm_regime.py) — a 3-state Gaussian
-  # HMM fit on ^GSPC's own daily indicator history, run alongside (never
-  # replacing) the rule-based regime detection in analysis/regime.py. The
-  # rule-based ADX/VIX/SMA200 thresholds create sharp regime boundaries
-  # (ADX 24.9 is MIXED, ADX 25.1 is TRENDING_BULL) — HMM state probabilities
-  # are continuous and provide a confidence check in both directions:
-  # a TRENDING_BULL call can be DOWNGRADED to MIXED when HMM bull confidence
-  # is low, and a MIXED call can be UPGRADED to TRENDING_BULL when HMM bull
-  # confidence is very high. Every other rule-based regime (TRENDING_BEAR,
-  # RANGING_LOW_VOL, HIGH_VOLATILITY) is left untouched — HMM is
-  # informational only there. See CLAUDE.md's "HMM regime confidence layer"
-  # section for the full mechanism and the backtest evidence behind both
-  # gates.
-  hmm_min_training_days: 504           # ~2 years minimum ^GSPC history before a model will be fit at all
-  hmm_bull_confidence_threshold: 0.60  # a rule-based TRENDING_BULL call is downgraded to MIXED when HMM's bull-state probability falls below this
-  hmm_upgrade_threshold: 0.90          # a rule-based MIXED call is upgraded to TRENDING_BULL when HMM's bull-state probability is at/above this (deliberately much stricter than the downgrade threshold — an upgrade opens a new entry the rules alone would have blocked, so it should only fire on very high confidence)
-  hmm_upgrade_enabled: true            # the upgrade mechanism's own on/off switch — kept true so it's ready the moment hmm_enabled flips on; inert while hmm_enabled is false, same as every other signals.hmm_* key below
-  hmm_refit_interval_days: 7           # refit weekly (Sunday summary job) rather than on every analysis run — a full re-fit is too expensive to run every 3 hours
-  # Still disabled — adding the upgrade path (2026-07-04) made things WORSE,
-  # not better. A full-history backtest (2019-present, tradeable assets,
-  # identical code/data, only hmm_enabled changed) with both the downgrade
-  # gate and the new upgrade gate active produced 443 trades at 36.3% win
-  # rate, profit factor 1.36, Sharpe 0.31, max drawdown -80.8% — every
-  # metric worse than both the no-HMM baseline (236 trades, 45.8% win,
-  # PF 2.62, Sharpe 0.80, DD -29.5%) AND the previously-tested downgrade-only
-  # gate (165 trades, 42.4% win, PF 1.69, Sharpe 0.548, DD -33.1%). Splitting
-  # the 443 trades by cause: 287 were HMM-upgraded MIXED->TRENDING_BULL
-  # entries (34.2% win, PF 1.28, DD -60.7%) and 156 were genuine rule-based
-  # TRENDING_BULL entries that survived the downgrade gate (40.4% win,
-  # PF 1.57, DD -37.5%) — the upgraded subset alone is worse than either.
-  # Root cause: allowed_entry_regimes is ["TRENDING_BULL"] only specifically
-  # *because* a full-history backtest showed MIXED has no edge (416 trades,
-  # 37.5% win, PF 0.123, -91.26% DD — see "Regime entry gate" in CLAUDE.md).
-  # The upgrade path's 34.2% win rate on 287 trades is a near-exact match
-  # for that MIXED-regime baseline — the HMM's bull-state probability does
-  # not appear to discriminate the small number of MIXED days that are
-  # genuinely bull-like from the much larger pool that isn't; it is
-  # effectively re-admitting the same low-edge MIXED entries the gate was
-  # built to keep out. This is consistent with the label-switching
-  # instability already diagnosed for the downgrade gate (two
-  # nearly-identical "bull-like" fitted states) — the same instability that
-  # makes a low-confidence TRENDING_BULL an unreliable downgrade signal
-  # apparently also makes a high-confidence MIXED an unreliable upgrade
-  # signal. The mechanism (this config block, analysis/regime.py's gate,
-  # analysis/backtest.py's monthly cache, and the full pytest suite) remains
-  # implemented and tested either way — re-enabling is still a config-only
-  # change (hmm_enabled: true), but should not be done without first
-  # re-validating against full history the same way, per this file's own
-  # standing rule for regime-detection changes. See CLAUDE.md's "HMM regime
-  # confidence layer" section for the full write-up.
-  hmm_enabled: false
+  # An HMM regime confidence layer (validating, never replacing, the
+  # rule-based ADX/VIX/SMA200 regime call above) was implemented and fully
+  # backtested — both a downgrade-only gate and a downgrade+upgrade
+  # combination deteriorated every risk-adjusted metric versus the
+  # rule-based-only baseline, likely due to label-switching instability
+  # between two nearly-identical fitted states. Removed entirely; see
+  # CLAUDE.md's "HMM confidence gate — why it's disabled" section for the
+  # full investigation and numbers.
   # Change point detection (analysis/volatility.py:detect_change_points()) —
   # identifies structural breaks in a ticker's return-variance regime.
   cpd_lookback_days: 504    # ~2 trading years of history for change point detection
   cpd_threshold: 3.0        # critical value for the standardised ICSS statistic (see detect_change_points())
   cpd_recent_window: 90     # days — a change point within this window is flagged as "recent"
-  # GARCH(1,1) dynamic stop loss (analysis/volatility.py:compute_garch_stop()) —
-  # replaces the fixed ATR(14) x atr_stop_multiplier stop with a forward-looking
-  # 1-day GARCH volatility forecast scaled to the position's holding period.
-  garch_lookback_days: 504      # ~2 trading years for GARCH calibration
-  garch_min_observations: 60    # minimum data points required to fit GARCH (60 comfortably fits GARCH(1,1)'s 3 parameters and lets a change point within cpd_recent_window's 90 days still leave enough post-break rows)
-  # Per-holding-period GARCH stop multipliers. The very first calibration
-  # (garch_stop_multiplier: 2.0, one value for every ticker) deteriorated
-  # backtest performance — see the disable rationale below — because GARCH's
-  # sqrt(holding_days) time-scaling has no ATR equivalent, so a single
-  # multiplier tuned against a 14-day ATR window produced stops 4-8x wider
-  # than ATR's once holding_days entered the formula. An empirical
-  # calibration (2026-07-04: compute both stop formulas for every
-  # T212-eligible ticker at today's close, using each ticker's actual
-  # get_max_holding_days() bucket) found the GARCH/ATR ratio is driven almost
-  # entirely by which holding-period bucket a ticker falls into, not by the
-  # ticker itself — median ratio 3.80 for the 30-day (stock) bucket, 6.81 for
-  # the 90-day (ETF) bucket, 7.85 for the 45-day (bond ETF) bucket. Each
-  # bucket multiplier below is 2.0 / that bucket's median ratio, so a
-  # bucket's GARCH stop lands back in the same magnitude the ATR stop
-  # occupied before this feature, while still letting GARCH's actual value
-  # (reacting to a ticker's current vol regime, not a flat trailing average)
-  # come through undiluted by the holding-period scaling artifact.
-  garch_stop_multiplier_stocks: 0.53   # 30-day hold (watchlist.us_large_cap)
-  garch_stop_multiplier_bonds: 0.25    # 45-day hold (TLT, IEF, SHY, TIP, LQD, JNK, EMB, MUB, HYG)
-  garch_stop_multiplier_etfs: 0.29     # 90-day hold (ucits_mapping, non-bond)
-  garch_stop_multiplier: 0.35          # global fallback for any ticker outside the three buckets above (e.g. forex/crypto holding windows)
+  # ATR-based stop loss bounds (analysis/volatility.py:_atr_fallback_stop()).
+  # A GARCH(1,1)-based dynamic stop was implemented and backtested at two
+  # calibrations (a flat multiplier, then per-holding-period bucket
+  # multipliers) and underperformed this ATR stop on every risk-adjusted
+  # metric both times — see CLAUDE.md's "GARCH stop loss" section. Removed
+  # entirely; the ATR stop below is what remains in production.
   min_stop_pct: 1.0             # floor: stop never tighter than 1% of entry price
   max_stop_pct: 25.0            # ceiling: stop never wider than 25% of entry price
-  # Still disabled. A full-history backtest comparison (2019-present,
-  # tradeable assets, same code/data) after switching to these per-bucket
-  # multipliers — see above — is a large improvement over the original
-  # flat-multiplier attempt (max drawdown -56.7% -> -36.3%, STOP_LOSS exit
-  # rate 0.8% -> 38.4%) but still falls short of the ATR baseline on every
-  # risk-adjusted metric: profit factor 2.44 vs 2.51, Sharpe 0.753 vs 0.799,
-  # max drawdown -36.3% vs -30.29%, STOP_LOSS exit rate 38.4% vs a ~49%
-  # target. Root cause: each bucket multiplier is calibrated to that
-  # bucket's MEDIAN GARCH/ATR ratio, but within-bucket dispersion is real
-  # (stdev ~1.88 around the overall mean ratio of ~5.6 in the empirical
-  # calibration) — roughly half of a bucket's tickers still get a GARCH stop
-  # wider than their true ATR-equivalent, which is what's muting the
-  # STOP_LOSS trigger rate below target and widening drawdowns on the
-  # trades that ride further before exiting. Win rate did improve (53.1% vs
-  # 47.4%), consistent with GARCH's actual value (reacting to a ticker's
-  # current vol regime) coming through, just not yet with matching risk
-  # control. See CLAUDE.md's "GARCH/CPD stop loss in the backtest" section
-  # for the full before/after comparison table and a next-step suggestion
-  # (calibrating each bucket multiplier against a tighter percentile than
-  # the median, e.g. the 25th, to target the more-volatile tail of each
-  # bucket rather than its centre) before attempting a third calibration.
-  use_garch_stops: false
 
   # Regional weighting for the macro module's composite score (2026-07-07).
   # analysis/macro.py groups every scored FRED series (+ VIX, always "us") by

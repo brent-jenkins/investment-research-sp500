@@ -2,10 +2,8 @@
 
 import logging
 from enum import Enum
-from pathlib import Path
 from typing import Optional
 
-import yaml
 from sqlalchemy import text
 
 from data.database import get_engine, get_metadata_str, set_metadata
@@ -14,12 +12,6 @@ logger = logging.getLogger(__name__)
 
 # Reference asset for regime detection — must exist in the watchlist
 _REFERENCE_TICKER = "^GSPC"
-
-
-def _load_config() -> dict:
-    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
 
 
 class Regime(str, Enum):
@@ -197,52 +189,21 @@ def _detect_regime_rules(details: dict) -> Regime:
 def detect_regime() -> dict:
     """Detect the current market regime using stored ^GSPC indicators.
 
-    Two layers, in order:
-
-    1. **Rule-based (primary)** — ``_detect_regime_rules()`` applies the
-       priority-ordered ADX/VIX/SMA200 thresholds described there. This is
-       always computed and is never overridden except by step 2 below.
-    2. **HMM confidence gate (validator, not a replacement)** — when
-       ``signals.hmm_enabled`` is true (default), the rule-based call can be
-       adjusted in either direction:
-
-       - **Downgrade**: a rule-based ``TRENDING_BULL`` call is downgraded to
-         ``MIXED`` if ``analysis.hmm_regime.get_hmm_regime_confidence()``
-         reports a bull-state probability below
-         ``signals.hmm_bull_confidence_threshold`` (default 0.60).
-       - **Upgrade**: a rule-based ``MIXED`` call is upgraded to
-         ``TRENDING_BULL`` if ``signals.hmm_upgrade_enabled`` is true (default)
-         and the HMM bull-state probability is at/above
-         ``signals.hmm_upgrade_threshold`` (default 0.90 — deliberately much
-         stricter than the downgrade threshold, since an upgrade opens a new
-         entry the rules alone would have blocked).
-
-       Every other rule-based regime (``TRENDING_BEAR``, ``RANGING_LOW_VOL``,
-       ``HIGH_VOLATILITY``) is left untouched — the HMM is informational only
-       outside ``TRENDING_BULL``/``MIXED``. This exists because the rule-based
-       thresholds create sharp regime boundaries (ADX 24.9 is MIXED, ADX 25.1
-       is TRENDING_BULL) that a single noisy data point can flip; the HMM's
-       continuous state probability smooths that boundary by validating
-       whether the broader feature pattern actually looks like a genuine bull
-       regime before trusting (or overriding) the rule's call. See
-       analysis/hmm_regime.py's module docstring and CLAUDE.md for the full
-       design.
+    Applies the priority-ordered ADX/VIX/SMA200 rules in
+    ``_detect_regime_rules()``. An HMM confidence gate that validated (and
+    could downgrade/upgrade) this rule-based call was implemented and fully
+    backtested — both a downgrade-only gate and a downgrade+upgrade
+    combination deteriorated every risk-adjusted metric versus the
+    rule-based-only baseline. Removed entirely; see CLAUDE.md's "HMM
+    confidence gate — why it's disabled" section for the investigation.
 
     Returns:
         Dict with:
-        - ``regime``      — final :class:`Regime` (post-HMM-gate)
+        - ``regime``      — the detected :class:`Regime`
         - ``weights``     — module weight dict for this regime
         - ``description`` — human-readable regime explanation
         - ``colour``      — hex accent colour for the UI
         - ``details``     — raw indicator values used for classification
-        - ``hmm``         — dict with the full HMM confidence output (see
-          analysis.hmm_regime.get_hmm_regime_confidence()) plus
-          ``hmm_downgraded`` (bool), ``hmm_upgraded`` (bool), and
-          ``rule_regime`` (the pre-gate :class:`Regime` name) — empty dict
-          when hmm_enabled is false or the HMM check itself failed. At most
-          one of ``hmm_downgraded``/``hmm_upgraded`` is ever True, since the
-          downgrade path only applies to a rule-based TRENDING_BULL and the
-          upgrade path only applies to a rule-based MIXED.
     """
     details: dict = {
         "ticker": _REFERENCE_TICKER,
@@ -275,56 +236,8 @@ def detect_regime() -> dict:
             "adx": row.get("adx"), "vix": row.get("vix_level"),
         })
 
-    rule_regime = _detect_regime_rules(details)
-    final_regime = rule_regime
-    downgraded = False
-    upgraded = False
-    hmm_info: dict = {}
-
-    try:
-        config = _load_config()
-    except Exception as exc:
-        logger.warning("Regime detection: could not load config for HMM gate: %s", exc)
-        config = {}
-
-    if config.get("signals", {}).get("hmm_enabled", True):
-        try:
-            from analysis.hmm_regime import get_hmm_regime_confidence  # noqa: PLC0415  local import — avoid a module-load-time dependency on hmmlearn for callers that never enable this feature
-            hmm_info = get_hmm_regime_confidence(config)
-            sig_cfg = config.get("signals", {})
-            bull_prob = hmm_info.get("hmm_bull_probability")
-            model_available = bool(hmm_info.get("hmm_model_available"))
-
-            if rule_regime == Regime.TRENDING_BULL:
-                threshold = float(sig_cfg.get("hmm_bull_confidence_threshold", 0.60))
-                if model_available and bull_prob is not None and bull_prob < threshold:
-                    final_regime = Regime.MIXED
-                    downgraded = True
-            elif rule_regime == Regime.MIXED:
-                upgrade_enabled = bool(sig_cfg.get("hmm_upgrade_enabled", True))
-                upgrade_threshold = float(sig_cfg.get("hmm_upgrade_threshold", 0.90))
-                if (
-                    upgrade_enabled
-                    and model_available
-                    and bull_prob is not None
-                    and bull_prob >= upgrade_threshold
-                ):
-                    final_regime = Regime.TRENDING_BULL
-                    upgraded = True
-            # TRENDING_BEAR, RANGING_LOW_VOL, HIGH_VOLATILITY — HMM is
-            # informational only there; neither gate applies.
-        except Exception as exc:
-            logger.warning("HMM regime confidence check failed: %s", exc)
-            hmm_info = {}
-
-    result = _build_result(final_regime, details)
-    result["hmm"] = {
-        **hmm_info,
-        "hmm_downgraded": downgraded,
-        "hmm_upgraded": upgraded,
-        "rule_regime": rule_regime.name,
-    }
-    return result
+    regime = _detect_regime_rules(details)
+    return _build_result(regime, details)
 
 
 def get_latest_regime_name() -> Optional[str]:

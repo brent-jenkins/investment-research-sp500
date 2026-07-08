@@ -16,8 +16,7 @@ absence is compensated by normalising confluence over the five present modules.
 
 import json
 import logging
-import math
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -255,8 +254,8 @@ def _macro_scores(
     region has no data yet, mirroring the live _regional_macro_score(). This
     mirrors analysis/macro.py's own per-series region tags (imported
     directly, not re-hardcoded) — the same "shared core, no re-implementation
-    of the mapping" pattern already used for VaR sizing and GARCH stops
-    elsewhere in this file.
+    of the mapping" pattern already used for VaR sizing elsewhere in this
+    file.
 
     Reverted to latest-observation-only (2026-07-08): each FRED series'
     single most recent stored value is broadcast as a CONSTANT across the
@@ -335,19 +334,18 @@ def _macro_scores(
 # ---------------------------------------------------------------------------
 
 def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: dict) -> pd.DataFrame:
-    """Return a date-indexed DataFrame with 'regime', 'hmm_bull_probability',
-    'hmm_downgraded', and 'hmm_upgraded' columns.
+    """Return a date-indexed DataFrame with a 'regime' column — the
+    rule-based ADX/VIX/SMA200 classification.
 
-    'regime' is the rule-based ADX/VIX/SMA200 classification (unchanged from
-    before the HMM feature), gated afterward by _resolve_hmm_gate() exactly
-    the way analysis.regime.detect_regime() gates its own live rule-based
-    call in both directions (TRENDING_BULL -> MIXED downgrade, MIXED ->
-    TRENDING_BULL upgrade) — see that function's docstring for the full
-    rationale. Since this is computed ONCE per backtest run from the single
-    shared ^GSPC series (not once per ticker — every ticker's
-    compute_signal_history() call reuses this same DataFrame), the HMM gate
-    here is also only ever evaluated once per run, not multiplied by the
-    ticker count.
+    An HMM confidence gate (validating, never replacing, this rule-based
+    call) was implemented, backtested both alone and combined with a
+    MIXED -> TRENDING_BULL upgrade path, and found to deteriorate every
+    metric versus the rule-based-only baseline — see CLAUDE.md's "HMM
+    confidence gate — why it's disabled" section. Since this is computed
+    ONCE per backtest run from the single shared ^GSPC series (not once per
+    ticker — every ticker's compute_signal_history() call reuses this same
+    DataFrame), the cost of this classification is not multiplied by the
+    ticker count either way.
     """
     sig     = config["signals"]
     close   = gspc_df["close"].astype(float)
@@ -376,202 +374,7 @@ def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: d
     )
     regime = np.where(sma_200.isna(), "MIXED", regime)
 
-    hmm_bull_probability = np.full(len(close), np.nan)
-    hmm_downgraded = np.zeros(len(close), dtype=bool)
-    hmm_upgraded = np.zeros(len(close), dtype=bool)
-
-    if sig.get("hmm_enabled", True):
-        try:
-            from analysis.hmm_regime import _build_features as _hmm_build_features
-            full_features = _hmm_build_features(gspc_df, config)
-            if not full_features.empty:
-                regime, hmm_bull_probability, hmm_downgraded, hmm_upgraded = _resolve_hmm_gate(
-                    regime, close.index, full_features, config,
-                )
-        except Exception as exc:
-            logger.warning(
-                "Backtest: HMM regime gate failed, falling back to rule-based regime only: %s", exc,
-            )
-
-    return pd.DataFrame(
-        {
-            "regime": regime,
-            "hmm_bull_probability": hmm_bull_probability,
-            "hmm_downgraded": hmm_downgraded,
-            "hmm_upgraded": hmm_upgraded,
-        },
-        index=close.index,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Monthly HMM regime-confidence cache — backtest mirror of the live HMM gate
-# ---------------------------------------------------------------------------
-#
-# Refitting a 3-state GaussianHMM at every date the rule-based regime says
-# TRENDING_BULL would be needlessly expensive (each fit is tens of
-# milliseconds of EM iteration) for what is, in a multi-year backtest,
-# potentially hundreds of dates. As with the GARCH/CPD monthly vol cache
-# above, the model is instead calibrated once per calendar month-end (using
-# only ^GSPC feature data strictly before that month-end — no look-ahead)
-# and every date within that month is checked against that same fixed model.
-# Unlike the GARCH cache, this only ever runs once per backtest run (the
-# regime series is shared across all tickers — see _regime_history()'s
-# docstring), so there is no per-ticker multiplication to worry about.
-_MONTHLY_HMM_CACHE: dict[date, dict] = {}
-
-
-def _build_monthly_hmm_cache(
-    full_features: pd.DataFrame, start_date: date, end_date: date, config: dict,
-) -> dict[date, dict]:
-    """Fit a GaussianHMM as of every calendar month-end between start_date
-    and end_date, using only full_features rows strictly before that
-    month-end. Reuses analysis.hmm_regime's pure, DB-free
-    _standardize()/_fit_hmm_core()/_label_states() so a backtested gate
-    calibrates identically to a live weekly refit computed from the same
-    historical data.
-
-    full_features must already be look-ahead free by construction (each row
-    depends only on data up to and including that row) — see
-    analysis.hmm_regime._build_features()'s docstring — so slicing it by
-    date here introduces no additional look-ahead of its own.
-
-    Returns {month_end_date: {"model": GaussianHMM | None, "feature_mean":
-    np.ndarray | None, "feature_std": np.ndarray | None, "state_labels":
-    dict[int, str] | None}}. A None model means there wasn't yet
-    signals.hmm_min_training_days of pre-month-end history — the same
-    "insufficient data" state get_hmm_regime_confidence() returns live —
-    and _resolve_hmm_gate() below treats that as "no gate available",
-    leaving the rule-based call as-is for those early dates.
-    """
-    from analysis.hmm_regime import _standardize, _fit_hmm_core, _label_states, FEATURE_NAMES
-
-    sig = config.get("signals", {})
-    min_days = int(sig.get("hmm_min_training_days", 504))
-
-    month_ends = list(pd.date_range(start_date, end_date, freq="ME"))
-    if not month_ends:
-        month_ends = [pd.Timestamp(end_date)]
-
-    if all((me.date() in _MONTHLY_HMM_CACHE) for me in month_ends):
-        return {me.date(): _MONTHLY_HMM_CACHE[me.date()] for me in month_ends}
-
-    empty_entry = {"model": None, "feature_mean": None, "feature_std": None, "state_labels": None}
-    cache: dict[date, dict] = {}
-
-    for me in month_ends:
-        month_end_date = me.date()
-        if month_end_date in _MONTHLY_HMM_CACHE:
-            cache[month_end_date] = _MONTHLY_HMM_CACHE[month_end_date]
-            continue
-
-        prior = full_features[full_features.index < me]
-        if len(prior) < min_days:
-            cache[month_end_date] = empty_entry
-            _MONTHLY_HMM_CACHE[month_end_date] = empty_entry
-            continue
-
-        X, feature_mean, feature_std = _standardize(prior)
-        model = _fit_hmm_core(X)
-        if model is None:
-            cache[month_end_date] = empty_entry
-            _MONTHLY_HMM_CACHE[month_end_date] = empty_entry
-            continue
-
-        state_labels = _label_states(model.means_, FEATURE_NAMES)
-        entry = {
-            "model": model, "feature_mean": feature_mean,
-            "feature_std": feature_std, "state_labels": state_labels,
-        }
-        cache[month_end_date] = entry
-        _MONTHLY_HMM_CACHE[month_end_date] = entry
-
-    return cache
-
-
-def _resolve_hmm_gate(
-    regime_array: np.ndarray, dates: pd.DatetimeIndex, full_features: pd.DataFrame, config: dict,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Apply the HMM confidence gate to a rule-based regime array — the
-    backtest mirror of analysis.regime.detect_regime()'s live gate. Returns
-    (gated_regime, hmm_bull_probability, hmm_downgraded, hmm_upgraded), all
-    aligned to *dates*.
-
-    Two independent directions are checked, mirroring the live gate exactly:
-
-    - TRENDING_BULL dates: downgraded to MIXED when HMM bull probability
-      falls below signals.hmm_bull_confidence_threshold.
-    - MIXED dates (only when signals.hmm_upgrade_enabled): upgraded to
-      TRENDING_BULL when HMM bull probability is at/above
-      signals.hmm_upgrade_threshold.
-
-    Every other regime (TRENDING_BEAR, RANGING_LOW_VOL, HIGH_VOLATILITY) is
-    informational-only and left untouched, same as live. For each checked
-    date, the observation array passed to predict_proba() ends exactly at
-    that date — never later — even though dates within the same calendar
-    month share one fitted model (see _build_monthly_hmm_cache()):
-    hmmlearn's predict_proba() is a forward-BACKWARD smoother, not a pure
-    forward filter, so an array extending past date d would let its
-    reported probability for d be influenced by observations *after* d, a
-    genuine look-ahead leak. Grouping only the model FIT by month (not the
-    per-date predict_proba call) avoids this while still keeping the
-    number of HMM fits bounded by month count rather than per-date checks.
-    """
-    sig = config.get("signals", {})
-    threshold         = float(sig.get("hmm_bull_confidence_threshold", 0.60))
-    upgrade_enabled   = bool(sig.get("hmm_upgrade_enabled", True))
-    upgrade_threshold = float(sig.get("hmm_upgrade_threshold", 0.90))
-
-    gated = regime_array.copy()
-    bull_prob  = np.full(len(dates), np.nan)
-    downgraded = np.zeros(len(dates), dtype=bool)
-    upgraded   = np.zeros(len(dates), dtype=bool)
-
-    bull_positions  = np.where(regime_array == "TRENDING_BULL")[0]
-    mixed_positions = np.where(regime_array == "MIXED")[0] if upgrade_enabled else np.array([], dtype=int)
-    check_positions = np.union1d(bull_positions, mixed_positions)
-    if len(check_positions) == 0:
-        return gated, bull_prob, downgraded, upgraded
-
-    start_range = dates[check_positions[0]].date()
-    end_range   = dates[check_positions[-1]].date()
-    month_cache = _build_monthly_hmm_cache(full_features, start_range, end_range, config)
-
-    for pos in check_positions:
-        d = dates[pos]
-        month_end_key = (pd.Timestamp(d) + pd.offsets.MonthEnd(-1)).date()
-        entry = month_cache.get(month_end_key)
-        if entry is None or entry.get("model") is None:
-            continue  # insufficient pre-month-end history yet — leave the rule-based call as-is
-
-        window = full_features[full_features.index <= d]
-        if window.empty:
-            continue
-
-        X = (window.to_numpy() - entry["feature_mean"]) / entry["feature_std"]
-        try:
-            proba = entry["model"].predict_proba(X)
-        except Exception:
-            continue
-
-        latest = proba[-1]
-        p_bull = 0.0
-        for state_idx, label in entry["state_labels"].items():
-            if label == "BULL" and 0 <= state_idx < len(latest):
-                p_bull = float(latest[state_idx])
-                break
-
-        bull_prob[pos] = p_bull
-        if regime_array[pos] == "TRENDING_BULL":
-            if p_bull < threshold:
-                gated[pos] = "MIXED"
-                downgraded[pos] = True
-        elif regime_array[pos] == "MIXED":
-            if p_bull >= upgrade_threshold:
-                gated[pos] = "TRENDING_BULL"
-                upgraded[pos] = True
-
-    return gated, bull_prob, downgraded, upgraded
+    return pd.DataFrame({"regime": regime}, index=close.index)
 
 
 # ---------------------------------------------------------------------------
@@ -653,30 +456,6 @@ def compute_signal_history(
     macro_sc    = _macro_scores(df, ticker, vix_s, macro_df, config)
 
     regime_aligned = regime_hist["regime"].reindex(df.index).ffill().fillna("MIXED")
-    # hmm_bull_probability/hmm_downgraded/hmm_upgraded are NOT forward-filled
-    # like regime above: _resolve_hmm_gate() (analysis/backtest.py) only ever
-    # populates hmm_bull_probability on dates the rule-based regime was
-    # actually TRENDING_BULL or MIXED — every other date is a deliberate NaN
-    # meaning "the gate was never evaluated here" (informational-only
-    # regimes don't need an HMM opinion). Forward-filling would replace that
-    # "not evaluated" NaN with a stale probability from the last time it
-    # *was* evaluated, misrepresenting every subsequent BEAR/etc. date as if
-    # the HMM had just given a fresh (but actually days- or weeks-old)
-    # opinion on it — a plain reindex (only introduces NaN for the rare case
-    # a ticker's own trading calendar has a date ^GSPC's doesn't) preserves
-    # the sparse, accurate signal instead.
-    if "hmm_bull_probability" in regime_hist.columns:
-        hmm_bull_probability_aligned = regime_hist["hmm_bull_probability"].reindex(df.index)
-    else:
-        hmm_bull_probability_aligned = pd.Series(np.nan, index=df.index)
-    if "hmm_downgraded" in regime_hist.columns:
-        hmm_downgraded_aligned = regime_hist["hmm_downgraded"].reindex(df.index).fillna(False).astype(bool)
-    else:
-        hmm_downgraded_aligned = pd.Series(False, index=df.index)
-    if "hmm_upgraded" in regime_hist.columns:
-        hmm_upgraded_aligned = regime_hist["hmm_upgraded"].reindex(df.index).fillna(False).astype(bool)
-    else:
-        hmm_upgraded_aligned = pd.Series(False, index=df.index)
 
     # Build per-date weight series for the five modules included in backtest.
     # Correlation module (weight=0.10) is excluded; remaining weights are
@@ -733,236 +512,31 @@ def compute_signal_history(
         "volatility_score":     vol_sc,
         "volume_score":         volume_sc,
         "macro_score":          macro_sc,
-        "hmm_bull_probability": hmm_bull_probability_aligned,
-        "hmm_downgraded":       hmm_downgraded_aligned,
-        "hmm_upgraded":         hmm_upgraded_aligned,
     })
     result.index.name = "date"
     return result.dropna(subset=["close", "confluence_score"])
-
-
-# ---------------------------------------------------------------------------
-# Monthly CPD/GARCH vol cache — backtest mirror of the live GARCH stop
-# ---------------------------------------------------------------------------
-#
-# The live system (brokers/trading212.py, analysis/volatility.py) refits
-# GARCH and reruns change point detection at every order placement — cheap
-# there (one fit per ticker per EOD run). Doing the same per trade ENTRY in
-# a backtest would be O(n^2): 64 tickers x 7 years x ~347 trades. Instead,
-# GARCH/CPD state is calibrated at calendar month-end granularity and every
-# trade entry looks up the state as of the end of its own preceding month —
-# the same state a live order placed on that entry's date would have seen,
-# with no look-ahead (a month-end's entry only ever uses data strictly
-# before it, and simulate_trades() always looks up a month-end strictly
-# before the entry date itself — see its MonthEnd(-1) usage below).
-#
-# simulate_trades() calls _build_monthly_vol_cache() one month at a time,
-# only for months an actual trade entry falls in (a ticker with 5 entries
-# across 7 years needs 5 GARCH fits, not ~84) — measured empirically at
-# ~73ms/fit, so eagerly precomputing every month in a wide requested range
-# would blow the whole run's performance budget across 64 tickers. Calling
-# the function with start_date == end_date == the one needed month is a
-# calling-pattern choice; the function's own contract (compute every
-# month-end in [start_date, end_date], look-ahead-free) is unchanged and
-# still exercised directly by its own tests with a wide date range.
-
-# Cross-run cache keyed on (ticker, month_end_date) — if the same
-# ticker/month combination is needed again later in the same process (a
-# second backtest run in the same Streamlit session, for example), the
-# already-computed GARCH fit / change point is reused rather than redone.
-_MONTHLY_VOL_CACHE: dict[tuple[str, date], dict] = {}
-
-# Per-ticker price-history cache, keyed on ticker alone — separate from
-# _MONTHLY_VOL_CACHE above (which caches computed results, not raw prices).
-# simulate_trades() calls _build_monthly_vol_cache() once per DISTINCT
-# calendar month a trade enters (see that function's module docstring for
-# why), which for an active ticker can be a dozen or more calls in one
-# backtest run; without this, each of those calls would re-fetch the
-# ticker's entire price history via get_price_df() — measured at ~150-500ms
-# per fetch, which dominated the run time (136s for a 64-ticker/239-trade
-# run) far more than the GARCH fits themselves (~73ms each) did.
-_TICKER_PRICE_CACHE: dict[str, "pd.DataFrame"] = {}
-
-
-def _get_cached_price_history(ticker: str, days: int) -> "pd.DataFrame":
-    """get_price_df(ticker, days), cached per ticker for this process.
-
-    Safe to reuse across calls with a smaller `days` than an earlier cached
-    fetch used, since get_price_df's `days` only ever widens the window —
-    a later call asking for fewer days than what's already cached still
-    finds everything it needs in the cached (wider) frame. If a later call
-    asks for MORE days than is cached, re-fetches with the larger window.
-    """
-    cached = _TICKER_PRICE_CACHE.get(ticker)
-    if cached is not None and cached.attrs.get("_fetched_days", 0) >= days:
-        return cached
-    df = get_price_df(ticker, days=days)
-    if not df.empty:
-        df.attrs["_fetched_days"] = days
-    _TICKER_PRICE_CACHE[ticker] = df
-    return df
-
-
-def _build_monthly_vol_cache(
-    ticker: str,
-    start_date: date,
-    end_date: date,
-    config: dict,
-) -> dict[date, dict]:
-    """Compute (change_point_date, garch_daily_vol, vol_source) for every
-    calendar month-end between start_date and end_date, using ONLY price
-    data strictly before that month-end — no look-ahead (verified by test).
-
-    Mirrors the live calibration exactly by reusing the same pure,
-    DB-free core functions detect_change_points()/compute_garch_stop() call
-    internally: analysis.volatility._icss_change_point() for the change
-    point and analysis.volatility._garch_daily_vol_core() for the GARCH
-    fit — so a backtested stop and a live stop computed from the same
-    historical data would calibrate identically.
-
-    Fetches the ticker's full available price history via get_price_df()
-    ONCE (that call has no upper-date bound, so a generous `days` window
-    captures everything through "now" — safe for a historical backtest
-    since the DB never contains rows beyond what's already elapsed by the
-    time this runs), then slices it per month-end in memory — one DB round
-    trip regardless of how many month-ends are requested in a single call.
-
-    Returns {month_end_date: {"change_point_date": date|None,
-                               "garch_daily_vol": float|None,
-                               "vol_source": "garch" | "atr_fallback"}}
-    ("atr_fallback" here just means "no GARCH forecast available for this
-    month" — simulate_trades() is what actually falls back to the ATR
-    stop formula using that signal.)
-    """
-    from analysis.volatility import _icss_change_point, _garch_daily_vol_core  # noqa: PLC0415
-
-    sig               = config.get("signals", {})
-    cpd_lookback      = int(sig.get("cpd_lookback_days", 504))
-    cpd_threshold     = float(sig.get("cpd_threshold", 3.0))
-    cpd_recent_window = int(sig.get("cpd_recent_window", 90))
-    garch_lookback    = int(sig.get("garch_lookback_days", 504))
-    garch_min_obs     = int(sig.get("garch_min_observations", 60))
-
-    month_ends = list(pd.date_range(start_date, end_date, freq="ME"))
-    if not month_ends:
-        month_ends = [pd.Timestamp(end_date)]
-
-    # Skip the price-history fetch entirely if every requested month is
-    # already cached from an earlier call in this process.
-    if all((ticker, me.date()) in _MONTHLY_VOL_CACHE for me in month_ends):
-        return {me.date(): _MONTHLY_VOL_CACHE[(ticker, me.date())] for me in month_ends}
-
-    empty_entry = {"change_point_date": None, "garch_daily_vol": None, "vol_source": "atr_fallback"}
-
-    lookback_days_max = max(cpd_lookback, garch_lookback)
-    df = _get_cached_price_history(ticker, int(lookback_days_max * 1.6) + 3650)
-    cache: dict[date, dict] = {}
-    if df.empty:
-        for me in month_ends:
-            cache[me.date()] = empty_entry
-            _MONTHLY_VOL_CACHE[(ticker, me.date())] = empty_entry
-        return cache
-
-    df = df.sort_values("date").reset_index(drop=True)
-    df["date"] = pd.to_datetime(df["date"])
-
-    for me in month_ends:
-        month_end_date = me.date()
-        cache_key = (ticker, month_end_date)
-        if cache_key in _MONTHLY_VOL_CACHE:
-            cache[month_end_date] = _MONTHLY_VOL_CACHE[cache_key]
-            continue
-
-        prior = df[df["date"] < me]
-        entry = dict(empty_entry)
-
-        if len(prior) >= 60:
-            close_all = prior["close"].astype(float)
-
-            # --- Change point detection (mirrors detect_change_points()) ---
-            cpd_close     = close_all.tail(cpd_lookback + 1)
-            cpd_dates     = prior["date"].tail(cpd_lookback + 1)
-            log_ret_cpd   = np.log(cpd_close / cpd_close.shift(1)).iloc[1:].reset_index(drop=True)
-            ret_dates_cpd = cpd_dates.iloc[1:].reset_index(drop=True)
-
-            change_point_date = None
-            if len(log_ret_cpd) >= 60:
-                idx = _icss_change_point(log_ret_cpd.to_numpy(), cpd_threshold)
-                if idx is not None:
-                    cp_ts = ret_dates_cpd.iloc[idx]
-                    change_point_date = cp_ts.date() if hasattr(cp_ts, "date") else cp_ts
-
-            # --- GARCH (mirrors compute_garch_stop()'s post-break slicing) ---
-            garch_close = close_all.tail(garch_lookback + 1)
-            if change_point_date is not None:
-                days_since_break = (month_end_date - change_point_date).days
-                if 0 <= days_since_break <= cpd_recent_window:
-                    post = prior.loc[prior["date"] >= pd.Timestamp(change_point_date), "close"].astype(float)
-                    if len(post) >= garch_min_obs:
-                        garch_close = post
-
-            log_ret_garch = np.log(garch_close / garch_close.shift(1)).dropna()
-            if len(log_ret_garch) >= garch_min_obs:
-                daily_vol = _garch_daily_vol_core(log_ret_garch.to_numpy())
-                if daily_vol is not None:
-                    entry = {
-                        "change_point_date": change_point_date,
-                        "garch_daily_vol":   daily_vol,
-                        "vol_source":        "garch",
-                    }
-
-        cache[month_end_date] = entry
-        _MONTHLY_VOL_CACHE[cache_key] = entry
-
-    return cache
 
 
 def _resolve_entry_stop(
     direction: str,
     price: float,
     atr: float,
-    holding_days: int,
-    month_end_key: Optional[date],
-    monthly_cache: dict[date, dict],
     config: dict,
-) -> tuple[float, float, str]:
-    """Return (stop_price, stop_distance_pct, vol_source) for a new entry.
+) -> tuple[float, float]:
+    """Return (stop_price, stop_distance_pct) for a new entry, sized via the
+    pre-existing entry ± backtest.atr_stop_multiplier x ATR formula.
 
-    When signals.use_garch_stops is true and the cached GARCH vol for the
-    nearest prior month-end is available, sizes the stop the same way
-    compute_garch_stop() does live: a holding-period-bucketed stop
-    multiplier (see analysis.volatility._garch_stop_multiplier_for_holding_
-    days() — shared with the live path so the two never calibrate
-    differently for the same holding_days) x holding_vol (daily vol scaled
-    by sqrt(holding_days)), clamped to [min_stop_pct, max_stop_pct] of entry
-    price. Otherwise (feature disabled, or no GARCH vol cached for this
-    month — e.g. too little history that early in the backtest) falls back
-    to the pre-existing atr_stop_multiplier x ATR formula, UNCHANGED from
-    before this feature — unbounded by min/max_stop_pct, matching "retain
-    existing ATR behaviour exactly" for the use_garch_stops: false case.
+    A GARCH(1,1)-based dynamic stop was implemented, backtested (via a
+    monthly-granularity calibration cache mirroring the live GARCH stop),
+    and found to underperform this ATR stop on every risk-adjusted metric —
+    see CLAUDE.md's "GARCH/CPD stop loss in the backtest" section.
     """
-    sig = config.get("signals", {})
-    use_garch = bool(sig.get("use_garch_stops", False))
-
-    cached = monthly_cache.get(month_end_key) if month_end_key is not None else None
-    daily_vol = cached.get("garch_daily_vol") if cached else None
-
-    if use_garch and daily_vol is not None:
-        from analysis.volatility import _garch_stop_multiplier_for_holding_days  # noqa: PLC0415  local import — avoid circular import
-        stop_multiplier = _garch_stop_multiplier_for_holding_days(holding_days, config)
-        min_stop_pct = float(sig.get("min_stop_pct", 1.0)) / 100.0
-        max_stop_pct = float(sig.get("max_stop_pct", 25.0)) / 100.0
-        holding_vol = daily_vol * math.sqrt(max(holding_days, 1))
-        distance_frac = max(min_stop_pct, min(stop_multiplier * holding_vol, max_stop_pct))
-        vol_source = "garch"
-    else:
-        atr_mult = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
-        distance_frac = (atr_mult * atr / price) if price else 0.0
-        vol_source = "atr_fallback"
+    atr_mult = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
+    distance_frac = (atr_mult * atr / price) if price else 0.0
 
     stop_distance = distance_frac * price
     stop_price = price - stop_distance if direction == "LONG" else price + stop_distance
-    return stop_price, round(distance_frac * 100, 4), vol_source
+    return stop_price, round(distance_frac * 100, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -989,12 +563,8 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
     Exit (in priority order, unaffected by either entry gate — an open
     position always continues to be monitored and closed regardless of what
     the regime does next):
-      1. Stop loss — GARCH-based when signals.use_garch_stops is true (the
-         same calibration the live system uses, via a monthly precomputed
-         cache — see _build_monthly_vol_cache() / _resolve_entry_stop()
-         above), falling back to the pre-existing
-         entry ± backtest.atr_stop_multiplier × ATR formula when GARCH
-         data isn't available for that month or the feature is disabled.
+      1. Stop loss — entry ± backtest.atr_stop_multiplier × ATR (see
+         _resolve_entry_stop() above).
       2. Signal reversal, gated by trading212_invest.exit_signal — "SELL"
          (default) reverses on SELL/STRONG_SELL for LONG (BUY/STRONG_BUY for
          SHORT); "STRONG_SELL" requires the strong variant only. Mirrors the
@@ -1062,21 +632,6 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
     trades: list[dict] = []
     open_trade: Optional[dict] = None
 
-    # Monthly CPD/GARCH vol cache — computed lazily, one calendar month at a
-    # time, only for months an actual trade entry falls in. A ticker with
-    # (say) 5 entries over a 7-year run needs 5 GARCH fits, not ~84 —
-    # eagerly precomputing every month-end in the full requested range was
-    # measured at ~73ms/fit x 84 months = over 6s for a SINGLE ticker, which
-    # would blow the whole run's performance budget across 64 tickers.
-    # _build_monthly_vol_cache() is still called with a genuine
-    # (start_date, end_date) range each time — here just narrowed to the one
-    # month actually needed — so its module-level cross-run cache and
-    # look-ahead-free slicing behave identically either way; this is a
-    # calling-pattern choice, not a change to that function's contract. A
-    # ticker that never enters a trade never triggers any of this at all.
-    use_garch_stops = bool(config.get("signals", {}).get("use_garch_stops", False))
-    monthly_cache: dict[date, dict] = {}
-
     for dt, row in signals.iterrows():
         price  = float(row["close"])
         sig    = str(row["signal"])
@@ -1092,23 +647,7 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 continue
             direction = "LONG" if sig in _BULL else "SHORT"
 
-            entry_date_only = dt.date() if hasattr(dt, "date") else dt
-            month_end_key: Optional[date] = None
-            if use_garch_stops:
-                # MonthEnd(-1) always lands strictly before dt (even when dt
-                # is itself a month-end) — the calibration state as of the
-                # end of the last fully-completed month before this entry,
-                # never data from dt's own (still in-progress) month.
-                month_end_ts = pd.Timestamp(dt) + pd.offsets.MonthEnd(-1)
-                month_end_key = month_end_ts.date()
-                if month_end_key not in monthly_cache:
-                    monthly_cache.update(
-                        _build_monthly_vol_cache(ticker, month_end_key, month_end_key, config)
-                    )
-
-            stop, stop_distance_pct, vol_source = _resolve_entry_stop(
-                direction, price, atr, max_hold, month_end_key, monthly_cache or {}, config,
-            )
+            stop, stop_distance_pct = _resolve_entry_stop(direction, price, atr, config)
 
             # VaR position sizing — uses only prices strictly BEFORE dt (no
             # look-ahead). Falls back to max_position_gbp * 0.5 when fewer
@@ -1144,7 +683,6 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "entry_signal":             sig,
                 "stop_price":               stop,
                 "stop_distance_pct":        stop_distance_pct,
-                "vol_source":               vol_source,
                 "position_gbp":             position_gbp,
                 "drawdown_scale_factor":    dd_scale,
                 "drawdown_pct_at_entry":    dd_pct_at_entry,
@@ -1199,7 +737,6 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
                 "position_gbp":             open_trade["position_gbp"],
                 "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
                 "stop_distance_pct":        open_trade["stop_distance_pct"],
-                "vol_source":               open_trade["vol_source"],
                 "drawdown_scale_factor":    open_trade["drawdown_scale_factor"],
                 "drawdown_pct_at_entry":    open_trade["drawdown_pct_at_entry"],
                 "regime_at_entry":          open_trade["regime_at_entry"],
@@ -1236,7 +773,6 @@ def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[di
             "position_gbp":             open_trade["position_gbp"],
             "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
             "stop_distance_pct":        open_trade["stop_distance_pct"],
-            "vol_source":               open_trade["vol_source"],
             "drawdown_scale_factor":    open_trade["drawdown_scale_factor"],
             "drawdown_pct_at_entry":    open_trade["drawdown_pct_at_entry"],
             "regime_at_entry":          open_trade["regime_at_entry"],
@@ -1289,12 +825,10 @@ def _update_run_status(engine, run_id: int, status: str, error: str = "") -> Non
 _SIGNALS_UPSERT_SQL = text("""
     INSERT INTO backtest_signals
         (run_id, ticker, date, regime, confluence_score, signal, trend_score,
-         mean_reversion_score, volatility_score, volume_score, macro_score, close_price, atr,
-         hmm_bull_probability, hmm_downgraded, hmm_upgraded)
+         mean_reversion_score, volatility_score, volume_score, macro_score, close_price, atr)
     VALUES
         (:run_id, :ticker, :date, :regime, :confluence_score, :signal, :trend_score,
-         :mean_reversion_score, :volatility_score, :volume_score, :macro_score, :close_price, :atr,
-         :hmm_bull_probability, :hmm_downgraded, :hmm_upgraded)
+         :mean_reversion_score, :volatility_score, :volume_score, :macro_score, :close_price, :atr)
     ON CONFLICT(run_id, ticker, date) DO UPDATE SET
         confluence_score = excluded.confluence_score,
         signal            = excluded.signal
@@ -1336,9 +870,6 @@ def _store_signals_batch(engine, run_id: int, ticker: str, signals: pd.DataFrame
             "macro_score":          int(row["macro_score"]),
             "close_price":          float(row["close"]),
             "atr":                  float(row["atr"]) if pd.notna(row["atr"]) else None,
-            "hmm_bull_probability": float(row["hmm_bull_probability"]) if "hmm_bull_probability" in row and pd.notna(row["hmm_bull_probability"]) else None,
-            "hmm_downgraded":       int(bool(row["hmm_downgraded"])) if "hmm_downgraded" in row else 0,
-            "hmm_upgraded":         int(bool(row["hmm_upgraded"])) if "hmm_upgraded" in row else 0,
         })
     if not rows:
         return
@@ -1457,12 +988,7 @@ def run_backtest(
             gspc_df.index = pd.to_datetime(gspc_df.index)
             reg_hist = _regime_history(gspc_df, vix_s, config)
         else:
-            reg_hist = pd.DataFrame({
-                "regime": pd.Series(dtype=str),
-                "hmm_bull_probability": pd.Series(dtype=float),
-                "hmm_downgraded": pd.Series(dtype=bool),
-                "hmm_upgraded": pd.Series(dtype=bool),
-            })
+            reg_hist = pd.DataFrame({"regime": pd.Series(dtype=str)})
 
         macro_df = _load_macro_history()
 

@@ -398,17 +398,17 @@ def exit_reason_breakdown(df: pd.DataFrame) -> pd.DataFrame:
             trades, win_rate (pct, e.g. 62.5), avg_return (pct, e.g. 1.23),
             avg_hold (days), avg_stop_distance_pct (pct, e.g. 8.4 — only
             present when df has a stop_distance_pct column; older
-            backtest_trades rows predating GARCH stops don't have one, so
-            this key is simply omitted from each row dict rather than
-            filled with a misleading 0.0 — the same "additive, don't
-            reinterpret missing data as zero" pattern compute_metrics()
-            uses for its pnl_gbp-derived keys).
+            backtest_trades rows don't have one, so this key is simply
+            omitted from each row dict rather than filled with a misleading
+            0.0 — the same "additive, don't reinterpret missing data as
+            zero" pattern compute_metrics() uses for its pnl_gbp-derived
+            keys).
 
     Comparing avg_stop_distance_pct for STOP_LOSS rows against other exit
-    reasons shows whether GARCH stops are calibrated sensibly — a STOP_LOSS
+    reasons shows whether the ATR stop is calibrated sensibly — a STOP_LOSS
     average distance far wider or narrower than what MAX_HOLDING/
     SIGNAL_REVERSAL trades typically move by is a signal worth checking
-    garch_stop_multiplier / min_stop_pct / max_stop_pct against.
+    backtest.atr_stop_multiplier against.
     """
     if df is None or df.empty or "exit_reason" not in df.columns:
         return pd.DataFrame()

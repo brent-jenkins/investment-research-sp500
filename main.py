@@ -418,108 +418,6 @@ def _hex_rgba(hx: str, alpha: float) -> str:
     return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
 
 
-def _hmm_display_dict(config: dict, regime_result: dict) -> dict:
-    """Return an HMM confidence dict for UI display, shaped like
-    analysis/regime.py:detect_regime()'s 'hmm' sub-dict, but never silently
-    hiding a fitted model just because signals.hmm_enabled is false.
-
-    When hmm_enabled is true, detect_regime() already populated
-    regime_result["hmm"] correctly (real confidence + genuine
-    hmm_downgraded/hmm_upgraded flags), so that dict is reused as-is with
-    "hmm_enabled": True added.
-
-    When hmm_enabled is false, detect_regime() never calls the confidence
-    function at all (see that function's own hmm_enabled check), so
-    regime_result["hmm"] carries no confidence data whatsoever even though a
-    fitted model may well exist — data/scheduler.py:_weekly_summary_job()
-    refits weekly regardless of hmm_enabled. This calls
-    analysis.hmm_regime.get_hmm_regime_confidence() directly to surface that
-    model's output for informational display, forcing hmm_downgraded/
-    hmm_upgraded to False (neither gate is ever actually applied while
-    disabled — showing otherwise would misrepresent live behaviour) and
-    tagging "hmm_enabled": False so every caller can render an unambiguous
-    "(disabled — informational only)" qualifier rather than implying this
-    confidence reading is affecting regime detection.
-    """
-    hmm_enabled = bool(config.get("signals", {}).get("hmm_enabled", False))
-    if hmm_enabled:
-        return {**(regime_result.get("hmm") or {}), "hmm_enabled": True}
-
-    try:
-        from analysis.hmm_regime import get_hmm_regime_confidence
-        hmm_info = get_hmm_regime_confidence(config)
-    except Exception:
-        hmm_info = {}
-
-    rule_regime = regime_result.get("regime")
-    rule_regime_name = rule_regime.value if hasattr(rule_regime, "value") else str(rule_regime)
-    return {
-        **hmm_info,
-        "hmm_downgraded": False,
-        "hmm_upgraded": False,
-        "rule_regime": rule_regime_name,
-        "hmm_enabled": False,
-    }
-
-
-def _hmm_status_pill_html(regime_result: dict, config: dict, font_size: str = "0.78rem") -> str:
-    """Build the inline HMM confidence pill shown alongside the regime badge
-    on the Daily Briefing status bar and the Signals page header block —
-    see _hmm_display_dict() above and CLAUDE.md's HMM confidence gate
-    section.
-
-    Five cases:
-    - signals.hmm_enabled is false: grey "HMM: NN% <state> (disabled —
-      informational only)" — a fitted model's reading may still exist (see
-      _hmm_display_dict()) but it never gates live regime detection, so this
-      is always the informational-only styling regardless of dominant state.
-    - Rule-based regime was TRENDING_BULL but HMM downgraded it to MIXED:
-      amber "⚠ Downgraded from TRENDING_BULL (HMM NN% bull confidence)".
-    - Rule-based regime was MIXED but HMM upgraded it to TRENDING_BULL:
-      amber "↑ HMM upgraded from MIXED (NN% bull confidence)".
-    - Rule-based regime was TRENDING_BULL and HMM confirmed it: green
-      "✓ HMM NN% confident".
-    - Any other regime — HMM is informational only, never a veto there:
-      grey "HMM: NN% <state> (informational only)".
-
-    Returns "" (nothing rendered) when the model hasn't been fit yet
-    (hmm_model_available is False) — there is nothing meaningful to show.
-    """
-    hmm = _hmm_display_dict(config, regime_result)
-    if not hmm.get("hmm_model_available"):
-        return ""
-
-    rule_regime = hmm.get("rule_regime", "")
-    downgraded  = hmm.get("hmm_downgraded", False)
-    upgraded    = hmm.get("hmm_upgraded", False)
-    dominant    = hmm.get("hmm_dominant_state", "UNCERTAIN")
-    confidence  = hmm.get("hmm_confidence", 0.0) or 0.0
-    bull_prob   = hmm.get("hmm_bull_probability", 0.0) or 0.0
-    disabled    = not hmm.get("hmm_enabled", True)
-
-    if disabled:
-        colour = "#6b7280"
-        text = f"HMM: {confidence:.0%} {dominant.lower()} (disabled — informational only)"
-    elif downgraded:
-        colour = "#f59e0b"
-        text = f"⚠ Downgraded from {rule_regime.replace('_', ' ')} (HMM {bull_prob:.0%} bull confidence)"
-    elif upgraded:
-        colour = "#f59e0b"
-        text = f"↑ HMM upgraded from {rule_regime.replace('_', ' ')} ({bull_prob:.0%} bull confidence)"
-    elif rule_regime == "TRENDING_BULL":
-        colour = "#16a34a"
-        text = f"✓ HMM {confidence:.0%} confident"
-    else:
-        colour = "#6b7280"
-        text = f"HMM: {confidence:.0%} {dominant.lower()} (informational only)"
-
-    return (
-        f'<span style="color:{colour};font-size:{font_size};font-weight:600;'
-        f'white-space:nowrap">{html.escape(text)}</span>'
-    )
-
-
-
 def _has_price_data() -> bool:
     """Return True if the price_data table contains at least one row."""
     from sqlalchemy import text as sa_text
@@ -1111,57 +1009,6 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f"<span style='color:#94a3b8;font-size:0.78rem'> — {_dd}</span></div>"
         )
 
-    hmm_strip = ""
-    _hmm = _hmm_display_dict(config, regime_result)
-    if _hmm.get("hmm_model_available"):
-        _hmm_states = [
-            ("BULL",      _hmm.get("hmm_bull_probability", 0.0) or 0.0,      "#16a34a"),
-            ("BEAR",      _hmm.get("hmm_bear_probability", 0.0) or 0.0,      "#ef5350"),
-            ("UNCERTAIN", _hmm.get("hmm_uncertain_probability", 0.0) or 0.0, "#6b7280"),
-        ]
-        _hmm_pills = "".join(
-            f"<span style='background:{c}18;border:1px solid {c}55;color:{c};padding:1px 7px;"
-            f"border-radius:3px;font-size:0.72rem;font-weight:700;white-space:nowrap;margin-right:4px'>"
-            f"{lbl} {p:.0%}</span>"
-            for lbl, p, c in _hmm_states
-        )
-        _hmm_rule = _hmm.get("rule_regime", "")
-        # hmm_downgraded/hmm_upgraded are always forced False by
-        # _hmm_display_dict() when signals.hmm_enabled is false — neither
-        # gate is ever actually applied in that state — so this naturally
-        # falls into the "confirms" branch below, which then gets the
-        # explicit disabled qualifier appended.
-        if _hmm.get("hmm_downgraded"):
-            _hmm_note = f"downgraded {_hmm_rule.replace('_', ' ')} to MIXED — bull confidence below threshold"
-        elif _hmm.get("hmm_upgraded"):
-            _hmm_note = f"upgraded {_hmm_rule.replace('_', ' ')} to TRENDING_BULL — bull confidence above upgrade threshold"
-        else:
-            _hmm_note = f"confirms dominant state {_hmm.get('hmm_dominant_state', 'UNCERTAIN')}"
-        if not _hmm.get("hmm_enabled", True):
-            _hmm_note += " (disabled — informational only)"
-
-        _hmm_gate_badge = ""
-        if _hmm.get("hmm_downgraded"):
-            _hmm_gate_badge = (
-                "<span style='background:#f59e0b;color:#fff;padding:1px 6px;border-radius:3px;"
-                "font-size:0.68rem;font-weight:800;margin-right:6px'>↓ DOWNGRADED</span>"
-            )
-        elif _hmm.get("hmm_upgraded"):
-            _hmm_gate_badge = (
-                "<span style='background:#f59e0b;color:#fff;padding:1px 6px;border-radius:3px;"
-                "font-size:0.68rem;font-weight:800;margin-right:6px'>↑ UPGRADED</span>"
-            )
-
-        hmm_strip = (
-            "<div style='border-left:3px solid #6366f1;padding:3px 10px;"
-            f"background:{_hex_rgba('#6366f1', 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
-            "<span style='background:#6366f1;color:#fff;padding:0 5px;"
-            "border-radius:2px;font-size:0.64rem;font-weight:800'>HMM CONFIDENCE</span> "
-            f"{_hmm_pills}"
-            f"{_hmm_gate_badge}"
-            f"<span style='color:#94a3b8;font-size:0.78rem'>{html.escape(_hmm_note)}</span></div>"
-        )
-
     macro_regional_strip = ""
     try:
         _macro_region_dash = get_macro_dashboard(config)
@@ -1191,7 +1038,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             "(macro_regional_weights) — see Macro Dashboard for detail</span></div>"
         )
 
-    intel_strips = overlay_strips + catch_up_strips + hmm_strip + macro_regional_strip
+    intel_strips = overlay_strips + catch_up_strips + macro_regional_strip
 
     dist_pills = "".join(
         f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
@@ -1998,128 +1845,6 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                         st.cache_data.clear()
                 except Exception as _exc:
                     st.error(f"Backfill failed: {_exc}")
-
-    # ── HMM Model ──────────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### HMM Model")
-    st.caption(
-        "3-state Gaussian HMM regime confidence layer — validates (never replaces) "
-        "the rule-based regime detection above. See analysis/hmm_regime.py."
-    )
-
-    try:
-        from analysis.hmm_regime import get_hmm_regime_confidence as _get_hmm_conf
-        _hmm_status = _get_hmm_conf(config)
-    except Exception:
-        _hmm_status = {"hmm_model_available": False}
-
-    _hmm_last_fit = get_metadata("hmm_last_fit")
-    _hmm_col1, _hmm_col2, _hmm_col3 = st.columns(3)
-    _status_card(
-        _hmm_col1, "Last Fit",
-        _fmt_uk(_hmm_last_fit, "%Y-%m-%d %H:%M") if _hmm_last_fit else "Never",
-        "Refits weekly (Sunday) or on demand",
-        "ok" if _hmm_last_fit else "warn",
-    )
-    _status_card(
-        _hmm_col2, "Training Days",
-        str(_hmm_status.get("model_trained_on_days", 0)) if _hmm_status.get("hmm_model_available") else "—",
-        "^GSPC daily history used for the current fit",
-        "ok" if _hmm_status.get("hmm_model_available") else "warn",
-    )
-    if _hmm_status.get("hmm_model_available"):
-        _hmm_probs_str = (
-            f"BULL {_hmm_status['hmm_bull_probability']:.0%} · "
-            f"BEAR {_hmm_status['hmm_bear_probability']:.0%} · "
-            f"UNCERTAIN {_hmm_status['hmm_uncertain_probability']:.0%}"
-        )
-        _status_card(_hmm_col3, "Current State", _hmm_status.get("hmm_dominant_state", "—"), _hmm_probs_str, "info")
-    else:
-        _status_card(_hmm_col3, "Current State", "Not available",
-                     "Model not yet fit — needs signals.hmm_min_training_days of ^GSPC history", "warn")
-
-    # ── Upgrade gate (MIXED → TRENDING_BULL) ────────────────────────────────
-    _sig_cfg = config.get("signals", {})
-    _hmm_enabled_cfg = bool(_sig_cfg.get("hmm_enabled", False))
-    _upgrade_enabled_cfg = bool(_sig_cfg.get("hmm_upgrade_enabled", True))
-    _upgrade_threshold_cfg = float(_sig_cfg.get("hmm_upgrade_threshold", 0.90))
-    _upgrade_bull_prob = (
-        _hmm_status.get("hmm_bull_probability") if _hmm_status.get("hmm_model_available") else None
-    )
-    _upgrade_triggered = (
-        _upgrade_enabled_cfg
-        and _upgrade_bull_prob is not None
-        and _upgrade_bull_prob >= _upgrade_threshold_cfg
-    )
-    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
-    _upgrade_col, _, _ = st.columns(3)
-
-    if not _hmm_enabled_cfg:
-        # signals.hmm_enabled is false, so analysis/regime.py:detect_regime()
-        # never calls the HMM confidence gate at all — whatever the upgrade
-        # condition below evaluates to (using the still-live model fit from
-        # the weekly refit job) is purely hypothetical and must never be
-        # rendered as "Upgrade active"/"Upgrade inactive", which would wrongly
-        # imply it's affecting live entries. See CLAUDE.md's "HMM confidence
-        # gate — why it's disabled" for why hmm_enabled ships false.
-        if not _hmm_status.get("hmm_model_available"):
-            _gate_value = "HMM disabled — no fitted model available"
-            _gate_sub = "Nothing to preview; entries are governed by rule-based regime detection alone."
-        elif not _upgrade_enabled_cfg:
-            _gate_value = "HMM disabled — upgrade gate's own sub-toggle is also off"
-            _gate_sub = (
-                f"hmm_upgrade_enabled: false — entries remain governed by rule-based "
-                f"{regime_name} regime detection alone."
-            )
-        elif _upgrade_triggered:
-            _gate_value = (
-                f"HMM disabled — upgrade gate would fire "
-                f"({_upgrade_bull_prob:.0%} > {_upgrade_threshold_cfg:.0%} threshold) but HMM is not active."
-            )
-            _gate_sub = f"Entries remain governed by rule-based {regime_name} regime detection."
-        else:
-            _gate_value = (
-                f"HMM disabled — upgrade gate would not fire "
-                f"({_upgrade_bull_prob:.0%} vs {_upgrade_threshold_cfg:.0%} threshold)"
-            )
-            _gate_sub = (
-                f"HMM is not active regardless; entries are governed by rule-based "
-                f"{regime_name} regime detection."
-            )
-        _status_card(
-            _upgrade_col,
-            "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
-            _gate_value,
-            _gate_sub,
-            "info",
-        )
-    else:
-        _upgrade_sub = f"Threshold {_upgrade_threshold_cfg:.0%}"
-        if not _upgrade_enabled_cfg:
-            _upgrade_sub += " · hmm_upgrade_enabled: false"
-        elif _upgrade_bull_prob is not None:
-            _upgrade_sub += f" · current bull confidence {_upgrade_bull_prob:.0%}"
-        _status_card(
-            _upgrade_col,
-            "HMM Upgrade Gate (MIXED → TRENDING_BULL)",
-            "Upgrade active" if _upgrade_triggered else "Upgrade inactive",
-            _upgrade_sub,
-            "ok" if _upgrade_triggered else ("warn" if _upgrade_enabled_cfg else "error"),
-        )
-    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
-
-    if st.button("Refit HMM Now", key="status_refit_hmm"):
-        with st.spinner("Refitting HMM…"):
-            try:
-                from analysis.hmm_regime import fit_hmm as _fit_hmm_now
-                _model = _fit_hmm_now(_load_config())
-                if _model is not None:
-                    st.success("HMM model refit complete.")
-                    st.cache_data.clear()
-                else:
-                    st.warning("Refit skipped — not enough ^GSPC history yet (see signals.hmm_min_training_days).")
-            except Exception as _exc:
-                st.error(f"HMM refit failed: {_exc}")
 
     # ── Email notification test ────────────────────────────────────────────
     notif_cfg = config.get("notifications", {}).get("email", {})
@@ -3010,24 +2735,6 @@ def _initialise() -> None:
         except Exception as exc:
             logger.warning("FX rate pre-fetch failed: %s", exc)
 
-        # First-run HMM fit — fires in a background thread so it never blocks
-        # the page load; a full EM fit can take several seconds and there's
-        # no need for the user to wait on it (get_hmm_regime_confidence()'s
-        # own uniform-probability fallback is a safe placeholder in the
-        # meantime — see analysis/hmm_regime.py). Only fires when no cached
-        # model exists yet — the weekly scheduler job keeps it fresh after
-        # that.
-        if get_metadata_str("hmm_model_params") is None:
-            try:
-                import threading  # noqa: PLC0415
-                from analysis.hmm_regime import fit_hmm  # noqa: PLC0415
-                _cfg = _load_config()
-                threading.Thread(
-                    target=fit_hmm, args=(_cfg,), name="hmm-startup-fit", daemon=True,
-                ).start()
-            except Exception as exc:
-                logger.warning("Could not start background HMM fit: %s", exc)
-
         # Run analysis on startup only on the very first run (last_analysis_run is None),
         # i.e. a fresh install where price data exists but has never been analysed.
         # For all subsequent startups the scheduler keeps analysis current — blocking
@@ -3546,7 +3253,7 @@ def _render_trade_card(e: dict) -> None:
     ]
     if sl_price is not None:
         _sl_dist_pct = e.get("stop_distance_pct")
-        _sl_label    = e.get("stop_label") or "ATR stop (fallback)"
+        _sl_label    = e.get("stop_label") or "ATR stop"
         _sl_str = f"SL: {sl_price:,.4f}"
         if _sl_dist_pct is not None:
             _sl_str += f" (-{float(_sl_dist_pct):.1f}%)"
@@ -3624,7 +3331,7 @@ def _render_trade_card_compact(e: dict) -> None:
     if status == "STOP LOSS":
         _sl_price = e.get("stop_loss_price")
         _sl_dist  = e.get("stop_distance_pct")
-        _sl_label = e.get("stop_label") or "ATR stop (fallback)"
+        _sl_label = e.get("stop_label") or "ATR stop"
         if _sl_price is not None:
             _sl_text = f"Stop: {_sl_price:,.4f}"
             if _sl_dist is not None:
@@ -3972,7 +3679,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         with _get_eng().connect() as _tc:
             _entry_rows = _tc.execute(_sa_t("""
                 SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code, var_pct,
-                       fill_price, stop_price, stop_distance_pct, vol_source
+                       fill_price
                 FROM t212_invest_orders
                 WHERE direction = 'BUY' AND status = 'FILLED'
                 ORDER BY filled_at ASC
@@ -4007,25 +3714,17 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
         entry_score   = float(entry_info.get("confluence_score") or 0)
         entry_var_pct = entry_info.get("var_pct")  # None when placed under position_sizing: fixed
 
-        # Stop loss — prefer the stored GARCH/ATR-fallback stop computed at
-        # order time (analysis/volatility.py:compute_garch_stop()); fall back
-        # to an on-the-fly ATR stop for positions opened before this feature
-        # existed (stop_price is NULL for those rows).
-        _stored_stop_price = entry_info.get("stop_price")
-        if _stored_stop_price is not None:
-            stop_loss_price    = float(_stored_stop_price)
-            stop_distance_pct  = entry_info.get("stop_distance_pct")
-            stop_label         = "GARCH stop" if entry_info.get("vol_source") == "garch" else "ATR stop (fallback)"
-        else:
-            try:
-                from analysis.volatility import _atr_fallback_stop  # noqa: PLC0415
-                _fallback = _atr_fallback_stop(research_ticker, avg_price, "LONG", config)
-                stop_loss_price   = _fallback.get("stop_price")
-                stop_distance_pct = _fallback.get("stop_distance_pct")
-            except Exception:
-                stop_loss_price   = None
-                stop_distance_pct = None
-            stop_label = "ATR stop (fallback)"
+        # Stop loss — computed on the fly from the ticker's own ATR history
+        # (no order-time stop is persisted; see analysis/volatility.py:_atr_fallback_stop()).
+        try:
+            from analysis.volatility import _atr_fallback_stop  # noqa: PLC0415
+            _fallback = _atr_fallback_stop(research_ticker, avg_price, "LONG", config)
+            stop_loss_price   = _fallback.get("stop_price")
+            stop_distance_pct = _fallback.get("stop_distance_pct")
+        except Exception:
+            stop_loss_price   = None
+            stop_distance_pct = None
+        stop_label = "ATR stop"
 
         # Resolve instrument currency: prefer DB-stored value (set at order time from T212 API),
         # then fall back to config ucits_mapping currency field (ETF only; stocks default USD).
@@ -4156,13 +3855,6 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     regime_result = detect_regime()
     regime  = regime_result["regime"]
     colour  = regime_result["colour"]
-    # An HMM-upgraded TRENDING_BULL (rule-based call was MIXED) is rendered
-    # amber rather than the normal green — this is an HMM-driven entry, not
-    # a rule-confirmed bull market, and that distinction matters when
-    # interpreting position performance later.
-    _hmm_upgraded_flag = bool((regime_result.get("hmm") or {}).get("hmm_upgraded"))
-    if _hmm_upgraded_flag:
-        colour = "#f59e0b"
     details = regime_result["details"]
     price   = details.get("price")
     sma_200 = details.get("sma_200")
@@ -4206,8 +3898,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         f'border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px;margin-bottom:4px">'
         f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
         f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
-        f'{regime.replace("_", " ")}{" ↑" if _hmm_upgraded_flag else ""}</span>'
-        + _hmm_status_pill_html(regime_result, config)
+        f'{regime.replace("_", " ")}</span>'
         + (f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
         + (f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
         + f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>'
@@ -4247,15 +3938,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         note = f" ({'/'.join(allowed)} only)" if allowed else ""
         if is_entry_allowed(config, regime.value, section):
             eff = resolve_entry_signal(cfg, regime.value)
-            if _hmm_upgraded_flag:
-                # An HMM-driven upgrade always takes priority over the normal
-                # "(override)" annotation so it's always visible that this
-                # regime's entries are HMM-driven, not rule-confirmed — see
-                # CLAUDE.md's "HMM regime confidence layer" section.
-                suffix = " (HMM upgrade)"
-            else:
-                overridden = regime.value in cfg.get("entry_signal_overrides", {})
-                suffix = " (override)" if overridden else ""
+            overridden = regime.value in cfg.get("entry_signal_overrides", {})
+            suffix = " (override)" if overridden else ""
             _auto_bits.append(f"{label} {eff}{suffix}{note}")
         else:
             _auto_bits.append(f"{label} blocked{note}")
@@ -5196,12 +4880,10 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
         _entry_signal   = _bt_cfg.get("entry_signal", "STRONG_BUY")
         _allowed_regimes = _bt_cfg.get("allowed_entry_regimes")
         _regime_note = f"{'/'.join(_allowed_regimes)} only" if _allowed_regimes else "all regimes"
-        _use_garch_stops = config.get("signals", {}).get("use_garch_stops", False)
-        _stops_note = "GARCH" if _use_garch_stops else f"ATR {_atr_mult:.1f}×"
         st.caption(
             f"Using live config: ETF max hold {_etf_max_hold}d · "
             f"Stock max hold {_stock_max_hold}d · Bond max hold {_bond_max_hold}d · "
-            f"entry {_entry_signal} · {_regime_note} · stops: {_stops_note}"
+            f"entry {_entry_signal} · {_regime_note} · stops: ATR {_atr_mult:.1f}×"
         )
 
         if st.button("Run Backtest", type="primary", key="bt_run"):
@@ -5303,16 +4985,11 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                 show_df = df.copy()
                 if "stop_distance_pct" not in show_df.columns:
                     show_df["stop_distance_pct"] = None
-                if "vol_source" not in show_df.columns:
-                    show_df["vol_source"] = None
-                show_df["vol_source"] = show_df["vol_source"].map(
-                    {"garch": "GARCH", "atr_fallback": "ATR fallback"}
-                ).fillna("—")
                 show_df = show_df[[
                     "ticker", "direction", "entry_date", "exit_date",
                     "entry_price", "exit_price", "pnl_pct",
                     "exit_reason", "regime_at_entry", "holding_days", "is_win",
-                    "stop_distance_pct", "vol_source",
+                    "stop_distance_pct",
                 ]].copy()
                 show_df["pnl_pct"] = (show_df["pnl_pct"] * 100).round(2)
                 show_df["stop_distance_pct"] = pd.to_numeric(
@@ -5322,7 +4999,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     "Ticker", "Dir", "Entry Date", "Exit Date",
                     "Entry Price", "Exit Price", "P&L %",
                     "Exit Reason", "Regime", "Hold Days", "Win",
-                    "Stop Distance %", "Vol Source",
+                    "Stop Distance %",
                 ]
                 st.dataframe(
                     show_df.style.map(lambda v: "color:#16a34a" if v is True else ("color:#dc2626" if v is False else ""), subset=["Win"])
@@ -5585,23 +5262,12 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                         _erb_df.style.map(_style_erb_return, subset=["Avg Return"]).format(_erb_format),
                         width="stretch", hide_index=True,
                     )
-                    _garch_enabled = config.get("signals", {}).get("use_garch_stops", False)
-                    if _has_stop_dist and _garch_enabled:
-                        st.caption(
-                            "Avg Stop Distance % shows how wide the GARCH (or ATR-fallback) stop was at entry "
-                            "for trades that exited each way — compare STOP_LOSS's distance against the others "
-                            "to see whether GARCH stops are calibrated sensibly for this ticker set. If "
-                            "MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the stop may be "
-                            "cutting profitable trades short — consider widening `signals.garch_stop_multiplier`. "
-                            "If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding losers too long."
-                        )
-                    else:
-                        st.caption(
-                            "If MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the ATR stop "
-                            "may be cutting profitable trades short — consider widening `backtest.atr_stop_multiplier` "
-                            "in config.yaml. If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding "
-                            "losers too long."
-                        )
+                    st.caption(
+                        "If MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the ATR stop "
+                        "may be cutting profitable trades short — consider widening `backtest.atr_stop_multiplier` "
+                        "in config.yaml. If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding "
+                        "losers too long."
+                    )
 
                 # Histogram
                 bins = decay.get("hold_bins", [])
@@ -5816,35 +5482,16 @@ def _render_performance_page(config: dict) -> None:
         show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
         show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
         show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
-        if "stop_distance_pct" in show_df.columns:
-            # Positions opened under use_garch_stops: false (the shipped
-            # default) have stop_distance_pct = NULL for every row, making
-            # this an all-None object-dtype column — Series.round() on an
-            # object dtype applies Python's round() per element, and
-            # round(None, 2) raises TypeError. pd.to_numeric coerces to a
-            # proper float64 (NaN for missing) first so .round() is the
-            # normal vectorized numeric path either way.
-            show_df["stop_distance_pct"] = pd.to_numeric(
-                show_df["stop_distance_pct"], errors="coerce"
-            ).round(2)
-        else:
-            show_df["stop_distance_pct"] = None
-        if "vol_source" in show_df.columns:
-            show_df["vol_source"] = show_df["vol_source"].map(
-                {"garch": "GARCH", "atr_fallback": "ATR Fallback"}
-            ).fillna("—")
-        else:
-            show_df["vol_source"] = "—"
 
         show_df = show_df[[
             "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
             "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
-            "signal_type", "regime", "exit_reason", "stop_distance_pct", "vol_source",
+            "signal_type", "regime", "exit_reason",
         ]]
         show_df.columns = [
             "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
             "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
-            "Entry Signal", "Regime", "Exit Reason", "Stop % at Entry", "Vol Source",
+            "Entry Signal", "Regime", "Exit Reason",
         ]
         st.dataframe(
             show_df.style

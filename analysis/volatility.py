@@ -2,7 +2,7 @@
 
 import logging
 import math
-from datetime import date, datetime
+from datetime import datetime
 from typing import Optional
 
 import numpy as np
@@ -45,8 +45,7 @@ def _pandas_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) 
 # shifted, so volatility scoring can distinguish "always been volatile" from
 # "recently entered a new volatility regime". Structural context only for
 # now — see compute_volatility()'s docstring for the score adjustment this
-# feeds, and CLAUDE.md's "Change point detection" section for the planned
-# GARCH stop-loss calibration this is laying groundwork for.
+# feeds.
 
 _CPD_EMPTY: dict = {
     "last_change_point": None,
@@ -494,21 +493,14 @@ def compute_volatility(
 
 
 # ---------------------------------------------------------------------------
-# GARCH(1,1) dynamic stop loss
+# ATR-based dynamic stop loss
 # ---------------------------------------------------------------------------
 #
-# Replaces the fixed ATR(14) x atr_stop_multiplier stop distance with a
-# forward-looking 1-day GARCH volatility forecast, scaled to the position's
-# holding period. GARCH models volatility clustering — after a high-vol
-# period, volatility tends to remain elevated before mean-reverting — so it
-# weights recent volatility more heavily than a simple trailing average.
-# Falls back to the old ATR-based stop whenever GARCH can't be trusted (too
-# little data, fitting failure). See compute_garch_stop()'s docstring.
-
-# Minimum number of daily log returns required before a GARCH fit is
-# attempted. Below this, compute_garch_stop() falls back to the ATR stop
-# rather than fitting on a thin, noisy sample.
-_MIN_GARCH_OBSERVATIONS_DEFAULT = 100
+# A GARCH(1,1)-based dynamic stop was implemented, backtested, and found to
+# underperform this ATR-based stop on every risk-adjusted metric at every
+# calibration attempted — see CLAUDE.md's "GARCH stop loss" section for the
+# full before/after numbers. The ATR stop below is what remains in
+# production.
 
 
 def _stop_price_and_distance(
@@ -520,9 +512,6 @@ def _stop_price_and_distance(
     bounds are applied. signals.min_stop_pct / max_stop_pct are configured
     as percentage numbers (1.0 = 1%), not fractions, so both are divided by
     100 here before clamping.
-
-    Shared by the GARCH path and the ATR fallback so both stops are bounded
-    identically regardless of which one produced the raw distance.
     """
     sig          = config.get("signals", {})
     min_stop_pct = float(sig.get("min_stop_pct", 1.0)) / 100.0
@@ -542,21 +531,17 @@ def _stop_price_and_distance(
 def _atr_fallback_stop(
     ticker: str, entry_price: float, direction: str, config: dict,
 ) -> dict:
-    """ATR-based stop — the pre-GARCH behaviour, and compute_garch_stop()'s
-    fallback when GARCH can't be trusted (too little data, fitting failure).
-
-    Also used directly by main.py to display a stop for positions opened
-    before this feature existed (t212_invest_orders.stop_price is NULL).
+    """ATR-based stop loss, used directly by main.py to display a stop for
+    open T212 Invest positions.
 
     Sizing uses ATR as a PERCENTAGE of price (atr_pct = ATR / close) from
-    *ticker*'s own OHLC history, not a raw price-unit ATR value — the same
-    design choice compute_garch_stop() makes for its GARCH distance, and for
-    the same reason: entry_price here may be a UCITS/stock instrument's
-    fill price in a different currency/scale than the research ticker's own
-    quotes (see CLAUDE.md's "Quantity sizing note"). A fractional ATR%
-    applied to whatever entry_price actually is stays currency-agnostic;
-    reusing a raw ATR value computed in the research ticker's own currency
-    would reproduce that exact bug class.
+    *ticker*'s own OHLC history, not a raw price-unit ATR value, since
+    entry_price here may be a UCITS/stock instrument's fill price in a
+    different currency/scale than the research ticker's own quotes (see
+    CLAUDE.md's "Quantity sizing note"). A fractional ATR% applied to
+    whatever entry_price actually is stays currency-agnostic; reusing a raw
+    ATR value computed in the research ticker's own currency would
+    reproduce that exact bug class.
     """
     sig        = config.get("signals", {})
     atr_period = int(sig.get("atr_period", 14))
@@ -565,9 +550,6 @@ def _atr_fallback_stop(
     result = {
         "stop_price": None,
         "stop_distance_pct": None,
-        "garch_daily_vol": None,
-        "garch_holding_vol": None,
-        "vol_source": "atr_fallback",
     }
 
     try:
@@ -597,188 +579,6 @@ def _atr_fallback_stop(
 
     bounds = _stop_price_and_distance(entry_price, direction, distance_frac, config)
     result.update(bounds)
-    return result
-
-
-def _garch_daily_vol_core(log_returns: np.ndarray) -> Optional[float]:
-    """Fit GARCH(1,1) on already-computed log returns and return the 1-day-
-    ahead volatility forecast (a fraction, e.g. 0.02 = 2%), or None if
-    fitting fails or doesn't converge.
-
-    Pure — no DB access — so it's safe to call both from compute_garch_stop()
-    below (live path, log returns from get_price_df() relative to today) and
-    from analysis/backtest.py's monthly vol cache (log returns sliced
-    strictly before a historical month-end, to stay look-ahead-free). This
-    is the same shared-core pattern _var_position_size_core() below uses for
-    VaR position sizing, for the same reason: the DB-fetching wrapper reads
-    relative to "now", which a backtest can never use directly.
-    """
-    try:
-        from arch import arch_model  # noqa: PLC0415  optional heavy import, only needed for GARCH stops
-        # arch's optimizer performs best when the input scale is roughly
-        # between 1 and 1000. A single fixed multiplier can't hit that target
-        # for every ticker (a calm bond ETF and a volatile stock need very
-        # different factors), so rescale=True lets arch pick its own factor
-        # per fit — recorded on the result as res.scale — rather than a
-        # hardcoded x100 that still triggered DataScaleWarning for calm
-        # tickers (verified empirically against SHY/IEF/MUB). forecast()
-        # returns variance in that internally-rescaled space, so it must be
-        # divided by res.scale (not 100) to get back to a decimal fraction.
-        am = arch_model(np.asarray(log_returns, dtype=float), vol="Garch", p=1, q=1, dist="normal", rescale=True)
-        res = am.fit(disp="off", show_warning=False)
-        if res.convergence_flag != 0:
-            return None
-        forecast = res.forecast(horizon=1)
-        scale = res.scale if res.scale else 1.0
-        daily_vol = float(forecast.variance.iloc[-1, 0] ** 0.5) / scale
-    except Exception:
-        return None
-
-    if not np.isfinite(daily_vol) or daily_vol <= 0:
-        return None
-    return daily_vol
-
-
-def _garch_stop_multiplier_for_holding_days(holding_days: int, config: dict) -> float:
-    """Select the GARCH stop multiplier bucket matching *holding_days*.
-
-    GARCH's sqrt(holding_days) time-scaling has no ATR equivalent, so a
-    single multiplier tuned against ATR's flat 14-day window produces stops
-    of very different relative width depending on how long a position is
-    meant to be held — verified empirically (2026-07-04) by computing both
-    stop formulas across the full T212-eligible ticker universe: the
-    GARCH/ATR ratio was driven almost entirely by holding-period bucket
-    (median ~3.8x at 30 days, ~7.9x at 45 days, ~6.8x at 90 days), not by
-    the individual ticker. Each bucket multiplier is calibrated so that
-    bucket's GARCH stop lands back in the same magnitude the ATR stop
-    occupied, rather than one multiplier being right for stocks and
-    structurally too wide/narrow for ETFs or bond ETFs.
-
-    holding_days comes from analysis.regime.get_max_holding_days(ticker,
-    config) — 30 (watchlist.us_large_cap stocks), 45 (bond ETFs), and 90
-    (other ucits_mapping ETFs) are the three tuned buckets; anything else
-    (forex 5-day, crypto 14-day, or any ticker outside those config-driven
-    values) falls back to the untuned global garch_stop_multiplier.
-    """
-    sig = config.get("signals", {})
-    if holding_days == 30:
-        return float(sig.get("garch_stop_multiplier_stocks", sig.get("garch_stop_multiplier", 2.0)))
-    if holding_days == 45:
-        return float(sig.get("garch_stop_multiplier_bonds", sig.get("garch_stop_multiplier", 2.0)))
-    if holding_days == 90:
-        return float(sig.get("garch_stop_multiplier_etfs", sig.get("garch_stop_multiplier", 2.0)))
-    return float(sig.get("garch_stop_multiplier", 2.0))
-
-
-def compute_garch_stop(
-    ticker: str,
-    entry_price: float,
-    direction: str,
-    config: dict,
-    change_point_date: Optional[date] = None,
-) -> dict:
-    """Compute a GARCH(1,1)-based dynamic stop loss for *ticker*.
-
-    Stop distance = stop_multiplier x GARCH 1-day-ahead volatility forecast
-    x sqrt(holding_days) x entry_price — a forward-looking estimate that
-    weights recent volatility more heavily during volatile periods and less
-    during calm ones, unlike a flat trailing ATR(14) average. stop_multiplier
-    is selected per holding-period bucket by
-    _garch_stop_multiplier_for_holding_days() (see its docstring) rather than
-    a single global garch_stop_multiplier — a flat multiplier tuned for one
-    holding period is structurally wrong for another, since sqrt(holding_days)
-    has no ATR equivalent to counterbalance it.
-
-    Args:
-        ticker: Research ticker to calibrate GARCH on (its own OHLC history
-            — entry_price may be a different instrument's price, e.g. a
-            UCITS wrapper; only the ticker's fractional/percentage return
-            volatility is used, which stays valid regardless of entry_price's
-            currency or scale — see _atr_fallback_stop()'s docstring for the
-            same reasoning applied to the ATR fallback).
-        entry_price: Actual fill price (native instrument currency) — pass
-            the confirmed fill price when known, not an estimate, since this
-            becomes the stop's reference point.
-        direction: "LONG" or "SHORT".
-        config: Loaded config.yaml dict.
-        change_point_date: A structural-break date (detect_change_points()'s
-            last_change_point) to calibrate GARCH on post-break data only,
-            when that break is recent (within signals.cpd_recent_window
-            days of the latest stored price). This is the integration point
-            with change point detection: a ticker that just entered a new
-            volatility regime should have its GARCH stop reflect that new
-            regime, not blend in the stale pre-break history.
-
-    Returns a dict:
-        stop_price          — absolute stop loss price, same currency/scale as entry_price
-        stop_distance_pct   — stop distance as % of entry_price (a percentage number, e.g. 3.5 = 3.5%)
-        garch_daily_vol     — GARCH 1-day-ahead volatility forecast (fraction), or None on fallback
-        garch_holding_vol    — daily_vol scaled by sqrt(holding_days), or None on fallback
-        vol_source          — "garch" or "atr_fallback"
-
-    Falls back to _atr_fallback_stop() (vol_source: "atr_fallback") when
-    fewer than signals.garch_min_observations daily returns are available,
-    or when the GARCH fit itself fails (non-convergence, numerical error) —
-    logged as a warning either way, never raised.
-    """
-    sig               = config.get("signals", {})
-    lookback_days     = int(sig.get("garch_lookback_days", 504))
-    min_observations  = int(sig.get("garch_min_observations", _MIN_GARCH_OBSERVATIONS_DEFAULT))
-    recent_window     = int(sig.get("cpd_recent_window", 90))
-
-    from analysis.regime import get_max_holding_days  # noqa: PLC0415  local import — avoid circular import
-    holding_days = get_max_holding_days(ticker, config)
-    stop_multiplier = _garch_stop_multiplier_for_holding_days(holding_days, config)
-
-    def _fallback(reason: str) -> dict:
-        logger.warning(
-            "compute_garch_stop: %s for %s — falling back to ATR stop.", reason, ticker,
-        )
-        return _atr_fallback_stop(ticker, entry_price, direction, config)
-
-    from data.ingestion import get_price_df  # noqa: PLC0415  local import — keeps this module DB-free otherwise
-    df = get_price_df(ticker, days=int(lookback_days * 1.6) + 30)
-    if df.empty:
-        return _fallback("no price history")
-
-    df = df.sort_values("date").tail(lookback_days + 1).reset_index(drop=True)
-
-    if change_point_date is not None:
-        latest_date = df["date"].iloc[-1]
-        latest_date_only = latest_date.date() if hasattr(latest_date, "date") else latest_date
-        days_since_break = (latest_date_only - change_point_date).days
-        if 0 <= days_since_break <= recent_window:
-            post_df = df[df["date"] >= pd.Timestamp(change_point_date)]
-            if len(post_df) >= min_observations:
-                df = post_df
-            # else: not enough post-break data to calibrate on alone — keep
-            # the full lookback window rather than shrinking below the
-            # minimum observation count. With the shipped defaults
-            # (cpd_recent_window: 90, garch_min_observations: 60) a break
-            # within the 90-day recent window can supply up to ~91 post-break
-            # rows, comfortably above the 60-row minimum, so this branch
-            # activates in the normal case rather than being the fallback —
-            # garch_min_observations was originally 100, which made this
-            # branch effectively unreachable (a "recent" break could never
-            # supply 100 rows); lowered to 60 to fix that.
-
-    close = df["close"].astype(float)
-    log_returns = np.log(close / close.shift(1)).dropna()
-
-    if len(log_returns) < min_observations:
-        return _fallback(f"only {len(log_returns)} return observations, need >= {min_observations}")
-
-    daily_vol = _garch_daily_vol_core(log_returns.to_numpy())
-    if daily_vol is None:
-        return _fallback("GARCH fitting failed or did not converge")
-
-    holding_vol = daily_vol * math.sqrt(max(holding_days, 1))
-    distance_frac = stop_multiplier * holding_vol
-
-    result = _stop_price_and_distance(entry_price, direction, distance_frac, config)
-    result["garch_daily_vol"] = daily_vol
-    result["garch_holding_vol"] = holding_vol
-    result["vol_source"] = "garch"
     return result
 
 

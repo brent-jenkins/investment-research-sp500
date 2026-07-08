@@ -66,8 +66,8 @@ def _drawdown_tier_from_pct(drawdown_pct: float, dd_cfg: dict, prior_tier: str) 
     ticker, since the backtest has no shared cross-ticker portfolio state —
     see that module's own drawdown-scaling integration note). This is the
     same shared-core pattern used elsewhere in this codebase for VaR sizing
-    and GARCH stops (a DB-free core plus a DB-aware wrapper), so live and
-    backtested drawdown scaling can never quietly drift apart.
+    (a DB-free core plus a DB-aware wrapper), so live and backtested
+    drawdown scaling can never quietly drift apart.
 
     Three tiers rather than a single threshold gives a graduated response —
     position size steps down progressively as drawdown deepens rather than

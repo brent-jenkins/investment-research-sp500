@@ -162,23 +162,9 @@ Escalating to a more severe tier happens immediately; recovering to a less sever
 
 A full-history backtest comparison (2019–present, tradeable assets) showed this is mathematically neutral on win rate/profit factor/Sharpe/max-drawdown-% — those metrics come from `pnl_pct`, which drawdown scaling never touches, only `position_gbp`/`pnl_gbp` — and, in this backtest's per-ticker notional-equity scoping (`simulate_trades()` runs one ticker at a time with no shared cross-ticker portfolio, the same limitation `starting_capital_gbp` already has), zero of 253 trades actually triggered scaling. See "Drawdown-based position scaling" in [CLAUDE.md](CLAUDE.md) for the full mechanism and why this backtest result is a "confirms no regression" check only, not a portfolio-level validation.
 
-### GARCH stop loss
+### Stop loss
 
-Replaces the fixed `entry_price ± atr_stop_multiplier × ATR(14)` stop with a forward-looking GARCH(1,1) volatility forecast scaled to the position's holding period — GARCH models volatility clustering (elevated vol tends to persist before mean-reverting), so it reacts to a ticker's *current* regime rather than a flat trailing average. Controlled by `signals.use_garch_stops` (default `true` — `false` reverts to the old ATR stop with no code change).
-
-`analysis/volatility.py:compute_garch_stop()` fits `arch_model(returns, vol="Garch", p=1, q=1)`, extracts the 1-day-ahead volatility forecast, scales it by `√holding_days`, multiplies by `garch_stop_multiplier`, and clamps the result to `[min_stop_pct, max_stop_pct]` of entry price. Falls back to the old ATR-based stop (`vol_source: "atr_fallback"`) when there's too little data to fit GARCH or the fit itself fails to converge — logged as a warning, never raised. It also integrates with change point detection (see the Volatility module note under "Analysis pipeline" below): a recent structural break calibrates GARCH on post-break data only, so a ticker that just entered a new volatility regime gets a stop reflecting that regime.
-
-```yaml
-signals:
-  use_garch_stops: true
-  garch_lookback_days: 504
-  garch_stop_multiplier: 2.0
-  garch_min_observations: 100
-  min_stop_pct: 1.0    # floor, % of entry price
-  max_stop_pct: 25.0   # ceiling, % of entry price
-```
-
-**T212 Invest is a cash account with no native stop-loss order support** — the hourly trade-alert job is the actual enforcement mechanism. `maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` compare each open position's live price against its stored `stop_price` *before* checking signal status at all; a breach places an immediate SELL (`exit_reason: "STOP_LOSS"`) within about an hour, regardless of what the confluence signal currently says. See "GARCH stop loss" in [CLAUDE.md](CLAUDE.md) for the full mechanism, the order-time-estimate vs. fill-price-recompute flow, and "GARCH/CPD stop loss in the backtest" for why it's currently disabled (`use_garch_stops: false`) — a full-history backtest comparison showed it deteriorates risk-adjusted performance (nearly doubled max drawdown) despite a higher win rate.
+Positions are stopped out at `entry_price ± backtest.atr_stop_multiplier × ATR(14)`. A GARCH(1,1)-based dynamic stop was implemented and backtested at two calibrations (a flat multiplier, then per-holding-period bucket multipliers) and underperformed this ATR stop on every risk-adjusted metric both times — it was removed; see CLAUDE.md's "GARCH stop loss" section for the investigation.
 
 ---
 
@@ -236,7 +222,7 @@ The Macro Dashboard tags each card: **✓ Signals** for series with ticker-speci
 
 ### Regime detection
 
-Two layers. **Rule-based (primary)** reads the most recent stored ^GSPC indicators and applies a priority-ordered classification:
+Rule-based, reading the most recent stored ^GSPC indicators and applying a priority-ordered classification:
 
 1. VIX > 30 → `HIGH_VOLATILITY`
 2. price > SMA200, ADX > 25, VIX < 20 → `TRENDING_BULL`
@@ -246,7 +232,7 @@ Two layers. **Rule-based (primary)** reads the most recent stored ^GSPC indicato
 
 The ADX thresholds (> 25 for trending, < 20 for ranging) are intentionally strict. ADX in the 20–25 range correctly produces `MIXED`, which signals that regime certainty is low and keeps position sizing conservative.
 
-**HMM confidence gate (validator, not a replacement)** — a 3-state Gaussian HMM fit on ^GSPC's own daily indicator history (`analysis/hmm_regime.py`) provides a continuous confidence score that gates the rule-based call in both directions: it can **downgrade** a rule-based `TRENDING_BULL` call to `MIXED` when its bull-state probability falls below `signals.hmm_bull_confidence_threshold` (default 0.60), and it can **upgrade** a rule-based `MIXED` call to `TRENDING_BULL` when bull-state probability is at/above the much stricter `signals.hmm_upgrade_threshold` (default 0.90, gated separately by `signals.hmm_upgrade_enabled`). Every other regime is left untouched (informational only). This exists because the rule-based thresholds above create sharp boundaries — ADX 24.9 is `MIXED`, ADX 25.1 is `TRENDING_BULL` — that a single noisy reading can flip, while the HMM's state probabilities are continuous and reflect the broader feature pattern. **Currently disabled** (`signals.hmm_enabled: false`) — two full-history backtests showed the gate deteriorating every metric versus the rule-only baseline, first with the downgrade gate alone (165 trades vs 236, profit factor 1.69 vs 2.62, max drawdown -33.1% vs -29.5%) and again after adding the upgrade path, which made things worse rather than better (443 trades, profit factor 1.36, max drawdown -80.8%) — the upgraded entries alone matched the win rate of the `MIXED`-regime days `allowed_entry_regimes` already excludes for lack of edge. Likely due to HMM label-switching instability across the model's independent monthly/weekly refits. See CLAUDE.md's "HMM regime confidence layer" section for the full mechanism and both backtests' numbers.
+An HMM confidence gate that validated this rule-based call (and could downgrade a `TRENDING_BULL` to `MIXED`, or upgrade a `MIXED` to `TRENDING_BULL`, based on a 3-state Gaussian HMM's bull-state probability) was implemented and fully backtested — both a downgrade-only gate and a downgrade+upgrade combination deteriorated every risk-adjusted metric versus the rule-based-only baseline, likely due to label-switching instability between two nearly-identical fitted states. It was removed; see CLAUDE.md's "HMM confidence gate — why it's disabled" section for the full investigation and numbers.
 
 ### Regime weights (sum to 1.0 per regime)
 

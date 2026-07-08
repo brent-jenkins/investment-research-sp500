@@ -390,9 +390,6 @@ class BacktestSignal(Base):
     macro_score = Column(Integer)
     close_price = Column(Float)
     atr = Column(Float)
-    hmm_bull_probability = Column(Float)  # HMM P(bull state) as of this date; NULL unless the rule-based call was TRENDING_BULL or MIXED — see analysis/hmm_regime.py
-    hmm_downgraded = Column(Integer)      # 0/1 — 1 if the rule-based TRENDING_BULL call this date was downgraded to MIXED by the HMM confidence gate
-    hmm_upgraded = Column(Integer)        # 0/1 — 1 if the rule-based MIXED call this date was upgraded to TRENDING_BULL by the HMM confidence gate
 
     __table_args__ = (
         UniqueConstraint("run_id", "ticker", "date", name="uq_bt_signal_run_ticker_date"),
@@ -417,8 +414,7 @@ class BacktestTrade(Base):
     pnl_pct = Column(Float)
     position_gbp = Column(Float)  # VaR-scaled position size used to size this simulated trade — see analysis/volatility.py:compute_var_position_size()
     pnl_gbp = Column(Float)       # position_gbp * pnl_pct — realised £ P&L for this simulated trade
-    stop_distance_pct = Column(Float)  # stop distance used at entry, as % of entry price — GARCH or ATR, see analysis/backtest.py:_resolve_entry_stop()
-    vol_source = Column(String(15))    # "garch" or "atr_fallback" — which formula sized stop_distance_pct
+    stop_distance_pct = Column(Float)  # ATR-based stop distance used at entry, as % of entry price — see analysis/backtest.py:_resolve_entry_stop()
     drawdown_scale_factor = Column(Float)   # position-size scale factor applied at entry (1.0 = no scaling, down to 0.25) — see analysis/risk.py:compute_drawdown_scale_factor()
     drawdown_pct_at_entry = Column(Float)   # ticker-level notional drawdown from its own running peak at entry time, as a fraction (0.05 = 5%) — see analysis/backtest.py's drawdown-scaling note
     regime_at_entry = Column(String(30))
@@ -456,11 +452,8 @@ class T212InvestOrder(Base):
     regime           = Column(String(20))
     account_type     = Column(String(10))           # DEMO / LIVE
     currency_code    = Column(String(10))           # instrument currency (USD, EUR, GBX, …)
-    exit_reason      = Column(String(20))           # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT / STOP_LOSS; null for BUY orders
+    exit_reason      = Column(String(20))           # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT; null for BUY orders
     var_pct          = Column(Float)                # holding-period VaR (as a fraction, e.g. -0.08 = -8%) used to size this BUY order; null for SELL orders and for orders placed under position_sizing: fixed
-    stop_price       = Column(Float)                # GARCH (or ATR-fallback) stop loss price, instrument-native currency; null for SELL orders and for BUY orders placed before this feature / with use_garch_stops: false
-    stop_distance_pct = Column(Float)               # stop distance as % of fill price (a percentage number, e.g. 3.5 = 3.5%); null alongside stop_price
-    vol_source       = Column(String(15))           # "garch" or "atr_fallback" — which method produced stop_price; null alongside stop_price
     error_message    = Column(Text)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     filled_at        = Column(DateTime)
@@ -497,9 +490,7 @@ class T212Pnl(Base):
     signal_type      = Column(String(15))               # signal on the BUY order (e.g. STRONG_BUY)
     confluence_score = Column(Float)                    # confluence score on the BUY order
     regime           = Column(String(20))               # regime on the BUY order
-    exit_reason      = Column(String(20))               # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT / STOP_LOSS
-    stop_distance_pct = Column(Float)                    # stop distance (% of entry price) read from the BUY order row; null if opened before the GARCH-stop feature
-    vol_source       = Column(String(15))                # "garch" or "atr_fallback" read from the BUY order row; null alongside stop_distance_pct
+    exit_reason      = Column(String(20))               # SELL_SIGNAL / STRONG_SELL_SIGNAL / NEUTRAL_CONFIRMED / TIME_LIMIT
     # Module scores as of the BUY fill date — not stored on t212_invest_orders
     # itself, so looked up from the nearest signals row for (ticker, date).
     trend_score           = Column(Integer)
@@ -659,20 +650,11 @@ def _apply_migrations(engine) -> None:
         ("t212_invest_orders", "currency_code",       "TEXT"),
         ("t212_invest_orders", "exit_reason",         "TEXT"),
         ("t212_invest_orders", "var_pct",             "FLOAT"),
-        ("t212_invest_orders", "stop_price",          "FLOAT"),
-        ("t212_invest_orders", "stop_distance_pct",   "FLOAT"),
-        ("t212_invest_orders", "vol_source",          "VARCHAR(15)"),
-        ("t212_pnl",           "stop_distance_pct",   "FLOAT"),
-        ("t212_pnl",           "vol_source",          "VARCHAR(15)"),
         ("backtest_trades",    "position_gbp",        "FLOAT"),
         ("backtest_trades",    "pnl_gbp",              "FLOAT"),
         ("backtest_trades",    "stop_distance_pct",   "FLOAT"),
-        ("backtest_trades",    "vol_source",          "VARCHAR(15)"),
         ("backtest_trades",    "drawdown_scale_factor", "FLOAT"),
         ("backtest_trades",    "drawdown_pct_at_entry", "FLOAT"),
-        ("backtest_signals",   "hmm_bull_probability","FLOAT"),
-        ("backtest_signals",   "hmm_downgraded",      "INTEGER"),
-        ("backtest_signals",   "hmm_upgraded",        "INTEGER"),
     ]
 
     for table, column, col_type in new_columns:
