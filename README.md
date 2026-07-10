@@ -209,12 +209,12 @@ The macro module fetches and scores 17 FRED series (13 US + 4 international), st
 | BOGMBASE | US | Monetary base | Composite score contribution |
 | ECBDFR | Europe | ECB Deposit Facility Rate | Bearish on hikes, bullish on cuts (same pattern as DFEDTARU) — composite (regional) only |
 | IRLTLT01DEM156N | Europe | Germany 10Y Bund yield | Scored off its own 2-year z-score (no natural "good" level) — composite (regional) only |
-| IRSTCB01JPM156N | Asia | BoJ policy rate | Bearish on hikes (carry-trade-unwind risk), bullish on cuts — composite (regional) only |
-| CHNGDPNQDSMEI | Asia | China nominal GDP (quarterly) | Scored off quarter-over-quarter growth — composite (regional) only |
+| IRSTCI01JPM156N | Asia | Japan interbank overnight rate (BoJ policy proxy) | Bearish on hikes (carry-trade-unwind risk), bullish on cuts — composite (regional) only |
+| CHNGDPRAPSMEI | Asia | China real GDP growth (annual) | Scored off year-over-year growth — composite (regional) only |
 
 VIX is sourced from the local `price_data` table (^VIX ticker), not FRED, and is always folded into the US region.
 
-International series can lag by more than one reporting period (quarterly China GDP especially) — the fetch uses a ~6-year lookback for non-US series instead of the ~2-year window used for US series, and scores whatever the last available observation is regardless of age. The dashboard flags an international tile as stale past 90 days old (35 days for US series) purely for display; this never blocks or affects scoring.
+International series can lag by more than one reporting period (annual China GDP especially) — the fetch uses a ~6-year lookback for non-US series instead of the ~2-year window used for US series, and scores whatever the last available observation is regardless of age. The dashboard flags an international tile as stale past 90 days old (35 days for US series, 400 days for the annual CHNGDPRAPSMEI series) purely for display; this never blocks or affects scoring.
 
 Self-referential macro tickers (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0.
 

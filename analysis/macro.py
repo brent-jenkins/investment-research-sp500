@@ -260,12 +260,13 @@ def _score_fred_series(
             return 1
         return 0
 
-    if series_id == "IRSTCB01JPM156N":
-        # BoJ policy rate ("Interest Rates: Immediate Rates (< 24 Hours):
-        # Central Bank Rates: Total for Japan"). A hike raises carry-trade-
-        # unwind risk for global risk assets (see e.g. the August 2024
-        # selloff); a cut eases it — same direction/threshold logic as
-        # ECBDFR/DFEDTARU.
+    if series_id == "IRSTCI01JPM156N":
+        # Japan interbank overnight rate ("Interest Rates: Immediate Rates:
+        # Call Money/Interbank Rate: Total for Japan") — used as a BoJ
+        # policy-rate proxy (replaced IRSTCB01JPM156N 2026-07-10, which
+        # stopped updating Dec 2023). A hike raises carry-trade-unwind risk
+        # for global risk assets (see e.g. the August 2024 selloff); a cut
+        # eases it — same direction/threshold logic as ECBDFR/DFEDTARU.
         if (pct_30d or 0) < -2.0:
             return 1
         if (pct_30d or 0) > 2.0:
@@ -276,9 +277,10 @@ def _score_fred_series(
             return -1
         return 0
 
-    if series_id == "CHNGDPNQDSMEI":
-        # China nominal GDP (current prices, quarterly level) — a level
-        # series like M2SL/BOGMBASE, so only quarter-over-quarter growth is
+    if series_id == "CHNGDPRAPSMEI":
+        # China real GDP (constant prices, annual level) — replaced
+        # CHNGDPNQDSMEI 2026-07-10, which stopped updating Jul 2023. A level
+        # series like M2SL/BOGMBASE, so only year-over-year growth is
         # meaningful, not the level itself. Higher growth = bullish for
         # commodities/EM exposure (FXI, EEM).
         if (pct_30d or 0) > 1.0:
@@ -322,6 +324,12 @@ _DEFAULT_REGIONAL_WEIGHTS = {"us": 0.60, "europe": 0.25, "asia": 0.15}
 # never blocks scoring — a stale-but-available value is still used (see
 # fetch_and_store_macro_indicators()'s longer international lookback below).
 _STALE_THRESHOLD_DAYS = {"us": 35, "europe": 90, "asia": 90}
+
+# Per-series overrides where the region default doesn't fit a specific
+# series' actual reporting cadence. CHNGDPRAPSMEI is annual — a fresh
+# observation can legitimately be up to ~13 months old, well past the 90-day
+# region default tuned for the mostly monthly/quarterly rest of "asia".
+_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE = {"CHNGDPRAPSMEI": 400}
 
 
 def _regional_weights(config: dict) -> dict[str, float]:
@@ -948,7 +956,8 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
             display_value = f"{val:+.2f}"
         context = _extra_context(sid, val, pct, sc) if val is not None else "No data"
         age_days = _row_age_days(rows.get(sid))
-        is_stale = age_days is not None and age_days > _STALE_THRESHOLD_DAYS.get(region, 90)
+        stale_threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get(sid, _STALE_THRESHOLD_DAYS.get(region, 90))
+        is_stale = age_days is not None and age_days > stale_threshold
         if is_stale:
             context += f" (stale — {age_days}d old)"
         extra_series.append({

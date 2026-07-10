@@ -12,7 +12,7 @@ compute_macro()/get_macro_dashboard() call _load_config() internally when no
 config is passed, which reads the real project config.yaml (same pattern
 already used by tests/test_regime.py) — so these integration tests rely on
 config.yaml's real macro_regional_weights (us: 0.60, europe: 0.25, asia: 0.15)
-and the real region tags on DFII10/T10Y2Y/ECBDFR/IRSTCB01JPM156N.
+and the real region tags on DFII10/T10Y2Y/ECBDFR/IRSTCI01JPM156N.
 """
 
 from datetime import datetime
@@ -192,7 +192,7 @@ def test_get_macro_dashboard_regional_breakdown_differs_from_flat_average(db_eng
     not just present as unused extra fields."""
     _seed_macro_row(db_engine, "DFII10", 0)              # us
     _seed_macro_row(db_engine, "ECBDFR", 1)               # europe
-    _seed_macro_row(db_engine, "IRSTCB01JPM156N", 1)      # asia
+    _seed_macro_row(db_engine, "IRSTCI01JPM156N", 1)      # asia
 
     dash = get_macro_dashboard()
 
@@ -217,7 +217,7 @@ def test_compute_macro_uses_regional_weighting_not_flat_average(db_engine):
     _seed_macro_row(db_engine, "DFII10", 1)               # us
     _seed_macro_row(db_engine, "T10Y2Y", 1)                # us -> us avg = 1.0
     _seed_macro_row(db_engine, "ECBDFR", -1)              # europe avg = -1.0
-    _seed_macro_row(db_engine, "IRSTCB01JPM156N", -1)     # asia avg = -1.0
+    _seed_macro_row(db_engine, "IRSTCI01JPM156N", -1)     # asia avg = -1.0
 
     # Ticker with no per-ticker adjustment routing (CFNAI/DFEDTARU/M2SL/PERMIT
     # all require specific watchlist-group or _RATE_*/_GOLD_SET membership —

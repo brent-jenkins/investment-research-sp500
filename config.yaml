@@ -536,28 +536,37 @@ macro:
       region: "europe"
       # Not a real yield like DFII10 — no natural "good" level, so this is
       # scored purely off its own 2-year z-score (context-dependent).
-    IRSTCB01JPM156N:
-      label: "BoJ Policy Rate"
+    IRSTCI01JPM156N:
+      label: "Japan Interbank Overnight Rate (BoJ Proxy)"
       category: "monetary_policy"
       region: "asia"
-      # Substituted for the originally-proposed "MOPJPY", which is not a real
-      # FRED series ID (verified — no such series exists). This is FRED's
-      # actual BoJ policy-rate series: "Interest Rates: Immediate Rates
-      # (< 24 Hours): Central Bank Rates: Total for Japan" (OECD source,
-      # monthly). A BoJ hike raises carry-trade-unwind risk for global risk
-      # assets (see e.g. August 2024); a cut eases it — bearish_high, same
-      # direction as ECBDFR/DFEDTARU.
-    CHNGDPNQDSMEI:
-      label: "China GDP (Nominal, Quarterly)"
+      # Substituted 2026-07-10 for IRSTCB01JPM156N ("Central Bank Rates:
+      # Total for Japan"), which stopped updating Dec 2023 — replaced with
+      # this interbank rate series. IRSTCI01JPM156N ("Interest Rates:
+      # Immediate Rates: Call Money/Interbank Rate: Total for Japan",
+      # OECD-sourced) is updated monthly and tracks BoJ policy rate
+      # decisions accurately (unlike the stale series, which was still
+      # showing 0.30% against an actual BoJ rate of 1.0%). A BoJ hike
+      # raises carry-trade-unwind risk for global risk assets (see e.g.
+      # August 2024); a cut eases it — bearish_high, same direction as
+      # ECBDFR/DFEDTARU. (IRSTCB01JPM156N was itself a substitute for the
+      # originally-proposed "MOPJPY", never a real FRED series ID.)
+    CHNGDPRAPSMEI:
+      label: "China Real GDP Growth (Annual)"
       category: "leading_indicators"
       region: "asia"
-      # OECD-sourced quarterly nominal GDP level for China (current prices) —
-      # a level series like M2SL/BOGMBASE, scored off quarter-over-quarter
-      # growth, not the level itself. Higher growth = bullish for commodities
-      # and EM exposure (FXI, EEM). Quarterly data can lag by more than one
-      # quarter — fetched with a longer lookback window and scored from the
-      # last available value regardless of age; see
-      # analysis/macro.py:fetch_and_store_macro_indicators().
+      # Substituted 2026-07-10 for CHNGDPNQDSMEI (China nominal GDP,
+      # quarterly), which stopped updating Jul 2023 — replaced with this
+      # OECD annual real-GDP-growth series. CHNGDPRAPSMEI ("National
+      # Accounts: GDP by Expenditure: Constant Prices: GDP: Total for
+      # China") is annual, last updated March 2026 (5.0% growth for 2025).
+      # Scored off year-over-year growth (same "level series, score the
+      # trend" pattern as M2SL/BOGMBASE) — higher growth = bullish for
+      # commodities and EM exposure (FXI, EEM). Being annual, it can be up
+      # to ~13 months old before a fresh observation lands, hence the
+      # longer per-series staleness threshold in
+      # analysis/macro.py:_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE — see
+      # fetch_and_store_macro_indicators() for the fetch-lookback handling.
 
 confluence:
   # Minimum number of signals that must agree for a BUY/SELL call
