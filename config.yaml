@@ -546,9 +546,14 @@ macro:
       # Immediate Rates: Call Money/Interbank Rate: Total for Japan",
       # OECD-sourced) is updated monthly and tracks BoJ policy rate
       # decisions accurately (unlike the stale series, which was still
-      # showing 0.30% against an actual BoJ rate of 1.0%). A BoJ hike
-      # raises carry-trade-unwind risk for global risk assets (see e.g.
-      # August 2024); a cut eases it — bearish_high, same direction as
+      # showing 0.30% against an actual BoJ rate of 1.0%). This is the
+      # actual market call-money rate, not the BoJ's announced target, so
+      # expect it to read slightly below the announced target (e.g. ~0.7%
+      # vs. an announced 1.0% as of 2026-07) rather than match it exactly —
+      # that gap is normal and arguably more representative of real
+      # borrowing costs/carry-trade dynamics than the headline figure. A
+      # BoJ hike raises carry-trade-unwind risk for global risk assets (see
+      # e.g. August 2024); a cut eases it — bearish_high, same direction as
       # ECBDFR/DFEDTARU. (IRSTCB01JPM156N was itself a substitute for the
       # originally-proposed "MOPJPY", never a real FRED series ID.)
     CHNGDPRAPSMEI:
@@ -562,10 +567,18 @@ macro:
       # China") is annual, last updated March 2026 (5.0% growth for 2025).
       # Scored off year-over-year growth (same "level series, score the
       # trend" pattern as M2SL/BOGMBASE) — higher growth = bullish for
-      # commodities and EM exposure (FXI, EEM). Being annual, it can be up
-      # to ~13 months old before a fresh observation lands, hence the
-      # longer per-series staleness threshold in
-      # analysis/macro.py:_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE — see
+      # commodities and EM exposure (FXI, EEM). FRED dates each annual
+      # observation at the *start* of the year it covers (e.g. the "2025"
+      # value is dated 2025-01-01), not its publish date, and OECD's own
+      # publish lag runs ~14-15 months on top of that — so a freshly
+      # published, fully up-to-date observation can display as 500+ days
+      # "old" by simple date arithmetic, confirmed in production 2026-07-10
+      # (the 2025 observation, published ~March 2026, showed as 555 days
+      # old). The per-series staleness override in
+      # analysis/macro.py:_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE is set to
+      # 800 (not the original 400) to comfortably cover a full normal
+      # publish cycle without false-flagging — see that constant's own
+      # comment for the full arithmetic. See
       # fetch_and_store_macro_indicators() for the fetch-lookback handling.
 
 confluence:

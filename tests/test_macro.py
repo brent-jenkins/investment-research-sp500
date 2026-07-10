@@ -15,7 +15,7 @@ config.yaml's real macro_regional_weights (us: 0.60, europe: 0.25, asia: 0.15)
 and the real region tags on DFII10/T10Y2Y/ECBDFR/IRSTCI01JPM156N.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -243,6 +243,46 @@ def test_new_international_series_are_not_self_referentially_excluded(db_engine)
     result_a = compute_macro("AAPL")
     result_b = compute_macro("SOME_OTHER_TICKER")
     assert result_a["score"] == result_b["score"]
+
+
+def test_chngdprapsmei_not_stale_despite_period_start_dating_lag(db_engine):
+    """FRED dates each CHNGDPRAPSMEI annual observation at the start of the
+    year it covers, not its publish date — a freshly-published observation
+    can already look 500+ days "old" by simple date arithmetic. Verified in
+    production 2026-07-10: a value published ~March 2026 (5.0% growth for
+    2025) displayed as 555 days old under the original 400-day override,
+    incorrectly flagging current data as stale. The override (raised to 800
+    the same day) must not flag this normal publish-lag age."""
+    with Session(db_engine) as session:
+        session.add(MacroIndicator(
+            series_id="CHNGDPRAPSMEI",
+            date=datetime.utcnow() - timedelta(days=555),
+            value=5.0, pct_change_30d=5.0, z_score_2y=0.0, score=1,
+        ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    row = next(s for s in dash["extra_series"] if s["series_id"] == "CHNGDPRAPSMEI")
+    assert row["stale"] is False
+    assert row["age_days"] == 555
+
+
+def test_chngdprapsmei_still_flagged_stale_past_800_days(db_engine):
+    """Genuine multi-year discontinuation (like the predecessor series this
+    replaced, which went 1,105 days without an update before being swapped
+    out) must still be caught — the 800-day override is generous, not
+    unlimited."""
+    with Session(db_engine) as session:
+        session.add(MacroIndicator(
+            series_id="CHNGDPRAPSMEI",
+            date=datetime.utcnow() - timedelta(days=900),
+            value=5.0, pct_change_30d=5.0, z_score_2y=0.0, score=1,
+        ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    row = next(s for s in dash["extra_series"] if s["series_id"] == "CHNGDPRAPSMEI")
+    assert row["stale"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -264,9 +264,15 @@ def _score_fred_series(
         # Japan interbank overnight rate ("Interest Rates: Immediate Rates:
         # Call Money/Interbank Rate: Total for Japan") — used as a BoJ
         # policy-rate proxy (replaced IRSTCB01JPM156N 2026-07-10, which
-        # stopped updating Dec 2023). A hike raises carry-trade-unwind risk
-        # for global risk assets (see e.g. the August 2024 selloff); a cut
-        # eases it — same direction/threshold logic as ECBDFR/DFEDTARU.
+        # stopped updating Dec 2023). This is the actual market call-money
+        # rate, not the BoJ's announced target — expect it to sit slightly
+        # below the announced target (e.g. ~0.7% vs. an announced 1.0% as
+        # of 2026-07) rather than matching it exactly; that gap is normal
+        # and, if anything, more representative of real borrowing costs and
+        # carry-trade dynamics than the headline target figure. A hike
+        # raises carry-trade-unwind risk for global risk assets (see e.g.
+        # the August 2024 selloff); a cut eases it — same direction/
+        # threshold logic as ECBDFR/DFEDTARU.
         if (pct_30d or 0) < -2.0:
             return 1
         if (pct_30d or 0) > 2.0:
@@ -326,10 +332,23 @@ _DEFAULT_REGIONAL_WEIGHTS = {"us": 0.60, "europe": 0.25, "asia": 0.15}
 _STALE_THRESHOLD_DAYS = {"us": 35, "europe": 90, "asia": 90}
 
 # Per-series overrides where the region default doesn't fit a specific
-# series' actual reporting cadence. CHNGDPRAPSMEI is annual — a fresh
-# observation can legitimately be up to ~13 months old, well past the 90-day
-# region default tuned for the mostly monthly/quarterly rest of "asia".
-_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE = {"CHNGDPRAPSMEI": 400}
+# series' actual reporting cadence.
+#
+# CHNGDPRAPSMEI is annual, and FRED dates each annual observation at the
+# *start* of the year it covers (e.g. the "2025" value is stored dated
+# 2025-01-01), not its publish date — verified against production 2026-07-10:
+# the 2025 observation (published ~March 2026, ~4-5 months old in real terms)
+# was already showing as "555d old" purely from age-since-period-start
+# arithmetic (2025-01-01 -> 2026-07-10 is ~555 days on its own). An initial
+# 400-day override was too tight for this dating convention: OECD's ~14-15
+# month publish lag means a freshly-published observation can already be
+# ~430+ days old by FRED's date-stamp, and it then remains the latest
+# available row for up to another ~12 months until next year's print lands —
+# a normal, non-stale worst case of close to 800 days between real updates.
+# 800 comfortably covers that full cycle while still catching genuine
+# multi-year discontinuation (the predecessor series this replaced went
+# 1,105 days without an update before being swapped out).
+_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE = {"CHNGDPRAPSMEI": 800}
 
 
 def _regional_weights(config: dict) -> dict[str, float]:

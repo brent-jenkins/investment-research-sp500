@@ -214,7 +214,7 @@ The macro module fetches and scores 17 FRED series (13 US + 4 international), st
 
 VIX is sourced from the local `price_data` table (^VIX ticker), not FRED, and is always folded into the US region.
 
-International series can lag by more than one reporting period (annual China GDP especially) — the fetch uses a ~6-year lookback for non-US series instead of the ~2-year window used for US series, and scores whatever the last available observation is regardless of age. The dashboard flags an international tile as stale past 90 days old (35 days for US series, 400 days for the annual CHNGDPRAPSMEI series) purely for display; this never blocks or affects scoring.
+International series can lag by more than one reporting period (annual China GDP especially) — the fetch uses a ~6-year lookback for non-US series instead of the ~2-year window used for US series, and scores whatever the last available observation is regardless of age. The dashboard flags an international tile as stale past 90 days old (35 days for US series, 800 days for the annual CHNGDPRAPSMEI series — FRED dates each annual observation at the start of the year it covers, so even a freshly-published value can look 500+ days "old" by simple date arithmetic) purely for display; this never blocks or affects scoring.
 
 Self-referential macro tickers (^VIX, TLT, IEF, HYG) receive a neutral macro score of 0.
 
