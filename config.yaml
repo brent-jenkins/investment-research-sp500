@@ -1,4 +1,4 @@
-# 104 assets across 20 groups (64 tradeable — eligible for automated T212 Invest orders)
+# 112 assets across 21 groups (70 tradeable — eligible for automated T212 Invest orders)
 watchlist:
   indices:
     - ticker: "^GSPC"
@@ -360,10 +360,11 @@ watchlist:
   # corresponding sector ETF already in the watchlist for correlation context:
   # Technology (AAPL/MSFT/NVDA/AMZN/ADBE/CRM/ORCL) -> XLK/SKYY, AMZN also XLY;
   # Communication Services (NFLX/DIS) -> XLY/XLC; Financials (JPM/GS/BAC/V/MA) ->
-  # XLF/KBE; Healthcare (LLY/UNH/JNJ/PFE/MRK) -> XLV; Semiconductors (AMD/AVGO/QCOM)
-  # -> SOXX; Consumer Staples (COST/WMT) -> XLP; Energy (XOM/CVX) -> XLE;
-  # Industrials (CAT/RTX) -> XLI; Gold Miners (NEM/GOLD) -> GLD (gold miners track,
-  # but don't perfectly correlate with, the metal itself).
+  # XLF/KBE; Healthcare (LLY/UNH/JNJ/PFE/MRK/ISRG) -> XLV; Semiconductors
+  # (AMD/AVGO/QCOM) -> SOXX; Consumer Staples (COST/WMT) -> XLP; Energy (XOM/CVX)
+  # -> XLE; Industrials (CAT/RTX/GE) -> XLI; Materials (LIN) -> XLB; Gold Miners
+  # (NEM/GOLD) -> GLD (gold miners track, but don't perfectly correlate with, the
+  # metal itself).
   # Tickers with significant systematic risk are deliberately excluded despite
   # otherwise fitting the liquidity/correlation criteria — see "Adding assets to
   # the watchlist" -> us_large_cap exclusions in CLAUDE.md for the full rationale
@@ -414,6 +415,11 @@ watchlist:
     # Industrials
     - {ticker: "CAT",   name: "Caterpillar",               exchange: "NYSE", tradeable: true}
     - {ticker: "RTX",   name: "RTX Corporation",           exchange: "NYSE", tradeable: true}
+    - {ticker: "GE",    name: "GE Aerospace",              exchange: "NYSE", tradeable: true}
+    # Materials
+    - {ticker: "LIN",   name: "Linde plc",                 exchange: "NYSE", tradeable: true}
+    # Healthcare — Medical Devices
+    - {ticker: "ISRG",  name: "Intuitive Surgical",        exchange: "NYSE", tradeable: true}
     # Gold Miners
     - {ticker: "NEM",   name: "Newmont Corporation",       exchange: "NYSE", tradeable: true}
     - {ticker: "GOLD",  name: "Barrick Gold",              exchange: "NYSE", tradeable: true}
