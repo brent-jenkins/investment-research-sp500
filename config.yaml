@@ -358,15 +358,20 @@ watchlist:
   # Curated US large-cap stocks for the trading212_stocks automation path (see that
   # config section below). S&P 500 large-caps chosen for liquidity and for having a
   # corresponding sector ETF already in the watchlist for correlation context:
-  # Technology (AAPL/MSFT/NVDA/AMZN/ADBE) -> XLK/SKYY, AMZN also XLY; Financials
-  # (JPM/GS/BAC/V/MA) -> XLF/KBE; Healthcare (LLY/UNH/JNJ/PFE/MRK) -> XLV;
-  # Semiconductors (AMD/AVGO/QCOM) -> SOXX; Consumer Staples (COST/WMT) -> XLP;
-  # Energy (XOM/CVX) -> XLE; Industrials (CAT/RTX) -> XLI; Gold Miners (NEM/GOLD) ->
-  # GLD (gold miners track, but don't perfectly correlate with, the metal itself).
-  # Tickers with significant socio-political or geopolitical risk were deliberately
-  # excluded despite otherwise fitting the liquidity/correlation criteria: TSLA (CEO
-  # political exposure), META and GOOGL (antitrust/regulatory exposure), TSM (Taiwan
-  # geopolitical risk).
+  # Technology (AAPL/MSFT/NVDA/AMZN/ADBE/CRM/ORCL) -> XLK/SKYY, AMZN also XLY;
+  # Communication Services (NFLX/DIS) -> XLY/XLC; Financials (JPM/GS/BAC/V/MA) ->
+  # XLF/KBE; Healthcare (LLY/UNH/JNJ/PFE/MRK) -> XLV; Semiconductors (AMD/AVGO/QCOM)
+  # -> SOXX; Consumer Staples (COST/WMT) -> XLP; Energy (XOM/CVX) -> XLE;
+  # Industrials (CAT/RTX) -> XLI; Gold Miners (NEM/GOLD) -> GLD (gold miners track,
+  # but don't perfectly correlate with, the metal itself).
+  # Tickers with significant systematic risk are deliberately excluded despite
+  # otherwise fitting the liquidity/correlation criteria — see "Adding assets to
+  # the watchlist" -> us_large_cap exclusions in CLAUDE.md for the full rationale
+  # per ticker: TSLA (key-person personality risk), META and GOOGL (regulatory
+  # existential risk — antitrust), TSM (geopolitical existential risk — Taiwan).
+  # DIS was previously excluded here for content-strategy underperformance; it was
+  # re-added 2026-07-11 once streaming turned profitable and box office recovered
+  # — see CLAUDE.md for detail.
   us_large_cap:
     # Technology
     - {ticker: "AAPL",  name: "Apple",                    exchange: "NYSE", tradeable: true}
@@ -375,6 +380,10 @@ watchlist:
     - {ticker: "AMZN",  name: "Amazon",                    exchange: "NYSE", tradeable: true}
     - {ticker: "ADBE",  name: "Adobe",                     exchange: "NYSE", tradeable: true}
     - {ticker: "CRM",   name: "Salesforce",                exchange: "NYSE", tradeable: true}
+    - {ticker: "ORCL",  name: "Oracle Corporation",        exchange: "NYSE", tradeable: true}
+    # Communication Services
+    - {ticker: "NFLX",  name: "Netflix",                   exchange: "NYSE", tradeable: true}
+    - {ticker: "DIS",   name: "Walt Disney Company",       exchange: "NYSE", tradeable: true}
     # Financials
     - {ticker: "JPM",   name: "JP Morgan Chase",           exchange: "NYSE", tradeable: true}
     - {ticker: "GS",    name: "Goldman Sachs",             exchange: "NYSE", tradeable: true}
