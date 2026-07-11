@@ -3148,7 +3148,7 @@ def _render_charts_landing(config: dict) -> None:
             continue
         st.markdown(f"#### {group_label}")
         cols = st.columns(4)
-        for i, entry in enumerate(group):
+        for i, entry in enumerate(sorted(group, key=lambda e: e["ticker"])):
             ticker  = entry["ticker"]
             name    = entry["name"]
             _signal = _sig_map_cl.get(ticker, "NEUTRAL")
