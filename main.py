@@ -85,6 +85,19 @@ from analysis.backtest_metrics import (
     signal_decay,
     walk_forward,
 )
+from analysis.robustness import (
+    BACKTEST_START_DATE,
+    PARAMETER_FREEZE_DATE,
+    compute_annual_returns,
+    compute_attribution,
+    compute_calmar_ratios,
+    compute_drawdown_metrics,
+    compute_edge_quality,
+    compute_monthly_heatmap,
+    compute_out_of_sample_stats,
+    compute_regime_filter_contribution,
+    compute_rolling_metrics,
+)
 from output.briefing import (
     STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
     STATUS_ICONS   as _BRIEF_STATUS_ICONS,
@@ -5619,6 +5632,284 @@ def _render_performance_page(config: dict) -> None:
         st.caption("No learned weights have been computed yet — insufficient T212 closed-position history.")
 
 
+def _render_out_of_sample_badge() -> None:
+    """Small persistent caption shown at the top of every page except
+    Robustness itself — see analysis/robustness.py:PARAMETER_FREEZE_DATE.
+    A constant reminder that every backtest number elsewhere in the app is
+    in-sample (the config was tuned against that same historical data),
+    while T212 trades closed after the freeze date are genuinely
+    out-of-sample. Cheap — a single small t212_pnl read — so it is safe to
+    call on every page render.
+    """
+    oos = compute_out_of_sample_stats()
+    oos_start = PARAMETER_FREEZE_DATE + timedelta(days=1)
+    icon = "⚠️" if oos["status"] == "red" else "✅"
+    st.caption(
+        f"📊 In-Sample: {BACKTEST_START_DATE} → {PARAMETER_FREEZE_DATE}  |  "
+        f"{icon} Out-of-Sample: {oos_start} → present  |  "
+        f"Live trades: {oos['n_trades']}  |  "
+        f"Live return: {oos['return_since_freeze_pct']:+.1f}%"
+    )
+
+
+def _render_robustness_page(config: dict) -> None:
+    """Due-diligence dashboard — "why should I trust these results?" rather
+    than the Performance page's "what happened?". See CLAUDE.md's
+    "Robustness page" section and analysis/robustness.py for the underlying
+    computations; this function only assembles and renders them.
+    """
+    st.title("Robustness")
+    st.caption(
+        "A due-diligence view of the backtest engine itself — parameter-freeze "
+        "tracking, return concentration, drawdown/recovery behaviour, and "
+        "attribution — rather than a restatement of what the backtest returned."
+    )
+
+    all_runs = get_all_runs()
+    complete = [r for r in all_runs if r.get("status") == "complete"]
+    if not complete:
+        st.info("No completed backtest runs yet — run one from the Backtest page first.")
+        return
+
+    run_opts = {f"#{r['id']} — {r['name']} ({r.get('total_trades', 0)} trades)": r["id"] for r in complete}
+    sel_label = st.selectbox("Backtest run", list(run_opts.keys()), key="rb_sel_run")
+    sel_id = run_opts[sel_label]
+
+    tab_edge, tab_returns, tab_risk, tab_attr = st.tabs([
+        "1️⃣ Edge Quality",
+        "2️⃣ Returns Analysis",
+        "3️⃣ Risk Analysis",
+        "4️⃣ Attribution",
+    ])
+
+    # ── Panel 1: Edge Quality ────────────────────────────────────────────────
+    with tab_edge:
+        st.warning("⚠ Historical results include parameter optimisation.")
+        st.success(f"✅ Results after {PARAMETER_FREEZE_DATE} are fully out-of-sample.")
+
+        eq = compute_edge_quality(sel_id)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Parameter Freeze Date", str(eq["parameter_freeze_date"]))
+        c2.metric("In-Sample Period", f"{eq['in_sample_start']} → {eq['in_sample_end']}")
+        c3.metric("Out-of-Sample Period", f"{eq['parameter_freeze_date'] + timedelta(days=1)} onwards")
+
+        st.divider()
+        st.markdown("#### Edge Metrics")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Time Invested", f"{eq.get('time_invested_pct', 0):.1f}%")
+        m2.metric("Cash Allocation", f"{eq.get('cash_allocation_pct', 0):.1f}%")
+        m3.metric("Profit Factor", f"{eq.get('profit_factor', 0):.2f}")
+        m4.metric("Win Rate", f"{eq.get('win_rate_pct', 0):.1f}%")
+
+        exp = eq.get("expectancy", {})
+        m5, m6 = st.columns(2)
+        m5.metric("Expectancy per Trade", f"{exp.get('expectancy_pct', 0):+.2f}%")
+        m6.metric("Expectancy in £", f"£{exp.get('expectancy_gbp', 0):+,.2f}",
+                   help=f"At account value £{exp.get('account_value_gbp', 0):,.0f} (backtest.starting_capital_gbp)")
+
+        st.markdown("#### Winner Concentration")
+        wc = eq.get("winner_concentration", {})
+        w1, w2, w3 = st.columns(3)
+        w1.metric("Top 5 winners", f"{wc.get('top5_pct', 0):.1f}% of profits")
+        w2.metric("Top 10 winners", f"{wc.get('top10_pct', 0):.1f}% of profits")
+        w3.metric("Top 20 winners", f"{wc.get('top20_pct', 0):.1f}% of profits")
+        st.caption(
+            "High concentration means the edge depends heavily on a small number of "
+            "large winners — a warning sign if those winners cluster in a single "
+            "regime or period rather than spreading across the run."
+        )
+
+        st.markdown("#### Exit Reason Breakdown")
+        erb = eq.get("exit_reason_breakdown", {})
+        if not erb:
+            st.info("No trades in this run.")
+        else:
+            erb_df = pd.DataFrame([
+                {"Exit Reason": k, "Count": v["count"], "% of Trades": v["pct"]}
+                for k, v in sorted(erb.items(), key=lambda kv: -kv[1]["count"])
+            ])
+            st.dataframe(erb_df, width="stretch", hide_index=True)
+
+        st.divider()
+        st.markdown("#### Out-of-Sample Monitor")
+        oos = eq.get("out_of_sample", {})
+        oos_colour = {"green": "#16a34a", "red": "#dc2626", "grey": "#6b7280"}.get(oos.get("status"), "#6b7280")
+        o1, o2, o3 = st.columns(3)
+        o1.metric("Freeze Date", str(oos.get("freeze_date", PARAMETER_FREEZE_DATE)))
+        o2.metric("Trades Since Freeze", oos.get("n_trades", 0))
+        o3.metric("Return Since Freeze", f"{oos.get('return_since_freeze_pct', 0):+.1f}%")
+        st.markdown(
+            f"<div style='border-left:4px solid {oos_colour};padding:4px 12px;'>"
+            f"£{oos.get('pnl_since_freeze_gbp', 0):+,.2f} realised P&L on real T212 closes "
+            f"since the parameter freeze.</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Panel 2: Returns Analysis ────────────────────────────────────────────
+    with tab_returns:
+        st.markdown("#### Annual Returns vs S&P 500")
+        annual = compute_annual_returns(sel_id)
+        if annual.empty:
+            st.info("No trades in this run.")
+        else:
+            show = annual.copy()
+            show.columns = ["Year", "Trades", "Win Rate %", "Total Return %", "P&L £", "S&P 500 %", "vs S&P 500 %"]
+            st.dataframe(
+                show.style
+                    .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}" if isinstance(v, (int, float)) else "",
+                         subset=["Total Return %", "vs S&P 500 %"]),
+                width="stretch", hide_index=True,
+            )
+
+        st.markdown("#### Monthly Returns Heatmap")
+        heat = compute_monthly_heatmap(sel_id)
+        if heat.empty:
+            st.info("No trades in this run.")
+        else:
+            fig = go.Figure(data=go.Heatmap(
+                z=heat.values,
+                x=heat.columns.tolist(),
+                y=[str(y) for y in heat.index.tolist()],
+                colorscale=[[0.0, "#dc2626"], [0.5, "#ffffff"], [1.0, "#16a34a"]],
+                zmid=0,
+                text=heat.values,
+                texttemplate="%{text:.1f}%",
+                hovertemplate="%{y} %{x}: %{z:.2f}%<extra></extra>",
+            ))
+            fig.update_layout(
+                title="Monthly Return % (0.0% = no trades exited that month)",
+                height=max(280, 32 * len(heat.index)),
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(fig, width="stretch")
+
+        st.markdown("#### Rolling 12-Month Return & Sharpe")
+        roll = compute_rolling_metrics(sel_id)
+        if roll.empty:
+            st.info("Not enough trade history for a rolling window.")
+        else:
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=roll["date"], y=roll["rolling_return_pct"], name="Rolling 12M Return %",
+                mode="lines", line=dict(color="#3b82f6", width=2), yaxis="y1",
+            ))
+            fig2.add_trace(go.Scatter(
+                x=roll["date"], y=roll["rolling_sharpe"], name="Rolling 12M Sharpe",
+                mode="lines", line=dict(color="#f59e0b", width=2, dash="dot"), yaxis="y2",
+            ))
+            fig2.update_layout(
+                title="Rolling 12-Month Return % and Sharpe",
+                height=350, margin=dict(l=0, r=0, t=40, b=0),
+                yaxis=dict(title="Return %"),
+                yaxis2=dict(title="Sharpe", overlaying="y", side="right"),
+                legend=dict(orientation="h", y=1.1),
+            )
+            st.plotly_chart(fig2, width="stretch")
+
+    # ── Panel 3: Risk Analysis ───────────────────────────────────────────────
+    with tab_risk:
+        st.markdown("#### Drawdown Metrics")
+        dd = compute_drawdown_metrics(sel_id)
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Current Drawdown", f"{dd.get('current_drawdown_pct', 0):.1f}%")
+        d2.metric("Maximum Drawdown", f"{dd.get('max_drawdown_pct', 0):.1f}%")
+        d3.metric("Average Drawdown", f"{dd.get('avg_drawdown_pct', 0):.1f}%")
+        d4, d5 = st.columns(2)
+        d4.metric("Average Recovery Time", f"{dd.get('avg_recovery_days', 0):.0f} days")
+        d5.metric("Longest Recovery Time", f"{dd.get('longest_recovery_days', 0)} days")
+
+        st.markdown("#### Calmar Ratio")
+        st.caption("Calmar = CAGR ÷ Max Drawdown. Higher is better. >1.0 is considered strong.")
+        calmar = compute_calmar_ratios(sel_id)
+        calmar_rows = [
+            {"Period": "Lifetime (full run)", **calmar.get("lifetime", {})},
+            {"Period": "36-month rolling",    **calmar.get("rolling_36m", {})},
+            {"Period": "12-month rolling",    **calmar.get("rolling_12m", {})},
+        ]
+        calmar_df = pd.DataFrame(calmar_rows)
+        calmar_df.columns = ["Period", "CAGR %", "Max DD %", "Calmar"]
+        st.dataframe(calmar_df, width="stretch", hide_index=True)
+
+        st.markdown("#### Rolling 12-Month Sharpe")
+        roll = compute_rolling_metrics(sel_id)
+        if roll.empty:
+            st.info("Not enough trade history for a rolling window.")
+        else:
+            fig3 = go.Figure()
+            fig3.add_trace(go.Scatter(
+                x=roll["date"], y=roll["rolling_sharpe"], name="Rolling 12M Sharpe",
+                mode="lines", line=dict(color="#6366f1", width=2),
+            ))
+            fig3.add_hline(y=1.0, line_dash="dash", line_color="#94a3b8",
+                            annotation_text="Sharpe = 1.0 (professional benchmark)")
+            fig3.update_layout(
+                title="Rolling 12-Month Sharpe Ratio",
+                xaxis_title="Date", yaxis_title="Sharpe",
+                height=320, margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(fig3, width="stretch")
+
+    # ── Panel 4: Attribution ─────────────────────────────────────────────────
+    with tab_attr:
+        attr_source_label = st.radio(
+            "Attribution source", ["Historical", "Live", "Combined"],
+            horizontal=True, key="rb_attr_source",
+        )
+        source_key = attr_source_label.lower()
+        attr = compute_attribution(sel_id, config, source=source_key)
+
+        if source_key == "live" and not attr.get("available"):
+            st.info("No closed T212 positions yet — live attribution will populate as real trades close.")
+        elif not attr.get("available"):
+            st.info("No trade data available for this source.")
+        else:
+            def _bucket_table(rows: list[dict]) -> pd.DataFrame:
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    return df
+                df.columns = ["Name", "Trades", "Win Rate %", "% of Total Profit", "Profit Factor"]
+                return df
+
+            st.markdown("#### ETF vs Stock")
+            st.dataframe(_bucket_table(attr["etf_vs_stock"]), width="stretch", hide_index=True)
+
+            st.markdown("#### Domestic (US) vs International")
+            st.dataframe(_bucket_table(attr["domestic_vs_intl"]), width="stretch", hide_index=True)
+
+            st.markdown("#### Asset Class")
+            st.dataframe(_bucket_table(attr["asset_class"]), width="stretch", hide_index=True)
+
+            st.markdown("#### Sector Attribution")
+            sector_table = attr["sector_table"]
+            if sector_table.empty:
+                st.info("No sector data available.")
+            else:
+                show_sector = sector_table.copy()
+                show_sector.columns = ["Sector", "Trades", "Win Rate %", "Profit %", "Profit Factor"]
+                st.dataframe(show_sector, width="stretch", hide_index=True)
+
+        st.divider()
+        st.markdown("#### Regime Filter Contribution")
+        st.caption(
+            "Compares this run's actual trades (allowed_entry_regimes applied) against "
+            "a second, comparison-only pass with every regime admitted — isolating how "
+            "much of the run's edge comes from the regime gate itself."
+        )
+        rfc = compute_regime_filter_contribution(sel_id)
+        if not rfc.get("available"):
+            st.info("This run predates the regime-filter contribution feature — re-run the backtest to populate it.")
+        else:
+            wf, wof = rfc["with_filter"], rfc["without_filter"]
+            rfc_rows = [
+                {"Metric": "Return",        "With Filter": f"{wf.get('total_return_pct', 0):+.1f}%",  "Without Filter": f"{wof.get('total_return_pct', 0):+.1f}%",  "Difference": f"{rfc['return_improvement_pct']:+.1f}%"},
+                {"Metric": "Max Drawdown",  "With Filter": f"{wf.get('max_drawdown_pct', 0):.1f}%",    "Without Filter": f"{wof.get('max_drawdown_pct', 0):.1f}%",    "Difference": f"{rfc['max_dd_reduction_pct']:+.1f}%"},
+                {"Metric": "Sharpe",        "With Filter": f"{wf.get('sharpe_ratio', 0):.2f}",         "Without Filter": f"{wof.get('sharpe_ratio', 0):.2f}",         "Difference": f"{rfc['sharpe_improvement']:+.2f}"},
+                {"Metric": "Trades",        "With Filter": str(wf.get('total_trades', 0)),             "Without Filter": str(wof.get('total_trades', 0)),             "Difference": "—"},
+            ]
+            st.dataframe(pd.DataFrame(rfc_rows), width="stretch", hide_index=True)
+
+
 # Main UI
 # ---------------------------------------------------------------------------
 
@@ -5649,13 +5940,14 @@ def main() -> None:
         st.divider()
 
         # Page navigation
-        _PAGES = ["Daily Briefing", "Signals", "Charts", "Relationships", "Performance", "Backtest", "Status"]
+        _PAGES = ["Daily Briefing", "Signals", "Charts", "Relationships", "Performance", "Robustness", "Backtest", "Status"]
         _PAGE_KEYS = {
             "Daily Briefing": "briefing",
             "Signals":       "signals",
             "Charts":        "charts",
             "Relationships": "relationships",
             "Performance":   "performance",
+            "Robustness":    "robustness",
             "Backtest":      "backtest",
             "Status":        "status",
         }
@@ -5688,6 +5980,11 @@ def main() -> None:
     # ---- Main content --------------------------------------------------
     page_key = st.session_state.get("page", "briefing")
 
+    # Persistent in-sample/out-of-sample badge — every page except
+    # Robustness itself (which already shows this context in full).
+    if page_key != "robustness":
+        _render_out_of_sample_badge()
+
     if page_key == "briefing":
         _render_briefing_page(config, watchlist, tradeable_set, t212_names)
         return
@@ -5706,6 +6003,10 @@ def main() -> None:
 
     if page_key == "performance":
         _render_performance_page(config)
+        return
+
+    if page_key == "robustness":
+        _render_robustness_page(config)
         return
 
     if page_key == "backtest":

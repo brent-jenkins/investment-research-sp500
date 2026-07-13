@@ -14,6 +14,7 @@ because it requires pair-level data and contributes a fixed 0.10 weight; its
 absence is compensated by normalising confluence over the five present modules.
 """
 
+import copy
 import json
 import logging
 from datetime import datetime
@@ -910,6 +911,17 @@ def _update_run_complete(engine, run_id: int, metrics: dict) -> None:
         )
 
 
+def _store_regime_filter_contribution(engine, run_id: int, with_metrics: dict, without_metrics: dict) -> None:
+    """Persist the two-pass regime-filter comparison — see run_backtest()'s
+    "Regime filter contribution" pass and analysis/robustness.py:
+    compute_regime_filter_contribution(), which reads these columns back."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE backtest_runs SET with_regime_filter=:w, without_regime_filter=:wo WHERE id=:id"),
+            {"w": json.dumps(with_metrics), "wo": json.dumps(without_metrics), "id": run_id},
+        )
+
+
 # ---------------------------------------------------------------------------
 # Quick metrics for run summary (full metrics in backtest_metrics.py)
 # ---------------------------------------------------------------------------
@@ -959,6 +971,16 @@ def run_backtest(
 ) -> int:
     """Run the full vectorized backtest and persist results.
 
+    Also runs a second, comparison-only simulation pass per ticker with
+    `backtest.allowed_entry_regimes` bypassed (every regime admitted) —
+    quick-metrics summaries from both passes are stored as JSON on
+    backtest_runs.with_regime_filter / without_regime_filter, so the
+    Robustness page can show how much of the run's edge comes from the
+    regime gate itself vs. the underlying signal logic. Only the actually-
+    gated pass's trades are persisted to backtest_trades / used for the
+    run's own summary metrics — the unfiltered pass is comparison-only and
+    is not stored trade-by-trade.
+
     Returns:
         run_id — integer primary key of the BacktestRun row.
     """
@@ -996,8 +1018,22 @@ def run_backtest(
         ts_start = pd.Timestamp(start_date)
         ts_end   = pd.Timestamp(end_date)
 
+        # --- Regime filter contribution: unfiltered config for the second,
+        # comparison-only pass below. Bypasses allowed_entry_regimes by
+        # admitting every regime instead — everything else (entry_signal,
+        # entry_signal_overrides, ATR stop, VaR/drawdown params) is identical
+        # to the run's own config, so the only variable between the two
+        # passes is the regime gate itself. See CLAUDE.md's "Regime filter
+        # contribution" section and analysis/robustness.py:
+        # compute_regime_filter_contribution(), which reads the two metrics
+        # dicts stored below back out.
+        from analysis.regime import Regime as _Regime  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
+        unfiltered_config = copy.deepcopy(config)
+        unfiltered_config.setdefault("backtest", {})["allowed_entry_regimes"] = [r.value for r in _Regime]
+
         # --- Per-ticker signal computation -----------------------------------
         all_trades: list[dict] = []
+        all_trades_unfiltered: list[dict] = []
         for ticker in tickers:
             try:
                 df = get_price_df(ticker, days=4000)
@@ -1024,6 +1060,13 @@ def run_backtest(
                 all_trades.extend(ticker_trades)
                 logger.debug("%s: %d trades simulated.", ticker, len(ticker_trades))
 
+                # Second, comparison-only pass — reuses the same in_range
+                # signal history (no recomputation), so this only re-runs
+                # the cheap per-date simulate_trades() walk, not the
+                # vectorized pandas scoring above.
+                ticker_trades_unfiltered = simulate_trades(in_range, ticker, unfiltered_config)
+                all_trades_unfiltered.extend(ticker_trades_unfiltered)
+
             except Exception as exc:
                 logger.warning("Backtest: error processing %s: %s", ticker, exc)
                 continue
@@ -1032,6 +1075,9 @@ def run_backtest(
         _store_trades_batch(engine, run_id, all_trades)
         metrics = _quick_metrics(all_trades)
         _update_run_complete(engine, run_id, metrics)
+
+        metrics_unfiltered = _quick_metrics(all_trades_unfiltered)
+        _store_regime_filter_contribution(engine, run_id, metrics, metrics_unfiltered)
 
         logger.info(
             "Backtest run %d complete — %d trades, win_rate=%.1f%%, return=%.1f%%",

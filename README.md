@@ -8,7 +8,7 @@ Live at [research.example.com](https://research.example.com) (password protected
 
 ## What it does
 
-The app tracks ~112 assets across 21 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, factor ETFs, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on eight scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy.
+The app tracks ~112 assets across 21 groups (indices, ETFs, commodities, forex, crypto, bonds, US large-cap stocks, factor ETFs, etc.), runs a seven-module technical and macro analysis pipeline, detects the current market regime, and scores every asset on a weighted confluence scale from −1 to +1. Signals are regenerated automatically on eight scheduler jobs. Open T212 Invest positions are monitored live with P&L in GBP and automated health status, and exit automatically on signal reversal. A backtesting engine replays signal logic over up to 10 years of stored history. A Performance page tracks real T212 execution outcomes — win rate, P&L, and a feedback-learning system that adjusts module weights based on closed-position accuracy. A Robustness page provides due-diligence tracking on top of that — parameter-freeze / out-of-sample separation, return concentration, drawdown/recovery, Calmar ratios, and attribution — and every other page carries a small persistent badge showing how much of the system's live track record is genuinely out-of-sample.
 
 ---
 
@@ -86,6 +86,23 @@ T212 Invest execution performance, driven entirely by real broker fills — no m
 - **Closed Positions** — a table of every closed T212 position (`t212_pnl`): ticker, type, entry/exit date and price, quantity, P&L in £ and %, holding days, entry signal, regime, exit reason. Always shown, regardless of row count — `"No closed positions yet — data will appear as T212 positions close"` when the table is empty.
 - **Performance Metrics** — gated behind 5 closed positions (T212 exits are infrequent — maybe 5–10/year — so this can take a while to populate). Below 5, just a win/loss count and total P&L. At 5+: win rate, avg/total return, profit factor, max drawdown, an equity curve, and performance broken down by regime-at-entry and by exit reason. Reuses the same metrics functions as the Backtest page (`analysis/backtest_metrics.py`) via a column-renaming adapter, rather than a second implementation of the same aggregation logic.
 - **Learning System** — live count of `t212_pnl` rows against `learning.min_trades_before_adjustment` (default 20 — see "Feedback learning" below), and, once any weights have been learned, a comparison of learned per-module weights against the static regime-weight average.
+
+### Robustness
+
+A due-diligence dashboard, distinct from Performance's "what happened" — it answers "why should these results be trusted?" Read-only: it selects a completed backtest run from a dropdown and never runs a backtest itself. Four tabs:
+
+- **Edge Quality** — the parameter-freeze banner (`⚠ Historical results include parameter optimisation` / `✅ Results after {freeze date} are fully out-of-sample`); Time Invested % / Cash Allocation %; Profit Factor and Win Rate; Expectancy per trade in % and £; winner concentration (top 5/10/20 trades' share of total profit — a highly concentrated edge is a red flag even with a strong aggregate profit factor); exit-reason breakdown; and an **Out-of-Sample Monitor** showing trades and return since the freeze date, colour-coded green/red/grey.
+- **Returns Analysis** — an annual returns table benchmarked against known S&P 500 calendar-year returns, a monthly returns heatmap (red → white → green), and a dual-axis rolling 12-month return %/Sharpe chart.
+- **Risk Analysis** — current/max/average drawdown and average/longest recovery time; three Calmar ratio variants (lifetime, rolling 36-month, rolling 12-month — "Calmar = CAGR ÷ Max Drawdown. Higher is better. >1.0 is considered strong."); a rolling 12-month Sharpe chart with a reference line at `Sharpe = 1.0`.
+- **Attribution** — a Historical / Live / Combined toggle (backtest trades vs. real `t212_pnl` closes vs. both); ETF-vs-Stock, Domestic-vs-International, and asset-class (Equity/Fixed Income/Commodity/Currency) breakdowns; a sector attribution table; and **Regime Filter Contribution** — a comparison of the run's actual (regime-gated) return/drawdown/Sharpe against a second, unfiltered pass with every regime admitted, isolating how much of the run's edge comes from the regime gate itself rather than the underlying signal logic.
+
+**Parameter freeze date: `2026-07-13`** (`analysis/robustness.py:PARAMETER_FREEZE_DATE`). Every weight, threshold, and risk parameter in this system was tuned against historical data up to that date, so every backtest number is in-sample by construction. Any T212 Invest position that closes after it is genuinely out-of-sample. This is why every other page — Daily Briefing, Signals, Charts, Relationships, Performance, Backtest, Status — shows a small persistent caption at the top:
+
+```
+📊 In-Sample: 2019-04-12 → 2026-07-13  |  ✅ Out-of-Sample: 2026-07-14 → present  |  Live trades: 0  |  Live return: 0.0%
+```
+
+The badge is only omitted on the Robustness page itself, which already shows this context in full.
 
 ### Backtest
 Replay the current signal logic over up to 10 years of stored historical price data — no look-ahead bias (vectorized pandas rolling operations). The backtest mirrors live system config rather than accepting independent runtime parameters: `config.yaml` is the single source of truth for holding limits, ATR stop multiplier, entry/exit thresholds, and the regime gate, for backtesting exactly as it is for live trading. To test different settings, edit `config.yaml` and re-run — there's no separate backtest-only parameter set.

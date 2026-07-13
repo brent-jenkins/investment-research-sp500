@@ -30,6 +30,7 @@ _GET_ENGINE_BINDINGS = (
     "analysis.regime.get_engine",
     "analysis.confluence.get_engine",
     "analysis.backtest.get_engine",
+    "analysis.robustness.get_engine",
     "data.ingestion.get_engine",
     "output.performance.get_engine",
     "analysis.macro.get_engine",

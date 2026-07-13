@@ -370,6 +370,16 @@ class BacktestRun(Base):
     total_return_pct = Column(Float)
     avg_holding_days = Column(Float)
 
+    # Regime-filter contribution — quick-metrics JSON dicts (see
+    # analysis/backtest.py:_quick_metrics()) computed from the same signal
+    # history with (with_regime_filter, matches the run's own config) and
+    # without (without_regime_filter, allowed_entry_regimes bypassed to admit
+    # every regime) the regime entry gate — see CLAUDE.md's "Regime filter
+    # contribution" section and analysis/robustness.py:
+    # compute_regime_filter_contribution().
+    with_regime_filter = Column(Text)
+    without_regime_filter = Column(Text)
+
 
 class BacktestSignal(Base):
     """Daily signal for each ticker within a backtest run."""
@@ -655,6 +665,8 @@ def _apply_migrations(engine) -> None:
         ("backtest_trades",    "stop_distance_pct",   "FLOAT"),
         ("backtest_trades",    "drawdown_scale_factor", "FLOAT"),
         ("backtest_trades",    "drawdown_pct_at_entry", "FLOAT"),
+        ("backtest_runs",      "with_regime_filter",    "TEXT"),
+        ("backtest_runs",      "without_regime_filter", "TEXT"),
     ]
 
     for table, column, col_type in new_columns:
