@@ -1222,6 +1222,8 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
       - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
       - Free cash covers at least £10
       - Total deployed remains below max_total_deployed x account value
+      - Currently open positions are below max_open_positions (default 999
+        when absent from config — unlimited in practice)
 
     All outcomes (success and failure) are written to t212_invest_orders.
     API errors set "t212_invest_error" in system_metadata, stop placement for
@@ -1330,6 +1332,15 @@ def maybe_place_t212_orders(config: dict, run_type: str = "full") -> None:
         logger.info(
             "T212 Invest: %.0f%% deployed (limit %.0f%%) — no new orders.",
             (invested / total_val) * 100, max_deployed_pct * 100,
+        )
+        return
+
+    max_open      = t212_cfg.get("max_open_positions", 999)
+    current_open  = len(positions_by_ucits)
+    if current_open >= max_open:
+        logger.info(
+            "T212 Invest: %d/%d positions open — max_open_positions reached, skipping new entries.",
+            current_open, max_open,
         )
         return
 
@@ -1766,6 +1777,8 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
       - No recent order in t212_invest_orders (last 30 days, PLACED or FILLED)
       - Free cash covers at least £10
       - Total deployed remains below max_total_deployed x account value
+      - Currently open positions are below max_open_positions (default 999
+        when absent from config — unlimited in practice)
 
     Order sizing: when trading212_stocks.fractional_shares is true and the
     T212 instruments API reports maxQuantityPrecision > 0 for the ticker,
@@ -1899,6 +1912,15 @@ def maybe_place_stock_orders(config: dict, run_type: str = "full") -> None:
         logger.info(
             "T212 Stocks: %.0f%% deployed (limit %.0f%%) — no new orders.",
             (invested / total_val) * 100, max_deployed_pct * 100,
+        )
+        return
+
+    max_open      = stock_cfg.get("max_open_positions", 999)
+    current_open  = len(positions_by_t212)
+    if current_open >= max_open:
+        logger.info(
+            "T212 Stocks: %d/%d positions open — max_open_positions reached, skipping new entries.",
+            current_open, max_open,
         )
         return
 

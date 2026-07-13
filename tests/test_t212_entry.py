@@ -142,6 +142,62 @@ def test_trending_bull_regime_buy_signal_triggers_order(db_engine, t212_mocks):
 
 
 # ---------------------------------------------------------------------------
+# max_open_positions — caps total simultaneous positions regardless of
+# max_total_deployed, independent of which ticker occupies each slot.
+# ---------------------------------------------------------------------------
+
+def test_max_open_positions_blocks_new_buy_when_at_limit(db_engine, t212_mocks):
+    """A held position on any ticker counts toward the cap — once open
+    positions equal max_open_positions, a new BUY signal is skipped even
+    though the signal itself would otherwise qualify."""
+    from brokers.trading212 import maybe_place_t212_orders
+
+    cfg = _config()
+    cfg["trading212_invest"]["max_open_positions"] = 1
+    t212_mocks.get_positions.return_value = [{"ticker": "OTHERUCITS_EQ", "quantity": 5}]
+
+    _seed_signal(db_engine, ticker="^GSPC", signal="NEUTRAL", regime="MIXED")
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_BUY", regime="MIXED")
+
+    maybe_place_t212_orders(cfg, run_type="full")
+
+    t212_mocks.place_market_order.assert_not_called()
+
+
+def test_max_open_positions_allows_buy_when_below_limit(db_engine, t212_mocks):
+    """Below max_open_positions, BUY orders proceed exactly as before."""
+    from brokers.trading212 import maybe_place_t212_orders
+
+    cfg = _config()
+    cfg["trading212_invest"]["max_open_positions"] = 2
+    t212_mocks.get_positions.return_value = [{"ticker": "OTHERUCITS_EQ", "quantity": 5}]
+
+    _seed_signal(db_engine, ticker="^GSPC", signal="NEUTRAL", regime="MIXED")
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_BUY", regime="MIXED")
+
+    maybe_place_t212_orders(cfg, run_type="full")
+
+    t212_mocks.place_market_order.assert_called_once()
+
+
+def test_max_open_positions_defaults_to_999_when_absent(db_engine, t212_mocks):
+    """No max_open_positions key in config falls back to 999 (unlimited in
+    practice) — a config predating this feature sees unchanged behaviour."""
+    from brokers.trading212 import maybe_place_t212_orders
+
+    cfg = _config()
+    assert "max_open_positions" not in cfg["trading212_invest"]
+    t212_mocks.get_positions.return_value = [{"ticker": "OTHERUCITS_EQ", "quantity": 5}]
+
+    _seed_signal(db_engine, ticker="^GSPC", signal="NEUTRAL", regime="MIXED")
+    _seed_signal(db_engine, ticker="AAPL", signal="STRONG_BUY", regime="MIXED")
+
+    maybe_place_t212_orders(cfg, run_type="full")
+
+    t212_mocks.place_market_order.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # maybe_exit_t212_positions() — hourly exit check, independent of run_type.
 # ---------------------------------------------------------------------------
 

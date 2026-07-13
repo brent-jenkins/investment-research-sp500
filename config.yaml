@@ -779,6 +779,7 @@ trading212_invest:
   long_only: true          # T212 Invest is a cash account — no shorting allowed
   max_position_gbp: 2500   # Hard ceiling GBP limit per order — unchanged; VaR sizing never exceeds this
   max_total_deployed: 0.5  # Never deploy more than 50% of account value
+  max_open_positions: 10    # Maximum simultaneous ETF positions — prevents over-concentration regardless of deployment cap
   # Position sizing — "var" scales position size inversely with the ticker's own
   # historical volatility so the expected holding-period loss at var_confidence
   # stays within max_risk_pct of account value; "fixed" uses max_position_gbp
@@ -886,6 +887,7 @@ trading212_stocks:
   long_only: true
   max_position_gbp: 1000         # smaller than ETFs (2500) — higher individual stock volatility; hard ceiling, VaR sizing never exceeds this
   max_total_deployed: 0.3        # tighter cap than ETFs (0.5)
+  max_open_positions: 10          # Maximum simultaneous stock positions — keeps portfolio manageable during demo validation
   # Position sizing — identical mechanism to trading212_invest above, sized
   # independently here since individual stocks (e.g. NVDA) can be materially
   # more volatile than diversified ETFs, or than each other (e.g. NVDA vs WMT)
