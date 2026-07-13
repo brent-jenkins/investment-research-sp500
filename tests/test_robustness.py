@@ -22,8 +22,17 @@ from analysis.robustness import (
     compute_expectancy,
     compute_out_of_sample_stats,
     compute_winner_concentration,
+    generate_robustness_pdf,
 )
 from data.database import BacktestRun, BacktestTrade, T212Pnl
+
+_PDF_TEST_CONFIG = {
+    "watchlist": {
+        "us_large_cap": [{"ticker": "AAPL", "name": "Apple"}],
+        "sector_etfs":  [{"ticker": "XLK", "name": "Tech ETF"}],
+    },
+    "backtest": {"starting_capital_gbp": 10000},
+}
 
 
 def _seed_run(engine, **overrides) -> int:
@@ -296,3 +305,58 @@ def test_compute_attribution_live_source_reads_t212_pnl(db_engine):
 
     assert result["available"] is True
     assert "Technology" in set(result["sector_table"]["name"])
+
+
+# ---------------------------------------------------------------------------
+# generate_robustness_pdf()
+# ---------------------------------------------------------------------------
+
+def test_generate_robustness_pdf_returns_valid_pdf_bytes(db_engine):
+    run_id = _seed_run(db_engine, name="pdf-test-run")
+    for i in range(5):
+        _seed_trade(
+            db_engine, run_id,
+            ticker="AAPL" if i % 2 == 0 else "XLK",
+            pnl_pct=0.05 if i % 2 == 0 else -0.02,
+            pnl_gbp=50.0 if i % 2 == 0 else -20.0,
+            is_win=(i % 2 == 0),
+            exit_reason="MAX_HOLDING" if i % 2 == 0 else "STOP_LOSS",
+            entry_date=date(2024, 1, 1) + timedelta(days=i * 10),
+            exit_date=date(2024, 1, 5) + timedelta(days=i * 10),
+        )
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 0
+    assert pdf_bytes[:5] == b"%PDF-"
+
+
+def test_generate_robustness_pdf_handles_empty_t212_pnl_gracefully(db_engine):
+    """A fresh DB has zero t212_pnl rows — the Out-of-Sample Monitor and the
+    Attribution page's Live/Combined sources must render a placeholder
+    ("no live trades yet") rather than raising, since this is the normal
+    state for a long time after this feature ships (see CLAUDE.md's
+    "Feedback learning" section on how slowly t212_pnl accumulates)."""
+    run_id = _seed_run(db_engine, name="pdf-test-run-no-live")
+    _seed_trade(db_engine, run_id, ticker="AAPL", pnl_pct=0.05, pnl_gbp=50.0, is_win=True)
+
+    with Session(db_engine) as session:
+        assert session.query(T212Pnl).count() == 0  # the precondition this test exercises
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+
+    assert pdf_bytes[:5] == b"%PDF-"
+    assert len(pdf_bytes) > 1000
+
+
+def test_generate_robustness_pdf_handles_run_with_no_trades_at_all(db_engine):
+    """An empty run (e.g. a backtest over a ticker scope with no eligible
+    entries) must still produce a valid PDF with placeholder text on every
+    page that would otherwise show a table — not raise."""
+    run_id = _seed_run(db_engine, name="pdf-test-run-empty")
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+
+    assert pdf_bytes[:5] == b"%PDF-"
+    assert len(pdf_bytes) > 0

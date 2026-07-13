@@ -97,6 +97,7 @@ from analysis.robustness import (
     compute_out_of_sample_stats,
     compute_regime_filter_contribution,
     compute_rolling_metrics,
+    generate_robustness_pdf,
 )
 from output.briefing import (
     STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
@@ -5652,6 +5653,21 @@ def _render_out_of_sample_badge() -> None:
     )
 
 
+@st.cache_data(ttl=600, show_spinner="Generating due diligence report…")
+def _cached_robustness_pdf(run_id: int, config: dict) -> bytes:
+    """Thin cache wrapper around analysis.robustness.generate_robustness_pdf().
+
+    Streamlit reruns the whole page script on every widget interaction (e.g.
+    switching the Attribution tab's Historical/Live/Combined radio), and
+    generation itself takes several seconds (two matplotlib charts, a dozen
+    tables) — without caching, every such interaction on the Robustness page
+    would silently pay that cost again. Keyed on (run_id, config) via
+    st.cache_data's own content hashing, not object identity, so a config.yaml
+    edit still invalidates it correctly.
+    """
+    return generate_robustness_pdf(run_id, config)
+
+
 def _render_robustness_page(config: dict) -> None:
     """Due-diligence dashboard — "why should I trust these results?" rather
     than the Performance page's "what happened?". See CLAUDE.md's
@@ -5674,6 +5690,20 @@ def _render_robustness_page(config: dict) -> None:
     run_opts = {f"#{r['id']} — {r['name']} ({r.get('total_trades', 0)} trades)": r["id"] for r in complete}
     sel_label = st.selectbox("Backtest run", list(run_opts.keys()), key="rb_sel_run")
     sel_id = run_opts[sel_label]
+
+    # PDF export — cached per (run_id, config) so switching tabs/toggles below
+    # (each a Streamlit rerun) doesn't silently re-render the whole 10-page
+    # report every time; only a genuinely new run or config change does.
+    pdf_bytes = _cached_robustness_pdf(sel_id, config)
+    st.download_button(
+        label="📄 Download Due Diligence Report (PDF)",
+        data=pdf_bytes,
+        file_name=f"sp500invest_due_diligence_{date.today().isoformat()}.pdf",
+        mime="application/pdf",
+        type="primary",
+        key="rb_pdf_download",
+    )
+    st.divider()
 
     tab_edge, tab_returns, tab_risk, tab_attr = st.tabs([
         "1️⃣ Edge Quality",
