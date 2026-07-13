@@ -707,7 +707,7 @@ backtest:
   # cross-ticker portfolio balance (see CLAUDE.md's "VaR position sizing"
   # section), so this stays constant for every entry across a whole run
   # rather than growing/shrinking the way a real account would.
-  starting_capital_gbp: 10000
+  starting_capital_gbp: 50000
   # Exit conditions for trade simulation
   max_holding_days: 30           # default max hold — equities, ETFs, commodities
   max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
@@ -777,7 +777,7 @@ trading212_invest:
   enabled: true            # Set true when ready to connect
   live: false              # NEVER set true until demo-validated — place_market_order() blocks it
   long_only: true          # T212 Invest is a cash account — no shorting allowed
-  max_position_gbp: 500    # Hard ceiling GBP limit per order — unchanged; VaR sizing never exceeds this
+  max_position_gbp: 2500   # Hard ceiling GBP limit per order — unchanged; VaR sizing never exceeds this
   max_total_deployed: 0.5  # Never deploy more than 50% of account value
   # Position sizing — "var" scales position size inversely with the ticker's own
   # historical volatility so the expected holding-period loss at var_confidence
@@ -884,7 +884,7 @@ trading212_stocks:
   enabled: true
   live: false                    # NEVER set true until demo-validated — place_market_order() blocks it
   long_only: true
-  max_position_gbp: 200          # smaller than ETFs (500) — higher individual stock volatility; hard ceiling, VaR sizing never exceeds this
+  max_position_gbp: 1000         # smaller than ETFs (2500) — higher individual stock volatility; hard ceiling, VaR sizing never exceeds this
   max_total_deployed: 0.3        # tighter cap than ETFs (0.5)
   # Position sizing — identical mechanism to trading212_invest above, sized
   # independently here since individual stocks (e.g. NVDA) can be materially
