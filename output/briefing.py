@@ -143,7 +143,7 @@ def _email_header_h(title: str, subtitle: str, accent: str = "#0f172a") -> str:
     return (
         f'<div style="background-color:{accent};padding:24px 26px;border-radius:8px 8px 0 0">'
         '<p style="margin:0 0 4px;font-size:10px;font-weight:700;text-transform:uppercase;'
-        'letter-spacing:1.5px;color:#94a3b8">Investment Research Dashboard</p>'
+        'letter-spacing:1.5px;color:#94a3b8">SP500Invest</p>'
         f'<h1 style="margin:0 0 4px;font-size:21px;font-weight:700;color:#ffffff">{title}</h1>'
         f'<p style="margin:0;font-size:13px;color:#94a3b8">{subtitle}</p>'
         '</div>'
@@ -614,7 +614,7 @@ def send_vix_spike_alert(
     )
 
     text_body = "\n".join([
-        "Investment Research Dashboard — Volatility Spike Alert",
+        "SP500Invest — Volatility Spike Alert",
         f"Generated: {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
         "",
         f"VIX has risen {vix_pct:.1f}% today ({vix_prev:.2f} → {vix_current:.2f}).",
@@ -751,7 +751,7 @@ def send_test_email(
     last_run_str = _fmt_uk(last_analysis, "%Y-%m-%d %H:%M") if last_analysis else "—"
 
     lines = [
-        "Investment Research Dashboard — Test Notification",
+        "SP500Invest — Test Notification",
         f"Sent:      {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
         f"From:      {from_addr}",
         f"To:        {', '.join(to_addrs)}",
@@ -769,7 +769,7 @@ def send_test_email(
     ]
 
     html_body = _build_test_html(config, regime, last_analysis, open_trade_count)
-    ok, msg   = _smtp_send("Investment Research — Test Notification",
+    ok, msg   = _smtp_send("SP500Invest — Test Notification",
                             "\n".join(lines), html_body, config)
     if ok:
         return True, f"Test email sent to {', '.join(to_addrs)}"
@@ -946,7 +946,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
         rule()
 
     # ── Header ────────────────────────────────────────────────────────
-    L.append("INVESTMENT RESEARCH — WEEKLY SUMMARY")
+    L.append("SP500INVEST — WEEKLY SUMMARY")
     L.append(
         f"Week of {week_ago.strftime('%d %b')} "
         f"to {now.strftime('%d %b %Y')}  |  "
@@ -1158,7 +1158,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     # ── Footer ────────────────────────────────────────────────────────
     L.append("")
     rule("-", 60)
-    L.append("Investment Research Dashboard  |  platform.example.com")
+    L.append("SP500Invest  |  platform.example.com")
     next_sunday = now + timedelta(days=(6 - now.weekday() + 7) % 7 or 7)
     _uk_10 = _fmt_uk(next_sunday.replace(hour=10, minute=0, second=0, tzinfo=timezone.utc), "%H:%M")
     L.append(f"Next weekly summary: Sunday {next_sunday.strftime('%d %b %Y')} at {_uk_10}")
@@ -1569,7 +1569,7 @@ def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
     now      = data["now"]
     week_ago = data["week_ago"]
     subject  = (
-        f"Investment Research — Weekly Summary "
+        f"SP500Invest — Weekly Summary "
         f"{week_ago.strftime('%d %b')}–{now.strftime('%d %b %Y')}"
     )
 

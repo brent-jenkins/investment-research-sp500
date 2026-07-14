@@ -1,4 +1,4 @@
-# Investment Research Dashboard
+# SP500Invest
 
 A self-hosted Streamlit application for daily market analysis, multi-module confluence signal generation, cross-asset correlation tracking, historical backtesting, and automated T212 Invest order placement.
 

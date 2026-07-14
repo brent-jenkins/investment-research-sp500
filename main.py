@@ -1110,6 +1110,12 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         + f"</div>",
         unsafe_allow_html=True,
     )
+    if _region_scores_sig:
+        st.caption(
+            "Regional bullishness reflects the percentage of indicators in each group "
+            "scoring positively. Europe 0% = both tracked European series (ECB Deposit Rate, "
+            "Germany 10Y Bund) are currently bearish — mathematically correct, not a display error."
+        )
 
     # ---- Generate Signals button (top of page, right of header) -----------
     _gs_col, _ = st.columns([2, 5])
@@ -4841,6 +4847,26 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 # Backtest page
 # ---------------------------------------------------------------------------
 
+def _format_run_label(r: dict) -> str:
+    """'Run #{id} · {Month Day Year} · {N} trades' for a backtest-run selector.
+
+    Parses `created_at` rather than the free-text `name` field — a run
+    started without a custom name defaults to a raw "Backtest {timestamp}"
+    string that reads poorly in a dropdown, while created_at is always
+    present and gives a clean, consistent date regardless of naming.
+    """
+    created_at = r.get("created_at")
+    date_str = ""
+    if created_at:
+        try:
+            dt = created_at if isinstance(created_at, datetime) else datetime.fromisoformat(str(created_at))
+            date_str = f"{dt.strftime('%B')} {dt.day} {dt.strftime('%Y')}"
+        except (ValueError, TypeError):
+            date_str = str(created_at)[:10]
+    n_trades = r.get("total_trades", 0)
+    return f"Run #{r['id']} · {date_str} · {n_trades} trades" if date_str else f"Run #{r['id']} · {n_trades} trades"
+
+
 def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
     _render_page_wordmark("Backtest")
     st.markdown("## Backtest")
@@ -4862,8 +4888,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
     # ── shared: load runs list once ──────────────────────────────────────────
     all_runs  = get_all_runs()
     complete  = [r for r in all_runs if r.get("status") == "complete"]
-    run_opts  = {f"#{r['id']} — {r['name']} ({r.get('total_trades',0)} trades)": r["id"]
-                 for r in complete}
+    run_opts  = {_format_run_label(r): r["id"] for r in complete}
 
     # ── Tab 1: Run & Overview ─────────────────────────────────────────────────
     with tab_run:
@@ -5535,6 +5560,25 @@ def _render_performance_page(config: dict) -> None:
     st.markdown("### Closed Positions")
     pnl_rows = _get_t212_pnl_rows()
 
+    # A scheduler daemon running stale code (fixed 2026-07-06 — see CLAUDE.md's
+    # "Ongoing deploys" section) placed orders under outdated regime-gate logic
+    # for a period before the fix. Those closed positions are real T212 fills,
+    # not fabricated, but don't reflect current strategy logic — flagged here
+    # rather than excluded so the table stays an honest, complete record.
+    _DAEMON_FIX_DATE = "2026-07-06"
+    _pre_fix_trades = [
+        r for r in pnl_rows if str(r.get("exit_date", ""))[:10] < _DAEMON_FIX_DATE
+    ]
+    if _pre_fix_trades:
+        st.info(
+            f"**Note:** {len(_pre_fix_trades)} of the closed positions below "
+            f"({'all' if len(_pre_fix_trades) == len(pnl_rows) else 'some'} shown) "
+            f"were executed before {_DAEMON_FIX_DATE} by a scheduler daemon running stale "
+            f"code — prior to the regime-gate fix that is now enforced. These trades do not "
+            f"reflect the current strategy logic. Full incident details are documented in "
+            f"CLAUDE.md."
+        )
+
     if not pnl_rows:
         st.info("No closed positions yet — data will appear as T212 positions close.")
     else:
@@ -5768,9 +5812,35 @@ def _render_robustness_page(config: dict) -> None:
         _render_footer()
         return
 
-    run_opts = {f"#{r['id']} — {r['name']} ({r.get('total_trades', 0)} trades)": r["id"] for r in complete}
+    run_opts = {_format_run_label(r): r["id"] for r in complete}
     sel_label = st.selectbox("Backtest run", list(run_opts.keys()), key="rb_sel_run")
     sel_id = run_opts[sel_label]
+
+    # Streamlit's "primary" button/tab styling doesn't reliably pick up the
+    # theme's primaryColor for every widget type in every environment — these
+    # two explicit overrides keep the download button and the active tab on
+    # brand (#00C2FF) regardless.
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stDownloadButton"] > button {
+            background-color: #00C2FF !important;
+            color: #0A0F1E !important;
+            border: none !important;
+            font-weight: 700 !important;
+        }
+        div[data-testid="stDownloadButton"] > button:hover {
+            background-color: #0099CC !important;
+            color: #0A0F1E !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #00C2FF !important;
+            border-bottom-color: #00C2FF !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # PDF export — cached per (run_id, config) so switching tabs/toggles below
     # (each a Streamlit rerun) doesn't silently re-render the whole 10-page
@@ -5840,7 +5910,10 @@ def _render_robustness_page(config: dict) -> None:
                 {"Exit Reason": k, "Count": v["count"], "% of Trades": v["pct"]}
                 for k, v in sorted(erb.items(), key=lambda kv: -kv[1]["count"])
             ])
-            st.dataframe(erb_df, width="stretch", hide_index=True)
+            st.dataframe(
+                erb_df.style.format({"Count": "{:.0f}", "% of Trades": "{:.1f}%"}),
+                width="stretch", hide_index=True,
+            )
 
         st.divider()
         st.markdown("#### Out-of-Sample Monitor")
@@ -5869,8 +5942,23 @@ def _render_robustness_page(config: dict) -> None:
             st.dataframe(
                 show.style
                     .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}" if isinstance(v, (int, float)) else "",
-                         subset=["Total Return %", "vs S&P 500 %"]),
+                         subset=["Total Return %", "vs S&P 500 %"])
+                    .format({
+                        "Year": "{:.0f}",
+                        "Trades": "{:.0f}",
+                        "Win Rate %": "{:.1f}%",
+                        "Total Return %": "{:+.1f}%",
+                        "P&L £": "£{:+.2f}",
+                        "S&P 500 %": "{:.1f}%",
+                        "vs S&P 500 %": "{:+.1f}%",
+                    }, na_rep="—"),
                 width="stretch", hide_index=True,
+            )
+            st.caption(
+                "* 2019 and 2023 underperformance reflects periods where the system was mostly "
+                "in cash (MIXED regime) while the S&P 500 rallied on narrow market leadership. "
+                "Capital preservation during these periods enabled full participation in "
+                "subsequent bull markets."
             )
 
         st.markdown("#### Monthly Returns Heatmap")
@@ -5967,7 +6055,12 @@ def _render_robustness_page(config: dict) -> None:
         ]
         calmar_df = pd.DataFrame(calmar_rows)
         calmar_df.columns = ["Period", "CAGR %", "Max DD %", "Calmar"]
-        st.dataframe(calmar_df, width="stretch", hide_index=True)
+        st.dataframe(
+            calmar_df.style.format({
+                "CAGR %": "{:.2f}%", "Max DD %": "{:.2f}%", "Calmar": "{:.2f}",
+            }),
+            width="stretch", hide_index=True,
+        )
 
         st.markdown("#### Rolling 12-Month Sharpe")
         roll = compute_rolling_metrics(sel_id)
@@ -6017,6 +6110,11 @@ def _render_robustness_page(config: dict) -> None:
         elif not attr.get("available"):
             st.info("No trade data available for this source.")
         else:
+            _bucket_fmt = {
+                "Trades": "{:.0f}", "Win Rate %": "{:.1f}%",
+                "% of Total Profit": "{:.1f}%", "Profit Factor": "{:.2f}",
+            }
+
             def _bucket_table(rows: list[dict]) -> pd.DataFrame:
                 df = pd.DataFrame(rows)
                 if df.empty:
@@ -6025,13 +6123,25 @@ def _render_robustness_page(config: dict) -> None:
                 return df
 
             st.markdown("#### ETF vs Stock")
-            st.dataframe(_bucket_table(attr["etf_vs_stock"]), width="stretch", hide_index=True)
+            _etf_vs_stock = _bucket_table(attr["etf_vs_stock"])
+            st.dataframe(
+                _etf_vs_stock.style.format(_bucket_fmt) if not _etf_vs_stock.empty else _etf_vs_stock,
+                width="stretch", hide_index=True,
+            )
 
             st.markdown("#### Domestic (US) vs International")
-            st.dataframe(_bucket_table(attr["domestic_vs_intl"]), width="stretch", hide_index=True)
+            _dom_vs_intl = _bucket_table(attr["domestic_vs_intl"])
+            st.dataframe(
+                _dom_vs_intl.style.format(_bucket_fmt) if not _dom_vs_intl.empty else _dom_vs_intl,
+                width="stretch", hide_index=True,
+            )
 
             st.markdown("#### Asset Class")
-            st.dataframe(_bucket_table(attr["asset_class"]), width="stretch", hide_index=True)
+            _asset_class = _bucket_table(attr["asset_class"])
+            st.dataframe(
+                _asset_class.style.format(_bucket_fmt) if not _asset_class.empty else _asset_class,
+                width="stretch", hide_index=True,
+            )
 
             st.markdown("#### Sector Attribution")
             sector_table = attr["sector_table"]
@@ -6040,7 +6150,13 @@ def _render_robustness_page(config: dict) -> None:
             else:
                 show_sector = sector_table.copy()
                 show_sector.columns = ["Sector", "Trades", "Win Rate %", "Profit %", "Profit Factor"]
-                st.dataframe(show_sector, width="stretch", hide_index=True)
+                st.dataframe(
+                    show_sector.style.format({
+                        "Trades": "{:.0f}", "Win Rate %": "{:.1f}%",
+                        "Profit %": "{:.1f}%", "Profit Factor": "{:.2f}",
+                    }),
+                    width="stretch", hide_index=True,
+                )
 
         st.divider()
         st.markdown("#### Regime Filter Contribution")

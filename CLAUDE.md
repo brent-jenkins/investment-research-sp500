@@ -162,6 +162,18 @@ Key config sections added since initial release:
 - `backtest.entry_signal`, `entry_signal_overrides`, `allowed_entry_regimes` — entry gating for `analysis/backtest.py:simulate_trades()`. `entry_signal: "STRONG_BUY"` limits entries to STRONG_BUY/STRONG_SELL; `"BUY"` also accepts BUY/SELL. `entry_signal_overrides` applies a different threshold per detected regime (see "Per-regime entry signal overrides" below). `allowed_entry_regimes` blocks new entries entirely in any regime not listed (see "Regime entry gate" below) — checked before `entry_signal_overrides`. Kept under `backtest:` rather than `trading212_invest:`/`trading212_stocks:` because simulated backtest trades can go LONG or SHORT, unlike those two long-only cash-account automation paths. (These keys previously lived under a `virtual_trading:` section that also drove a now-removed live automated paper-trading feature — see "Removed: virtual trading" below.)
 - `trading212_invest.enabled`, `live`, `max_position_gbp`, `max_total_deployed`, `max_open_positions`, `entry_signal`, `entry_signal_overrides`, `allowed_entry_regimes`, `exit_signal`, `ucits_mapping` — control T212 Invest API integration. `entry_signal: "STRONG_BUY"` restricts entries to STRONG_BUY only; `"BUY"` also accepts BUY or STRONG_BUY (same pattern for `exit_signal`). `entry_signal_overrides` applies a different threshold per detected regime; `allowed_entry_regimes` blocks entries entirely outside the listed regimes (see "Per-regime entry signal overrides" and "Regime entry gate" below). `max_open_positions` (default 999 when absent — unlimited in practice) caps the number of simultaneously open positions regardless of `max_total_deployed`, checked in the BUY phase immediately after the deployed-capital check — see "Broker integration — Trading212 Invest" below. `ucits_mapping` maps internal research tickers to T212 UCITS instrument IDs — only mapped tickers receive automated orders. Requires `T212_API_KEY` and `T212_API_SECRET` env vars. `live: false` is the hard default and is enforced in code. `position_sizing`, `var_confidence`, `var_lookback_days`, `max_risk_pct`, `min_position_gbp` (also present, independently, under `trading212_stocks`) control VaR-based position sizing — see "VaR position sizing" below; `max_position_gbp` remains the hard ceiling either way.
 
+## Pre-Demo Checklist
+
+Before opening the laptop in front of an investor:
+1. Open Status page — confirm no OVERDUE rows in Pipeline table
+2. Open Macro Dashboard — confirm no "(stale — N d old)" warnings on Asia tiles
+3. Send a test email from Status page — confirm "SP500INVEST" branding in subject and header
+4. Confirm both services running: `systemctl status investment-research investment-research-scheduler`
+5. Note current regime and prepare verbal explanation for why entries are/aren't blocked
+6. Have the daemon incident explanation ready for Performance page (7 pre-fix trades)
+
+Suggested demo flow: Daily Briefing → Signals → Charts (live ticker) → Backtest → Robustness → Performance → Status
+
 ## Running tests
 
 ```powershell

@@ -1124,6 +1124,10 @@ def _pdf_styles() -> dict[str, ParagraphStyle]:
             "TableCell", parent=base["Normal"], fontName="Helvetica",
             fontSize=8, leading=10.5, textColor=_PDF_BODY, spaceAfter=0,
         ),
+        "Footnote": ParagraphStyle(
+            "Footnote", parent=base["Normal"], fontName="Helvetica-Oblique",
+            fontSize=7.8, leading=10.5, textColor=colors.grey, spaceAfter=4,
+        ),
     }
 
 
@@ -1496,6 +1500,13 @@ def _pdf_page_annual_returns(styles: dict, annual: pd.DataFrame, calmar: dict, r
             f"{vs:+.1f}%" if pd.notna(vs) else "—",
         ])
     flow.append(_pdf_table(rows, col_widths=[1.6 * cm, 1.8 * cm, 2 * cm, 2.2 * cm, 2.8 * cm, 2.4 * cm, 2.4 * cm]))
+    flow.append(Paragraph(
+        "* 2019 and 2023 underperformance reflects periods where the system was mostly "
+        "in cash (MIXED regime) while the S&amp;P 500 rallied on narrow market leadership. "
+        "Capital preservation during these periods enabled full participation in subsequent "
+        "bull markets.",
+        styles["Footnote"],
+    ))
     flow.append(Spacer(1, 0.3 * cm))
 
     # Risk-adjusted comparison replaces a raw "outperformed N of M years"
