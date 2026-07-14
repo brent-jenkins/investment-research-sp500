@@ -20,10 +20,11 @@ only reads the resulting with_regime_filter / without_regime_filter columns.
 
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import matplotlib
 matplotlib.use("Agg")  # headless — no display server, must be set before pyplot is imported anywhere in-process
@@ -53,9 +54,24 @@ from sqlalchemy import text
 
 from analysis.backtest import get_run, get_run_trades
 from analysis.backtest_metrics import compute_metrics, equity_curve, equity_curve_gbp
-from data.database import get_engine
+from data.database import get_engine, get_metadata, get_metadata_str
 
 logger = logging.getLogger(__name__)
+
+# UK local-time formatting for this module's own report timestamps. Cannot
+# import main.py:_fmt_uk() — main.py imports FROM this module, so the reverse
+# import would be circular — so it's reimplemented here, independently, the
+# same way CLAUDE.md documents output/briefing.py doing for its own emails.
+_UK_TZ = ZoneInfo("Europe/London")
+
+
+def _fmt_uk_time(dt: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Convert a naive-UTC (or UTC-aware) datetime to UK local time and format it."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    uk = dt.astimezone(_UK_TZ)
+    abbr = "BST" if uk.dst() else "GMT"
+    return f"{uk.strftime(fmt)} {abbr}"
 
 # ---------------------------------------------------------------------------
 # Parameter freeze — every result dated on or before this date used a config
@@ -1667,35 +1683,125 @@ def _pdf_page_walk_forward(styles: dict, wf: pd.DataFrame) -> list:
     return flow
 
 
-def _current_regime_note(config: dict) -> str:
-    """One sentence naming the current regime and whether either T212
-    automation path is currently unblocked for new entries — used on the
-    Live Validation page's zero-live-trades placeholder so it never just
-    says "no trades" without explaining why, the same way main.py's Daily
-    Briefing narrative avoids contradicting its own status bar. Reads the
-    live DB (the regime most recently stamped on the ^GSPC signals row) —
-    a real-time reflection of the moment the report was generated, not a
-    property of the backtest run itself."""
+def _next_scheduled_run_label(config: dict) -> Optional[str]:
+    """Soonest of the three weekday analysis runs (pre-market/US-open/EOD),
+    formatted in UK local time. Mirrors main.py's own "Next Scheduled Run"
+    Status page computation (_next_run_for_time() + the soonest-of-three
+    loop) exactly — reimplemented here rather than imported, since main.py
+    imports FROM this module and importing back would be circular."""
+    runs_cfg = (config.get("scheduler") or {}).get("runs") or {}
+    labels = {"pre_market": "Pre-Market", "us_open": "US Open", "eod": "End of Day"}
+
+    def _next_run_for_time(hour: int, minute: int) -> datetime:
+        now = datetime.utcnow()
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        while candidate.weekday() >= 5:  # skip Sat (5) / Sun (6)
+            candidate += timedelta(days=1)
+        return candidate
+
+    next_dt, next_label = None, None
+    for run_name, label in labels.items():
+        run_cfg = runs_cfg.get(run_name, {})
+        candidate = _next_run_for_time(int(run_cfg.get("hour", 0)), int(run_cfg.get("minute", 0)))
+        effective_label = "Monday Pre-Market" if (run_name == "pre_market" and candidate.weekday() == 0) else label
+        if next_dt is None or candidate < next_dt:
+            next_dt, next_label = candidate, effective_label
+
+    if next_dt is None:
+        return None
+    return f"{next_label} — {_fmt_uk_time(next_dt)}"
+
+
+def compute_current_system_status(config: dict) -> dict:
+    """Live operational snapshot at report-generation time: market regime,
+    whether new entries are currently permitted, open T212 position count,
+    account value, drawdown-scaling tier, and the last/next scheduled
+    analysis run.
+
+    Distinct from every other compute_*() function in this module: those
+    all read a frozen, completed backtest run keyed by run_id; this one
+    reads the live system state instead, for the Live Validation page's
+    "Current System Status" section (see CLAUDE.md's Live Validation
+    notes) — it takes no run_id and its result changes from one call to
+    the next as the live system's own state changes.
+
+    Every field is fetched independently and defensively: a missing T212
+    snapshot, an undetermined regime, or absent scheduler config must never
+    raise or block PDF generation. A field this function couldn't resolve
+    is left None; the page-builder renders "Unknown" / "Data unavailable"
+    for those rather than a fabricated value.
+    """
+    status: dict = {
+        "regime": None,
+        "invest_allowed": None,
+        "stock_allowed": None,
+        "open_positions": None,
+        "account_value_gbp": None,
+        "drawdown_pct": None,
+        "drawdown_status": None,
+        "drawdown_scale_factor": None,
+        "last_analysis_run": None,
+        "next_scheduled_run": None,
+    }
+
     try:
         from analysis.regime import get_latest_regime_name, is_entry_allowed  # noqa: PLC0415  local import — mirrors analysis/backtest.py's own pattern for regime.py functions
 
         regime_name = get_latest_regime_name()
-        if not regime_name:
-            return "The current market regime could not be determined."
-
-        invest_allowed = is_entry_allowed(config, regime_name, "trading212_invest")
-        stock_allowed  = is_entry_allowed(config, regime_name, "trading212_stocks")
-        if invest_allowed or stock_allowed:
-            return f"The system is currently in {regime_name} regime — new entries are currently permitted."
-        return (
-            f"The system is currently in {regime_name} regime — entries are blocked until "
-            "TRENDING_BULL conditions are confirmed."
-        )
+        status["regime"] = regime_name
+        if regime_name:
+            status["invest_allowed"] = is_entry_allowed(config, regime_name, "trading212_invest")
+            status["stock_allowed"] = is_entry_allowed(config, regime_name, "trading212_stocks")
     except Exception:
-        return "The current market regime could not be determined."
+        logger.exception("compute_current_system_status: regime lookup failed")
+
+    account_value_gbp = None
+    try:
+        raw_account = get_metadata_str("t212_account_snapshot")
+        if raw_account:
+            account_value_gbp = json.loads(raw_account).get("totalValue")
+            status["account_value_gbp"] = account_value_gbp
+    except Exception:
+        logger.exception("compute_current_system_status: account snapshot read failed")
+
+    try:
+        raw_positions = get_metadata_str("t212_positions_snapshot")
+        if raw_positions:
+            status["open_positions"] = len(json.loads(raw_positions))
+    except Exception:
+        logger.exception("compute_current_system_status: positions snapshot read failed")
+
+    if account_value_gbp is not None:
+        try:
+            from analysis.risk import compute_drawdown_scale_factor  # noqa: PLC0415
+
+            scale_factor, dd_pct, dd_status = compute_drawdown_scale_factor(
+                account_value_gbp=account_value_gbp, config=config, section="trading212_invest",
+            )
+            status["drawdown_pct"] = dd_pct
+            status["drawdown_status"] = dd_status
+            status["drawdown_scale_factor"] = scale_factor
+        except Exception:
+            logger.exception("compute_current_system_status: drawdown lookup failed")
+
+    try:
+        last_run = get_metadata("last_full_refresh")
+        if last_run:
+            status["last_analysis_run"] = _fmt_uk_time(last_run)
+    except Exception:
+        logger.exception("compute_current_system_status: last analysis run lookup failed")
+
+    try:
+        status["next_scheduled_run"] = _next_scheduled_run_label(config)
+    except Exception:
+        logger.exception("compute_current_system_status: next scheduled run computation failed")
+
+    return status
 
 
-def _pdf_page_live_validation(styles: dict, config: dict, eq: dict, run: dict, live: dict) -> list:
+def _pdf_page_live_validation(styles: dict, config: dict, eq: dict, run: dict, live: dict, status: dict) -> list:
     flow = [Paragraph("Live Validation", styles["SectionTitle"])]
     flow.append(Paragraph("<b>Out-of-Sample Performance Tracking</b>", styles["Body"]))
     flow.append(Spacer(1, 0.2 * cm))
@@ -1757,7 +1863,6 @@ def _pdf_page_live_validation(styles: dict, config: dict, eq: dict, run: dict, l
             "closed.",
             styles["Body"],
         ))
-        flow.append(Paragraph(_current_regime_note(config), styles["Body"]))
     else:
         flow.append(Paragraph("Live vs In-Sample Comparison", styles["SubHeading"]))
         exp_in_sample = eq.get("expectancy", {}).get("expectancy_pct", 0.0)
@@ -1777,6 +1882,84 @@ def _pdf_page_live_validation(styles: dict, config: dict, eq: dict, run: dict, l
         "backtest as the primary performance reference.",
         styles["Small"],
     ))
+
+    # --- Section 2: Current System Status -----------------------------------
+    # A distinct block from everything above: Section 1 is about historical/
+    # live *performance* (frozen backtest vs. real T212 fills since the
+    # freeze date); this section is the live operational state of the system
+    # at the moment the report was generated — never conflated with, and
+    # never used to explain, the performance figures above it.
+    flow.append(Spacer(1, 0.5 * cm))
+    flow.append(HRFlowable(width="100%", thickness=0.75, color=_PDF_NAVY))
+    flow.append(Spacer(1, 0.3 * cm))
+    flow.append(Paragraph("Current System Status", styles["SectionTitle"]))
+    flow.append(Spacer(1, 0.2 * cm))
+
+    _NA = "Data unavailable — run Refresh Data on Status page"
+    _GREEN, _AMBER, _RED = "#00875A", "#8A5A00", "#C0392B"
+
+    def _coloured(text: str, colour: Optional[str]) -> str:
+        return f'<font color="{colour}"><b>{text}</b></font>' if colour else f"<b>{text}</b>"
+
+    regime = status.get("regime")
+    regime_colour = {"MIXED": _AMBER, "TRENDING_BULL": _GREEN}.get(regime)
+    regime_text = _coloured(regime, regime_colour) if regime else _coloured("Unknown", None)
+
+    if regime is None:
+        entries_text = _coloured("Unknown", None)
+    elif status.get("invest_allowed") or status.get("stock_allowed"):
+        entries_text = _coloured("Allowed", _GREEN)
+    else:
+        entries_text = _coloured("Blocked", _RED)
+
+    open_positions = status.get("open_positions")
+    open_positions_text = str(open_positions) if open_positions is not None else _NA
+
+    account_value_gbp = status.get("account_value_gbp")
+    account_value_text = f"£{account_value_gbp:,.0f}" if account_value_gbp is not None else _NA
+
+    drawdown_pct = status.get("drawdown_pct")
+    drawdown_pct_text = f"{drawdown_pct:.1f}%" if drawdown_pct is not None else _NA
+
+    dd_status = status.get("drawdown_status")
+    dd_scale = status.get("drawdown_scale_factor")
+    if dd_status is None:
+        dd_text = _coloured("Unknown", None)
+    else:
+        dd_colour = {"NORMAL": _GREEN, "CAUTION": _AMBER, "REDUCED": _AMBER, "MINIMAL": _RED}.get(dd_status)
+        dd_label = f"{dd_status} ({dd_scale:.0%} of normal size)" if dd_scale is not None else dd_status
+        dd_text = _coloured(dd_label, dd_colour)
+
+    last_analysis_text = status.get("last_analysis_run") or "Unknown"
+    next_run_text = status.get("next_scheduled_run") or "Unknown"
+
+    status_box = Table([[Paragraph(
+        f"Market Regime: {regime_text}<br/>"
+        f"New Entries: {entries_text}<br/>"
+        f"Open Positions: <b>{open_positions_text}</b><br/>"
+        f"Account Value: <b>{account_value_text}</b><br/>"
+        f"Drawdown from Peak: <b>{drawdown_pct_text}</b><br/>"
+        f"Drawdown Scale Factor: {dd_text}<br/>"
+        f"Last Analysis Run: <b>{last_analysis_text}</b><br/>"
+        f"Next Scheduled Run: <b>{next_run_text}</b>",
+        styles["Body"],
+    )]], colWidths=[16.5 * cm])
+    status_box.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8F4FD")),
+        ("BOX",           (0, 0), (-1, -1), 1.2, _PDF_NAVY),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+    ]))
+    flow.append(status_box)
+    flow.append(Spacer(1, 0.2 * cm))
+    flow.append(Paragraph(
+        "Operational status at time of report generation. Reflects live system state, not "
+        "historical performance.",
+        styles["Small"],
+    ))
+
     return flow
 
 
@@ -1856,6 +2039,7 @@ def generate_robustness_pdf(run_id: int, config: dict) -> bytes:
     rfc    = compute_regime_filter_contribution(run_id)
     wf     = compute_walk_forward_evidence(run_id)
     live   = compute_live_validation(run_id)
+    status = compute_current_system_status(config)
 
     styles = _pdf_styles()
     buf = BytesIO()
@@ -1875,7 +2059,7 @@ def generate_robustness_pdf(run_id: int, config: dict) -> bytes:
         _pdf_page_attribution(styles, attr, rfc),
         _pdf_page_backtest_evidence(styles, run_id, config, run, eq),
         _pdf_page_walk_forward(styles, wf),
-        _pdf_page_live_validation(styles, config, eq, run, live),
+        _pdf_page_live_validation(styles, config, eq, run, live, status),
         _pdf_page_methodology(styles),
     ]
 
