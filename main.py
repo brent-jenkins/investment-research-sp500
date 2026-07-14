@@ -5901,24 +5901,49 @@ def _render_robustness_page(config: dict) -> None:
         if roll.empty:
             st.info("Not enough trade history for a rolling window.")
         else:
+            # The rolling Sharpe axis is clipped to [-2, 2] for display only —
+            # early-period windows (pre-2020) have too few trades for a
+            # meaningful Sharpe estimate and can swing to ~-8, which would
+            # otherwise compress every later, genuinely-informative reading
+            # (recent values sit around +0.9) into a sliver at the top of
+            # the axis. The underlying `roll["rolling_sharpe"]` is untouched.
+            sharpe_display = roll["rolling_sharpe"].clip(lower=-2, upper=2)
+
             fig2 = go.Figure()
             fig2.add_trace(go.Scatter(
                 x=roll["date"], y=roll["rolling_return_pct"], name="Rolling 12M Return %",
                 mode="lines", line=dict(color="#3b82f6", width=2), yaxis="y1",
             ))
             fig2.add_trace(go.Scatter(
-                x=roll["date"], y=roll["rolling_sharpe"], name="Rolling 12M Sharpe",
+                x=roll["date"], y=sharpe_display, name="Rolling 12M Sharpe",
                 mode="lines", line=dict(color="#f59e0b", width=2, dash="dot"), yaxis="y2",
             ))
+            fig2.add_shape(
+                type="line", xref="paper", x0=0, x1=1, yref="y2", y0=1.0, y1=1.0,
+                line=dict(color="#00C2FF", width=1, dash="dash"),
+            )
+            fig2.add_annotation(
+                xref="paper", x=1, y=1.0, yref="y2", xanchor="right", yanchor="bottom",
+                text="Sharpe = 1.0 (professional benchmark)", showarrow=False,
+                font=dict(color="#00C2FF"),
+            )
             fig2.update_layout(
                 title="Rolling 12-Month Return % and Sharpe",
                 height=350, margin=dict(l=0, r=0, t=40, b=0),
                 yaxis=dict(title="Return %"),
-                yaxis2=dict(title="Sharpe", overlaying="y", side="right"),
+                yaxis2=dict(
+                    title="Sharpe", overlaying="y", side="right",
+                    range=[-2, 2], tickvals=[-2, -1, 0, 1, 2], ticktext=["-2", "-1", "0", "1", "2"],
+                    zeroline=True, zerolinecolor="#8899AA", zerolinewidth=1, gridcolor="#1E2D45",
+                ),
                 legend=dict(orientation="h", y=1.1),
             )
             _apply_dark_theme(fig2)
             st.plotly_chart(fig2, width="stretch")
+            st.caption(
+                "Early period Sharpe values (pre-2020) reflect insufficient rolling window data "
+                "and are clipped to [-2, 2] for readability. Actual early values reached -8."
+            )
 
     # ── Panel 3: Risk Analysis ───────────────────────────────────────────────
     with tab_risk:
@@ -5949,20 +5974,34 @@ def _render_robustness_page(config: dict) -> None:
         if roll.empty:
             st.info("Not enough trade history for a rolling window.")
         else:
+            # See the identical clipping note on the combined Return & Sharpe
+            # chart above — same reasoning, same [-2, 2] display-only clip.
+            sharpe_display = roll["rolling_sharpe"].clip(lower=-2, upper=2)
+
             fig3 = go.Figure()
             fig3.add_trace(go.Scatter(
-                x=roll["date"], y=roll["rolling_sharpe"], name="Rolling 12M Sharpe",
+                x=roll["date"], y=sharpe_display, name="Rolling 12M Sharpe",
                 mode="lines", line=dict(color="#6366f1", width=2),
             ))
-            fig3.add_hline(y=1.0, line_dash="dash", line_color="#94a3b8",
-                            annotation_text="Sharpe = 1.0 (professional benchmark)")
+            fig3.add_hline(y=1.0, line_dash="dash", line_color="#00C2FF",
+                            annotation_text="Sharpe = 1.0 (professional benchmark)",
+                            annotation_font_color="#00C2FF")
             fig3.update_layout(
                 title="Rolling 12-Month Sharpe Ratio",
-                xaxis_title="Date", yaxis_title="Sharpe",
+                xaxis_title="Date",
+                yaxis=dict(
+                    title="Sharpe", range=[-2, 2], tickvals=[-2, -1, 0, 1, 2],
+                    ticktext=["-2", "-1", "0", "1", "2"],
+                    zeroline=True, zerolinecolor="#8899AA", zerolinewidth=1,
+                ),
                 height=320, margin=dict(l=0, r=0, t=40, b=0),
             )
             _apply_dark_theme(fig3)
             st.plotly_chart(fig3, width="stretch")
+            st.caption(
+                "Early period Sharpe values (pre-2020) reflect insufficient rolling window data "
+                "and are clipped to [-2, 2] for readability. Actual early values reached -8."
+            )
 
     # ── Panel 4: Attribution ─────────────────────────────────────────────────
     with tab_attr:
