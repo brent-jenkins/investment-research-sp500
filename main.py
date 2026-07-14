@@ -720,17 +720,19 @@ def _apply_dark_theme(fig: go.Figure) -> go.Figure:
     return it for chaining.
 
     Every chart in the app should route through this rather than setting
-    `template="plotly_dark"` (or nothing) directly — Plotly's own dark
-    template uses a generic dark grey, not the brand's navy
-    (`#0A0F1E`/`#111829`), and a single shared helper means a future
-    palette tweak is a one-line edit here instead of an N-site find/replace.
-    Safe to call on any figure regardless of trace types (candlestick, bar,
-    heatmap, scatter, ...) since it only touches layout, never trace data.
+    `template="plotly_dark"` (or nothing) directly. Deliberately does NOT
+    set `paper_bgcolor`/`plot_bgcolor` — leaving those unset lets Plotly
+    inherit the surrounding background from the Streamlit theme
+    (`.streamlit/config.toml`'s `[theme]` section) automatically, so a
+    chart's background always matches the page it's embedded in rather
+    than being pinned to a hardcoded colour that only happens to match
+    today's navy palette. A future palette change in config.toml is then
+    a zero-line-edit change for charts. Safe to call on any figure
+    regardless of trace types (candlestick, bar, heatmap, scatter, ...)
+    since it only touches layout, never trace data.
     """
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor="#0A0F1E",
-        plot_bgcolor="#111829",
         font=dict(color="#CCDDEE"),
         xaxis=dict(gridcolor="#1E2D45", linecolor="#1E2D45"),
         yaxis=dict(gridcolor="#1E2D45", linecolor="#1E2D45"),
