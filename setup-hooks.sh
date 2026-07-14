@@ -17,7 +17,7 @@ cat > "$HOOKS_DIR/pre-push" << 'HOOK'
 # .git/hooks/pre-push — managed by setup-hooks.sh (re-run to update)
 #
 # Runs the test suite before any push to main, then schedules a deploy to
-# research.example.com in the background — restarting BOTH investment-research
+# platform.example.com in the background — restarting BOTH investment-research
 # (Streamlit UI) and investment-research-scheduler (the daemon that actually
 # fires scheduled jobs and places orders). Restarting only the UI service
 # leaves the scheduler daemon running stale in-memory code indefinitely,
@@ -51,14 +51,14 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
             exit 1
         fi
         echo ""
-        echo "✅ Tests passed — pushing now; deploy to research.example.com will follow in the background."
+        echo "✅ Tests passed — pushing now; deploy to platform.example.com will follow in the background."
         echo "    (deploy log: $LOG_FILE)"
 
         nohup bash -c '
             sleep 15
             ssh_key="$1"; vm_ip="$2"; log_file="$3"
             {
-                echo "[$(date -u +%FT%TZ)] Deploying to research.example.com"
+                echo "[$(date -u +%FT%TZ)] Deploying to platform.example.com"
                 ssh -i "$ssh_key" -o StrictHostKeyChecking=no "root@${vm_ip}" \
                     "cd /root/investment-research && git pull origin main && python3.11 -m pip install -r requirements.txt --quiet && (python3.11 -m pip install TA-Lib --quiet 2>/dev/null || true) && systemctl restart investment-research investment-research-scheduler"
             } >> "$log_file" 2>&1
@@ -78,5 +78,5 @@ chmod +x "$HOOKS_DIR/pre-push"
 echo "Done — pre-push hook installed at $HOOKS_DIR/pre-push"
 echo ""
 echo "Pushes to main will now run the test suite, then automatically deploy to"
-echo "research.example.com in the background ~15s after the push completes."
+echo "platform.example.com in the background ~15s after the push completes."
 echo "To skip both for a single push: git push --no-verify"

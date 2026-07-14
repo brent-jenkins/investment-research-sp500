@@ -2,7 +2,7 @@
 
 A self-hosted Streamlit application for daily market analysis, multi-module confluence signal generation, cross-asset correlation tracking, historical backtesting, and automated T212 Invest order placement.
 
-Live at [research.example.com](https://research.example.com) (password protected).
+Live at [platform.example.com](https://platform.example.com) (password protected).
 
 ---
 

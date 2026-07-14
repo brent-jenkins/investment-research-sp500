@@ -155,8 +155,8 @@ def _email_footer_h(note: str = "") -> str:
     return (
         '<div style="background-color:#1e293b;padding:14px 22px;border-radius:0 0 8px 8px">'
         '<p style="margin:0;font-size:12px;color:#64748b">'
-        '<a href="https://research.example.com" style="color:#60a5fa;text-decoration:none">'
-        'research.example.com</a>'
+        '<a href="https://platform.example.com" style="color:#60a5fa;text-decoration:none">'
+        'platform.example.com</a>'
         f'{extra}</p></div>'
     )
 
@@ -1158,7 +1158,7 @@ def _build_weekly_email(data: dict, config: dict) -> str:
     # ── Footer ────────────────────────────────────────────────────────
     L.append("")
     rule("-", 60)
-    L.append("Investment Research Dashboard  |  research.example.com")
+    L.append("Investment Research Dashboard  |  platform.example.com")
     next_sunday = now + timedelta(days=(6 - now.weekday() + 7) % 7 or 7)
     _uk_10 = _fmt_uk(next_sunday.replace(hour=10, minute=0, second=0, tzinfo=timezone.utc), "%H:%M")
     L.append(f"Next weekly summary: Sunday {next_sunday.strftime('%d %b %Y')} at {_uk_10}")
