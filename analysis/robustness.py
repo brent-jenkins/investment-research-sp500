@@ -970,6 +970,120 @@ _SYSTEM_DESCRIPTION_FULL = _SYSTEM_DESCRIPTION_SHORT + (
     "maximum-holding-period exit conditions."
 )
 
+# Static content for the Methodology & Disclaimers page's "Known Limitations &
+# Improvement Roadmap" section — documented proactively rather than derived
+# from any compute_*() function, since every figure quoted here is a specific,
+# already-known finding from earlier work (see CLAUDE.md's macro/regime-weight
+# rebalance and re-tuning-study sections for the underlying investigations).
+_KNOWN_LIMITATIONS: list[dict[str, str]] = [
+    {
+        "limitation": "Narrow rally problem",
+        "evidence": (
+            "System returned -5.4% in 2023 while S&amp;P 500 gained +26.3%. The 2023 rally was "
+            "driven by a narrow set of mega-cap tech stocks (Magnificent 7) while broad market "
+            "ADX was insufficient to confirm TRENDING_BULL."
+        ),
+        "impact": (
+            "Missed significant gains in markets where a small number of stocks drive index "
+            "returns without broad participation."
+        ),
+    },
+    {
+        "limitation": "Concentration risk",
+        "evidence": (
+            "February 2024 contributed +158.5% to monthly returns — largely driven by NVDA's "
+            "~60% gain in a single month."
+        ),
+        "impact": (
+            "Top 10 trades represent 31.2% of total profits. Exceptional months may not repeat "
+            "at the same magnitude."
+        ),
+    },
+    {
+        "limitation": "In-sample parameter optimisation",
+        "evidence": (
+            "All module weights, regime thresholds, and entry criteria were calibrated using "
+            "2019–2026 data. Parameter freeze date: 2026-07-13."
+        ),
+        "impact": (
+            "Backtest performance reflects an optimised system applied retrospectively. "
+            "Walk-forward validation (74.5% of windows profitable) and out-of-sample monitoring "
+            "from 2026-07-14 onward provide partial mitigation."
+        ),
+    },
+    {
+        "limitation": "US and TRENDING_BULL bias",
+        "evidence": (
+            "System is long-only, US-focused, and enters only in confirmed bull market "
+            "conditions. Approximately 56.1% of trading days are spent in cash."
+        ),
+        "impact": (
+            "No short-side exposure. Underperforms in extended bear markets where capital "
+            "preservation is the primary outcome rather than returns."
+        ),
+    },
+    {
+        "limitation": "Limited live track record",
+        "evidence": (
+            "Out-of-sample monitoring began 2026-07-13. Live T212 execution data is accumulating "
+            "but insufficient for statistical validation."
+        ),
+        "impact": (
+            "Live performance attribution and weight re-tuning deferred until 20+ closed "
+            "positions are available."
+        ),
+    },
+    {
+        "limitation": "Module weight calibration",
+        "evidence": (
+            "The TRENDING_BULL regime weights were calibrated against a macro module that was "
+            "later discovered to have a data bug (fillna(0) producing near-zero scores). "
+            "Re-tuning study was inconclusive pending more live data."
+        ),
+        "impact": (
+            "Module weights may be suboptimally calibrated. Re-tuning is prioritised once "
+            "sufficient live execution data is available."
+        ),
+    },
+]
+
+_IMPROVEMENT_ROADMAP: list[tuple[str, list[str]]] = [
+    (
+        "Near-term (next 6 months — pending live data accumulation):",
+        [
+            "Full six-module weight re-tuning on real T212 execution data (20+ closed positions required)",
+            "Per-ticker geographic exposure weighting — regional macro scores applied per asset based on revenue geography",
+            "2-state Hidden Markov Model recalibration — bull vs non-bull, replacing failed 3-state implementation",
+        ],
+    ),
+    (
+        "Medium-term (6–18 months — pending regulatory and capital):",
+        [
+            "FCA authorisation for automated investment advice — required for B2C retail launch in the UK",
+            "Short-side execution via IG API — activates TRENDING_BEAR regime signals currently generated but not executed",
+            "VAR lead/lag correlation analysis — captures predictive relationships between asset classes (e.g. copper leading equities)",
+            "Multi-broker API support — reduces single-broker dependency, enables broader instrument universe",
+        ],
+    ),
+    (
+        "Longer-term (18+ months — scale and product):",
+        [
+            "Mobile-first retail interface — consumer-grade UX for non-technical investors",
+            "Multi-currency account support — GBP, USD, EUR portfolio management",
+            "Institutional white-label API — signal engine and regime detection as standalone B2B product",
+            "Global market expansion — US, European, Asian exchange coverage with per-market regime detection",
+        ],
+    ),
+]
+
+_FOUNDERS_NOTE = (
+    "This is Version 1.0. It demonstrably works — the regime gate preserved capital during the "
+    "COVID crash and 2022 bear market, and the system captured exceptional momentum moves in "
+    "2024-2025. The limitations documented above are known quantities, not unknowns. The "
+    "improvement roadmap is clear and prioritised. The question is not whether the system works, "
+    "but how much better it can get with the right capital, talent, and regulatory access."
+)
+
 
 def _pdf_styles() -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()
@@ -1005,6 +1119,10 @@ def _pdf_styles() -> dict[str, ParagraphStyle]:
         "Banner": ParagraphStyle(
             "Banner", parent=base["Normal"], fontName="Helvetica-Bold",
             fontSize=10.5, alignment=TA_CENTER, spaceAfter=4,
+        ),
+        "TableCell": ParagraphStyle(
+            "TableCell", parent=base["Normal"], fontName="Helvetica",
+            fontSize=8, leading=10.5, textColor=_PDF_BODY, spaceAfter=0,
         ),
     }
 
@@ -1998,6 +2116,9 @@ def _pdf_page_methodology(styles: dict) -> list:
         "Walk-forward validation methodology is available on request.",
     ]:
         flow.append(Paragraph(f"- {item}", styles["Body"]))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    flow.extend(_known_limitations_section(styles))
 
     flow.append(Spacer(1, 0.4 * cm))
     flow.append(HRFlowable(width="100%", thickness=0.5, color=_PDF_BORDER))
@@ -2007,6 +2128,112 @@ def _pdf_page_methodology(styles: dict) -> list:
         styles["Small"],
     ))
     return flow
+
+
+def _known_limitations_section(styles: dict) -> list:
+    """"Known Limitations & Improvement Roadmap" — the Methodology &
+    Disclaimers page's closing section, between "Backtest Assumptions and
+    Limitations" and the contact footer.
+
+    Deliberately static (no DB reads, no run_id): every figure quoted here
+    is a specific, already-known finding from earlier work (see CLAUDE.md's
+    macro-bug and TRENDING_BULL regime-weight re-tuning-study sections for
+    the underlying investigations) rather than something recomputed live —
+    this section documents what is already understood, not a fresh
+    analysis of the currently-selected run.
+
+    Each sub-section's own heading is paired with only its first row/bullet
+    inside a KeepTogether — enough to stop the heading being orphaned alone
+    at the bottom of a page — while the sub-section as a whole is left able
+    to flow across a page break, since the full section is long enough that
+    forcing it onto one page would either overflow or leave a large gap.
+    """
+    flow: list = [Paragraph("Known Limitations &amp; Improvement Roadmap", styles["SubHeading"])]
+    flow.append(Paragraph(
+        "The following limitations are documented proactively — not as disclaimers, but as "
+        "evidence that the system's boundaries are well understood. Each limitation represents "
+        "a quantified, identified opportunity for improvement rather than an unknown risk.",
+        styles["Body"],
+    ))
+    flow.append(Spacer(1, 0.2 * cm))
+
+    # --- Sub-section 1: Current Limitations ---------------------------------
+    col_widths = [3.3 * cm, 8.0 * cm, 5.2 * cm]
+    header_table = Table([["Limitation", "Evidence", "Impact"]], colWidths=col_widths)
+    header_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _PDF_NAVY),
+        ("TEXTCOLOR",     (0, 0), (-1, -1), colors.white),
+        ("FONTNAME",      (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.2),
+        ("GRID",          (0, 0), (-1, -1), 0.4, _PDF_BORDER),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+    ]))
+    first_row = _limitation_row(_KNOWN_LIMITATIONS[0], 0, styles, col_widths)
+    flow.append(KeepTogether([
+        Paragraph("Current Limitations", styles["SubHeading"]),
+        header_table,
+        first_row,
+    ]))
+    for i, item in enumerate(_KNOWN_LIMITATIONS[1:], start=1):
+        flow.append(_limitation_row(item, i, styles, col_widths))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    # --- Sub-section 2: Improvement Roadmap ---------------------------------
+    first_tier_heading, first_tier_bullets = _IMPROVEMENT_ROADMAP[0]
+    flow.append(KeepTogether([
+        Paragraph("Improvement Roadmap", styles["SubHeading"]),
+        Paragraph(f'<font color="#00C2FF"><b>{first_tier_heading}</b></font>', styles["Body"]),
+        Paragraph(f"→ {first_tier_bullets[0]}", styles["Body"]),
+    ]))
+    for bullet in first_tier_bullets[1:]:
+        flow.append(Paragraph(f"→ {bullet}", styles["Body"]))
+    for tier_heading, bullets in _IMPROVEMENT_ROADMAP[1:]:
+        flow.append(Paragraph(f'<font color="#00C2FF"><b>{tier_heading}</b></font>', styles["Body"]))
+        for bullet in bullets:
+            flow.append(Paragraph(f"→ {bullet}", styles["Body"]))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    # --- Sub-section 3: Founder's Note --------------------------------------
+    founders_box = Table([[Paragraph(f"<i>{_FOUNDERS_NOTE}</i>", styles["Body"])]], colWidths=[16.5 * cm])
+    founders_box.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8F4FD")),
+        ("BOX",           (0, 0), (-1, -1), 1.2, _PDF_NAVY),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+    ]))
+    flow.append(KeepTogether([
+        Paragraph("Founder's Note", styles["SubHeading"]),
+        founders_box,
+    ]))
+    return flow
+
+
+def _limitation_row(item: dict, index: int, styles: dict, col_widths: list[float]) -> KeepTogether:
+    """One row of the Known Limitations table, wrapped in KeepTogether so a
+    row is never split across a page break — each row is its own small
+    Table rather than one row of a larger combined Table, specifically so
+    KeepTogether can be applied per-row."""
+    bg = _PDF_LIGHT_GREY if index % 2 == 1 else colors.white
+    row = Table([[
+        Paragraph(f"<b>{item['limitation']}</b>", styles["TableCell"]),
+        Paragraph(item["evidence"], styles["TableCell"]),
+        Paragraph(f'<i><font color="#6B7280">{item["impact"]}</font></i>', styles["TableCell"]),
+    ]], colWidths=col_widths)
+    row.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), bg),
+        ("GRID",          (0, 0), (-1, -1), 0.4, _PDF_BORDER),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+    ]))
+    return KeepTogether(row)
 
 
 def generate_robustness_pdf(run_id: int, config: dict) -> bytes:

@@ -336,6 +336,27 @@ def test_generate_robustness_pdf_returns_valid_pdf_bytes(db_engine):
     assert pdf_bytes[:5] == b"%PDF-"
 
 
+def test_generate_robustness_pdf_includes_known_limitations_section(db_engine):
+    """The Methodology & Disclaimers page's closing section documents known
+    limitations and the improvement roadmap proactively — verify it renders
+    into a well-formed PDF (header check) and that its heading text actually
+    reaches the page, the same way the Live Validation page content checks
+    below verify their own sections via pypdf text extraction."""
+    run_id = _seed_run(db_engine, name="pdf-test-known-limitations")
+    _seed_trade(db_engine, run_id, ticker="AAPL", pnl_pct=0.05, pnl_gbp=50.0, is_win=True)
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 0
+    assert pdf_bytes[:5] == b"%PDF-"
+
+    text = _extract_pdf_text(pdf_bytes)
+    assert "Known Limitations" in text
+    assert "Improvement Roadmap" in text
+    assert "Founder" in text
+
+
 def test_generate_robustness_pdf_handles_empty_t212_pnl_gracefully(db_engine):
     """A fresh DB has zero t212_pnl rows — the Out-of-Sample Monitor and the
     Attribution page's Live/Combined sources must render a placeholder
