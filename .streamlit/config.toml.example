@@ -26,3 +26,9 @@ serverPort = 443
 [client]
 # "minimal" hides the Deploy button and reduces top-bar clutter.
 toolbarMode = "minimal"
+
+[general]
+# Reserved for future general-level settings. The browser tab title/icon
+# come from st.set_page_config(page_title="SP500Invest", page_icon="Z") in
+# main.py, not from a config.toml key — Streamlit has no [general] title
+# option — so this section is intentionally left empty for now.

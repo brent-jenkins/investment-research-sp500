@@ -931,6 +931,7 @@ _SCORE_SYMBOL: dict[int, str] = {1: "▲", 0: "●", -1: "▼"}
 def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str]) -> None:
     """Render the Signals page: regime card, generate button, ranked table."""
 
+    _render_page_wordmark("Signals")
     st.markdown("## Market Signals")
 
     # ---- Opportunity flags & regime overlays (top of page) ----------------
@@ -967,6 +968,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
 
     if not rows:
         st.info("No signals yet — signals are generated automatically after each data refresh.")
+        _render_footer()
         return
 
     _DIST_CFG = [
@@ -1412,6 +1414,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             + (f" · {n_analysis_rows} analysis-only hidden" if n_analysis_rows else "")
         )
 
+    _render_footer()
+
 
 # ---------------------------------------------------------------------------
 # Status page (also shown on Charts landing when no asset is selected)
@@ -1475,6 +1479,7 @@ def _pipeline_row(
 def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     """System status panel — rendered as the Status page and as the Charts landing."""
     st.cache_data.clear()
+    _render_page_wordmark("Status")
     st.markdown("## System Status")
 
     # ── Collect data needed for both status rows ──────────────────────────
@@ -2717,7 +2722,10 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 key="log_dl_7d",
             )
 
-    # Auto-refresh for log viewer only (opt-in via toggle).
+    _render_footer()
+
+    # Auto-refresh for log viewer only (opt-in via toggle) — after the
+    # footer so the page still renders its full content before any rerun.
     if _log_auto_refresh:
         import time as _time_mod  # noqa: PLC0415
         _time_mod.sleep(30)
@@ -2787,6 +2795,7 @@ _DIV_ICONS = {
 
 def _render_relationships_page(config: dict) -> None:
     """Render the Relationships page: divergence narratives, pair table, correlation heatmap."""
+    _render_page_wordmark("Relationships")
     from analysis.correlations import RELATIONSHIP_MAP as _REL_MAP
     _corr_ts  = get_metadata("last_analysis_run")
     _ts_str   = _fmt_uk(_corr_ts, "%Y-%m-%d %H:%M") if _corr_ts else "pending"
@@ -3075,6 +3084,8 @@ def _render_relationships_page(config: dict) -> None:
         )
         st.plotly_chart(fig_heat, width="stretch")
 
+    _render_footer()
+
 
 # ---------------------------------------------------------------------------
 # Charts landing (grouped asset cards)
@@ -3110,6 +3121,7 @@ def _render_charts_landing(config: dict) -> None:
     from sqlalchemy import text as sa_text
     from data.database import get_engine
 
+    _render_page_wordmark("Charts")
     st.markdown("## Charts")
     st.caption("Select an asset to view its price chart and indicators.")
 
@@ -3178,6 +3190,8 @@ def _render_charts_landing(config: dict) -> None:
                     st.session_state["selected_ticker"] = ticker
                     st.rerun()
         st.markdown("")
+
+    _render_footer()
 
 
 # ---------------------------------------------------------------------------
@@ -3852,6 +3866,7 @@ def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
 
 def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
     """Render the Daily Briefing: market overview, open trade monitor, opportunities."""
+    _render_page_wordmark("Daily Briefing")
     st.markdown("## Daily Briefing")
 
     _render_system_health_banner()
@@ -4796,12 +4811,15 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             "multiply by investment × leverage for GBP risk estimate."
         )
 
+    _render_footer()
+
 
 # ---------------------------------------------------------------------------
 # Backtest page
 # ---------------------------------------------------------------------------
 
 def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
+    _render_page_wordmark("Backtest")
     st.markdown("## Backtest")
     st.caption(
         "Replay the current signal logic over historical price data. "
@@ -5391,6 +5409,8 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                                     "Avg Return %", "N Trades", "Sharpe", "Max DD %"]
                 st.dataframe(show_wf, width="stretch", hide_index=True)
 
+    _render_footer()
+
 
 def _t212_asset_type_map(config: dict) -> dict[str, str]:
     """Map research ticker -> 'ETF' or 'STOCK' via the T212 automation config.
@@ -5458,6 +5478,7 @@ def _render_performance_page(config: dict) -> None:
     reconstruction" in CLAUDE.md), not simulated/paper trades — there is no
     other trade source left in the app.
     """
+    _render_page_wordmark("Performance")
     st.title("Performance")
 
     # ── Section 1: Open Positions ───────────────────────────────────────────
@@ -5632,6 +5653,32 @@ def _render_performance_page(config: dict) -> None:
     else:
         st.caption("No learned weights have been computed yet — insufficient T212 closed-position history.")
 
+    _render_footer()
+
+
+def _render_page_wordmark(page_name: str) -> None:
+    """Small "SP500INVEST · <page>" brand prefix at the top of a page's main
+    content area — a subtle identity mark, not a replacement for that
+    page's own st.markdown("## ...") title which still follows it."""
+    st.markdown(
+        '<span style="font-size: 0.85rem; font-weight: 700; letter-spacing: 0.15em; color: #00C2FF;">SP500INVEST</span>'
+        f'<span style="font-size: 0.85rem; color: #8899AA; margin-left: 0.5rem;">{page_name}</span>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_footer() -> None:
+    """Branded footer shown at the bottom of every page."""
+    st.markdown("---")
+    st.markdown(
+        '<div style="text-align: center; color: #8899AA; font-size: 0.75rem; padding: 0.5rem 0;">'
+        'SP500INVEST &nbsp;·&nbsp; Systematic large-cap momentum research. &nbsp;·&nbsp; '
+        '<a href="mailto:hello@example.com" style="color: #00C2FF; text-decoration: none;">hello@example.com</a>'
+        ' &nbsp;·&nbsp; <a href="https://example.com" style="color: #00C2FF; text-decoration: none;">example.com</a>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
 
 def _render_out_of_sample_badge() -> None:
     """Small persistent caption shown at the top of every page except
@@ -5645,11 +5692,14 @@ def _render_out_of_sample_badge() -> None:
     oos = compute_out_of_sample_stats()
     oos_start = PARAMETER_FREEZE_DATE + timedelta(days=1)
     icon = "⚠️" if oos["status"] == "red" else "✅"
-    st.caption(
+    st.markdown(
+        '<div style="font-size: 0.8rem; color: #00C2FF;">'
         f"📊 In-Sample: {BACKTEST_START_DATE} → {PARAMETER_FREEZE_DATE}  |  "
         f"{icon} Out-of-Sample: {oos_start} → present  |  "
         f"Live trades: {oos['n_trades']}  |  "
         f"Live return: {oos['return_since_freeze_pct']:+.1f}%"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
 
@@ -5674,6 +5724,7 @@ def _render_robustness_page(config: dict) -> None:
     "Robustness page" section and analysis/robustness.py for the underlying
     computations; this function only assembles and renders them.
     """
+    _render_page_wordmark("Robustness")
     st.title("Robustness")
     st.caption(
         "A due-diligence view of the backtest engine itself — parameter-freeze "
@@ -5685,6 +5736,7 @@ def _render_robustness_page(config: dict) -> None:
     complete = [r for r in all_runs if r.get("status") == "complete"]
     if not complete:
         st.info("No completed backtest runs yet — run one from the Backtest page first.")
+        _render_footer()
         return
 
     run_opts = {f"#{r['id']} — {r['name']} ({r.get('total_trades', 0)} trades)": r["id"] for r in complete}
@@ -5939,14 +5991,16 @@ def _render_robustness_page(config: dict) -> None:
             ]
             st.dataframe(pd.DataFrame(rfc_rows), width="stretch", hide_index=True)
 
+    _render_footer()
+
 
 # Main UI
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     st.set_page_config(
-        page_title="Investment Research",
-        page_icon="📈",
+        page_title="SP500Invest",
+        page_icon="Z",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -5966,7 +6020,16 @@ def main() -> None:
 
     # ---- Sidebar -------------------------------------------------------
     with st.sidebar:
-        st.title("Investment Research")
+        st.sidebar.markdown("""
+            <div style="padding: 0.5rem 0 1rem 0;">
+                <div style="font-size: 1.4rem; font-weight: 800; letter-spacing: 0.12em; color: #00C2FF;">
+                    SP500INVEST
+                </div>
+                <div style="font-size: 0.7rem; color: #8899AA; letter-spacing: 0.05em; margin-top: 0.1rem;">
+                    Systematic large-cap momentum research.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
         st.divider()
 
         # Page navigation
@@ -6056,6 +6119,7 @@ def main() -> None:
         st.session_state["selected_ticker"] = None
         st.rerun()
 
+    _render_page_wordmark("Charts")
     st.markdown(f"## {name}")
     st.caption(f"Ticker: **{selected}**")
 
@@ -6082,6 +6146,7 @@ def main() -> None:
             f"No price data found for **{selected}**. "
             f"Data is refreshed automatically at {_uk_sched_time(21,30)} — use Manual Controls on the Status page to trigger an immediate pull."
         )
+        _render_footer()
         return
 
     # Key metrics row — always computed from the full loaded window so YTD
@@ -6116,6 +6181,8 @@ def main() -> None:
             display_df.sort_values("date", ascending=False).reset_index(drop=True),
             width="stretch",
         )
+
+    _render_footer()
 
 
 if __name__ == "__main__":
