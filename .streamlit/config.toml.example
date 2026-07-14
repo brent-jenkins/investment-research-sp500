@@ -32,3 +32,15 @@ toolbarMode = "minimal"
 # come from st.set_page_config(page_title="SP500Invest", page_icon="Z") in
 # main.py, not from a config.toml key — Streamlit has no [general] title
 # option — so this section is intentionally left empty for now.
+
+[theme]
+# SP500Invest dark navy brand theme — matches example.com and the pitch deck.
+# This drives the global background, sidebar background, input fields,
+# buttons, and primary accent colour automatically; custom inline HTML
+# elsewhere in main.py (cards, tables, badges) is colour-matched to these
+# same values by hand — see "SP500Invest brand identity" in CLAUDE.md.
+primaryColor = "#00C2FF"
+backgroundColor = "#0A0F1E"
+secondaryBackgroundColor = "#111829"
+textColor = "#CCDDEE"
+font = "sans serif"

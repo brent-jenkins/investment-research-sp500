@@ -458,9 +458,9 @@ _LEVEL_COLOUR = {
 
 def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") -> None:
     """Render a colour-coded status card into a Streamlit column."""
-    colour  = _LEVEL_COLOUR.get(level, "#6b7280")
+    colour  = _LEVEL_COLOUR.get(level, "#8899AA")
     sub_html = (
-        f'<div style="font-size:0.78rem;color:#64748b;margin-top:3px">'
+        f'<div style="font-size:0.78rem;color:#8899AA;margin-top:3px">'
         f'{html.escape(sub)}</div>'
     ) if sub else ""
     col.markdown(
@@ -715,6 +715,29 @@ def _parse_journal_line(raw: str) -> "dict | None":
     return {"ts": ts, "level": level, "message": msg, "raw": raw}
 
 
+def _apply_dark_theme(fig: go.Figure) -> go.Figure:
+    """Apply the SP500Invest dark-navy theme to a Plotly figure in place, and
+    return it for chaining.
+
+    Every chart in the app should route through this rather than setting
+    `template="plotly_dark"` (or nothing) directly — Plotly's own dark
+    template uses a generic dark grey, not the brand's navy
+    (`#0A0F1E`/`#111829`), and a single shared helper means a future
+    palette tweak is a one-line edit here instead of an N-site find/replace.
+    Safe to call on any figure regardless of trace types (candlestick, bar,
+    heatmap, scatter, ...) since it only touches layout, never trace data.
+    """
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0A0F1E",
+        plot_bgcolor="#111829",
+        font=dict(color="#CCDDEE"),
+        xaxis=dict(gridcolor="#1E2D45", linecolor="#1E2D45"),
+        yaxis=dict(gridcolor="#1E2D45", linecolor="#1E2D45"),
+    )
+    return fig
+
+
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
     """Build a Plotly candlestick + volume chart for a ticker."""
     fig = go.Figure()
@@ -753,12 +776,11 @@ def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Price",
         xaxis_rangeslider_visible=False,
-        template="plotly_dark",
         height=500,
         margin=dict(l=40, r=20, t=50, b=40),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
     )
-    return fig
+    return _apply_dark_theme(fig)
 
 
 def _volume_bar_chart(df: pd.DataFrame) -> go.Figure:
@@ -772,12 +794,11 @@ def _volume_bar_chart(df: pd.DataFrame) -> go.Figure:
     )
     fig.update_layout(
         yaxis_title="Volume",
-        template="plotly_dark",
         height=180,
         margin=dict(l=40, r=20, t=10, b=30),
         showlegend=False,
     )
-    return fig
+    return _apply_dark_theme(fig)
 
 
 def _render_indicator_panel(ticker: str) -> None:
@@ -872,11 +893,11 @@ def _render_indicator_panel(ticker: str) -> None:
 
         vol_regime = (row.get("vol_regime") or "NORMAL").upper()
         _vol_regime_colours = {
-            "LOW": "#26a69a", "NORMAL": "#6b7280", "HIGH": "#f59e0b", "ELEVATED": "#ef5350",
+            "LOW": "#26a69a", "NORMAL": "#8899AA", "HIGH": "#f59e0b", "ELEVATED": "#ef5350",
         }
-        _vr_colour = _vol_regime_colours.get(vol_regime, "#6b7280")
+        _vr_colour = _vol_regime_colours.get(vol_regime, "#8899AA")
         c5.markdown(
-            f"<div style='font-size:0.78rem;color:#94a3b8'>Vol Regime</div>"
+            f"<div style='font-size:0.78rem;color:#8899AA'>Vol Regime</div>"
             f"<div style='font-size:1.15rem;font-weight:600;color:{_vr_colour}'>{html.escape(vol_regime)}</div>",
             unsafe_allow_html=True,
         )
@@ -974,7 +995,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
     _DIST_CFG = [
         ("STRONG BUY",  "#16a34a"),
         ("BUY",         "#26a69a"),
-        ("NEUTRAL",     "#6b7280"),
+        ("NEUTRAL",     "#8899AA"),
         ("SELL",        "#f59e0b"),
         ("STRONG SELL", "#ef5350"),
     ]
@@ -993,7 +1014,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         if overlay_key not in active_overlays:
             continue
         meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-        _oc    = meta.get("colour", "#6b7280")
+        _oc    = meta.get("colour", "#8899AA")
         _label = html.escape(meta.get("label", overlay_key.replace("_", " ")))
         _body  = html.escape(meta.get("text", ""))
         overlay_strips += (
@@ -1002,7 +1023,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f"<span style='background:{_oc};color:#fff;padding:0 5px;"
             f"border-radius:2px;font-size:0.64rem;font-weight:800'>REGIME OVERLAY</span>"
             f"<strong style='color:{_oc};font-size:0.8rem'> {_label}</strong>"
-            f"<span style='color:#94a3b8;font-size:0.78rem'> — {_body}</span></div>"
+            f"<span style='color:#8899AA;font-size:0.78rem'> — {_body}</span></div>"
         )
 
     _cu_colour = "#d97706"
@@ -1021,8 +1042,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f"<span style='background:{_cu_colour};color:#fff;padding:0 5px;"
             f"border-radius:2px;font-size:0.64rem;font-weight:800'>CATCH-UP</span>"
             f"<strong style='color:#fbbf24;font-size:0.8rem'> {_td}</strong>"
-            f"<span style='color:#64748b;font-size:0.78rem'> {_sd} {_zs}{_cs}</span>"
-            f"<span style='color:#94a3b8;font-size:0.78rem'> — {_dd}</span></div>"
+            f"<span style='color:#8899AA;font-size:0.78rem'> {_sd} {_zs}{_cs}</span>"
+            f"<span style='color:#8899AA;font-size:0.78rem'> — {_dd}</span></div>"
         )
 
     macro_regional_strip = ""
@@ -1037,9 +1058,9 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         _REGION_COLOUR_SIG = {"us": "#16a34a", "europe": "#6366f1", "asia": "#f59e0b"}
         _REGION_LABEL_SIG   = {"us": "US", "europe": "EUROPE", "asia": "ASIA"}
         _region_pills = "".join(
-            f"<span style='background:{_REGION_COLOUR_SIG.get(r, '#6b7280')}18;"
-            f"border:1px solid {_REGION_COLOUR_SIG.get(r, '#6b7280')}55;"
-            f"color:{_REGION_COLOUR_SIG.get(r, '#6b7280')};padding:1px 7px;"
+            f"<span style='background:{_REGION_COLOUR_SIG.get(r, '#8899AA')}18;"
+            f"border:1px solid {_REGION_COLOUR_SIG.get(r, '#8899AA')}55;"
+            f"color:{_REGION_COLOUR_SIG.get(r, '#8899AA')};padding:1px 7px;"
             f"border-radius:3px;font-size:0.72rem;font-weight:700;white-space:nowrap;margin-right:4px'>"
             f"{_REGION_LABEL_SIG.get(r, r.upper())} {((v + 1) / 2):.0%}</span>"
             for r, v in _region_scores_sig.items()
@@ -1050,7 +1071,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             "<span style='background:#0ea5e9;color:#fff;padding:0 5px;"
             "border-radius:2px;font-size:0.64rem;font-weight:800'>MACRO REGIONS</span> "
             f"{_region_pills}"
-            "<span style='color:#94a3b8;font-size:0.78rem'>bullishness by region "
+            "<span style='color:#8899AA;font-size:0.78rem'>bullishness by region "
             "(macro_regional_weights) — see Macro Dashboard for detail</span></div>"
         )
 
@@ -1060,8 +1081,8 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
         f"background:{fg}22;border:1px solid {fg}55;flex:1;min-width:72px'>"
         f"<div style='color:{fg};font-weight:700;font-size:1.3rem'>{counts[lbl]}</div>"
-        f"<div style='color:#6b7280;font-size:0.62rem;font-weight:600'>{t_counts[lbl]} tradeable</div>"
-        f"<div style='color:#64748b;font-size:0.68rem;margin-top:1px'>{lbl}</div>"
+        f"<div style='color:#8899AA;font-size:0.62rem;font-weight:600'>{t_counts[lbl]} tradeable</div>"
+        f"<div style='color:#8899AA;font-size:0.68rem;margin-top:1px'>{lbl}</div>"
         f"</div>"
         for lbl, fg in _DIST_CFG
     )
@@ -1075,14 +1096,14 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         + f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px'>"
         + f"<span style='background:{colour};color:#fff;padding:2px 10px;border-radius:12px;"
         + f"font-size:0.82rem;font-weight:700'>{regime.replace('_', ' ')}</span>"
-        + f"<span style='color:#6b7280;font-size:0.79rem'>^GSPC {html.escape(price_pct)}</span>"
-        + f"<span style='color:#6b7280;font-size:0.79rem'>{adx_str}</span>"
-        + f"<span style='color:#6b7280;font-size:0.79rem'>{vix_str}</span>"
+        + f"<span style='color:#8899AA;font-size:0.79rem'>^GSPC {html.escape(price_pct)}</span>"
+        + f"<span style='color:#8899AA;font-size:0.79rem'>{adx_str}</span>"
+        + f"<span style='color:#8899AA;font-size:0.79rem'>{vix_str}</span>"
         + f"</div>"
-        + (f"<div style='font-size:0.82rem;color:#94a3b8;line-height:1.4;margin-bottom:6px'>"
+        + (f"<div style='font-size:0.82rem;color:#8899AA;line-height:1.4;margin-bottom:6px'>"
            f"{html.escape(note)}</div>" if note else "")
         + f"<div style='display:flex;gap:5px;margin-bottom:5px'>{dist_pills}</div>"
-        + f"<div style='font-size:0.71rem;color:#475569'>Signals: {html.escape(ts_str)}"
+        + f"<div style='font-size:0.71rem;color:#8899AA'>Signals: {html.escape(ts_str)}"
         + f" · updates at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} &amp; {_uk_sched_time(21,30)}</div>"
         + f"</div>",
         unsafe_allow_html=True,
@@ -1286,7 +1307,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
                     caution_tips.append(tip)
 
             support_html = (
-                f'<div style="color:#6b7280;font-size:0.72rem;margin-top:5px">'
+                f'<div style="color:#8899AA;font-size:0.72rem;margin-top:5px">'
                 f'✓ {" · ".join(support_tips[:2])}</div>'
             ) if support_tips else ""
             caution_html = (
@@ -1298,13 +1319,13 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
                 f'<div style="background:{card_fg}18;border-left:3px solid {card_fg};'
                 f'padding:8px 12px;border-radius:4px;margin-bottom:8px">'
                 f'<span style="font-weight:700;color:{card_fg}">{ticker}</span>'
-                f'<span style="color:#64748b;font-size:0.8rem;margin-left:8px">{name}</span><br>'
+                f'<span style="color:#8899AA;font-size:0.8rem;margin-left:8px">{name}</span><br>'
                 f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
                 f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.0%}</span>'
                 f'<div style="background:#374151;border-radius:2px;height:3px;margin-top:6px">'
                 f'<div style="background:{card_fg};width:{pct}%;height:3px;border-radius:2px"></div>'
                 f'</div>'
-                f'<span style="color:#6b7280;font-size:0.7rem">{agreeing}/5 modules agree</span>'
+                f'<span style="color:#8899AA;font-size:0.7rem">{agreeing}/5 modules agree</span>'
                 f'{support_html}'
                 f'{caution_html}'
                 f'</div>',
@@ -1393,7 +1414,7 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
         .map(_style_module, subset=module_cols)
         .map(lambda v: (
             "color:#16a34a;font-size:0.75rem;font-weight:600" if v == "Tradeable"
-            else "color:#6b7280;font-size:0.75rem" if v == "Analysis only"
+            else "color:#8899AA;font-size:0.75rem" if v == "Analysis only"
             else ""
         ), subset=["Type"])
         .format({"Score": "{:+.3f}"})
@@ -1457,20 +1478,20 @@ def _pipeline_row(
 
     return (
         f'<div style="display:flex;align-items:center;padding:9px 0;'
-        f'border-bottom:1px solid #f1f5f9;gap:0;font-size:0.88rem">'
+        f'border-bottom:1px solid #1E2D45;gap:0;font-size:0.88rem">'
         f'<div style="width:32px;flex-shrink:0;display:flex;justify-content:center;align-items:center">'
         f'<span style="display:block;width:10px;height:10px;border-radius:50%;background:{colour}"></span>'
         f'</div>'
-        f'<div style="flex:0 0 18%;min-width:0;font-weight:600;color:#1e293b;padding-right:8px">'
+        f'<div style="flex:0 0 18%;min-width:0;font-weight:600;color:#CCDDEE;padding-right:8px">'
         f'{html.escape(label)}</div>'
-        f'<div style="flex:0 0 17%;min-width:0;color:#475569;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
+        f'<div style="flex:0 0 17%;min-width:0;color:#8899AA;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
         f'{html.escape(ts_str)}</div>'
-        f'<div style="flex:0 0 7%;min-width:0;color:#94a3b8;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
+        f'<div style="flex:0 0 7%;min-width:0;color:#8899AA;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
         f'{html.escape(age_str)}</div>'
         f'<div style="flex:0 0 8%;min-width:0;padding-right:8px">'
         f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 9px;border-radius:4px;'
         f'font-size:0.73rem;font-weight:700;letter-spacing:0.04em">{badge}</span></div>'
-        f'<div style="flex:1;min-width:0;color:#64748b;font-size:0.82rem">'
+        f'<div style="flex:1;min-width:0;color:#8899AA;font-size:0.82rem">'
         f'{html.escape(desc)}</div>'
         f'</div>'
     )
@@ -1671,8 +1692,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     _THEAD = (
         '<div style="font-size:0.88rem">'
-        '<div style="display:flex;align-items:center;padding:4px 0 6px;border-bottom:2px solid #e2e8f0;'
-        'color:#94a3b8;font-size:0.70rem;text-transform:uppercase;letter-spacing:0.07em">'
+        '<div style="display:flex;align-items:center;padding:4px 0 6px;border-bottom:2px solid #1E2D45;'
+        'color:#8899AA;font-size:0.70rem;text-transform:uppercase;letter-spacing:0.07em">'
         '<div style="width:32px;flex-shrink:0"></div>'
         '<div style="flex:0 0 18%;padding-right:8px">Step</div>'
         '<div style="flex:0 0 17%;padding-right:8px">Last Run</div>'
@@ -2095,10 +2116,10 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                         "#f97316" if _bar_pct >= _deploy_limit * 0.85 else "#6366f1"
                     )
                     st.markdown(
-                        f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#64748b">'
+                        f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#8899AA">'
                         f'Deployed: £{_invested:,.0f} of £{_total:,.0f} '
                         f'(limit {int(_deploy_limit * 100)}%)</div>'
-                        f'<div style="background:#e2e8f0;border-radius:4px;height:6px">'
+                        f'<div style="background:#1E2D45;border-radius:4px;height:6px">'
                         f'<div style="background:{_bar_colour};width:{_bar_pct * 100:.1f}%;'
                         f'height:6px;border-radius:4px"></div></div>',
                         unsafe_allow_html=True,
@@ -2403,9 +2424,9 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.markdown(
         f'<div style="margin-bottom:10px">'
-        f'<span style="font-size:0.82rem;color:#64748b">Scheduler: </span>'
+        f'<span style="font-size:0.82rem;color:#8899AA">Scheduler: </span>'
         f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
-        + (f'<span style="font-size:0.75rem;color:#94a3b8;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
+        + (f'<span style="font-size:0.75rem;color:#8899AA;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
         + "</div>",
         unsafe_allow_html=True,
     )
@@ -2448,19 +2469,19 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     _dot, _badge = "#dc2626", "OVERDUE"
 
             _sh_rows.append(
-                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #f1f5f9;'
+                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
                 f'align-items:center;font-size:0.78rem">'
                 f'<div style="flex:0 0 22%;font-weight:600">{html.escape(_jlabel)}</div>'
-                f'<div style="flex:0 0 28%;color:#64748b;font-size:0.73rem">{html.escape(_jsched)}</div>'
+                f'<div style="flex:0 0 28%;color:#8899AA;font-size:0.73rem">{html.escape(_jsched)}</div>'
                 f'<div style="flex:0 0 25%">{html.escape(_nrt_str)}</div>'
-                f'<div style="flex:0 0 12%;color:#64748b">{html.escape(_until_str)}</div>'
+                f'<div style="flex:0 0 12%;color:#8899AA">{html.escape(_until_str)}</div>'
                 f'<div style="flex:0 0 13%;color:{_dot};font-weight:700">{html.escape(_badge)}</div>'
                 f'</div>'
             )
         _sh_head = (
             '<div style="font-size:0.82rem">'
-            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #e2e8f0;'
-            'color:#94a3b8;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
+            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
+            'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
             '<div style="flex:0 0 22%">Job</div>'
             '<div style="flex:0 0 28%">Schedule</div>'
             '<div style="flex:0 0 25%">Next Run</div>'
@@ -2529,19 +2550,19 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     _dot, _badge = "#dc2626", "OVERDUE"
 
             _sh_rows_d.append(
-                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #f1f5f9;'
+                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
                 f'align-items:center;font-size:0.78rem">'
                 f'<div style="flex:0 0 22%;font-weight:600">{html.escape(_jlabel)}</div>'
-                f'<div style="flex:0 0 28%;color:#64748b;font-size:0.73rem">{html.escape(_jsched)}</div>'
+                f'<div style="flex:0 0 28%;color:#8899AA;font-size:0.73rem">{html.escape(_jsched)}</div>'
                 f'<div style="flex:0 0 25%">{html.escape(_nrt_str)}</div>'
-                f'<div style="flex:0 0 12%;color:#64748b">{html.escape(_until_str)}</div>'
+                f'<div style="flex:0 0 12%;color:#8899AA">{html.escape(_until_str)}</div>'
                 f'<div style="flex:0 0 13%;color:{_dot};font-weight:700">{html.escape(_badge)}</div>'
                 f'</div>'
             )
         _sh_head_d = (
             '<div style="font-size:0.82rem">'
-            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #e2e8f0;'
-            'color:#94a3b8;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
+            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
+            'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
             '<div style="flex:0 0 22%">Job</div>'
             '<div style="flex:0 0 28%">Schedule</div>'
             '<div style="flex:0 0 25%">Next Run</div>'
@@ -2653,7 +2674,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                 _mc, _lc_col = "#cbd5e1", "#94a3b8"
             _line_htmls.append(
                 f'<div style="line-height:1.5;padding:1px 0">'
-                f'<span style="color:#475569">{html.escape(_p["ts"])}</span>'
+                f'<span style="color:#8899AA">{html.escape(_p["ts"])}</span>'
                 f'<span style="color:{_lc_col};font-weight:600;margin-left:6px">'
                 f'{html.escape(_lvl[:4])}</span>'
                 f'<span style="color:{_mc};margin-left:6px;word-break:break-all">'
@@ -2784,7 +2805,7 @@ def _initialise() -> None:
 _DIV_COLOURS = {
     "CONFIRMING": "#16a34a",
     "DIVERGING":  "#ef5350",
-    "NEUTRAL":    "#6b7280",
+    "NEUTRAL":    "#8899AA",
 }
 _DIV_ICONS = {
     "CONFIRMING": "✓",
@@ -2834,7 +2855,7 @@ def _render_relationships_page(config: dict) -> None:
                     f'<div style="border-left:3px solid #ef5350;background:#ef535018;'
                     f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
                     f'<span style="color:#ef5350;font-weight:700">⚠ {html.escape(p["label"])}</span>'
-                    f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
+                    f'<span style="color:#8899AA;font-size:0.8rem;margin-left:10px">'
                     f'{html.escape(c_str)} · {html.escape(z_str)}</span><br>'
                     f'<span style="font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
                     f'</div>',
@@ -2852,7 +2873,7 @@ def _render_relationships_page(config: dict) -> None:
                     f'<div style="border-left:3px solid #16a34a;background:#16a34a18;'
                     f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
                     f'<span style="color:#16a34a;font-weight:700">✓ {html.escape(p["label"])}</span>'
-                    f'<span style="color:#64748b;font-size:0.8rem;margin-left:10px">'
+                    f'<span style="color:#8899AA;font-size:0.8rem;margin-left:10px">'
                     f'{html.escape(c_str)}</span><br>'
                     f'<span style="font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
                     f'</div>',
@@ -2899,7 +2920,7 @@ def _render_relationships_page(config: dict) -> None:
             colours = {
                 "CONFIRMING": "background-color:#1a5c38;color:white;font-weight:600",
                 "DIVERGING":  "background-color:#7f1d1d;color:white;font-weight:600",
-                "NEUTRAL":    "color:#6b7280",
+                "NEUTRAL":    "color:#8899AA",
             }
             return colours.get(val, "")
 
@@ -3033,7 +3054,7 @@ def _render_relationships_page(config: dict) -> None:
         return {
             "DIRECT": "background-color:#1a5c38;color:white;font-weight:600",
             "PROXY":  "background-color:#78350f;color:white;font-weight:600",
-            "NONE":   "color:#6b7280",
+            "NONE":   "color:#8899AA",
         }.get(val, "")
 
     st.dataframe(
@@ -3076,12 +3097,12 @@ def _render_relationships_page(config: dict) -> None:
             )
         )
         fig_heat.update_layout(
-            template="plotly_dark",
             height=500,
             margin=dict(l=10, r=10, t=30, b=10),
             xaxis=dict(side="bottom", tickangle=-45),
             yaxis=dict(autorange="reversed"),
         )
+        _apply_dark_theme(fig_heat)
         st.plotly_chart(fig_heat, width="stretch")
 
     _render_footer()
@@ -3202,13 +3223,13 @@ def _render_charts_landing(config: dict) -> None:
 def _render_trade_card(e: dict) -> None:
     """Render one enriched open trade as a styled HTML status card."""
     status  = e.get("status", "ON TRACK")
-    colour  = _BRIEF_STATUS_COLOURS.get(status, "#6b7280")
+    colour  = _BRIEF_STATUS_COLOURS.get(status, "#8899AA")
     icon    = _BRIEF_STATUS_ICONS.get(status, "")
     bg      = _hex_rgba(colour, 0.08)
 
     ticker         = html.escape(str(e.get("ticker",    "")))
     _ucits         = e.get("ucits_ticker", "")
-    ucits_suffix   = (f" <span style='color:#94a3b8;font-size:0.82rem;font-weight:400'>"
+    ucits_suffix   = (f" <span style='color:#8899AA;font-size:0.82rem;font-weight:400'>"
                       f"({html.escape(str(_ucits))})</span>"
                       if _ucits and _ucits != e.get("ticker") else "")
     direction      = html.escape(str(e.get("direction", "LONG")))
@@ -3238,7 +3259,7 @@ def _render_trade_card(e: dict) -> None:
         )
     else:
         pnl_html = "—"
-        pnl_col  = "#6b7280"
+        pnl_col  = "#8899AA"
 
     # ── Signal / score — delta only when non-zero ─────────────────────────────
     entry_sig = html.escape((e.get("entry_signal")   or "—").replace("_", " "))
@@ -3307,12 +3328,12 @@ def _render_trade_card(e: dict) -> None:
         f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
         f"<strong style='font-size:1rem'>{ticker}</strong>{ucits_suffix}"
-        f"<span style='color:#64748b;font-size:0.85rem'>{direction} · "
+        f"<span style='color:#8899AA;font-size:0.85rem'>{direction} · "
         f"{'Day ' + str(days_held) + '/' + str(max_hold_days) if max_hold_days is not None else 'Day ' + str(days_held)}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
-        f"<span style='color:#64748b;font-size:0.78rem'>{acct_name}</span>"
+        f"<span style='color:#8899AA;font-size:0.78rem'>{acct_name}</span>"
         f"</div>"
-        f"<div style='font-size:0.82rem;color:#94a3b8'>"
+        f"<div style='font-size:0.82rem;color:#8899AA'>"
         f"{' · '.join(detail_parts)}"
         f"</div>"
         f"</div>",
@@ -3329,7 +3350,7 @@ def _render_trade_card_compact(e: dict) -> None:
     Positions section via the full _render_trade_card().
     """
     status = e.get("status", "ON TRACK")
-    colour = _BRIEF_STATUS_COLOURS.get(status, "#6b7280")
+    colour = _BRIEF_STATUS_COLOURS.get(status, "#8899AA")
     icon   = _BRIEF_STATUS_ICONS.get(status, "")
     bg     = _hex_rgba(colour, 0.08)
 
@@ -3349,7 +3370,7 @@ def _render_trade_card_compact(e: dict) -> None:
         pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
     else:
         pnl_html = "—"
-        pnl_col  = "#6b7280"
+        pnl_col  = "#8899AA"
 
     # Stop-loss detail is only surfaced here when it's the active reason for
     # the badge — otherwise this stays a single line by design (see
@@ -3378,7 +3399,7 @@ def _render_trade_card_compact(e: dict) -> None:
         f"border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
         f"<strong style='font-size:0.92rem'>{ticker}</strong>"
-        f"<span style='color:#64748b;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
+        f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
         f"{stop_html}"
         f"</div>",
@@ -3914,7 +3935,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         if _ok not in active_overlays:
             continue
         _om = OVERLAY_DESCRIPTIONS.get(_ok, {})
-        _oc = _om.get("colour", "#6b7280")
+        _oc = _om.get("colour", "#8899AA")
         _overlay_pills_html += (
             f'<span style="background:{_oc}20;border:1px solid {_oc}55;color:{_oc};'
             f'padding:1px 7px;border-radius:3px;font-size:0.72rem;font-weight:700;'
@@ -3924,16 +3945,16 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
     st.markdown(
         f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;'
-        f'border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px;margin-bottom:4px">'
+        f'border:1px solid #1E2D45;border-radius:8px;padding:8px 14px;margin-bottom:4px">'
         f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
         f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
         f'{regime.replace("_", " ")}</span>'
-        + (f'<span style="color:#6b7280;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
-        + (f'<span style="color:#6b7280;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
+        + (f'<span style="color:#8899AA;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
+        + (f'<span style="color:#8899AA;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
         + f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>'
         f'<span style="color:{vix_col};font-size:0.82rem;font-weight:600">{html.escape(vix_str)}</span>'
-        f'<span style="color:#6b7280;font-size:0.82rem">{html.escape(ys_str)}</span>'
-        f'<span style="color:#6b7280;font-size:0.82rem">{html.escape(usd_str)}</span>'
+        f'<span style="color:#8899AA;font-size:0.82rem">{html.escape(ys_str)}</span>'
+        f'<span style="color:#8899AA;font-size:0.82rem">{html.escape(usd_str)}</span>'
         + (f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>{_overlay_pills_html}' if _overlay_pills_html else '')
         + f'</div>',
         unsafe_allow_html=True,
@@ -3996,7 +4017,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         _dd_colour = {
             "NORMAL": "#16a34a", "CAUTION": "#f59e0b",
             "REDUCED": "#f97316", "MINIMAL": "#dc2626",
-        }.get(_dd_status["status"], "#6b7280")
+        }.get(_dd_status["status"], "#8899AA")
         _dd_line = (
             f"Portfolio Risk: {_dd_status['status']} · "
             f"Peak £{_dd_status['peak_value_gbp']:,.0f} · "
@@ -4019,7 +4040,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         if overlay_key not in active_overlays:
             continue
         meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-        oc    = meta.get("colour", "#6b7280")
+        oc    = meta.get("colour", "#8899AA")
         olabel = html.escape(meta.get("label", overlay_key.replace("_", " ")))
         obody  = html.escape(meta.get("text", ""))
         obg    = _hex_rgba(oc, 0.10)
@@ -4076,8 +4097,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         config,
     )
     st.markdown(
-        "<div style='border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;margin:10px 0'>"
-        "<div style='font-size:0.75rem;font-weight:700;color:#94a3b8;"
+        "<div style='border:1px solid #1E2D45;border-radius:8px;padding:14px 18px;margin:10px 0'>"
+        "<div style='font-size:0.75rem;font-weight:700;color:#8899AA;"
         "text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px'>Today's Briefing</div>"
         f"{_narrative_html}"
         "</div>",
@@ -4096,13 +4117,13 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             "FOMC Decision":   "#dc2626",
             "FOMC Minutes":    "#f59e0b",
             "Fed Speech":      "#3b82f6",
-            "Fed Announcement": "#6b7280",
+            "Fed Announcement": "#8899AA",
         }
         _ev_parts: list[str] = []
         _caution_days: list[tuple[int, str]] = []   # (days_away, event_type)
 
         for ev in _fomc_events:
-            ec      = _EV_COLOURS.get(ev["event_type"], "#6b7280")
+            ec      = _EV_COLOURS.get(ev["event_type"], "#8899AA")
             da      = ev["days_away"]
             da_str  = "Today" if da == 0 else ("Tomorrow" if da == 1 else f"in {da}d")
             _ev_parts.append(
@@ -4119,7 +4140,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         _ev_html = (
             '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;'
             'padding:6px 0 4px">'
-            '<span style="font-size:0.75rem;font-weight:700;color:#94a3b8;'
+            '<span style="font-size:0.75rem;font-weight:700;color:#8899AA;'
             'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">'
             'Key Events</span> '
             + " ".join(_ev_parts)
@@ -4134,8 +4155,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 'background:#fef3c720;border-radius:0 4px 4px 0;margin:4px 0 6px">'
                 f'<span style="background:#f59e0b;color:#fff;padding:1px 7px;'
                 f'border-radius:3px;font-size:0.68rem;font-weight:800">CAUTION</span> '
-                f'<strong style="color:#b45309">Fed Decision {_when}</strong>'
-                f'<span style="font-size:0.82rem;color:#92400e"> — consider reducing '
+                f'<strong style="color:#fbbf24">Fed Decision {_when}</strong>'
+                f'<span style="font-size:0.82rem;color:#fbbf24"> — consider reducing '
                 f'position sizes ahead of the announcement</span></div>',
                 unsafe_allow_html=True,
             )
@@ -4184,7 +4205,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # Signal distribution counts (all assets and tradeable-only)
     _SIG_ORDER  = ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"]
     _SIG_COLOUR = {
-        "STRONG BUY": "#16a34a", "BUY": "#26a69a", "NEUTRAL": "#6b7280",
+        "STRONG BUY": "#16a34a", "BUY": "#26a69a", "NEUTRAL": "#8899AA",
         "SELL": "#f59e0b", "STRONG SELL": "#ef5350",
     }
 
@@ -4203,12 +4224,12 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     def _counts_html(counts: dict, total: int, label: str) -> str:
         parts = " &nbsp;·&nbsp; ".join(
             f"<span style='color:{_SIG_COLOUR[lbl]};font-weight:700'>{counts[lbl]}</span>"
-            f"&nbsp;<span style='color:#64748b;font-size:0.75rem'>{lbl}</span>"
+            f"&nbsp;<span style='color:#8899AA;font-size:0.75rem'>{lbl}</span>"
             for lbl in _SIG_ORDER
         )
         return (
             f"<div style='font-size:0.8rem;margin-bottom:2px'>"
-            f"<span style='color:#94a3b8;min-width:120px;display:inline-block'>{label} ({total}):</span>"
+            f"<span style='color:#8899AA;min-width:120px;display:inline-block'>{label} ({total}):</span>"
             f" {parts}</div>"
         )
 
@@ -4298,10 +4319,10 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         if live_price is not None:
             p = live_price
             p_str = f"{p:.4f}" if p < 10 else (f"{p:,.2f}" if p < 100_000 else f"{p:,.0f}")
-            price_html = f"<span style='color:#64748b;font-size:0.78rem'>Last: {p_str}</span>"
+            price_html = f"<span style='color:#8899AA;font-size:0.78rem'>Last: {p_str}</span>"
         else:
             price_html = (
-                "<span style='color:#6b7280;font-size:0.72rem'>"
+                "<span style='color:#8899AA;font-size:0.72rem'>"
                 "⚠ Market closed · price unavailable</span>"
             )
 
@@ -4311,14 +4332,14 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             f"<div style='display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px'>"
             f"<span style='font-weight:{weight};color:{col};font-size:0.95rem'>"
             f"{html.escape(ticker)}</span>"
-            f"<span style='color:#94a3b8;font-size:0.78rem'>{name}</span>"
+            f"<span style='color:#8899AA;font-size:0.78rem'>{name}</span>"
             f"{badges}</div>"
             f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:5px'>"
             f"<span style='color:{col};font-size:0.8rem;font-weight:{weight}'>{sig_label}</span>"
             f"<span style='color:{col};font-weight:700'>{score:+.3f}</span>"
             f"{price_html}"
             f"</div>"
-            f"<div style='color:#94a3b8;font-size:0.75rem;line-height:1.4'>"
+            f"<div style='color:#8899AA;font-size:0.75rem;line-height:1.4'>"
             f"{html.escape(_brief_rationale(sig, direction))}</div>"
             f"</div>"
         )
@@ -4417,10 +4438,10 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             f"<span style='background:{score_colour};color:#fff;padding:1px 8px;"
             f"border-radius:3px;font-size:0.7rem;font-weight:800'>{score_label}</span>"
             f"</div>"
-            f"<div style='color:#64748b;font-size:0.82rem'>"
+            f"<div style='color:#8899AA;font-size:0.82rem'>"
             f"{ns} indicators · "
             f"<span style='color:#16a34a'>▲ {nb} bullish</span> · "
-            f"<span style='color:#6b7280'>◆ {nn} neutral</span> · "
+            f"<span style='color:#8899AA'>◆ {nn} neutral</span> · "
             f"<span style='color:#ef5350'>▼ {nbr} bearish</span>"
             f"</div>"
             f"</div>",
@@ -4441,9 +4462,9 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 for r, w in region_weights_cfg.items()
             )
             st.markdown(
-                f"<div style='font-size:0.78rem;color:#94a3b8;margin:-2px 0 8px 0'>"
+                f"<div style='font-size:0.78rem;color:#8899AA;margin:-2px 0 8px 0'>"
                 f"{html.escape(_region_bits)}"
-                + (f"<br><span style='color:#64748b'>Regional weights: {html.escape(_weight_bits)}</span>"
+                + (f"<br><span style='color:#8899AA'>Regional weights: {html.escape(_weight_bits)}</span>"
                    if _weight_bits else "")
                 + "</div>",
                 unsafe_allow_html=True,
@@ -4452,7 +4473,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         # Plain-English summary
         summary = html.escape(macro_dash.get("summary", ""))
         st.markdown(
-            f"<p style='font-size:0.84rem;color:#64748b;margin:0 0 10px 0;font-style:italic'>"
+            f"<p style='font-size:0.84rem;color:#8899AA;margin:0 0 10px 0;font-style:italic'>"
             f"{summary}</p>",
             unsafe_allow_html=True,
         )
@@ -4464,7 +4485,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
         def _metric_card(
             title: str, value_str: str, sub: str,
-            colour: str = "#6b7280", bg_alpha: float = 0.06,
+            colour: str = "#8899AA", bg_alpha: float = 0.06,
             tag: str = "",
         ) -> str:
             bg = _hex_rgba(colour, bg_alpha)
@@ -4472,26 +4493,26 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 "<span style='color:#16a34a;font-size:0.58rem;margin-left:4px"
                 ";font-weight:400;text-transform:none'>✓ Signals</span>"
                 if tag == "signals" else
-                "<span style='color:#94a3b8;font-size:0.58rem;margin-left:4px"
+                "<span style='color:#8899AA;font-size:0.58rem;margin-left:4px"
                 ";font-weight:400;text-transform:none'>Composite</span>"
                 if tag == "composite" else ""
             )
             return (
                 f"<div style='background:{bg};border:1px solid {colour}33;"
                 f"border-radius:8px;padding:10px 14px;min-height:72px'>"
-                f"<div style='font-size:0.72rem;font-weight:600;color:#6b7280;"
+                f"<div style='font-size:0.72rem;font-weight:600;color:#8899AA;"
                 f"text-transform:uppercase;letter-spacing:0.05em'>{html.escape(title)}"
                 f"{tag_html}</div>"
                 f"<div style='font-size:1.05rem;font-weight:700;color:{colour};margin:2px 0'>"
                 f"{html.escape(value_str)}</div>"
-                f"<div style='font-size:0.76rem;color:#64748b'>{html.escape(sub)}</div>"
+                f"<div style='font-size:0.76rem;color:#8899AA'>{html.escape(sub)}</div>"
                 f"</div>"
             )
 
         _region_pct = lambda r: f" ({region_weights_cfg[r]:.0%})" if r in region_weights_cfg else ""
 
         st.markdown(
-            f"<div style='font-size:0.76rem;font-weight:700;color:#94a3b8;"
+            f"<div style='font-size:0.76rem;font-weight:700;color:#8899AA;"
             f"text-transform:uppercase;letter-spacing:0.04em;margin:4px 0 4px 0'>"
             f"🇺🇸 United States{_region_pct('us')}</div>",
             unsafe_allow_html=True,
@@ -4522,7 +4543,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         with c3:
             hy_bps = macro_dash["hy_oas_bps"]
             cs     = macro_dash["credit_status"] or "—"
-            cs_c   = _CS_COLOUR.get(cs, "#6b7280")
+            cs_c   = _CS_COLOUR.get(cs, "#8899AA")
             v_str  = f"{hy_bps:.0f} bps" if hy_bps is not None else "—"
             p30    = macro_dash["hy_oas_pct_30d"]
             sub    = f"Status: {cs}" + (f" | 30d: {p30:+.1f}%" if p30 is not None else "")
@@ -4538,7 +4559,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         with c4:
             yc2y  = macro_dash["t10y2y"]
             sh2y  = macro_dash["t10y2y_shape"] or "—"
-            yc2_c = _YC_COLOUR.get(sh2y, "#6b7280")
+            yc2_c = _YC_COLOUR.get(sh2y, "#8899AA")
             v_str = f"{yc2y:+.2f}%" if yc2y is not None else "—"
             st.markdown(
                 _metric_card("Yield Curve 10Y-2Y", v_str, f"Shape: {sh2y}", yc2_c, tag="signals"),
@@ -4547,7 +4568,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         with c5:
             yc3m  = macro_dash["t10y3m"]
             sh3m  = macro_dash["t10y3m_shape"] or "—"
-            yc3_c = _YC_COLOUR.get(sh3m, "#6b7280")
+            yc3_c = _YC_COLOUR.get(sh3m, "#8899AA")
             v_str = f"{yc3m:+.2f}%" if yc3m is not None else "—"
             st.markdown(
                 _metric_card("Yield Curve 10Y-3M", v_str, f"Shape: {sh3m}", yc3_c, tag="signals"),
@@ -4599,12 +4620,12 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                         unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#6b7280", tag="signals"), unsafe_allow_html=True)
+                    st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#8899AA", tag="signals"), unsafe_allow_html=True)
             with c8:
                 if fed_rate_val is not None:
                     _FED_TREND_LABEL = {"cut": "Rate cut ↓", "hiked": "Rate hiked ↑", "unchanged": "Unchanged →"}
-                    _FED_TREND_COLOUR = {"cut": "#16a34a", "hiked": "#ef5350", "unchanged": "#6b7280"}
-                    fr_c   = _FED_TREND_COLOUR.get(fed_rate_trend, "#6b7280")
+                    _FED_TREND_COLOUR = {"cut": "#16a34a", "hiked": "#ef5350", "unchanged": "#8899AA"}
+                    fr_c   = _FED_TREND_COLOUR.get(fed_rate_trend, "#8899AA")
                     fr_lbl = _FED_TREND_LABEL.get(fed_rate_trend, "Unchanged →")
                     st.markdown(
                         _metric_card(
@@ -4617,7 +4638,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                         unsafe_allow_html=True,
                     )
                 else:
-                    st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#6b7280", tag="signals"), unsafe_allow_html=True)
+                    st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#8899AA", tag="signals"), unsafe_allow_html=True)
             with c9:
                 if us_extra:
                     es   = us_extra[0]
@@ -4672,7 +4693,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 continue
             st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
             st.markdown(
-                f"<div style='font-size:0.76rem;font-weight:700;color:#94a3b8;"
+                f"<div style='font-size:0.76rem;font-weight:700;color:#8899AA;"
                 f"text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px'>"
                 f"{_region_flag} {_region_label}{_region_pct(_region_key)}</div>",
                 unsafe_allow_html=True,
@@ -5010,6 +5031,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                         yaxis=dict(tickformat=".2f"),
                         xaxis=dict(type="date"),
                     )
+                    _apply_dark_theme(fig)
                     st.plotly_chart(fig, width="stretch")
 
                 # Trades table
@@ -5160,7 +5182,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
             bdown  = period_breakdown(df)
 
             for period_name, m in bdown.items():
-                colour  = m.get("colour", "#6b7280")
+                colour  = m.get("colour", "#8899AA")
                 desc    = m.get("desc", "")
                 n       = m.get("total_trades", 0)
 
@@ -5222,6 +5244,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     yaxis_title="Win Rate %", height=350,
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
+                _apply_dark_theme(fig)
                 st.plotly_chart(fig, width="stretch")
 
                 # Detailed table
@@ -5315,6 +5338,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                         xaxis_title="Days Held", yaxis_title="Number of Trades",
                         height=300, margin=dict(l=0, r=0, t=40, b=0),
                     )
+                    _apply_dark_theme(fig)
                     st.plotly_chart(fig, width="stretch")
 
                 # Avg hold by regime
@@ -5384,6 +5408,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     xaxis_title="Window Start", yaxis_title="Win Rate %",
                     height=320, margin=dict(l=0, r=0, t=40, b=0),
                 )
+                _apply_dark_theme(fig)
                 st.plotly_chart(fig, width="stretch")
 
                 # Avg return line
@@ -5400,6 +5425,7 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     xaxis_title="Window Start", yaxis_title="Avg Return %",
                     height=280, margin=dict(l=0, r=0, t=40, b=0),
                 )
+                _apply_dark_theme(fig2)
                 st.plotly_chart(fig2, width="stretch")
 
                 st.markdown("#### Window Detail")
@@ -5588,6 +5614,7 @@ def _render_performance_page(config: dict) -> None:
                 yaxis=dict(tickformat=".2f"),
                 xaxis=dict(type="date"),
             )
+            _apply_dark_theme(fig)
             st.plotly_chart(fig, width="stretch")
 
         rp = regime_performance(mdf)
@@ -5816,7 +5843,7 @@ def _render_robustness_page(config: dict) -> None:
         st.divider()
         st.markdown("#### Out-of-Sample Monitor")
         oos = eq.get("out_of_sample", {})
-        oos_colour = {"green": "#16a34a", "red": "#dc2626", "grey": "#6b7280"}.get(oos.get("status"), "#6b7280")
+        oos_colour = {"green": "#16a34a", "red": "#dc2626", "grey": "#8899AA"}.get(oos.get("status"), "#8899AA")
         o1, o2, o3 = st.columns(3)
         o1.metric("Freeze Date", str(oos.get("freeze_date", PARAMETER_FREEZE_DATE)))
         o2.metric("Trades Since Freeze", oos.get("n_trades", 0))
@@ -5853,7 +5880,7 @@ def _render_robustness_page(config: dict) -> None:
                 z=heat.values,
                 x=heat.columns.tolist(),
                 y=[str(y) for y in heat.index.tolist()],
-                colorscale=[[0.0, "#dc2626"], [0.5, "#ffffff"], [1.0, "#16a34a"]],
+                colorscale=[[0.0, "#dc2626"], [0.5, "#1f2937"], [1.0, "#16a34a"]],
                 zmid=0,
                 text=heat.values,
                 texttemplate="%{text:.1f}%",
@@ -5864,6 +5891,7 @@ def _render_robustness_page(config: dict) -> None:
                 height=max(280, 32 * len(heat.index)),
                 margin=dict(l=0, r=0, t=40, b=0),
             )
+            _apply_dark_theme(fig)
             st.plotly_chart(fig, width="stretch")
 
         st.markdown("#### Rolling 12-Month Return & Sharpe")
@@ -5887,6 +5915,7 @@ def _render_robustness_page(config: dict) -> None:
                 yaxis2=dict(title="Sharpe", overlaying="y", side="right"),
                 legend=dict(orientation="h", y=1.1),
             )
+            _apply_dark_theme(fig2)
             st.plotly_chart(fig2, width="stretch")
 
     # ── Panel 3: Risk Analysis ───────────────────────────────────────────────
@@ -5930,6 +5959,7 @@ def _render_robustness_page(config: dict) -> None:
                 xaxis_title="Date", yaxis_title="Sharpe",
                 height=320, margin=dict(l=0, r=0, t=40, b=0),
             )
+            _apply_dark_theme(fig3)
             st.plotly_chart(fig3, width="stretch")
 
     # ── Panel 4: Attribution ─────────────────────────────────────────────────
