@@ -10,17 +10,21 @@ building DataFrames directly.
 """
 
 from datetime import date, timedelta
+from io import BytesIO
 
 from sqlalchemy.orm import Session
 
 from analysis.robustness import (
     BACKTEST_START_DATE,
     PARAMETER_FREEZE_DATE,
+    _recovery_days_to_calendar_months,
     _ticker_sector_map,
     compute_attribution,
     compute_calmar_ratios,
     compute_expectancy,
+    compute_live_validation,
     compute_out_of_sample_stats,
+    compute_walk_forward_summary,
     compute_winner_concentration,
     generate_robustness_pdf,
 )
@@ -360,3 +364,151 @@ def test_generate_robustness_pdf_handles_run_with_no_trades_at_all(db_engine):
 
     assert pdf_bytes[:5] == b"%PDF-"
     assert len(pdf_bytes) > 0
+
+
+# ---------------------------------------------------------------------------
+# compute_walk_forward_summary() — Improvement 2
+# ---------------------------------------------------------------------------
+
+def test_compute_walk_forward_summary_counts_profitable_windows():
+    import pandas as pd
+
+    wf = pd.DataFrame({
+        "train_start":        ["2020-01-01", "2020-02-01", "2020-03-01", "2020-04-01", "2020-05-01"],
+        "train_end":          ["2020-06-30", "2020-07-31", "2020-08-31", "2020-09-30", "2020-10-31"],
+        "test_trades":        [10, 12, 8, 15, 9],
+        "test_win_rate_pct":  [50.0, 45.0, 60.0, 40.0, 55.0],
+        "test_profit_factor": [1.5, 0.8, 2.1, 0.95, 1.0],  # 2 above 1.0, 1.0 itself not "above"
+        "test_max_dd_pct":    [-10.0, -20.0, -5.0, -30.0, -12.0],
+    })
+
+    result = compute_walk_forward_summary(wf)
+
+    assert result["n_total"] == 5
+    assert result["n_positive"] == 2  # 1.5 and 2.1 are the only values > 1.0
+    assert result["success_rate_pct"] == 40.0
+
+
+def test_compute_walk_forward_summary_empty_input_returns_zeros():
+    import pandas as pd
+    result = compute_walk_forward_summary(pd.DataFrame())
+    assert result == {"n_total": 0, "n_positive": 0, "success_rate_pct": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# _recovery_days_to_calendar_months() — Improvement 3
+# ---------------------------------------------------------------------------
+
+def test_recovery_days_to_calendar_months_matches_spec_example():
+    # 711 trading days / 21 trading-days-per-month ~= 33.857... -> 33.9
+    assert _recovery_days_to_calendar_months(711) == 33.9
+
+
+def test_recovery_days_to_calendar_months_zero_days_is_zero():
+    assert _recovery_days_to_calendar_months(0) == 0.0
+
+
+def test_recovery_days_to_calendar_months_rounds_to_one_decimal():
+    assert _recovery_days_to_calendar_months(21) == 1.0
+    assert _recovery_days_to_calendar_months(42) == 2.0
+    assert _recovery_days_to_calendar_months(30) == round(30 / 21, 1)
+
+
+# ---------------------------------------------------------------------------
+# compute_live_validation() — Improvement 4
+# ---------------------------------------------------------------------------
+
+def test_compute_live_validation_zero_trades_before_any_post_freeze_rows(db_engine):
+    result = compute_live_validation(run_id=1)
+    assert result["n_trades"] == 0
+    assert result["status"] == "grey"
+    assert result["win_rate_pct"] is None
+    assert result["sharpe_available"] is False
+
+
+def test_compute_live_validation_computes_stats_from_post_freeze_rows(db_engine):
+    with Session(db_engine) as session:
+        session.add(T212Pnl(
+            ticker="AAPL", buy_order_id=1, sell_order_id=2,
+            entry_date=PARAMETER_FREEZE_DATE + timedelta(days=1),
+            exit_date=PARAMETER_FREEZE_DATE + timedelta(days=10),
+            pnl_pct=0.10, pnl_gbp=100.0, holding_days=9,
+        ))
+        session.add(T212Pnl(
+            ticker="XLK", buy_order_id=3, sell_order_id=4,
+            entry_date=PARAMETER_FREEZE_DATE + timedelta(days=15),
+            exit_date=PARAMETER_FREEZE_DATE + timedelta(days=25),
+            pnl_pct=-0.04, pnl_gbp=-40.0, holding_days=10,
+        ))
+        session.commit()
+
+    result = compute_live_validation(run_id=1)
+
+    assert result["n_trades"] == 2
+    assert result["win_rate_pct"] == 50.0
+    assert result["return_since_freeze_pct"] == 6.0  # (0.10 - 0.04) * 100
+    assert result["status"] == "green"
+    assert result["sharpe_available"] is False  # span well under 12 months
+
+
+def test_compute_live_validation_sharpe_only_available_after_12_months(db_engine):
+    with Session(db_engine) as session:
+        session.add(T212Pnl(
+            ticker="AAPL", buy_order_id=1, sell_order_id=2,
+            entry_date=PARAMETER_FREEZE_DATE + timedelta(days=1),
+            exit_date=PARAMETER_FREEZE_DATE + timedelta(days=400),
+            pnl_pct=0.10, pnl_gbp=100.0, holding_days=399,
+        ))
+        session.add(T212Pnl(
+            ticker="XLK", buy_order_id=3, sell_order_id=4,
+            entry_date=PARAMETER_FREEZE_DATE + timedelta(days=2),
+            exit_date=PARAMETER_FREEZE_DATE + timedelta(days=410),
+            pnl_pct=-0.04, pnl_gbp=-40.0, holding_days=408,
+        ))
+        session.commit()
+
+    result = compute_live_validation(run_id=1)
+    assert result["sharpe_available"] is True
+
+
+# ---------------------------------------------------------------------------
+# Live Validation PDF page — Improvement 4 (content checks via pypdf)
+# ---------------------------------------------------------------------------
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    from pypdf import PdfReader
+    reader = PdfReader(BytesIO(pdf_bytes))
+    return "\n".join(page.extract_text() for page in reader.pages)
+
+
+def test_live_validation_page_shows_placeholder_when_no_post_freeze_trades(db_engine):
+    run_id = _seed_run(db_engine, name="pdf-live-empty")
+    _seed_trade(db_engine, run_id, ticker="AAPL", pnl_pct=0.05, pnl_gbp=50.0, is_win=True)
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+    text = _extract_pdf_text(pdf_bytes)
+
+    assert "Live Validation" in text
+    assert "No live trades have been completed" in text
+    assert "Live vs In-Sample Comparison" not in text
+
+
+def test_live_validation_page_shows_comparison_table_when_post_freeze_trades_exist(db_engine):
+    run_id = _seed_run(db_engine, name="pdf-live-populated")
+    _seed_trade(db_engine, run_id, ticker="AAPL", pnl_pct=0.05, pnl_gbp=50.0, is_win=True)
+
+    with Session(db_engine) as session:
+        session.add(T212Pnl(
+            ticker="AAPL", buy_order_id=1, sell_order_id=2,
+            entry_date=PARAMETER_FREEZE_DATE + timedelta(days=1),
+            exit_date=PARAMETER_FREEZE_DATE + timedelta(days=10),
+            pnl_pct=0.05, pnl_gbp=50.0, holding_days=9,
+        ))
+        session.commit()
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+    text = _extract_pdf_text(pdf_bytes)
+
+    assert "Live Validation" in text
+    assert "Live vs In-Sample Comparison" in text
+    assert "No live trades have been completed" not in text

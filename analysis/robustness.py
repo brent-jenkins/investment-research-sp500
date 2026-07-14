@@ -81,6 +81,18 @@ SP500_ANNUAL: dict[int, float] = {
     2023: 26.3, 2024: 25.0, 2025: 12.0,
 }
 
+# Well-established S&P 500 buy-and-hold reference figures (2019-2026,
+# matching BACKTEST_START_DATE's span) for the PDF report's risk-adjusted
+# benchmark comparison table — see "Risk-Adjusted Benchmark Comparison" on
+# the Annual Returns page. A raw "outperformed N of M years" count is
+# misleading on its own: it doesn't account for how much of each year the
+# system was actually invested (see Time Invested on the Edge Quality
+# page), so CAGR/Calmar/Sharpe are compared instead.
+SP500_CAGR_2019_2026 = 15.4     # annualised total return, approximate
+SP500_MAX_DRAWDOWN = -33.9      # COVID crash, March 2020
+SP500_SHARPE_2019_2026 = 0.88   # approximate
+SP500_CALMAR = round(SP500_CAGR_2019_2026 / abs(SP500_MAX_DRAWDOWN), 2)
+
 # ---------------------------------------------------------------------------
 # Sector / asset-class classification
 # ---------------------------------------------------------------------------
@@ -239,6 +251,26 @@ def compute_expectancy(run_id: int) -> dict:
     }
 
 
+def _t212_pnl_rows_after_freeze() -> list[dict]:
+    """Shared row fetch for compute_out_of_sample_stats() and
+    compute_live_validation() — one SQL query, two different aggregations
+    over the same genuinely-out-of-sample t212_pnl rows."""
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            return [
+                dict(r) for r in conn.execute(
+                    text(
+                        "SELECT pnl_pct, pnl_gbp, entry_date, exit_date, holding_days "
+                        "FROM t212_pnl WHERE date(exit_date) > date(:freeze) ORDER BY exit_date"
+                    ),
+                    {"freeze": PARAMETER_FREEZE_DATE.isoformat()},
+                ).mappings().all()
+            ]
+    except Exception:
+        return []
+
+
 def compute_out_of_sample_stats() -> dict:
     """Read t212_pnl for positions closed strictly after PARAMETER_FREEZE_DATE.
 
@@ -247,22 +279,7 @@ def compute_out_of_sample_stats() -> dict:
     ships, since T212 closes accumulate slowly (~5-10/year per CLAUDE.md's
     "Feedback learning" section).
     """
-    engine = get_engine()
-    rows: list[dict] = []
-    try:
-        with engine.connect() as conn:
-            rows = [
-                dict(r) for r in conn.execute(
-                    text(
-                        "SELECT pnl_pct, pnl_gbp, exit_date FROM t212_pnl "
-                        "WHERE date(exit_date) > date(:freeze)"
-                    ),
-                    {"freeze": PARAMETER_FREEZE_DATE.isoformat()},
-                ).mappings().all()
-            ]
-    except Exception:
-        rows = []
-
+    rows = _t212_pnl_rows_after_freeze()
     n = len(rows)
     return_since_freeze_pct = round(sum((r.get("pnl_pct") or 0.0) for r in rows) * 100, 2)
     pnl_since_freeze_gbp    = round(sum((r.get("pnl_gbp") or 0.0) for r in rows), 2)
@@ -283,6 +300,93 @@ def compute_out_of_sample_stats() -> dict:
         "pnl_since_freeze_gbp":      pnl_since_freeze_gbp,
         "status":                    status,
     }
+
+
+def compute_live_validation(run_id: int) -> dict:
+    """Live (post-freeze) T212 performance for the PDF's Live Validation
+    page — extends compute_out_of_sample_stats() with win rate, profit
+    factor, expectancy, max drawdown, and Sharpe, so the page can compare
+    genuinely out-of-sample results against this run's in-sample backtest
+    metrics.
+
+    Sharpe is only computed once at least 12 months of live history exists
+    (the span between the earliest live entry and latest live exit) — a
+    Sharpe ratio computed from a handful of trades over a few weeks is not
+    meaningful; `sharpe_available` tells the caller which case it is.
+
+    `run_id` is accepted for signature symmetry with the other compute_*()
+    functions and potential future use (e.g. per-run live comparisons) but
+    is not currently read — live performance is a property of the account,
+    not of any one backtest run.
+    """
+    rows = _t212_pnl_rows_after_freeze()
+    n = len(rows)
+
+    result = {
+        "freeze_date":            PARAMETER_FREEZE_DATE,
+        "n_trades":               n,
+        "return_since_freeze_pct": 0.0,
+        "win_rate_pct":           None,
+        "profit_factor":          None,
+        "expectancy_pct":         None,
+        "max_drawdown_pct":       None,
+        "sharpe_ratio":           None,
+        "sharpe_available":       False,
+        "status":                "grey",
+    }
+    if n == 0:
+        return result
+
+    df = pd.DataFrame(rows)
+    df["entry_date"] = pd.to_datetime(df["entry_date"])
+    df["exit_date"]  = pd.to_datetime(df["exit_date"])
+    df = df.sort_values("exit_date")
+
+    wins   = df[df["pnl_pct"] > 0]
+    losses = df[df["pnl_pct"] < 0]
+    win_rate = len(wins) / n
+    avg_win_pct      = float(wins["pnl_pct"].mean() * 100) if not wins.empty else 0.0
+    avg_loss_pct_abs = abs(float(losses["pnl_pct"].mean() * 100)) if not losses.empty else 0.0
+    expectancy_pct = (avg_win_pct * win_rate) - (avg_loss_pct_abs * (1 - win_rate))
+
+    total_return_pct = float(df["pnl_pct"].sum() * 100)
+
+    win_sum, loss_sum = float(wins["pnl_pct"].sum()), float(losses["pnl_pct"].sum())
+    if loss_sum != 0:
+        profit_factor = round(min(win_sum / abs(loss_sum), 99.9), 2)
+    else:
+        profit_factor = 99.9 if win_sum > 0 else 0.0
+
+    cum  = (1 + df["pnl_pct"]).cumprod()
+    peak = cum.cummax()
+    max_dd = float(((cum - peak) / peak).min() * 100)
+
+    span_days = (df["exit_date"].max() - df["entry_date"].min()).days
+    sharpe_available = span_days >= 365
+    sharpe_ratio = None
+    if sharpe_available and df["pnl_pct"].std() > 0:
+        avg_hold = df["holding_days"].mean() or 1.0
+        periods_per_year = 252.0 / avg_hold if avg_hold > 0 else 1.0
+        sharpe_ratio = round(float((df["pnl_pct"].mean() / df["pnl_pct"].std()) * np.sqrt(periods_per_year)), 2)
+
+    if total_return_pct > 0:
+        status = "green"
+    elif total_return_pct < 0:
+        status = "red"
+    else:
+        status = "grey"
+
+    result.update({
+        "return_since_freeze_pct": round(total_return_pct, 2),
+        "win_rate_pct":            round(win_rate * 100, 1),
+        "profit_factor":           profit_factor,
+        "expectancy_pct":          round(expectancy_pct, 2),
+        "max_drawdown_pct":        round(max_dd, 2),
+        "sharpe_ratio":            sharpe_ratio,
+        "sharpe_available":        sharpe_available,
+        "status":                  status,
+    })
+    return result
 
 
 def compute_edge_quality(run_id: int) -> dict:
@@ -734,6 +838,32 @@ def compute_walk_forward_evidence(run_id: int, window_months: int = 6, step_mont
         current = current + step_months
 
     return pd.DataFrame(rows, columns=cols)
+
+
+def compute_walk_forward_summary(wf: pd.DataFrame) -> dict:
+    """Aggregate compute_walk_forward_evidence()'s per-window rows into the
+    Walk-Forward Validation page's summary box: how many windows were
+    tested, how many were net profitable (test_profit_factor > 1.0), and
+    the resulting success rate — always computed live from the data, never
+    hardcoded.
+    """
+    if wf is None or wf.empty or "test_profit_factor" not in wf.columns:
+        return {"n_total": 0, "n_positive": 0, "success_rate_pct": 0.0}
+
+    n_total = len(wf)
+    n_positive = int((wf["test_profit_factor"] > 1.0).sum())
+    success_rate_pct = round(n_positive / n_total * 100, 1) if n_total else 0.0
+    return {"n_total": n_total, "n_positive": n_positive, "success_rate_pct": success_rate_pct}
+
+
+def _recovery_days_to_calendar_months(days: int) -> float:
+    """Approximate calendar months from a recovery-period day count, using
+    the standard ~21 trading-days-per-month convention — used for the Risk
+    Analysis page's longest-recovery warning box (see
+    compute_drawdown_metrics()'s longest_recovery_days)."""
+    if not days:
+        return 0.0
+    return round(days / 21, 1)
 
 
 def _rolling_sharpe_narrative(roll: pd.DataFrame) -> str:
@@ -1208,8 +1338,15 @@ def _pdf_page_edge_quality(styles: dict, eq: dict) -> list:
     return flow
 
 
-def _pdf_page_annual_returns(styles: dict, annual: pd.DataFrame) -> list:
-    flow = [Paragraph("Annual Returns vs S&P 500", styles["SectionTitle"])]
+def _pdf_page_annual_returns(styles: dict, annual: pd.DataFrame, calmar: dict, run: dict, eq: dict) -> list:
+    # "S&amp;P" (not the bare "S&P") — ReportLab's Paragraph mini-XML parser
+    # treats a bare "&" as the start of an entity reference; "&P " isn't a
+    # valid one, and it was silently rendering as "S&P; 500" (dropping the
+    # "&", inserting a stray ";") wherever this string reached a Paragraph.
+    # Confirmed by rendering the actual generated PDF to PNG — building
+    # without an exception is not proof it's correct. Table cell strings
+    # (below) are unaffected — they don't go through this parser.
+    flow = [Paragraph("Annual Returns vs S&amp;P 500", styles["SectionTitle"])]
     if annual.empty:
         flow.append(Paragraph("No trades in this run.", styles["Body"]))
         return flow
@@ -1227,28 +1364,52 @@ def _pdf_page_annual_returns(styles: dict, annual: pd.DataFrame) -> list:
     flow.append(_pdf_table(rows, col_widths=[1.6 * cm, 1.8 * cm, 2 * cm, 2.2 * cm, 2.8 * cm, 2.4 * cm, 2.4 * cm]))
     flow.append(Spacer(1, 0.3 * cm))
 
-    comparable = annual.dropna(subset=["vs_sp500_pct"])
-    if not comparable.empty:
-        n_out = int((comparable["vs_sp500_pct"] > 0).sum())
-        n_under = len(comparable) - n_out
-        flow.append(Paragraph(
-            f"The system outperformed the S&P 500 in <b>{n_out}</b> of {len(comparable)} "
-            f"comparable years and underperformed in <b>{n_under}</b>.",
-            styles["Body"],
-        ))
+    # Risk-adjusted comparison replaces a raw "outperformed N of M years"
+    # count — a simple year-count is skewed by how much of each year the
+    # system was actually invested (see Time Invested below), so it
+    # overstates S&P outperformance in active years and understates it in
+    # cash-holding ones. CAGR/Calmar/Sharpe are a fairer like-for-like
+    # comparison. SP500_* constants are the only hardcoded figures on this
+    # page — every SP500Invest figure is read live from this run.
+    sp500invest_cagr    = calmar.get("lifetime", {}).get("cagr_pct", 0.0)
+    sp500invest_calmar  = calmar.get("lifetime", {}).get("calmar", 0.0)
+    sp500invest_max_dd  = run.get("max_drawdown_pct") or 0.0
+    sp500invest_sharpe  = run.get("sharpe_ratio") or 0.0
+    sp500invest_time_invested = eq.get("time_invested_pct", 0.0)
 
-        underperf = comparable[comparable["vs_sp500_pct"] <= 0]
-        if not underperf.empty:
-            years_str = ", ".join(str(int(y)) for y in underperf["year"])
-            flow.append(Paragraph(
-                f"Underperformance in {years_str} reflects periods where the regime gate kept "
-                "the system on the sidelines (or trading lightly) during a strong broad-market "
-                "rally — see the Edge Quality page's Time Invested figure — rather than a "
-                "cluster of losing trades. The regime gate trades only when the system has "
-                "demonstrated edge, which by construction means giving up some upside during "
-                "strong bull markets outside its own entry criteria.",
-                styles["Small"],
-            ))
+    flow.append(Paragraph("Risk-Adjusted Benchmark Comparison", styles["SubHeading"]))
+    comp_rows = [
+        ["Metric", "SP500Invest", "S&P 500 (Buy & Hold)"],
+        ["CAGR (annualised return)", f"{sp500invest_cagr:+.1f}%", f"{SP500_CAGR_2019_2026:+.1f}%"],
+        ["Maximum Drawdown", f"{sp500invest_max_dd:.1f}%", f"{SP500_MAX_DRAWDOWN:.1f}% (COVID, Mar 2020)"],
+        ["Calmar Ratio", f"{sp500invest_calmar:.2f}", f"{SP500_CALMAR:.2f}"],
+        ["Time Invested", f"{sp500invest_time_invested:.1f}%", "100%"],
+        ["Sharpe Ratio", f"{sp500invest_sharpe:.2f}", f"{SP500_SHARPE_2019_2026:.2f}"],
+    ]
+    flow.append(_pdf_table(comp_rows, col_widths=[6 * cm, 4.5 * cm, 6 * cm]))
+    flow.append(Spacer(1, 0.2 * cm))
+    flow.append(Paragraph(
+        f"Note: SP500Invest is invested only {sp500invest_time_invested:.1f}% of the time — direct "
+        "annual return comparison overstates S&amp;P outperformance in active years and "
+        "understates it in cash-holding years. Risk-adjusted metrics (Calmar, Sharpe) provide "
+        "a more meaningful comparison.",
+        styles["Small"],
+    ))
+    flow.append(Spacer(1, 0.3 * cm))
+
+    comparable = annual.dropna(subset=["vs_sp500_pct"])
+    underperf = comparable[comparable["vs_sp500_pct"] <= 0] if not comparable.empty else comparable
+    if not underperf.empty:
+        years_str = ", ".join(str(int(y)) for y in underperf["year"])
+        flow.append(Paragraph(
+            f"Underperformance in {years_str} reflects periods where the regime gate kept "
+            "the system on the sidelines (or trading lightly) during a strong broad-market "
+            "rally — see the Edge Quality page's Time Invested figure — rather than a "
+            "cluster of losing trades. The regime gate trades only when the system has "
+            "demonstrated edge, which by construction means giving up some upside during "
+            "strong bull markets outside its own entry criteria.",
+            styles["Small"],
+        ))
     return flow
 
 
@@ -1308,23 +1469,52 @@ def _pdf_page_risk_analysis(styles: dict, dd: dict, calmar: dict, roll: pd.DataF
         ["Longest Recovery Time", f"{dd.get('longest_recovery_days', 0)} days"],
     ]
     flow.append(_pdf_table(dd_rows, col_widths=[8 * cm, 6 * cm]))
+    flow.append(Spacer(1, 0.3 * cm))
 
+    # Elevated to a standalone amber warning box (distinct from the blue
+    # informational boxes elsewhere) rather than a small caption under the
+    # table — a multi-year recovery period is exactly the kind of fact a
+    # due-diligence reader should not have to notice in a table row.
     longest = dd.get("longest_recovery_days", 0) or 0
-    if longest >= 180:
-        flow.append(Paragraph(
-            f"The longest recovery stretch in this run is {longest} calendar days without a "
-            "new equity high — a materially long stretch by many allocators' standards. This "
-            "reflects a genuine period the strategy spent underwater, not a data artefact; "
-            "review the Annual Returns and Monthly Heatmap pages to identify which period it "
-            "corresponds to before treating the aggregate return figures alone as sufficient.",
-            styles["Small"],
-        ))
-    elif longest > 0:
-        flow.append(Paragraph(
-            f"The longest recovery stretch in this run is {longest} calendar days — within a "
-            "range most allocators would consider tolerable.",
-            styles["Small"],
-        ))
+    if longest > 0:
+        months = _recovery_days_to_calendar_months(longest)
+        years = int(months // 12)
+        rem_months = round(months - years * 12)
+        if rem_months >= 12:
+            years += 1
+            rem_months -= 12
+        if years and rem_months:
+            duration_phrase = f"{years} year{'s' if years != 1 else ''} and {rem_months} month{'s' if rem_months != 1 else ''}"
+        elif years:
+            duration_phrase = f"{years} year{'s' if years != 1 else ''}"
+        else:
+            duration_phrase = f"{rem_months} month{'s' if rem_months != 1 else ''}"
+
+        max_dd_val = dd.get("max_drawdown_pct", 0.0)
+        lifetime_calmar = calmar.get("lifetime", {}).get("calmar", 0.0)
+        calmar_descriptor = "strong" if lifetime_calmar >= 1.0 else "modest"
+
+        warning_box = Table([[Paragraph(
+            '<font color="#8A5A00"><b>WARNING: IMPORTANT RISK DISCLOSURE</b></font><br/><br/>'
+            f"Longest Recovery Period: <b>{longest} trading days</b> "
+            f"(approximately {months:.1f} calendar months)<br/><br/>"
+            f"This system experienced a period of approximately {duration_phrase} without "
+            "reaching a new equity high. Investors must be able to tolerate extended periods "
+            f"of flat or negative performance before recovery. The maximum drawdown of "
+            f"{max_dd_val:.1f}% occurred during this period.<br/><br/>"
+            f"This statistic should be considered carefully alongside the {calmar_descriptor} "
+            f"long-term Calmar ratio ({lifetime_calmar:.2f}).",
+            styles["Body"],
+        )]], colWidths=[16.5 * cm])
+        warning_box.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#FFF3CD")),
+            ("BOX",           (0, 0), (-1, -1), 1.2, colors.HexColor("#8A5A00")),
+            ("TOPPADDING",    (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+        ]))
+        flow.append(warning_box)
     flow.append(Spacer(1, 0.3 * cm))
 
     flow.append(Paragraph("Calmar Ratio", styles["SubHeading"]))
@@ -1438,6 +1628,35 @@ def _pdf_page_walk_forward(styles: dict, wf: pd.DataFrame) -> list:
         flow.append(Paragraph("Not enough trade history for a walk-forward breakdown.", styles["Body"]))
         return flow
 
+    summary = compute_walk_forward_summary(wf)
+    n_total, n_positive = summary["n_total"], summary["n_positive"]
+    success_rate = summary["success_rate_pct"]
+    majority = "Most" if success_rate >= 50 else "A minority of"
+    leaning = "supporting" if success_rate >= 50 else "tempering"
+
+    summary_box = Table([[Paragraph(
+        '<font color="#0A0F1E"><b>WALK-FORWARD SUMMARY</b></font><br/><br/>'
+        f"Windows Tested: <b>{n_total}</b><br/>"
+        f"Profitable Windows: <b>{n_positive}</b> (PF > 1.0)<br/>"
+        f"Success Rate: <b>{success_rate:.1f}%</b><br/><br/>"
+        f"Conclusion: {majority} rolling windows remained profitable, {leaning} the possibility "
+        "that the edge generalises beyond a single optimised historical period.<br/><br/>"
+        '<font color="#C0392B">WARNING: This does not eliminate look-ahead bias from parameter '
+        "optimisation but provides evidence the system's edge is not entirely "
+        "period-specific.</font>",
+        styles["Body"],
+    )]], colWidths=[16.5 * cm])
+    summary_box.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8F4FD")),
+        ("BOX",           (0, 0), (-1, -1), 1.2, _PDF_NAVY),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+    ]))
+    flow.append(summary_box)
+    flow.append(Spacer(1, 0.4 * cm))
+
     rows = [["Train Start", "Train End", "Test Trades", "Test Win Rate", "Test PF", "Test Max DD"]]
     for _, r in wf.iterrows():
         rows.append([
@@ -1445,18 +1664,117 @@ def _pdf_page_walk_forward(styles: dict, wf: pd.DataFrame) -> list:
             f"{r['test_win_rate_pct']:.1f}%", f"{r['test_profit_factor']:.2f}", f"{r['test_max_dd_pct']:.1f}%",
         ])
     flow.append(_pdf_table(rows, col_widths=[2.8 * cm, 2.8 * cm, 2.4 * cm, 2.6 * cm, 2 * cm, 2.4 * cm]))
+    return flow
+
+
+def _current_regime_note(config: dict) -> str:
+    """One sentence naming the current regime and whether either T212
+    automation path is currently unblocked for new entries — used on the
+    Live Validation page's zero-live-trades placeholder so it never just
+    says "no trades" without explaining why, the same way main.py's Daily
+    Briefing narrative avoids contradicting its own status bar. Reads the
+    live DB (the regime most recently stamped on the ^GSPC signals row) —
+    a real-time reflection of the moment the report was generated, not a
+    property of the backtest run itself."""
+    try:
+        from analysis.regime import get_latest_regime_name, is_entry_allowed  # noqa: PLC0415  local import — mirrors analysis/backtest.py's own pattern for regime.py functions
+
+        regime_name = get_latest_regime_name()
+        if not regime_name:
+            return "The current market regime could not be determined."
+
+        invest_allowed = is_entry_allowed(config, regime_name, "trading212_invest")
+        stock_allowed  = is_entry_allowed(config, regime_name, "trading212_stocks")
+        if invest_allowed or stock_allowed:
+            return f"The system is currently in {regime_name} regime — new entries are currently permitted."
+        return (
+            f"The system is currently in {regime_name} regime — entries are blocked until "
+            "TRENDING_BULL conditions are confirmed."
+        )
+    except Exception:
+        return "The current market regime could not be determined."
+
+
+def _pdf_page_live_validation(styles: dict, config: dict, eq: dict, run: dict, live: dict) -> list:
+    flow = [Paragraph("Live Validation", styles["SectionTitle"])]
+    flow.append(Paragraph("<b>Out-of-Sample Performance Tracking</b>", styles["Body"]))
+    flow.append(Spacer(1, 0.2 * cm))
+
+    freeze = live.get("freeze_date", PARAMETER_FREEZE_DATE)
+    today = date.today()
+    days_since_freeze = max((today - freeze).days, 0)
+    trading_days_since_freeze = len(pd.bdate_range(freeze + timedelta(days=1), today)) if today > freeze else 0
+
+    status_box_style = {
+        "green": ("#00875A", "#E8F8F0", "OUT-OF-SAMPLE (POSITIVE)"),
+        "red":   ("#C0392B", "#FDEAEA", "OUT-OF-SAMPLE (NEGATIVE)"),
+        "grey":  ("#6B7280", "#F2F3F5", "OUT-OF-SAMPLE"),
+    }
+    txt_colour, bg_colour, status_label = status_box_style.get(live.get("status"), status_box_style["grey"])
+
+    status_box = Table([[Paragraph(
+        f'<font color="{txt_colour}"><b>STATUS: {status_label}</b></font><br/><br/>'
+        f"Parameter Freeze Date: {freeze}<br/>"
+        f"Days Since Freeze: {days_since_freeze}<br/>"
+        f"Trading Days Since Freeze: {trading_days_since_freeze}",
+        styles["Body"],
+    )]], colWidths=[16.5 * cm])
+    status_box.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor(bg_colour)),
+        ("BOX",           (0, 0), (-1, -1), 1.2, colors.HexColor(txt_colour)),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+    ]))
+    flow.append(status_box)
+    flow.append(Spacer(1, 0.4 * cm))
+
+    flow.append(Paragraph("Live Performance Metrics", styles["SubHeading"]))
+
+    def _or_na(val, fmt: str) -> str:
+        return fmt.format(val) if val is not None else "N/A"
+
+    sharpe_cell = (
+        _or_na(live.get("sharpe_ratio"), "{:.2f}") if live.get("sharpe_available") else "Insufficient data"
+    )
+    live_rows = [
+        ["Metric", "Value"],
+        ["Trades Since Freeze", str(live.get("n_trades", 0))],
+        ["Live Return", f"{live.get('return_since_freeze_pct', 0):+.1f}%"],
+        ["Live Max Drawdown", _or_na(live.get("max_drawdown_pct"), "{:.1f}%")],
+        ["Live Sharpe", sharpe_cell],
+        ["Live Win Rate", _or_na(live.get("win_rate_pct"), "{:.1f}%")],
+        ["Live Profit Factor", _or_na(live.get("profit_factor"), "{:.2f}")],
+    ]
+    flow.append(_pdf_table(live_rows, col_widths=[8 * cm, 6 * cm]))
     flow.append(Spacer(1, 0.3 * cm))
 
-    n_positive = int((wf["test_profit_factor"] > 1.0).sum())
-    n_total = len(wf)
+    if live.get("n_trades", 0) == 0:
+        flow.append(Paragraph(
+            f"No live trades have been completed since the parameter freeze date of {freeze}. "
+            "This section will populate automatically as real T212 positions are opened and "
+            "closed.",
+            styles["Body"],
+        ))
+        flow.append(Paragraph(_current_regime_note(config), styles["Body"]))
+    else:
+        flow.append(Paragraph("Live vs In-Sample Comparison", styles["SubHeading"]))
+        exp_in_sample = eq.get("expectancy", {}).get("expectancy_pct", 0.0)
+        comp_rows = [
+            ["Metric", "In-Sample", "Live"],
+            ["Win Rate",      f"{eq.get('win_rate_pct', 0):.1f}%",       f"{live.get('win_rate_pct', 0):.1f}%"],
+            ["Profit Factor", f"{eq.get('profit_factor', 0):.2f}",      f"{live.get('profit_factor', 0):.2f}"],
+            ["Expectancy",    f"{exp_in_sample:+.2f}%",                 f"{live.get('expectancy_pct', 0):+.2f}%"],
+            ["Max Drawdown",  f"{(run.get('max_drawdown_pct') or 0):.1f}%", f"{live.get('max_drawdown_pct', 0):.1f}%"],
+        ]
+        flow.append(_pdf_table(comp_rows, col_widths=[5 * cm, 4.5 * cm, 4.5 * cm]))
+
+    flow.append(Spacer(1, 0.3 * cm))
     flow.append(Paragraph(
-        f"<b>{n_positive} of {n_total}</b> windows showed a profit factor above 1.0 (net "
-        "profitable) in this rolling out-of-sample evaluation.",
-        styles["Body"],
-    ))
-    flow.append(Paragraph(
-        "This does not eliminate look-ahead bias from parameter optimisation but provides "
-        "evidence the system's edge is not entirely period-specific.",
+        "Live results after the parameter freeze date provide the strongest evidence of "
+        "whether the system's edge is real. As this dataset grows, it will supersede the "
+        "backtest as the primary performance reference.",
         styles["Small"],
     ))
     return flow
@@ -1511,13 +1829,17 @@ def _pdf_page_methodology(styles: dict) -> list:
 def generate_robustness_pdf(run_id: int, config: dict) -> bytes:
     """Render the Robustness page as a standalone due-diligence PDF (bytes).
 
-    Ten sections: Cover, Executive Summary, Edge Quality, Annual Returns,
-    Monthly Returns Heatmap, Risk Analysis, Attribution, Backtest Evidence
-    (equity curve + exit-reason chart), Walk-Forward Validation, and
+    Eleven sections: Cover, Executive Summary, Edge Quality, Annual Returns
+    (with a risk-adjusted S&P 500 benchmark comparison), Monthly Returns
+    Heatmap, Risk Analysis (with a standalone longest-recovery warning box),
+    Attribution, Backtest Evidence (equity curve + exit-reason chart),
+    Walk-Forward Validation (with a summary box), Live Validation (genuine
+    post-freeze T212 performance vs. this run's in-sample metrics), and
     Methodology & Disclaimers. Every figure is computed live from the
-    compute_*() functions in this module — SP500_ANNUAL is the only
-    hardcoded performance number anywhere in the report. Read-only: no
-    database write of any kind, no re-running of the backtest itself.
+    compute_*() functions in this module — SP500_ANNUAL and the SP500_*
+    risk-adjusted constants are the only hardcoded performance numbers
+    anywhere in the report. Read-only: no database write of any kind, no
+    re-running of the backtest itself.
 
     Must complete well under the UI's 10-second budget — the two ~150dpi
     matplotlib PNGs and a dozen small ReportLab tables are the only
@@ -1533,6 +1855,7 @@ def generate_robustness_pdf(run_id: int, config: dict) -> bytes:
     attr   = compute_attribution(run_id, config, source="historical")
     rfc    = compute_regime_filter_contribution(run_id)
     wf     = compute_walk_forward_evidence(run_id)
+    live   = compute_live_validation(run_id)
 
     styles = _pdf_styles()
     buf = BytesIO()
@@ -1546,12 +1869,13 @@ def generate_robustness_pdf(run_id: int, config: dict) -> bytes:
         _pdf_page_cover(styles, run),
         _pdf_page_executive_summary(styles, run, eq, calmar, rfc),
         _pdf_page_edge_quality(styles, eq),
-        _pdf_page_annual_returns(styles, annual),
+        _pdf_page_annual_returns(styles, annual, calmar, run, eq),
         _pdf_page_monthly_heatmap(styles, heat),
         _pdf_page_risk_analysis(styles, dd, calmar, roll),
         _pdf_page_attribution(styles, attr, rfc),
         _pdf_page_backtest_evidence(styles, run_id, config, run, eq),
         _pdf_page_walk_forward(styles, wf),
+        _pdf_page_live_validation(styles, config, eq, run, live),
         _pdf_page_methodology(styles),
     ]
 

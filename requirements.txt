@@ -32,3 +32,4 @@ scipy>=1.11.0  # F-test in analysis/volatility.py:_variance_ratio_change_point()
 # ── Testing ──────────────────────────────────────────────────────────────────
 pytest>=8.0.0
 pytest-mock>=3.14.0
+pypdf>=4.0.0  # tests/test_robustness.py reads generated PDF text content (Live Validation placeholder/table checks)
