@@ -4,6 +4,7 @@ macro_indicators table; compute_macro() reads from the DB so it stays fast durin
 per-ticker analysis loops.
 """
 
+import json
 import logging
 import os
 import time
@@ -12,10 +13,11 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import requests
 import yaml
 from sqlalchemy import text
 
-from data.database import get_engine
+from data.database import get_engine, get_metadata_str, set_metadata
 from data.ingestion import get_price_df
 
 logger = logging.getLogger(__name__)
@@ -398,16 +400,331 @@ def _row_age_days(row: Optional[dict]) -> Optional[int]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Release-calendar-based staleness (2026-07-16) — replaces the guessed
+# per-series day-count overrides above (as the primary check; they remain
+# as the fallback) with a check against FRED's actual publish schedule, so
+# a newly-added monthly series doesn't silently reproduce the same
+# false-stale bug CFNAI/M2SL/BOGMBASE/PERMIT hit before a hand-tuned
+# override existed for each of them.
+#
+# Mechanism — verified against real FRED vintage data (each series'
+# recorded realtime_start, i.e. the actual date a specific observation
+# first became known) before being trusted, not assumed from the release
+# calendar's shape alone:
+#   1. Look up the series' release_id (fred/series/release) and its own
+#      reporting frequency (fred/series -> frequency_short), cached.
+#   2. Look up that release_id's publish calendar (fred/release/dates,
+#      include_release_dates_with_no_data=true — includes future scheduled
+#      dates), cached. Series on the same release_id (e.g. M2SL and
+#      BOGMBASE, both H.6) share one cached calendar.
+#   3. next_release = the earliest calendar date on/after
+#      (last_stored_observation_date + 2 x period_days), where period_days
+#      comes from the series' own frequency (Monthly=31, Daily=1, ...).
+#      "2x", not "1x", is deliberate: every series checked publishes with
+#      real-world lag longer than one full reporting period — e.g. CFNAI's
+#      May value (dated 2026-05-01) isn't published until 2026-06-25, and
+#      FRED confirms that exact date as the value's realtime_start — so a
+#      1x threshold would land on the release that's still finishing the
+#      *current* period's backlog, not the one bringing the next new
+#      observation. 2x was verified to land exactly on the confirmed
+#      real vintage date in all six series checked this way: CFNAI, M2SL,
+#      BOGMBASE, PERMIT, IRSTCI01JPM156N, IRLTLT01DEM156N.
+#   4. Stale only once today is more than _RELEASE_GRACE_DAYS past
+#      next_release (the stored observation not having advanced is implicit
+#      — we're checking staleness of exactly that stored row).
+#
+# CHNGDPRAPSMEI is excluded from this mechanism entirely — see
+# _CALENDAR_STALENESS_UNSUPPORTED below for why, verified the same way
+# (real vintage history), not assumed.
+#
+# refresh_release_calendars() (called from the EOD scheduler job) is the
+# ONLY code path that ever calls the FRED API for this feature —
+# _series_staleness() and everything it calls only ever reads the cache
+# (system_metadata), never fetches live. This matters for the same reason
+# compute_macro() reads macro_indicators instead of calling FRED directly:
+# get_macro_dashboard() runs on every Daily Briefing / Signals page render,
+# and a page render must never block on a live HTTP call. A missing or
+# stale cache falls back to the day-count threshold, logged at WARNING so
+# a persistently-uncomputable calendar check is visible in server logs
+# rather than silently degrading forever.
+# ---------------------------------------------------------------------------
+
+_FRED_API_BASE = "https://api.stlouisfed.org/fred"
+_RELEASE_CACHE_TTL_HOURS = 36   # a bit over one EOD cycle so a single missed refresh doesn't immediately fall back
+_RELEASE_GRACE_DAYS = 2         # buffer between a release's calendar date and when we expect it ingested
+
+# CHNGDPRAPSMEI shares release_id 205 ("Main Economic Indicators", OECD)
+# with two Monthly series (IRLTLT01DEM156N, IRSTCI01JPM156N) but is itself
+# Annual, so the shared release fires ~12x more often than CHNGDPRAPSMEI
+# itself gets new data. Verified directly against FRED's real vintage
+# history for two consecutive annual prints: the 2x-period formula above,
+# applied to the 2024 print (last known value before the current one,
+# realtime_start 2025-02-17), computes next_release = 2026-01-15 — but the
+# 2025 print's *actual* realtime_start was 2026-03-16, two months later.
+# Shipping the formula for this series would have reproduced roughly two
+# months of false-stale flagging every year. Separately (and more
+# fundamentally), release_id 205's own calendar isn't populated far into
+# the future the way domestic Fed/Treasury/Census releases are — confirmed
+# live 2026-07-15: it had no scheduled dates past 2026-06-15, versus a
+# full year ahead for every other release_id checked — so the mechanism
+# would frequently have no forward date to check against for this series
+# regardless of the frequency mismatch. The existing hand-tuned 800-day
+# day-count override (above) remains the only staleness check for this one
+# series; it was already tuned specifically for this exact lag pattern and
+# there is no reliable way to derive an equivalent from the release
+# calendar alone.
+#
+# DFEDTARU (release_id 101, "FOMC Press Release") and ECBDFR (release_id
+# 484, "Key ECB Interest Rates") were checked for the mirror-image risk —
+# a meeting-driven release name suggesting a sparse (~8/year) calendar
+# that could push next_release out to the next policy meeting even though
+# both series report a value every business day. Checked directly against
+# real vintage data: individual daily DFEDTARU/ECBDFR observations (e.g.
+# 2026-07-10, 2026-07-13) each have a realtime_start matching their own
+# date exactly, not the date of the last rate change — confirming both
+# releases genuinely fire daily (both release_id calendars independently
+# confirmed this: 101 has 365 dates/year, 484 has ~251 business-day
+# dates/year), not just at policy meetings. Neither needed exclusion.
+_CALENDAR_STALENESS_UNSUPPORTED = frozenset({"CHNGDPRAPSMEI"})
+
+# Approximate days-per-period for each FRED frequency_short code — only
+# needs to be "not so tight it clips into the period a series is still
+# reporting," not exact to the day.
+_FREQ_PERIOD_DAYS = {
+    "D": 1, "W": 7, "BW": 14, "M": 31, "Q": 92, "SA": 183, "A": 366,
+}
+
+
+def _release_cache_meta_key(series_id: str) -> str:
+    return f"fred_release_meta_{series_id}"
+
+
+def _release_cache_calendar_key(release_id: int) -> str:
+    return f"fred_release_calendar_{release_id}"
+
+
+def _fetch_json(url: str, params: dict) -> Optional[dict]:
+    """GET url with params, returning parsed JSON or None on any failure
+    (network error, non-200, malformed body) — callers treat None as
+    'could not refresh, leave the existing cache in place.'"""
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.warning("FRED release-calendar API call failed (%s): %s", url, exc)
+        return None
+
+
+def refresh_release_calendars(config: Optional[dict] = None) -> dict:
+    """Refresh the cached (release_id, frequency) per series and the
+    publish-date calendar per distinct release_id.
+
+    Called once per EOD scheduler run, alongside
+    fetch_and_store_macro_indicators() — this is the only function in this
+    module that calls FRED's series/release, series, or release/dates
+    endpoints. Series sharing a release_id (e.g. M2SL and BOGMBASE, both
+    H.6) only trigger one release/dates call between them, not one each.
+
+    Returns {series_id: bool} (metadata lookup succeeded) plus a
+    "_calendars": {release_id: bool} entry for the calendar fetches — a
+    failed series or calendar never aborts the rest, matching this
+    module's existing backfill_macro_indicators() convention.
+    """
+    if config is None:
+        config = _load_config()
+
+    macro_cfg  = config.get("macro", {})
+    fred_key   = macro_cfg.get("fred_api_key", "") or os.environ.get("FRED_API_KEY", "")
+    series_cfg = macro_cfg.get("fred_series", {})
+
+    if not fred_key:
+        logger.info("No FRED API key — skipping release-calendar refresh.")
+        return {}
+    if not series_cfg:
+        return {}
+
+    results: dict = {"_calendars": {}}
+    release_ids_needed: set[int] = set()
+
+    series_ids = [sid for sid in series_cfg if sid not in _CALENDAR_STALENESS_UNSUPPORTED]
+    for i, series_id in enumerate(series_ids):
+        rel  = _fetch_json(f"{_FRED_API_BASE}/series/release", {
+            "series_id": series_id, "api_key": fred_key, "file_type": "json",
+        })
+        freq = _fetch_json(f"{_FRED_API_BASE}/series", {
+            "series_id": series_id, "api_key": fred_key, "file_type": "json",
+        })
+        release_id = None
+        frequency_short = None
+        try:
+            release_id = rel["releases"][0]["id"] if rel else None
+            frequency_short = freq["seriess"][0]["frequency_short"] if freq else None
+        except (KeyError, IndexError, TypeError):
+            pass
+
+        if release_id is not None and frequency_short is not None:
+            set_metadata(
+                _release_cache_meta_key(series_id),
+                json.dumps({
+                    "release_id":       release_id,
+                    "frequency_short":  frequency_short,
+                    "fetched_at":       datetime.utcnow().isoformat(),
+                }),
+            )
+            release_ids_needed.add(release_id)
+            results[series_id] = True
+        else:
+            logger.warning(
+                "Could not resolve release_id/frequency for %s — staleness "
+                "for this series will fall back to the day-count threshold.",
+                series_id,
+            )
+            results[series_id] = False
+
+        if i < len(series_ids) - 1:
+            time.sleep(0.3)  # FRED rate-limit courtesy delay
+
+    for release_id in sorted(release_ids_needed):
+        cal = _fetch_json(f"{_FRED_API_BASE}/release/dates", {
+            "release_id": release_id, "api_key": fred_key, "file_type": "json",
+            "include_release_dates_with_no_data": "true",
+        })
+        dates = None
+        try:
+            dates = sorted(d["date"] for d in cal["release_dates"]) if cal else None
+        except (KeyError, TypeError):
+            pass
+
+        if dates:
+            set_metadata(
+                _release_cache_calendar_key(release_id),
+                json.dumps({"dates": dates, "fetched_at": datetime.utcnow().isoformat()}),
+            )
+            results["_calendars"][release_id] = True
+        else:
+            logger.warning("Could not fetch release calendar for release_id %s.", release_id)
+            results["_calendars"][release_id] = False
+
+        time.sleep(0.3)
+
+    successes = sum(1 for k, v in results.items() if k != "_calendars" and v)
+    logger.info(
+        "Release-calendar refresh complete: %d/%d series resolved, %d/%d calendars fetched.",
+        successes, len(series_ids), sum(results["_calendars"].values()), len(release_ids_needed),
+    )
+    return results
+
+
+def _read_cached_json(key: str) -> Optional[dict]:
+    raw = get_metadata_str(key)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _cache_fresh(fetched_at_iso: Optional[str]) -> bool:
+    if not fetched_at_iso:
+        return False
+    try:
+        fetched_at = datetime.fromisoformat(fetched_at_iso)
+    except Exception:
+        return False
+    return (datetime.utcnow() - fetched_at) < timedelta(hours=_RELEASE_CACHE_TTL_HOURS)
+
+
+def _next_expected_release(series_id: str, last_obs_date) -> Optional["datetime.date"]:
+    """The earliest release-calendar date on/after 2 reporting periods past
+    last_obs_date, read entirely from cache — or None if the calendar-based
+    check can't be computed right now (unsupported series, no cached
+    metadata/calendar yet, a stale cache, or a cached calendar that doesn't
+    reach far enough forward to cover the needed date). Never calls FRED —
+    see the module-level note above."""
+    if series_id in _CALENDAR_STALENESS_UNSUPPORTED:
+        return None
+
+    meta = _read_cached_json(_release_cache_meta_key(series_id))
+    if not meta or not _cache_fresh(meta.get("fetched_at")):
+        return None
+
+    release_id   = meta.get("release_id")
+    period_days  = _FREQ_PERIOD_DAYS.get(meta.get("frequency_short"))
+    if release_id is None or period_days is None:
+        return None
+
+    cal = _read_cached_json(_release_cache_calendar_key(release_id))
+    if not cal or not _cache_fresh(cal.get("fetched_at")):
+        return None
+
+    try:
+        last_obs = pd.Timestamp(last_obs_date)
+        if last_obs.tzinfo is not None:
+            last_obs = last_obs.tz_localize(None)
+    except Exception:
+        return None
+
+    threshold = (last_obs + timedelta(days=2 * period_days)).date()
+    try:
+        candidates = [
+            datetime.strptime(d, "%Y-%m-%d").date()
+            for d in cal.get("dates", [])
+            if datetime.strptime(d, "%Y-%m-%d").date() >= threshold
+        ]
+    except (ValueError, TypeError):
+        return None
+    return min(candidates) if candidates else None
+
+
+def _calendar_staleness(series_id: str, last_obs_date) -> Optional[bool]:
+    """True/False if the release calendar can determine staleness for this
+    series right now, else None — caller must fall back to the day-count
+    threshold."""
+    next_release = _next_expected_release(series_id, last_obs_date)
+    if next_release is None:
+        return None
+    return datetime.utcnow().date() > next_release + timedelta(days=_RELEASE_GRACE_DAYS)
+
+
 def _series_staleness(row: Optional[dict], sid: str, region: str) -> tuple[Optional[int], bool]:
-    """Age in days + stale flag for one stored series row, using the
-    per-series override (_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE) when one
-    exists, else the region default (_STALE_THRESHOLD_DAYS). Shared by
-    every staleness check in this module — the generic extra_series loop
-    and every bespoke-rendered _SPECIALTY series alike — so a single
-    threshold change or override addition applies everywhere uniformly."""
+    """Age in days + stale flag for one stored series row.
+
+    is_stale is determined by the release-calendar check (_calendar_staleness())
+    when it's computable for this series — see the "Release-calendar-based
+    staleness" section above — falling back to the day-count threshold
+    (per-series override in _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE, else the
+    region default in _STALE_THRESHOLD_DAYS) when it isn't: an unsupported
+    series (CHNGDPRAPSMEI), no cached release metadata/calendar yet, a
+    stale cache, or a calendar that doesn't reach far enough forward. The
+    fallback is logged at WARNING (except for CHNGDPRAPSMEI, which always
+    and deliberately uses the fallback — logging that every call would just
+    be noise) so a persistently-uncomputable calendar check is visible in
+    server logs rather than silently degrading forever. age_days (the
+    displayed "(stale — Nd old)" figure) is always the plain day-count,
+    regardless of which path determined is_stale.
+    """
     age_days = _row_age_days(row)
-    threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get(sid, _STALE_THRESHOLD_DAYS.get(region, 90))
-    is_stale = age_days is not None and age_days > threshold
+    is_stale: Optional[bool] = None
+
+    if row and row.get("date") is not None:
+        try:
+            is_stale = _calendar_staleness(sid, row["date"])
+        except Exception as exc:
+            logger.warning("Release-calendar staleness check failed for %s: %s", sid, exc)
+            is_stale = None
+
+    if is_stale is None:
+        if sid not in _CALENDAR_STALENESS_UNSUPPORTED:
+            logger.warning(
+                "No usable release-calendar data for %s — falling back to "
+                "the day-count staleness threshold.", sid,
+            )
+        threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get(sid, _STALE_THRESHOLD_DAYS.get(region, 90))
+        is_stale = age_days is not None and age_days > threshold
+
     return age_days, is_stale
 
 
