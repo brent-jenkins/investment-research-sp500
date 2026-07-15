@@ -62,6 +62,7 @@ from analysis.macro import (
     backfill_macro_indicators,
     fetch_and_store_macro_indicators,
     get_macro_dashboard,
+    refresh_release_calendars,
     SIGNALS_ACTIVE,
 )
 from analysis.risk import compute_drawdown_scale_factor
@@ -1841,6 +1842,11 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     fetch_and_store_macro_indicators(_cfg)
                 except Exception as _exc:
                     st.warning(f"FRED fetch failed (continuing): {_exc}")
+            with st.spinner("Refreshing FRED release calendars…"):
+                try:
+                    refresh_release_calendars(_cfg)
+                except Exception as _exc:
+                    st.warning(f"FRED release-calendar refresh failed (continuing): {_exc}")
             with st.spinner("Running analysis pipeline…"):
                 try:
                     run_analysis(tickers=_tickers, config=_cfg)
