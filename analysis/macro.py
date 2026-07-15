@@ -488,6 +488,30 @@ _RELEASE_GRACE_DAYS = 2         # buffer between a release's calendar date and w
 # dates/year), not just at policy meetings. Neither needed exclusion.
 _CALENDAR_STALENESS_UNSUPPORTED = frozenset({"CHNGDPRAPSMEI"})
 
+# IRLTLT01DEM156N and IRSTCI01JPM156N (also on release_id 205, but Monthly
+# rather than Annual — unlike CHNGDPRAPSMEI, the formula computes correctly
+# for both whenever the calendar has enough forward coverage, verified
+# against real vintage data in the same check that validated CFNAI/M2SL/
+# BOGMBASE/PERMIT). The problem is release_id 205's calendar itself:
+# confirmed live 2026-07-15 to cap at 2026-06-15 with zero dates beyond —
+# and re-queried fresh again (not from cache) with the identical result,
+# ruling out "the cached calendar just needs a newer pull": FRED's own
+# release/dates data for this release genuinely has no entry past
+# mid-June yet, despite the release's own ~monthly, ~15th-of-month pattern
+# (Jan 15, Feb 16, Mar 16, Apr 15, May 15, Jun 15) making a July entry
+# already overdue. OECD's release apparently isn't added to FRED's
+# calendar until close to when it actually happens, unlike domestic Fed/
+# Treasury/Census releases, which carry a full year ahead. This means
+# _next_expected_release() will predictably and recurringly return None
+# for these two once "today" runs past whatever release_id 205's calendar
+# currently covers — the day-count fallback (90-day europe/asia default)
+# firing here is the mechanism working exactly as designed, not a bug, so
+# it's listed here only to suppress the routine WARNING log (see
+# _series_staleness()) in favour of a quieter INFO note — the check itself
+# still runs and still takes over correctly the moment OECD's next date
+# lands in FRED's calendar.
+_CALENDAR_KNOWN_LIMITED_HORIZON = frozenset({"IRLTLT01DEM156N", "IRSTCI01JPM156N"})
+
 # Approximate days-per-period for each FRED frequency_short code — only
 # needs to be "not so tight it clips into the period a series is still
 # reporting," not exact to the day.
@@ -698,13 +722,25 @@ def _series_staleness(row: Optional[dict], sid: str, region: str) -> tuple[Optio
     (per-series override in _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE, else the
     region default in _STALE_THRESHOLD_DAYS) when it isn't: an unsupported
     series (CHNGDPRAPSMEI), no cached release metadata/calendar yet, a
-    stale cache, or a calendar that doesn't reach far enough forward. The
-    fallback is logged at WARNING (except for CHNGDPRAPSMEI, which always
-    and deliberately uses the fallback — logging that every call would just
-    be noise) so a persistently-uncomputable calendar check is visible in
-    server logs rather than silently degrading forever. age_days (the
-    displayed "(stale — Nd old)" figure) is always the plain day-count,
-    regardless of which path determined is_stale.
+    stale cache, or a calendar that doesn't reach far enough forward.
+
+    The fallback is logged at three different levels depending on why it
+    fired, so server logs distinguish "expected" from "investigate this":
+      - Not logged at all for CHNGDPRAPSMEI — it always and deliberately
+        uses the fallback, so logging every call would just be noise.
+      - Logged at INFO for _CALENDAR_KNOWN_LIMITED_HORIZON series
+        (IRLTLT01DEM156N, IRSTCI01JPM156N) — release_id 205's own calendar
+        is confirmed to have a recurring, structural forward-horizon
+        limitation (not a stale-cache artifact — see that set's own
+        comment), so this fallback is expected to recur on an ongoing
+        basis, not a sign of anything broken.
+      - Logged at WARNING for every other series — a persistently-
+        uncomputable calendar check here genuinely means something's
+        wrong (missing cache, expired cache, or a lookup failure) and
+        should be visible rather than silently degrading forever.
+
+    age_days (the displayed "(stale — Nd old)" figure) is always the plain
+    day-count, regardless of which path determined is_stale.
     """
     age_days = _row_age_days(row)
     is_stale: Optional[bool] = None
@@ -717,7 +753,13 @@ def _series_staleness(row: Optional[dict], sid: str, region: str) -> tuple[Optio
             is_stale = None
 
     if is_stale is None:
-        if sid not in _CALENDAR_STALENESS_UNSUPPORTED:
+        if sid in _CALENDAR_KNOWN_LIMITED_HORIZON:
+            logger.info(
+                "No usable release-calendar data for %s — expected, recurring "
+                "OECD release_id 205 forward-horizon limitation, not a failure. "
+                "Falling back to the day-count staleness threshold.", sid,
+            )
+        elif sid not in _CALENDAR_STALENESS_UNSUPPORTED:
             logger.warning(
                 "No usable release-calendar data for %s — falling back to "
                 "the day-count staleness threshold.", sid,

@@ -721,6 +721,30 @@ def test_series_staleness_fallback_does_not_warn_for_chngdprapsmei(db_engine, ca
     assert not any("falling back to the day-count" in r.message for r in caplog.records)
 
 
+def test_series_staleness_fallback_logs_info_not_warning_for_known_limited_horizon(db_engine, caplog):
+    """IRLTLT01DEM156N/IRSTCI01JPM156N (release_id 205, shared with
+    CHNGDPRAPSMEI) hit the fallback recurringly for a different, narrower
+    reason than CHNGDPRAPSMEI: confirmed live (re-queried fresh, not from a
+    stale cache — see _CALENDAR_KNOWN_LIMITED_HORIZON's own comment) that
+    release_id 205's calendar structurally caps at ~1 month ahead rather
+    than carrying a full year like domestic releases. Unlike CHNGDPRAPSMEI,
+    the check still runs for these two (it's correct whenever the calendar
+    has enough coverage) — only the noisy per-call WARNING is downgraded to
+    INFO, since the fallback firing here is expected and recurring, not a
+    sign of anything broken."""
+    import logging
+    from analysis.macro import _CALENDAR_KNOWN_LIMITED_HORIZON
+    assert {"IRLTLT01DEM156N", "IRSTCI01JPM156N"} == set(_CALENDAR_KNOWN_LIMITED_HORIZON)
+
+    with caplog.at_level(logging.INFO, logger="analysis.macro"):
+        _series_staleness({"date": "2026-05-01"}, "IRSTCI01JPM156N", "asia")
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    infos    = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert not any("falling back to the day-count" in r.message for r in warnings)
+    assert any("expected, recurring" in r.message for r in infos)
+
+
 # ---------------------------------------------------------------------------
 # analysis/backtest.py:_macro_scores() — the vectorized backtest mirror of
 # the same regional weighting. The backtest engine does NOT read
