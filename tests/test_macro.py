@@ -285,6 +285,79 @@ def test_chngdprapsmei_still_flagged_stale_past_800_days(db_engine):
     assert row["stale"] is True
 
 
+def test_cfnai_m2sl_bogmbase_not_stale_at_74_days(db_engine):
+    """CFNAI/M2SL/BOGMBASE are dated at the 1st of the month they cover and
+    publish 3-5 weeks after month-end, then remain the latest value for
+    another ~month until superseded — the same period-start-dating pattern
+    as CHNGDPRAPSMEI, just at monthly scale. Verified live 2026-07-15
+    against the FRED API directly: all three genuinely had no newer
+    observation available at 74 days old (the flat 35-day US default,
+    tuned for daily/weekly series, was flagging normal publish lag as
+    stale). The 90-day override must not flag this age."""
+    with Session(db_engine) as session:
+        for sid in ("CFNAI", "M2SL", "BOGMBASE"):
+            session.add(MacroIndicator(
+                series_id=sid,
+                date=datetime.utcnow() - timedelta(days=74),
+                value=1.0, pct_change_30d=1.0, z_score_2y=0.0, score=1,
+            ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    for sid in ("CFNAI", "M2SL", "BOGMBASE"):
+        row = next(s for s in dash["extra_series"] if s["series_id"] == sid)
+        assert row["stale"] is False, f"{sid} incorrectly flagged stale at 74 days"
+
+
+def test_cfnai_m2sl_bogmbase_still_flagged_stale_past_90_days(db_engine):
+    """The 90-day override is generous relative to these series' normal
+    ~77-86 day worst-case update gap, not unlimited — a genuine multi-month
+    fetch failure or FRED-side discontinuation (as happened to the Asia
+    series this codebase already replaced once) must still be caught."""
+    with Session(db_engine) as session:
+        for sid in ("CFNAI", "M2SL", "BOGMBASE"):
+            session.add(MacroIndicator(
+                series_id=sid,
+                date=datetime.utcnow() - timedelta(days=120),
+                value=1.0, pct_change_30d=1.0, z_score_2y=0.0, score=1,
+            ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    for sid in ("CFNAI", "M2SL", "BOGMBASE"):
+        row = next(s for s in dash["extra_series"] if s["series_id"] == sid)
+        assert row["stale"] is True, f"{sid} should be flagged stale at 120 days"
+
+
+def test_permit_stale_flag_computed_despite_specialty_rendering(db_engine):
+    """PERMIT is in main.py's _SPECIALTY set (bespoke tile, not the generic
+    extra_series loop) and shares CFNAI/M2SL/BOGMBASE's period-start-dating
+    + monthly publish-lag pattern, but had no staleness computation at all
+    until this was flagged 2026-07-15 — the bespoke render path skipped the
+    extra_series loop that computes age_days/stale entirely, silently. Must
+    behave the same as the extra_series-driven series: not stale at 74 days,
+    stale past the 90-day override."""
+    with Session(db_engine) as session:
+        session.add(MacroIndicator(
+            series_id="PERMIT",
+            date=datetime.utcnow() - timedelta(days=74),
+            value=1400.0, pct_change_30d=1.0, z_score_2y=0.0, score=1,
+        ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    assert dash["permit_stale"] is False
+    assert dash["permit_age_days"] == 74
+
+    with Session(db_engine) as session:
+        row = session.query(MacroIndicator).filter_by(series_id="PERMIT").one()
+        row.date = datetime.utcnow() - timedelta(days=120)
+        session.commit()
+
+    dash = get_macro_dashboard()
+    assert dash["permit_stale"] is True
+
+
 # ---------------------------------------------------------------------------
 # analysis/backtest.py:_macro_scores() — the vectorized backtest mirror of
 # the same regional weighting. The backtest engine does NOT read

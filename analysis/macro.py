@@ -348,7 +348,25 @@ _STALE_THRESHOLD_DAYS = {"us": 35, "europe": 90, "asia": 90}
 # 800 comfortably covers that full cycle while still catching genuine
 # multi-year discontinuation (the predecessor series this replaced went
 # 1,105 days without an update before being swapped out).
-_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE = {"CHNGDPRAPSMEI": 800}
+#
+# CFNAI/M2SL/BOGMBASE hit the identical dating-convention issue at monthly
+# scale, flagged live 2026-07-15: all three are dated at the 1st of the
+# month they cover, and each publishes 3-5 weeks after month-end, then
+# remains the latest value for another ~month until superseded. Verified
+# directly against the FRED API (not just inferred) that all three genuinely
+# have no newer observation yet — this is normal publish-lag age, not a
+# fetch failure. Worst-case age between updates runs ~77-86 days (measured
+# from the May 2026 observation's date-stamp to each series' expected next
+# release), comfortably inside the existing 90-day threshold already used
+# for europe/asia (chosen for the same "lags more than one reporting
+# period" reason) — reused here rather than inventing a new constant.
+_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE = {
+    "CHNGDPRAPSMEI": 800,
+    "CFNAI": 90,
+    "M2SL": 90,
+    "BOGMBASE": 90,
+    "PERMIT": 90,
+}
 
 
 def _regional_weights(config: dict) -> dict[str, float]:
@@ -992,9 +1010,19 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
             "age_days":      age_days,
         })
 
-    permit_val    = _get("PERMIT",  "value")
-    permit_pct1m  = _get("PERMIT",  "pct_change_30d")
-    permit_score  = _get("PERMIT",  "score")
+    permit_val       = _get("PERMIT",  "value")
+    permit_pct1m     = _get("PERMIT",  "pct_change_30d")
+    permit_score     = _get("PERMIT",  "score")
+    # PERMIT shares the same period-start-dating + monthly publish-lag
+    # pattern as CFNAI/M2SL/BOGMBASE (see _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE
+    # above), but — being in _SPECIALTY, not the generic extra_series loop —
+    # never had staleness computed at all until this was flagged 2026-07-15
+    # (the same bug that had CFNAI/M2SL/BOGMBASE falsely flagged stale at
+    # 74 days had also left PERMIT invisibly stuck on the same age, just
+    # with no staleness UI to reveal it either way).
+    permit_age_days  = _row_age_days(rows.get("PERMIT"))
+    permit_threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get("PERMIT", _STALE_THRESHOLD_DAYS.get("us", 90))
+    permit_stale      = permit_age_days is not None and permit_age_days > permit_threshold
 
     # ── Fed Funds Target Rate (DFEDTARU) ──────────────────────────────────────
     fed_rate       = _get("DFEDTARU", "value")
@@ -1098,6 +1126,8 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "permit":            permit_val,
         "permit_pct1m":      permit_pct1m,
         "permit_score":      permit_score,
+        "permit_stale":      permit_stale,
+        "permit_age_days":   permit_age_days,
         "fed_rate":          fed_rate,
         "fed_rate_trend":    fed_rate_trend,
         "fed_rate_score":    fed_rate_score,

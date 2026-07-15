@@ -4601,6 +4601,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         permit_val   = macro_dash.get("permit")
         permit_pct   = macro_dash.get("permit_pct1m")
         permit_sc    = macro_dash.get("permit_score")
+        permit_stale = macro_dash.get("permit_stale")
+        permit_age   = macro_dash.get("permit_age_days")
 
         fed_rate_val   = macro_dash.get("fed_rate")
         fed_rate_trend = macro_dash.get("fed_rate_trend", "unchanged")
@@ -4617,6 +4619,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 if permit_val is not None:
                     ar  = _TREND_ARROW.get("rising" if (permit_pct or 0) > 1.0 else "falling" if (permit_pct or 0) < -1.0 else "flat", "→")
                     sub = f"MoM: {permit_pct:+.1f}%" if permit_pct is not None else "MoM: —"
+                    if permit_stale:
+                        sub += f" (stale — {permit_age}d old)"
                     st.markdown(
                         _metric_card(
                             "Housing Permits (SAAR)",
