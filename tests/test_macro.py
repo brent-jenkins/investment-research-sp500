@@ -15,6 +15,7 @@ config.yaml's real macro_regional_weights (us: 0.60, europe: 0.25, asia: 0.15)
 and the real region tags on DFII10/T10Y2Y/ECBDFR/IRSTCI01JPM156N.
 """
 
+import json
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -25,15 +26,22 @@ from sqlalchemy.orm import Session
 
 from analysis.backtest import _macro_scores
 from analysis.macro import (
+    _calendar_staleness,
+    _CALENDAR_STALENESS_UNSUPPORTED,
+    _next_expected_release,
     _regional_macro_score,
     _regional_weights,
+    _release_cache_calendar_key,
+    _release_cache_meta_key,
     _series_region,
+    _series_staleness,
     backfill_macro_indicators,
     compute_macro,
     fetch_and_store_macro_indicators,
     get_macro_dashboard,
+    refresh_release_calendars,
 )
-from data.database import MacroIndicator
+from data.database import MacroIndicator, set_metadata
 
 # ---------------------------------------------------------------------------
 # Pure function tests — _regional_macro_score / _series_region / _regional_weights
@@ -418,6 +426,299 @@ def test_other_specialty_series_flagged_stale_past_35_days(db_engine):
     dash = get_macro_dashboard()
     for sid, key in _OTHER_SPECIALTY_SERIES.items():
         assert dash[f"{key}_stale"] is True, f"{sid} should be flagged stale at 40 days"
+
+
+# ---------------------------------------------------------------------------
+# Release-calendar-based staleness (2026-07-16) — replaces the guessed
+# per-series day-count overrides above with a check against FRED's actual
+# publish schedule. refresh_release_calendars() is the only function under
+# test here that calls the (mocked) FRED API at all; _calendar_staleness()/
+# _next_expected_release()/_series_staleness() only ever read the cache
+# (system_metadata), matching the "never block a page render on a live
+# HTTP call" design — so those tests need no network mocking at all, only
+# db_engine to back system_metadata.
+# ---------------------------------------------------------------------------
+
+def _fake_requests_get(mocker):
+    """A requests.get stand-in that routes by endpoint path, returning the
+    same response shapes verified live against the real FRED API for this
+    feature (series/release -> releases[0].id, series -> seriess[0].
+    frequency_short, release/dates -> release_dates[].date)."""
+    def _get(url, params=None, timeout=None):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        params = params or {}
+        if url.endswith("/series/release"):
+            sid = params.get("series_id")
+            resp.json.return_value = {"releases": [{"id": _FAKE_RELEASE_IDS[sid], "name": "fake"}]}
+        elif url.endswith("/series"):
+            sid = params.get("series_id")
+            resp.json.return_value = {"seriess": [{"frequency_short": _FAKE_FREQUENCIES[sid]}]}
+        elif url.endswith("/release/dates"):
+            rid = params.get("release_id")
+            resp.json.return_value = {"release_dates": [{"date": d} for d in _FAKE_CALENDARS[rid]]}
+        else:
+            raise AssertionError(f"Unexpected URL in test: {url}")
+        return resp
+    return mocker.patch("analysis.macro.requests.get", side_effect=_get)
+
+
+# Mirrors the real release_id/frequency/calendar this feature was verified
+# against live (CFNAI on 219, M2SL+BOGMBASE sharing 21) — see the module
+# docstring in analysis/macro.py for the full verified mapping.
+_FAKE_RELEASE_IDS = {"CFNAI": 219, "M2SL": 21, "BOGMBASE": 21}
+_FAKE_FREQUENCIES = {"CFNAI": "M", "M2SL": "M", "BOGMBASE": "M"}
+_FAKE_CALENDARS = {
+    219: ["2026-01-26", "2026-02-23", "2026-03-23", "2026-04-23", "2026-05-26", "2026-06-25", "2026-07-23", "2026-08-24"],
+    21:  ["2026-01-27", "2026-02-24", "2026-03-24", "2026-04-28", "2026-05-26", "2026-06-23", "2026-07-28", "2026-08-25"],
+}
+
+_RELEASE_CAL_CFG = {
+    "macro": {
+        "fred_api_key": "test-key",
+        "fred_series": {
+            "CFNAI":    {"region": "us"},
+            "M2SL":     {"region": "us"},
+            "BOGMBASE": {"region": "us"},
+        },
+    },
+}
+
+
+def test_refresh_release_calendars_caches_release_id_and_frequency(db_engine, mocker):
+    """A successful refresh stores (release_id, frequency_short) per series
+    in system_metadata, readable back via the cache-key helpers."""
+    _fake_requests_get(mocker)
+
+    refresh_release_calendars(_RELEASE_CAL_CFG)
+
+    from data.database import get_metadata_str
+    meta = json.loads(get_metadata_str(_release_cache_meta_key("CFNAI")))
+    assert meta["release_id"] == 219
+    assert meta["frequency_short"] == "M"
+
+
+def test_refresh_release_calendars_shares_calendar_across_series_on_same_release(db_engine, mocker):
+    """M2SL and BOGMBASE both resolve to release_id 21 (H.6) — the calendar
+    for release_id 21 must only be fetched once, not once per series, per
+    this feature's explicit 'don't make redundant API calls for series on
+    the same schedule' requirement."""
+    get_mock = _fake_requests_get(mocker)
+
+    refresh_release_calendars(_RELEASE_CAL_CFG)
+
+    release_dates_calls = [
+        c for c in get_mock.call_args_list if c.args[0].endswith("/release/dates")
+    ]
+    release_ids_requested = [c.kwargs["params"]["release_id"] for c in release_dates_calls]
+    assert release_ids_requested.count(21) == 1, "release_id 21 (shared by M2SL/BOGMBASE) fetched more than once"
+    assert sorted(set(release_ids_requested)) == [21, 219]
+
+    from data.database import get_metadata_str
+    for sid in ("M2SL", "BOGMBASE"):
+        meta = json.loads(get_metadata_str(_release_cache_meta_key(sid)))
+        assert meta["release_id"] == 21
+    cal = json.loads(get_metadata_str(_release_cache_calendar_key(21)))
+    assert cal["dates"] == _FAKE_CALENDARS[21]
+
+
+def test_refresh_release_calendars_never_calls_fred_for_chngdprapsmei(db_engine, mocker):
+    """CHNGDPRAPSMEI is permanently excluded from the calendar mechanism
+    (see _CALENDAR_STALENESS_UNSUPPORTED) — refresh must never even attempt
+    a series/release lookup for it."""
+    get_mock = _fake_requests_get(mocker)
+    cfg = {
+        "macro": {
+            "fred_api_key": "test-key",
+            "fred_series": {"CFNAI": {"region": "us"}, "CHNGDPRAPSMEI": {"region": "asia"}},
+        },
+    }
+    refresh_release_calendars(cfg)
+
+    requested_series_ids = {
+        c.kwargs["params"]["series_id"]
+        for c in get_mock.call_args_list
+        if c.args[0].endswith("/series/release") or c.args[0].endswith("/series")
+    }
+    assert "CHNGDPRAPSMEI" not in requested_series_ids
+
+
+def test_refresh_release_calendars_one_series_failure_does_not_abort_remaining(db_engine, mocker):
+    """A malformed/failed response for one series must not prevent the
+    others from being cached — matches backfill_macro_indicators()'s own
+    per-series isolation."""
+    def _get(url, params=None, timeout=None):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        if params.get("series_id") == "CFNAI" and url.endswith("/series/release"):
+            resp.json.return_value = {"releases": []}  # malformed — no release found
+        elif url.endswith("/series/release"):
+            resp.json.return_value = {"releases": [{"id": _FAKE_RELEASE_IDS[params["series_id"]]}]}
+        elif url.endswith("/series"):
+            resp.json.return_value = {"seriess": [{"frequency_short": _FAKE_FREQUENCIES[params["series_id"]]}]}
+        elif url.endswith("/release/dates"):
+            resp.json.return_value = {"release_dates": [{"date": d} for d in _FAKE_CALENDARS[params["release_id"]]]}
+        return resp
+    mocker.patch("analysis.macro.requests.get", side_effect=_get)
+
+    results = refresh_release_calendars(_RELEASE_CAL_CFG)
+
+    assert results["CFNAI"] is False
+    assert results["M2SL"] is True
+    assert results["BOGMBASE"] is True
+
+    from data.database import get_metadata_str
+    assert get_metadata_str(_release_cache_meta_key("CFNAI")) is None
+    assert get_metadata_str(_release_cache_meta_key("M2SL")) is not None
+
+
+def _seed_release_cache(sid: str, release_id: int, frequency_short: str, dates: list[str], *, fresh: bool = True):
+    age = timedelta(hours=1) if fresh else timedelta(hours=100)
+    set_metadata(_release_cache_meta_key(sid), json.dumps({
+        "release_id": release_id, "frequency_short": frequency_short,
+        "fetched_at": (datetime.utcnow() - age).isoformat(),
+    }))
+    set_metadata(_release_cache_calendar_key(release_id), json.dumps({
+        "dates": dates, "fetched_at": (datetime.utcnow() - age).isoformat(),
+    }))
+
+
+def test_next_expected_release_matches_verified_fred_vintage_date(db_engine):
+    """CFNAI's May 2026 observation (dated 2026-05-01) was verified live
+    against FRED's own realtime_start to have first become known on
+    2026-06-25 — meaning the *next* new observation (June's) is expected
+    at the following release, 2026-07-23. This is the exact case documented
+    in analysis/macro.py's module comment."""
+    _seed_release_cache("CFNAI", 219, "M", _FAKE_CALENDARS[219])
+    assert _next_expected_release("CFNAI", "2026-05-01") == datetime(2026, 7, 23).date()
+
+
+def test_next_expected_release_stays_short_for_daily_meeting_driven_releases(db_engine):
+    """DFEDTARU (release_id 101, 'FOMC Press Release') and ECBDFR
+    (release_id 484, 'Key ECB Interest Rates') have meeting-driven release
+    *names* that could suggest a sparse (~8/year) calendar — which would
+    push next_release out to the next policy meeting even though both
+    series report a value every business day, the mirror-image risk to
+    CHNGDPRAPSMEI's (there the release fired too *often* relative to the
+    data; here the concern was firing too *rarely*). Verified live against
+    real vintage data: individual daily DFEDTARU/ECBDFR observations each
+    have a realtime_start matching their own date, and both release_id
+    calendars independently confirmed daily/business-day cadence (101: 365
+    dates/year, 484: ~251/year) — see the _CALENDAR_STALENESS_UNSUPPORTED
+    comment. This pins that both compute a short (single-digit-day) next
+    expected release, not a multi-week jump to the next meeting."""
+    dfedtaru_dates = ["2026-07-10", "2026-07-11", "2026-07-12", "2026-07-13", "2026-08-05"]
+    _seed_release_cache("DFEDTARU", 101, "D", dfedtaru_dates)
+    assert _next_expected_release("DFEDTARU", "2026-07-10") == datetime(2026, 7, 12).date()
+
+    ecbdfr_dates = ["2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10", "2026-07-13", "2026-09-01"]
+    _seed_release_cache("ECBDFR", 484, "D", ecbdfr_dates)
+    assert _next_expected_release("ECBDFR", "2026-07-10") == datetime(2026, 7, 13).date()
+
+
+def test_calendar_staleness_not_stale_when_release_date_in_future(db_engine):
+    """A last_obs_date old enough to fail the plain 35-day US default, but
+    whose computed next_release (2 reporting periods out, per the verified
+    formula) still hasn't arrived — must not be flagged. Uses dates
+    relative to the real test-run clock (not hardcoded calendar years) so
+    this stays correct indefinitely rather than only until a fixed date."""
+    today = datetime.utcnow().date()
+    last_obs_date = (today - timedelta(days=50)).isoformat()          # well past the 35-day US default
+    far_future_release = (today + timedelta(days=200)).isoformat()    # comfortably beyond 2x period + grace
+    _seed_release_cache("CFNAI", 219, "M", [far_future_release])
+    assert _calendar_staleness("CFNAI", last_obs_date) is False
+
+
+def test_calendar_staleness_stale_when_release_passed_and_not_updated(db_engine):
+    """A release date safely in the past (relative to the real test-run
+    clock) with no newer stored observation must flag stale."""
+    past_calendar = ["2019-01-01", "2019-02-01", "2019-03-01"]
+    _seed_release_cache("CFNAI", 219, "M", past_calendar)
+    assert _calendar_staleness("CFNAI", "2018-11-01") is True
+
+
+def test_calendar_staleness_none_when_no_cache_present(db_engine):
+    """No cached meta/calendar at all (cold cache, e.g. right after a fresh
+    deploy before the first EOD refresh has run) -> _calendar_staleness
+    returns None, signalling the caller to fall back."""
+    assert _calendar_staleness("CFNAI", "2026-05-01") is None
+
+
+def test_calendar_staleness_none_when_cache_expired(db_engine):
+    """A cache older than _RELEASE_CACHE_TTL_HOURS must not be trusted,
+    even though it's technically present — falls back."""
+    _seed_release_cache("CFNAI", 219, "M", _FAKE_CALENDARS[219], fresh=False)
+    assert _calendar_staleness("CFNAI", "2026-05-01") is None
+
+
+def test_calendar_staleness_none_when_calendar_does_not_cover_needed_date(db_engine):
+    """A cached calendar that doesn't reach far enough forward (e.g.
+    release_id 205's real OECD calendar, confirmed live to have no dates
+    past 2026-06-15) must not be silently treated as 'never stale' — it
+    signals 'unknown, fall back' instead."""
+    short_calendar = ["2026-01-15", "2026-02-16", "2026-03-16"]  # nothing near the needed threshold
+    _seed_release_cache("IRSTCI01JPM156N", 205, "M", short_calendar)
+    assert _next_expected_release("IRSTCI01JPM156N", "2026-05-01") is None
+    assert _calendar_staleness("IRSTCI01JPM156N", "2026-05-01") is None
+
+
+def test_chngdprapsmei_never_uses_calendar_check_even_with_cache_present(db_engine):
+    """CHNGDPRAPSMEI is permanently excluded (_CALENDAR_STALENESS_UNSUPPORTED)
+    regardless of whether a cache happens to exist for it — verified live
+    that the calendar formula reproduces ~2 months/year of false staleness
+    for this specific series (see the module comment). Seeding a cache
+    anyway (as if refresh_release_calendars() had been changed to include
+    it by mistake) must still be ignored."""
+    assert "CHNGDPRAPSMEI" in _CALENDAR_STALENESS_UNSUPPORTED
+    _seed_release_cache("CHNGDPRAPSMEI", 205, "A", ["2026-01-15", "2026-02-16"])
+    assert _next_expected_release("CHNGDPRAPSMEI", "2025-01-01") is None
+    assert _calendar_staleness("CHNGDPRAPSMEI", "2025-01-01") is None
+
+
+def test_series_staleness_uses_calendar_result_over_day_count(db_engine):
+    """When the calendar check is computable, it must win over the
+    day-count threshold even when the two would disagree — 74 days old
+    exceeds no override for CFNAI's plain "us" default (35d) but the real
+    2026-06-25 vintage makes the June release (2026-07-23) the correct
+    'not stale until' date."""
+    _seed_release_cache("CFNAI", 219, "M", _FAKE_CALENDARS[219])
+    row = {"date": "2026-05-01"}
+    age_days, is_stale = _series_staleness(row, "CFNAI", "us")
+    assert age_days is not None and age_days > 35  # would fail the flat US default alone
+    next_release = _next_expected_release("CFNAI", "2026-05-01")
+    assert is_stale == (datetime.utcnow().date() > next_release + timedelta(days=2))
+
+
+def test_series_staleness_falls_back_to_day_count_when_calendar_unavailable(db_engine):
+    """No release-calendar cache present at all (the state every existing
+    pre-this-feature test runs in) must reproduce exactly the prior
+    day-count-only behaviour — this is the regression guarantee for the
+    32 staleness tests above, which were all written before this feature
+    and never seed a release-calendar cache."""
+    row = {"date": (datetime.utcnow() - timedelta(days=74)).strftime("%Y-%m-%d %H:%M:%S.%f")}
+    age_days, is_stale = _series_staleness(row, "CFNAI", "us")
+    assert age_days == 74
+    assert is_stale is False  # CFNAI's day-count override is 90
+
+
+def test_series_staleness_fallback_logs_warning_for_computable_series(db_engine, caplog):
+    """A series that *should* be calendar-checkable (not CHNGDPRAPSMEI) but
+    has no usable cache yet must log a warning identifying the fallback —
+    this is what makes a persistently-broken refresh visible in server
+    logs rather than silently degrading forever."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="analysis.macro"):
+        _series_staleness({"date": "2026-05-01"}, "CFNAI", "us")
+    assert any("falling back to the day-count" in r.message for r in caplog.records)
+
+
+def test_series_staleness_fallback_does_not_warn_for_chngdprapsmei(db_engine, caplog):
+    """CHNGDPRAPSMEI always and deliberately uses the fallback — warning on
+    every call would just be log noise for expected, permanent behaviour."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="analysis.macro"):
+        _series_staleness({"date": "2025-01-01"}, "CHNGDPRAPSMEI", "asia")
+    assert not any("falling back to the day-count" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
