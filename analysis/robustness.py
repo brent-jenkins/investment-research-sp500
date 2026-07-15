@@ -945,7 +945,8 @@ _HEATMAP_GREEN_RGB = (0 / 255, 135 / 255, 90 / 255)
 _HEATMAP_RED_RGB   = (192 / 255, 57 / 255, 43 / 255)
 
 # Highlighted spans on the Backtest Evidence equity curve — whether the
-# annotation reads "Zero trades — regime gate active" or an actual entry
+# annotation reads "Zero new entries — regime gate active" (optionally
+# noting carryover positions that closed in-window) or an actual entry
 # count is decided live from the run's own trades (see
 # _render_equity_curve_png()), not assumed here.
 _EQUITY_HIGHLIGHT_PERIODS: list[tuple[date, date, str]] = [
@@ -1242,11 +1243,14 @@ class _NumberedCanvas(_rl_canvas.Canvas):
         self.restoreState()
 
 
-def _render_equity_curve_png(run_id: int, config: dict) -> Optional[bytes]:
+def _render_equity_curve_png(run_id: int, config: dict) -> Optional[tuple[bytes, list[str]]]:
     """Matplotlib-rendered daily £ equity curve for the PDF's Backtest
-    Evidence page. Returns None (caller shows a text placeholder) when the
-    run has no usable £-sized equity curve — e.g. an older run predating
-    VaR position sizing."""
+    Evidence page, plus any carryover-position notes for the caller to
+    render as a caption below the image (see the loop below — kept off the
+    chart itself, where two nearby highlight windows collide past 2 lines
+    of annotation text). Returns None (caller shows a text placeholder)
+    when the run has no usable £-sized equity curve — e.g. an older run
+    predating VaR position sizing."""
     trades = get_run_trades(run_id)
     if trades.empty:
         return None
@@ -1269,9 +1273,17 @@ def _render_equity_curve_png(run_id: int, config: dict) -> Optional[bytes]:
         ax.spines[spine].set_visible(False)
 
     entry_dates = pd.to_datetime(trades["entry_date"])
+    exit_dates  = pd.to_datetime(trades["exit_date"])
     y_top = float(ec["equity_gbp"].max())
     ax.set_ylim(top=y_top * 1.2)
     label_y = y_top * 1.06
+
+    # Per-window carryover note (see caption below the chart) — kept off
+    # the chart's own annotation text: with two highlight windows only ~2
+    # years apart on this chart's timescale, a 3rd annotation line collided
+    # with the neighbouring window's label and made both illegible (caught
+    # by rendering the actual PNG, not just confirming the figure built).
+    carryover_notes: list[str] = []
 
     for start, end, period_label in _EQUITY_HIGHLIGHT_PERIODS:
         s_ts, e_ts = pd.Timestamp(start), pd.Timestamp(end)
@@ -1279,7 +1291,38 @@ def _render_equity_curve_png(run_id: int, config: dict) -> Optional[bytes]:
             continue
         ax.axvspan(s_ts, e_ts, color="#C0392B", alpha=0.08)
         n_entries = int(((entry_dates >= s_ts) & (entry_dates <= e_ts)).sum())
-        detail = "Zero trades — regime gate active" if n_entries == 0 else f"{n_entries} trade(s) entered"
+        if n_entries == 0:
+            # "Zero trades" was flagged externally as inaccurate: the regime
+            # gate only ever blocks NEW entries (see CLAUDE.md's "Regime
+            # entry gate") — a position opened before the window began
+            # continues to be monitored and can still exit inside it. Any
+            # trade with an exit_date in-window here is necessarily such a
+            # carryover (n_entries == 0 rules out it having entered here),
+            # so this is computed fresh from the run's own trades on every
+            # report, not a hardcoded count from any one run.
+            #
+            # Kept short ("Zero new entries" only, not "... — regime gate
+            # active") because the two highlight windows sit close enough
+            # on this chart's timescale that the longer string was already
+            # overlapping illegibly even before this fix — a pre-existing
+            # bug confirmed by rendering the actual PNG (present in the
+            # currently-shipping report too, independent of the wording
+            # itself). The full mechanism and any carryover detail live in
+            # the caption below the image instead, where there's no space
+            # constraint.
+            detail = "Zero new entries"
+            n_carryover_exits = int(((exit_dates >= s_ts) & (exit_dates <= e_ts)).sum())
+            if n_carryover_exits > 0:
+                carryover_notes.append(
+                    f"{period_label}: regime gate blocked new entries throughout. "
+                    f"{n_carryover_exits} carryover position"
+                    f"{'s' if n_carryover_exits != 1 else ''} (opened before the window, "
+                    f"closed inside it)."
+                )
+            else:
+                carryover_notes.append(f"{period_label}: regime gate blocked new entries throughout.")
+        else:
+            detail = f"{n_entries} trade(s) entered"
         mid = s_ts + (e_ts - s_ts) / 2
         ax.text(mid, label_y, f"{period_label}\n{detail}", ha="center", va="bottom",
                  fontsize=6.5, color="#C0392B")
@@ -1291,7 +1334,7 @@ def _render_equity_curve_png(run_id: int, config: dict) -> Optional[bytes]:
     fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
     buf.seek(0)
     plt.close(fig)
-    return buf.getvalue()
+    return buf.getvalue(), carryover_notes
 
 
 def _render_exit_reason_chart_png(run_id: int) -> Optional[bytes]:
@@ -1450,10 +1493,21 @@ def _pdf_page_edge_quality(styles: dict, eq: dict) -> list:
 
     flow.append(Paragraph("Expectancy per Trade", styles["SubHeading"]))
     exp = eq.get("expectancy", {})
-    win_rate_frac = exp.get("win_rate_pct", 0.0) / 100.0
+    # Display the win/loss split as percentages at win_rate_pct's own 1dp
+    # precision (matching how it's shown everywhere else in this report),
+    # not as a fraction rounded to 2dp (0.45/0.55) — the coarser fraction
+    # rounding was flagged externally because it makes the formula
+    # recompute to a visibly different result than the headline expectancy
+    # figure (e.g. displaying 0.45/0.55 when the true split is 44.9%/55.1%
+    # is a ~1-percentage-point rounding, enough to shift the 2dp result by
+    # several hundredths). 1dp percentages track the true split far more
+    # closely, so the formula as displayed reconciles with the headline
+    # figure to within normal rounding tolerance.
+    win_rate_pct  = exp.get("win_rate_pct", 0.0)
+    loss_rate_pct = round(100.0 - win_rate_pct, 1)
     flow.append(Paragraph(
-        f"({exp.get('avg_win_pct', 0):.2f}% x {win_rate_frac:.2f}) - "
-        f"({abs(exp.get('avg_loss_pct', 0)):.2f}% x {1 - win_rate_frac:.2f}) "
+        f"({exp.get('avg_win_pct', 0):.2f}% x {win_rate_pct:.1f}%) - "
+        f"({abs(exp.get('avg_loss_pct', 0)):.2f}% x {loss_rate_pct:.1f}%) "
         f"= {_pdf_signed(exp.get('expectancy_pct', 0), 2)}",
         styles["Body"],
     ))
@@ -1505,6 +1559,15 @@ def _pdf_page_annual_returns(styles: dict, annual: pd.DataFrame, calmar: dict, r
         "in cash (MIXED regime) while the S&amp;P 500 rallied on narrow market leadership. "
         "Capital preservation during these periods enabled full participation in subsequent "
         "bull markets.",
+        styles["Footnote"],
+    ))
+    flow.append(Paragraph(
+        "Note: Return % and P&amp;L (GBP) are each summed from every trade's own individual "
+        "outcome — Return % from each trade's own percentage return, P&amp;L (GBP) from each "
+        "trade's own VaR-sized position (position size varies per trade with that ticker's "
+        "volatility at entry). Neither column is computed against a fixed £50,000 account, "
+        "so the two will not reconcile as \"X% of £50,000\" would imply — see Expectancy per "
+        "Trade below for the flat-£50,000 illustrative figure used there.",
         styles["Footnote"],
     ))
     flow.append(Spacer(1, 0.3 * cm))
@@ -1729,9 +1792,12 @@ def _pdf_page_attribution(styles: dict, attr: dict, rfc: dict) -> list:
 def _pdf_page_backtest_evidence(styles: dict, run_id: int, config: dict, run: dict, eq: dict) -> list:
     flow = [Paragraph("Backtest Evidence", styles["SectionTitle"])]
 
-    png = _render_equity_curve_png(run_id, config)
-    if png:
+    equity_result = _render_equity_curve_png(run_id, config)
+    if equity_result:
+        png, carryover_notes = equity_result
         flow.append(Image(BytesIO(png), width=16.5 * cm, height=8.25 * cm))
+        for note in carryover_notes:
+            flow.append(Paragraph(note, styles["Footnote"]))
     else:
         flow.append(Paragraph("No £-denominated equity curve available for this run.", styles["Body"]))
     flow.append(Spacer(1, 0.3 * cm))

@@ -18,6 +18,7 @@ from analysis.robustness import (
     BACKTEST_START_DATE,
     PARAMETER_FREEZE_DATE,
     _recovery_days_to_calendar_months,
+    _render_equity_curve_png,
     _ticker_sector_map,
     compute_attribution,
     compute_calmar_ratios,
@@ -533,3 +534,106 @@ def test_live_validation_page_shows_comparison_table_when_post_freeze_trades_exi
     assert "Live Validation" in text
     assert "Live vs In-Sample Comparison" in text
     assert "No live trades have been completed" not in text
+
+
+# ---------------------------------------------------------------------------
+# Due-diligence report accuracy fixes (2026-07-16) — flagged in external
+# review of the 2026-07-14 report: an inaccurate "zero trades" chart label
+# for windows that actually had carryover-position exits, an unexplained
+# GBP P&L basis mismatch against the Expectancy section's flat-£50,000
+# figure, and a rounding-induced mismatch in the displayed expectancy
+# formula. See CLAUDE.md for the full investigation (including the real
+# 2022 SOXX trade — entered 2021-11-04 while TRENDING_BULL, closed via
+# stop-loss 2022-01-20 — used to verify these fixes against real data
+# before they were applied).
+# ---------------------------------------------------------------------------
+
+def test_expectancy_pdf_displays_percentage_split_not_bare_fraction(db_engine):
+    """The win/loss split must render as a percentage (e.g. "44.4%"), not a
+    fraction rounded to 2dp (e.g. "0.44") — the fraction rounding was
+    coarse enough that hand-multiplying the displayed formula produced a
+    visibly different result than the headline expectancy figure."""
+    run_id = _seed_run(db_engine, name="pdf-expectancy-precision")
+    # 4 wins / 9 trades = 44.44...% — a split that doesn't round cleanly.
+    for i in range(4):
+        _seed_trade(db_engine, run_id, ticker=f"W{i}", pnl_pct=0.05, pnl_gbp=50.0,
+                    is_win=True, entry_date=date(2024, 1, 1) + timedelta(days=i))
+    for i in range(5):
+        _seed_trade(db_engine, run_id, ticker=f"L{i}", pnl_pct=-0.02, pnl_gbp=-20.0,
+                    is_win=False, entry_date=date(2024, 2, 1) + timedelta(days=i))
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+    text = _extract_pdf_text(pdf_bytes)
+
+    assert "44.4%" in text
+    assert "55.6%" in text
+    # The old fraction-rounded display would have shown "0.44" / "0.56".
+    assert "x 0.44)" not in text
+    assert "x 0.56)" not in text
+
+
+def test_annual_returns_footnote_explains_gbp_pnl_basis(db_engine):
+    """The Annual Returns table must carry a note clarifying that Return %
+    and P&L (GBP) are each summed from individual trade outcomes, not
+    computed against a fixed £50,000 account — otherwise a reader
+    reasonably expects e.g. a 310% annual return to imply ~3x the account
+    value in £ profit, which it does not."""
+    run_id = _seed_run(db_engine, name="pdf-annual-footnote")
+    _seed_trade(db_engine, run_id, ticker="AAPL", pnl_pct=0.10, pnl_gbp=100.0, is_win=True)
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+    text = _extract_pdf_text(pdf_bytes)
+
+    assert "VaR-sized position" in text
+    assert "will not reconcile" in text
+    # Confirms the ReportLab "&" + letter entity-parsing bug (documented in
+    # CLAUDE.md) didn't resurface in this new paragraph.
+    assert "P&L;" not in text
+    assert "P&L (GBP)" in text
+
+
+def test_equity_curve_carryover_note_for_trade_closing_in_covid_window(db_engine):
+    """A trade opened before the COVID window (2020-02-01 to 2020-04-30)
+    that closes inside it must not be silently absent from the "zero
+    entries" finding — the on-chart annotation itself ("Zero new entries")
+    is baked into the rendered image and can't be checked via text
+    extraction, so this asserts directly against _render_equity_curve_png()'s
+    returned carryover_notes (unit-level) and separately confirms the same
+    text reaches the actual PDF (integration-level) — resolving the exact
+    contradiction an external reviewer flagged against the Annual Returns
+    table, where this same trade shows as "1 trade" for 2022... (here,
+    2020, but the identical mechanism)."""
+    run_id = _seed_run(db_engine, name="pdf-covid-carryover")
+    _seed_trade(
+        db_engine, run_id, ticker="AAPL",
+        entry_date=date(2019, 12, 1), exit_date=date(2020, 3, 1),
+        pnl_pct=-0.03, pnl_gbp=-30.0, is_win=False, exit_reason="STOP_LOSS",
+    )
+
+    result = _render_equity_curve_png(run_id, _PDF_TEST_CONFIG)
+    assert result is not None
+    _png_bytes, carryover_notes = result
+    assert any("COVID crash" in n and "1 carryover position" in n for n in carryover_notes)
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+    text = _extract_pdf_text(pdf_bytes)
+    assert "regime gate blocked new entries throughout" in text
+    assert "1 carryover position" in text
+
+
+def test_equity_curve_no_carryover_mentioned_when_truly_no_trades_touch_window(db_engine):
+    """A window with genuinely zero trades touching it (no entry, no exit)
+    must not claim a carryover position that doesn't exist."""
+    run_id = _seed_run(db_engine, name="pdf-covid-no-carryover")
+    _seed_trade(db_engine, run_id, ticker="AAPL",
+                entry_date=date(2019, 6, 1), exit_date=date(2019, 12, 1),
+                pnl_pct=0.05, pnl_gbp=50.0, is_win=True)
+    _seed_trade(db_engine, run_id, ticker="MSFT",
+                entry_date=date(2020, 6, 1), exit_date=date(2020, 12, 1),
+                pnl_pct=0.05, pnl_gbp=50.0, is_win=True)
+
+    pdf_bytes = generate_robustness_pdf(run_id, _PDF_TEST_CONFIG)
+    text = _extract_pdf_text(pdf_bytes)
+
+    assert "regime gate blocked new entries throughout" in text
+    assert "carryover position" not in text
