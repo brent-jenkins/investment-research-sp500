@@ -44,7 +44,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from analysis.confluence import generate_signals
 from analysis.correlations import compute_all_pairs
 from analysis.engine import run_analysis
-from analysis.macro import fetch_and_store_macro_indicators
+from analysis.macro import fetch_and_store_macro_indicators, refresh_release_calendars
 from data.database import get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
@@ -540,6 +540,13 @@ def _eod_job() -> None:
         set_metadata("last_fred_run", datetime.utcnow().isoformat())
     except Exception as exc:
         logger.error("FRED macro indicator fetch failed: %s", exc, exc_info=True)
+
+    try:
+        logger.info("Refreshing FRED release calendars…")
+        refresh_release_calendars(config)
+        set_metadata("last_fred_release_calendar_run", datetime.utcnow().isoformat())
+    except Exception as exc:
+        logger.error("FRED release-calendar refresh failed: %s", exc, exc_info=True)
 
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
 
