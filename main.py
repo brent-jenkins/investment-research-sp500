@@ -5315,6 +5315,15 @@ def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
                     "n_trades":               "N Trades",
                 })
                 st.dataframe(show, width="stretch", hide_index=True)
+                st.caption(
+                    "A 100%/0% Agreement split for Trend, Volatility, or Volume is expected under the "
+                    "current TRENDING_BULL-only entry gate, not a bug: with Macro's backtest score held "
+                    "constant (latest-observation-only — see CLAUDE.md) and weighted heavily in this "
+                    "regime, only trades where those three modules all score +1 can clear the STRONG_BUY "
+                    "threshold, so every entered trade shows the same value for each. Mean Reversion is "
+                    "the only module whose weight is small enough to vary freely across entries, making "
+                    "it the one row here with genuine discriminating signal."
+                )
 
     # ── Tab 4: Signal Decay ───────────────────────────────────────────────────
     with tab_decay:
