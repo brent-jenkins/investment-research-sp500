@@ -398,6 +398,19 @@ def _row_age_days(row: Optional[dict]) -> Optional[int]:
         return None
 
 
+def _series_staleness(row: Optional[dict], sid: str, region: str) -> tuple[Optional[int], bool]:
+    """Age in days + stale flag for one stored series row, using the
+    per-series override (_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE) when one
+    exists, else the region default (_STALE_THRESHOLD_DAYS). Shared by
+    every staleness check in this module — the generic extra_series loop
+    and every bespoke-rendered _SPECIALTY series alike — so a single
+    threshold change or override addition applies everywhere uniformly."""
+    age_days = _row_age_days(row)
+    threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get(sid, _STALE_THRESHOLD_DAYS.get(region, 90))
+    is_stale = age_days is not None and age_days > threshold
+    return age_days, is_stale
+
+
 def _regional_macro_score(
     rows: dict[str, dict],
     vix_score: Optional[int],
@@ -914,6 +927,7 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "rising"  if (real_yield_z is not None and real_yield_z >  0.3) else
         "flat"
     )
+    real_yield_age_days, real_yield_stale = _series_staleness(rows.get("DFII10"), "DFII10", "us")
 
     # ── Breakeven inflation (T10YIE) ─────────────────────────────────────────
     breakeven   = _get("T10YIE", "value")
@@ -923,11 +937,13 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "falling" if (breakeven_z is not None and breakeven_z < -0.3) else
         "flat"
     )
+    breakeven_age_days, breakeven_stale = _series_staleness(rows.get("T10YIE"), "T10YIE", "us")
 
     # ── Credit spreads ───────────────────────────────────────────────────────
     hy_oas_pct    = _get("BAMLH0A0HYM2", "value")
     hy_oas_pct30d = _get("BAMLH0A0HYM2", "pct_change_30d")
     hy_oas_bps    = round(hy_oas_pct * 100, 0) if hy_oas_pct is not None else None
+    hy_oas_age_days, hy_oas_stale = _series_staleness(rows.get("BAMLH0A0HYM2"), "BAMLH0A0HYM2", "us")
 
     hy_series_meta = config.get("macro", {}).get("fred_series", {}).get("BAMLH0A0HYM2", {})
     stress_thr = float(hy_series_meta.get("stress_threshold_pct", 5.0))
@@ -943,6 +959,7 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
 
     ig_oas_pct = _get("BAMLC0A0CM", "value")
     ig_oas_bps = round(ig_oas_pct * 100, 0) if ig_oas_pct is not None else None
+    ig_oas_age_days, ig_oas_stale = _series_staleness(rows.get("BAMLC0A0CM"), "BAMLC0A0CM", "us")
 
     # ── Leading indicators and other non-specialty series (dynamic) ─────────────
     # Series that have bespoke rendering in the UI; everything else → extra_series.
@@ -992,9 +1009,7 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         else:
             display_value = f"{val:+.2f}"
         context = _extra_context(sid, val, pct, sc) if val is not None else "No data"
-        age_days = _row_age_days(rows.get(sid))
-        stale_threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get(sid, _STALE_THRESHOLD_DAYS.get(region, 90))
-        is_stale = age_days is not None and age_days > stale_threshold
+        age_days, is_stale = _series_staleness(rows.get(sid), sid, region)
         if is_stale:
             context += f" (stale — {age_days}d old)"
         extra_series.append({
@@ -1020,15 +1035,14 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
     # (the same bug that had CFNAI/M2SL/BOGMBASE falsely flagged stale at
     # 74 days had also left PERMIT invisibly stuck on the same age, just
     # with no staleness UI to reveal it either way).
-    permit_age_days  = _row_age_days(rows.get("PERMIT"))
-    permit_threshold = _STALE_THRESHOLD_DAYS_SERIES_OVERRIDE.get("PERMIT", _STALE_THRESHOLD_DAYS.get("us", 90))
-    permit_stale      = permit_age_days is not None and permit_age_days > permit_threshold
+    permit_age_days, permit_stale = _series_staleness(rows.get("PERMIT"), "PERMIT", "us")
 
     # ── Fed Funds Target Rate (DFEDTARU) ──────────────────────────────────────
     fed_rate       = _get("DFEDTARU", "value")
     fed_rate_pct30 = _get("DFEDTARU", "pct_change_30d")
     fed_rate_z     = _get("DFEDTARU", "z_score_2y")
     fed_rate_score = _get("DFEDTARU", "score")
+    fed_rate_age_days, fed_rate_stale = _series_staleness(rows.get("DFEDTARU"), "DFEDTARU", "us")
     # Trend: "cut" / "hiked" / "unchanged"
     if fed_rate_pct30 is not None and fed_rate_pct30 < -2.0:
         fed_rate_trend = "cut"
@@ -1040,6 +1054,8 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
     # ── Yield curve ─────────────────────────────────────────────────────────
     t10y2y = _get("T10Y2Y", "value")
     t10y3m = _get("T10Y3M", "value")
+    t10y2y_age_days, t10y2y_stale = _series_staleness(rows.get("T10Y2Y"), "T10Y2Y", "us")
+    t10y3m_age_days, t10y3m_stale = _series_staleness(rows.get("T10Y3M"), "T10Y3M", "us")
 
     def _yc_shape_10y2y(val: Optional[float]) -> Optional[str]:
         if val is None:
@@ -1110,18 +1126,30 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "real_yield":        real_yield,
         "real_yield_trend":  real_yield_trend,
         "real_yield_z":      real_yield_z,
+        "real_yield_stale":  real_yield_stale,
+        "real_yield_age_days": real_yield_age_days,
         "breakeven":         breakeven,
         "breakeven_trend":   breakeven_trend,
+        "breakeven_stale":   breakeven_stale,
+        "breakeven_age_days": breakeven_age_days,
         "hy_oas_pct":        hy_oas_pct,
         "hy_oas_bps":        hy_oas_bps,
         "hy_oas_pct_30d":    hy_oas_pct30d,
+        "hy_oas_stale":      hy_oas_stale,
+        "hy_oas_age_days":   hy_oas_age_days,
         "credit_status":     credit_status,
         "ig_oas_pct":        ig_oas_pct,
         "ig_oas_bps":        ig_oas_bps,
+        "ig_oas_stale":      ig_oas_stale,
+        "ig_oas_age_days":   ig_oas_age_days,
         "t10y2y":            t10y2y,
         "t10y2y_shape":      _yc_shape_10y2y(t10y2y),
+        "t10y2y_stale":      t10y2y_stale,
+        "t10y2y_age_days":   t10y2y_age_days,
         "t10y3m":            t10y3m,
         "t10y3m_shape":      _yc_shape_10y3m(t10y3m),
+        "t10y3m_stale":      t10y3m_stale,
+        "t10y3m_age_days":   t10y3m_age_days,
         "extra_series":      extra_series,
         "permit":            permit_val,
         "permit_pct1m":      permit_pct1m,
@@ -1132,6 +1160,8 @@ def get_macro_dashboard(config: Optional[dict] = None) -> dict:
         "fed_rate_trend":    fed_rate_trend,
         "fed_rate_score":    fed_rate_score,
         "fed_rate_z":        fed_rate_z,
+        "fed_rate_stale":    fed_rate_stale,
+        "fed_rate_age_days": fed_rate_age_days,
         "composite_score":   round(composite, 3),
         "region_scores":     {r: round(v, 3) for r, v in regional["region_scores"].items()},
         "region_weights":    {r: round(v, 3) for r, v in regional["region_weights"].items()},

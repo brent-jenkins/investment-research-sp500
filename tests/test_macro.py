@@ -359,6 +359,68 @@ def test_permit_stale_flag_computed_despite_specialty_rendering(db_engine):
 
 
 # ---------------------------------------------------------------------------
+# The other 7 _SPECIALTY series (DFII10, T10YIE, BAMLH0A0HYM2, BAMLC0A0CM,
+# T10Y2Y, T10Y3M, DFEDTARU) had the identical gap PERMIT had: bespoke
+# rendering in main.py, no age_days/stale computed anywhere. Unlike
+# CFNAI/M2SL/BOGMBASE/PERMIT, these are all genuinely-daily FRED series
+# (verified live against the FRED API 2026-07-15 — all confirmed
+# "frequency": "Daily" or "Daily, Close"/"Daily, 7-Day", latest observation
+# dated today or the prior business day) with no period-start-dating
+# mismatch, so they use the plain 35-day "us" default — no per-series
+# override needed, unlike the monthly series above. This was a latent
+# monitoring gap rather than an active bug: all 7 were confirmed fresh at
+# the time this was found, but a future silent failure on any of them
+# would have had no way to surface on the dashboard at all.
+# ---------------------------------------------------------------------------
+
+_OTHER_SPECIALTY_SERIES = {
+    "DFII10":       "real_yield",
+    "T10YIE":       "breakeven",
+    "BAMLH0A0HYM2": "hy_oas",
+    "BAMLC0A0CM":   "ig_oas",
+    "T10Y2Y":       "t10y2y",
+    "T10Y3M":       "t10y3m",
+    "DFEDTARU":     "fed_rate",
+}
+
+
+def test_other_specialty_series_not_stale_at_30_days(db_engine):
+    """30 days is comfortably inside the 35-day "us" default for these
+    genuinely-daily series — none should be flagged."""
+    with Session(db_engine) as session:
+        for sid in _OTHER_SPECIALTY_SERIES:
+            session.add(MacroIndicator(
+                series_id=sid,
+                date=datetime.utcnow() - timedelta(days=30),
+                value=1.0, pct_change_30d=1.0, z_score_2y=0.0, score=1,
+            ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    for sid, key in _OTHER_SPECIALTY_SERIES.items():
+        assert dash[f"{key}_stale"] is False, f"{sid} incorrectly flagged stale at 30 days"
+        assert dash[f"{key}_age_days"] == 30
+
+
+def test_other_specialty_series_flagged_stale_past_35_days(db_engine):
+    """40 days is past the 35-day "us" default — a genuine gap (fetch
+    failure, FRED-side issue) in one of these daily series must still be
+    caught, now that each has a staleness computation at all."""
+    with Session(db_engine) as session:
+        for sid in _OTHER_SPECIALTY_SERIES:
+            session.add(MacroIndicator(
+                series_id=sid,
+                date=datetime.utcnow() - timedelta(days=40),
+                value=1.0, pct_change_30d=1.0, z_score_2y=0.0, score=1,
+            ))
+        session.commit()
+
+    dash = get_macro_dashboard()
+    for sid, key in _OTHER_SPECIALTY_SERIES.items():
+        assert dash[f"{key}_stale"] is True, f"{sid} should be flagged stale at 40 days"
+
+
+# ---------------------------------------------------------------------------
 # analysis/backtest.py:_macro_scores() — the vectorized backtest mirror of
 # the same regional weighting. The backtest engine does NOT read
 # compute_macro()'s stored indicators-table score at all (it re-implements

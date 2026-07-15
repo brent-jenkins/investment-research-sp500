@@ -4534,8 +4534,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             rt_ar = _TREND_ARROW.get(rt, "→")
             ry_c  = "#16a34a" if rt == "falling" else ("#ef5350" if rt == "rising" else "#f59e0b")
             v_str = f"{ry:+.2f}%" if ry is not None else "—"
+            sub   = f"Trend: {rt}"
+            if macro_dash.get("real_yield_stale"):
+                sub += f" (stale — {macro_dash['real_yield_age_days']}d old)"
             st.markdown(
-                _metric_card("10Y Real Yield", f"{rt_ar} {v_str}", f"Trend: {rt}", ry_c, tag="signals"),
+                _metric_card("10Y Real Yield", f"{rt_ar} {v_str}", sub, ry_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c2:
@@ -4544,8 +4547,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             bt_ar = _TREND_ARROW.get(bt, "→")
             bk_c  = "#16a34a" if 1.5 <= (bk or 0) <= 2.5 else "#f59e0b"
             v_str = f"{bk:.2f}%" if bk is not None else "—"
+            sub   = f"Trend: {bt}"
+            if macro_dash.get("breakeven_stale"):
+                sub += f" (stale — {macro_dash['breakeven_age_days']}d old)"
             st.markdown(
-                _metric_card("10Y Breakeven Inflation", f"{bt_ar} {v_str}", f"Trend: {bt}", bk_c, tag="signals"),
+                _metric_card("10Y Breakeven Inflation", f"{bt_ar} {v_str}", sub, bk_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c3:
@@ -4555,6 +4561,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             v_str  = f"{hy_bps:.0f} bps" if hy_bps is not None else "—"
             p30    = macro_dash["hy_oas_pct_30d"]
             sub    = f"Status: {cs}" + (f" | 30d: {p30:+.1f}%" if p30 is not None else "")
+            if macro_dash.get("hy_oas_stale"):
+                sub += f" (stale — {macro_dash['hy_oas_age_days']}d old)"
             st.markdown(
                 _metric_card("HY Credit Spread (OAS)", v_str, sub, cs_c, tag="signals"),
                 unsafe_allow_html=True,
@@ -4569,8 +4577,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             sh2y  = macro_dash["t10y2y_shape"] or "—"
             yc2_c = _YC_COLOUR.get(sh2y, "#8899AA")
             v_str = f"{yc2y:+.2f}%" if yc2y is not None else "—"
+            sub   = f"Shape: {sh2y}"
+            if macro_dash.get("t10y2y_stale"):
+                sub += f" (stale — {macro_dash['t10y2y_age_days']}d old)"
             st.markdown(
-                _metric_card("Yield Curve 10Y-2Y", v_str, f"Shape: {sh2y}", yc2_c, tag="signals"),
+                _metric_card("Yield Curve 10Y-2Y", v_str, sub, yc2_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c5:
@@ -4578,8 +4589,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
             sh3m  = macro_dash["t10y3m_shape"] or "—"
             yc3_c = _YC_COLOUR.get(sh3m, "#8899AA")
             v_str = f"{yc3m:+.2f}%" if yc3m is not None else "—"
+            sub   = f"Shape: {sh3m}"
+            if macro_dash.get("t10y3m_stale"):
+                sub += f" (stale — {macro_dash['t10y3m_age_days']}d old)"
             st.markdown(
-                _metric_card("Yield Curve 10Y-3M", v_str, f"Shape: {sh3m}", yc3_c, tag="signals"),
+                _metric_card("Yield Curve 10Y-3M", v_str, sub, yc3_c, tag="signals"),
                 unsafe_allow_html=True,
             )
         with c6:
@@ -4588,8 +4602,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                      "#ef5350" if ig_bps is not None and ig_bps > 150 else "#f59e0b"
             )
             v_str  = f"{ig_bps:.0f} bps" if ig_bps is not None else "—"
+            sub    = "Investment Grade bonds"
+            if macro_dash.get("ig_oas_stale"):
+                sub += f" (stale — {macro_dash['ig_oas_age_days']}d old)"
             st.markdown(
-                _metric_card("IG Credit Spread (OAS)", v_str, "Investment Grade bonds", ig_c, tag="signals"),
+                _metric_card("IG Credit Spread (OAS)", v_str, sub, ig_c, tag="signals"),
                 unsafe_allow_html=True,
             )
 
@@ -4639,6 +4656,8 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                     _FED_TREND_COLOUR = {"cut": "#16a34a", "hiked": "#ef5350", "unchanged": "#8899AA"}
                     fr_c   = _FED_TREND_COLOUR.get(fed_rate_trend, "#8899AA")
                     fr_lbl = _FED_TREND_LABEL.get(fed_rate_trend, "Unchanged →")
+                    if macro_dash.get("fed_rate_stale"):
+                        fr_lbl += f" (stale — {macro_dash['fed_rate_age_days']}d old)"
                     st.markdown(
                         _metric_card(
                             "Fed Funds Rate (Upper Bound)",
