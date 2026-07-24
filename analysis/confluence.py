@@ -12,9 +12,10 @@ from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from analysis.correlations import compute_correlations
-from analysis.macro import compute_macro
+from analysis.macro import compute_macro, get_macro_dashboard
 from analysis.mean_reversion import compute_mean_reversion
 from analysis.regime import Regime, detect_regime, detect_overlays
+from analysis.regime_history import record_regime_snapshot
 from analysis.trend import compute_trend
 from analysis.volatility import compute_volatility
 from analysis.volume import compute_volume
@@ -556,6 +557,19 @@ def generate_signals(
 
         if progress_callback:
             progress_callback(idx, total, ticker)
+
+    # Regime/market-health trend snapshot for the Daily Briefing chart — see
+    # analysis/regime_history.py. Computed from exactly this run's own
+    # regime_result/signals so the chart always matches what this run showed;
+    # never allowed to affect signal generation itself if it fails.
+    macro_health_score = None
+    try:
+        macro_dash = get_macro_dashboard(config)
+        if macro_dash.get("has_data"):
+            macro_health_score = macro_dash.get("composite_score")
+    except Exception as exc:
+        logger.warning("Could not compute macro health for regime snapshot: %s", exc)
+    record_regime_snapshot(regime_result, signals, config, macro_health_score)
 
     set_metadata("last_analysis_run", datetime.utcnow().isoformat())
     return {

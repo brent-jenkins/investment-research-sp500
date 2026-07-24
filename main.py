@@ -66,6 +66,11 @@ from analysis.macro import (
     SIGNALS_ACTIVE,
 )
 from analysis.risk import compute_drawdown_scale_factor
+from analysis.regime_history import (
+    backfill_regime_metrics_history,
+    get_regime_metrics_history,
+    summarise_resolution,
+)
 from analysis.backtest import (
     delete_run,
     get_all_runs,
@@ -782,6 +787,80 @@ def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
         height=500,
         margin=dict(l=40, r=20, t=50, b=40),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+    )
+    return _apply_dark_theme(fig)
+
+
+def _regime_trend_chart(df: pd.DataFrame) -> go.Figure:
+    """Dual-axis ADX/VIX/S&P-vs-SMA200 trend chart with regime-gate shading.
+
+    Left axis carries ADX and VIX together — both are roughly-0-100
+    unitless/index oscillators, so the ADX=25 and VIX=20 regime-gate
+    threshold lines sit naturally against both on one shared scale. Right
+    axis carries S&P % vs SMA200 alone — a genuinely different unit (a
+    percentage that swings roughly ±20%), so sharing the left axis would
+    either flatten it to a sliver or blow out the ADX/VIX scale.
+
+    Shading marks "entries blocked" bands only (see
+    analysis.regime_history.compute_shading_bands) — the default,
+    unshaded background already reads as "normal", so only the
+    exceptional "capital sitting in cash" state needs calling out,
+    mirroring the DD report's PDF equity-curve convention of shading only
+    the periods worth a second look, not the whole timeline.
+
+    A vertical marker separates backfilled history (one point per calendar
+    day; entries_allowed there is inferred from today's config, not ground
+    truth — see analysis.regime_history.summarise_resolution()) from live,
+    per-run data (up to 3 points/day; entries_allowed captured at the time)
+    — without it, the density jump and the shading-confidence change at
+    that point could read as an unexplained data artifact rather than what
+    it actually is.
+    """
+    from analysis.regime_history import compute_shading_bands, summarise_resolution
+
+    fig = go.Figure()
+
+    for band in compute_shading_bands(df):
+        if band["allowed"]:
+            continue
+        end = band["end"]
+        if end == band["start"]:
+            end = end + pd.Timedelta(hours=12)  # keep a single-run band visible
+        fig.add_vrect(x0=band["start"], x1=end, fillcolor="#8899AA", opacity=0.16, line_width=0)
+
+    _res = summarise_resolution(df)
+    if _res["boundary_timestamp"] is not None:
+        fig.add_vline(
+            x=_res["boundary_timestamp"], line_dash="dash", line_color="#8899AA", line_width=1.5,
+            annotation_text="← backfilled (1pt/day, inferred shading)  |  live (per-run, recorded) →",
+            annotation_position="top", annotation_font_color="#8899AA", annotation_font_size=10,
+        )
+
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["adx"], mode="lines",
+        name="ADX", line=dict(color="#00C2FF", width=1.6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["vix"], mode="lines",
+        name="VIX", line=dict(color="#f59e0b", width=1.6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["sp500_pct_vs_sma200"], mode="lines",
+        name="S&P % vs SMA200", line=dict(color="#26a69a", width=1.6),
+        yaxis="y2",
+    ))
+
+    fig.add_hline(y=25, line_dash="dot", line_color="#00C2FF",
+                  annotation_text="ADX 25 (trend threshold)", annotation_font_color="#00C2FF")
+    fig.add_hline(y=20, line_dash="dot", line_color="#f59e0b",
+                  annotation_text="VIX 20 (fear threshold)", annotation_font_color="#f59e0b")
+
+    fig.update_layout(
+        height=420,
+        margin=dict(l=40, r=50, t=20, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+        yaxis=dict(title="ADX / VIX"),
+        yaxis2=dict(title="S&P % vs SMA200", overlaying="y", side="right", ticksuffix="%"),
     )
     return _apply_dark_theme(fig)
 
@@ -1804,7 +1883,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     st.divider()
     st.markdown("### Manual Controls")
     st.caption("Trigger the analysis pipeline immediately without waiting for the next scheduled run.")
-    _mc1, _mc2, _mc3 = st.columns(3)
+    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
 
     with _mc1:
         if st.button("Run Analysis Now", width="stretch", type="primary",
@@ -1896,6 +1975,39 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                         _failed = [sid for sid, n in _backfill_results.items() if n == 0]
                         if _failed:
                             st.warning(f"No data for: {', '.join(_failed)}")
+                        st.cache_data.clear()
+                except Exception as _exc:
+                    st.error(f"Backfill failed: {_exc}")
+
+    with _mc4:
+        if st.button(
+            "Backfill Regime Metrics History", width="stretch",
+            key="status_backfill_regime_metrics",
+            help=(
+                "Reconstructs the Charts page's regime trend chart from "
+                "history that already exists in the indicators/signals "
+                "tables — one row per calendar date (the day's last "
+                "analysis run only; per-run resolution only exists going "
+                "forward, so the chart will show a visible density jump at "
+                "the backfill/live boundary — expected, not a bug). "
+                "Backfilled rows also infer the entries-blocked shading "
+                "from today's config applied retroactively, since no "
+                "historical config snapshot exists — live rows record the "
+                "gate result exactly as computed at the time. Safe to run "
+                "repeatedly — already-backfilled dates are skipped."
+            ),
+        ):
+            _cfg = _load_config()
+            with st.spinner("Reconstructing regime metrics history…"):
+                try:
+                    _rm_results = backfill_regime_metrics_history(_cfg)
+                    if _rm_results["rows_written"] == 0:
+                        st.info("Nothing new to backfill — all available dates are already recorded.")
+                    else:
+                        st.success(
+                            f"✓ Backfilled {_rm_results['rows_written']} day(s) "
+                            f"({_rm_results['earliest_date']} → {_rm_results['latest_date']})."
+                        )
                         st.cache_data.clear()
                 except Exception as _exc:
                     st.error(f"Backfill failed: {_exc}")
@@ -3158,6 +3270,62 @@ def _render_charts_landing(config: dict) -> None:
 
     _render_page_wordmark("Charts")
     st.markdown("## Charts")
+
+    # ── Market Regime Trend ──────────────────────────────────────────────
+    # Lives here (rather than a new sidebar page, or bolted onto Daily
+    # Briefing/Signals) because Charts' whole job is already "time-series
+    # chart" — this is that same job applied to regime/market-health
+    # metrics instead of a single ticker's price. See
+    # analysis/regime_history.py for what feeds it.
+    st.markdown("### Market Regime Trend")
+    st.caption(
+        "ADX, VIX, and S&P 500 % vs SMA200 across every analysis run. "
+        "Shaded bands mark when the regime gate blocked new T212 entries."
+    )
+    _RM_RANGE_DAYS = {"3M": 90, "6M": 180, "All": None}
+    _rm_range = st.radio(
+        "Trend range", list(_RM_RANGE_DAYS.keys()), index=1,
+        horizontal=True, label_visibility="collapsed", key="regime_trend_range",
+    )
+    _rm_days = _RM_RANGE_DAYS[_rm_range]
+    _rm_start = (datetime.utcnow() - timedelta(days=_rm_days)) if _rm_days is not None else None
+    _rm_df = get_regime_metrics_history(start=_rm_start)
+    if _rm_df.empty:
+        st.info(
+            'No regime metrics history yet for this range — this chart fills in as scheduled '
+            'analysis runs happen automatically, or use "Backfill Regime Metrics History" on '
+            "the Status page to reconstruct available history."
+        )
+    else:
+        _rm_res = summarise_resolution(_rm_df)
+        if _rm_res["boundary_timestamp"] is not None:
+            # Mixed backfilled + live data in view — both the point density
+            # and the shading's reliability change at the marked boundary,
+            # so both are called out explicitly rather than left to look
+            # like an unexplained artifact. See analysis/regime_history.py:
+            # summarise_resolution() for the full reasoning.
+            st.caption(
+                f"📅 **{_rm_res['n_backfilled']} backfilled day(s)** (one point/day, "
+                f"reconstructed from historical indicators/signals) up to "
+                f"{_rm_res['boundary_timestamp'].strftime('%Y-%m-%d')}, then "
+                f"**{_rm_res['n_live']} live analysis run(s)** (up to 3/day) from there on — "
+                "marked by the vertical line below."
+            )
+            st.caption(
+                "⚠️ Shading before that line is **inferred**: today's regime-gate config applied "
+                "retroactively to the historical regime (no historical config snapshot is kept). "
+                "Shading after that line is **recorded**: the actual gate result computed at the "
+                "time of each run. Treat pre-line shading as indicative, not authoritative."
+            )
+        elif _rm_res["n_backfilled"]:
+            st.caption(
+                f"📅 All {_rm_res['n_backfilled']} point(s) shown are backfilled (one per calendar "
+                "day) and shading is inferred from today's regime-gate config applied "
+                "retroactively — live, per-run, ground-truth shading begins accumulating from today."
+            )
+        st.plotly_chart(_regime_trend_chart(_rm_df), width="stretch")
+
+    st.divider()
     st.caption("Select an asset to view its price chart and indicators.")
 
     # Build signal lookup for badges

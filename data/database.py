@@ -346,6 +346,47 @@ class OpportunityFlag(Base):
     )
 
 
+class RegimeMetricsHistory(Base):
+    """Point-in-time regime/market-health snapshot captured on every
+    generate_signals() run — powers the Daily Briefing trend chart.
+
+    One row per analysis run (timestamp is minute-truncated so a rapid
+    double-invocation upserts rather than duplicating), not one row per
+    calendar day like indicators/signals — see
+    analysis/regime_history.py:record_regime_snapshot() for why this table
+    intentionally does not follow the (ticker, date) upsert pattern used
+    everywhere else in this schema: it has no ticker, and per-run resolution
+    is the whole point of the chart it feeds.
+    """
+
+    __tablename__ = "regime_metrics_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, index=True)  # UTC, minute-truncated
+
+    regime = Column(String(20), nullable=False)
+    entries_allowed = Column(Integer, nullable=False)  # 0/1 snapshot of is_entry_allowed() at write time
+
+    adx = Column(Float)
+    vix = Column(Float)
+    sp500_pct_vs_sma200 = Column(Float)
+    macro_health_score = Column(Float)
+
+    buy_count = Column(Integer)
+    sell_count = Column(Integer)
+    strong_buy_count = Column(Integer)
+    strong_sell_count = Column(Integer)
+    total_signals = Column(Integer)
+
+    is_backfilled = Column(Integer, default=0)  # 1 for rows reconstructed by backfill_regime_metrics_history()
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("timestamp", name="uq_regime_metrics_timestamp"),
+    )
+
+
 class BacktestRun(Base):
     """Metadata for a single backtest run."""
 

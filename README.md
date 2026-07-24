@@ -38,7 +38,9 @@ Below the header:
 Compact header block (regime badge, overlays, catch-up flags, signal distribution pills, timestamp — all in one bordered card). Market intelligence plain-English summary of signal breadth, VIX, ADX, and regime context. Full ranked signal table for all assets with module score symbols (▲ / ● / ▼) per column and signal-badge colour coding.
 
 ### Charts
-Asset-group landing page with group cards. Clicking through shows a candlestick + volume chart, indicator panel (RSI, Bollinger Bands, MACD, ADX, SMA20/50/200), and raw indicator values for the most recent date.
+A **Market Regime Trend** chart sits above the asset-group landing page: ADX, VIX, and S&P 500 % vs SMA200 across every analysis run (3M/6M/All range selector), with shaded bands marking when the regime gate blocked new T212 entries and threshold lines at ADX=25/VIX=20. Backfilled history (before this feature shipped) is one point per calendar day with inferred shading; live history going forward is up to 3 points/day with recorded (ground-truth) shading — the chart marks the boundary explicitly. See `analysis/regime_history.py`.
+
+Below that, group cards. Clicking through shows a candlestick + volume chart, indicator panel (RSI, Bollinger Bands, MACD, ADX, SMA20/50/200), and raw indicator values for the most recent date.
 
 ### Relationships
 Cross-asset correlation analysis across **28 predefined pairs**. Compact header shows the pair count and last-computed timestamp (read dynamically from `RELATIONSHIP_MAP`). 30-day correlation matrix heatmap across all price-data tickers (FRED series such as T10Y2Y and DFII10 are excluded from the heatmap). Pair-level table (30d corr, 90d corr, historical norm, z-score, CONFIRMING/DIVERGING/NEUTRAL status), and plain-English divergence narratives. Correlations are recomputed automatically on every analysis run.
@@ -120,7 +122,7 @@ Replay the current signal logic over up to 10 years of stored historical price d
 - **Walk-Forward** — rolling 6-month performance windows in 1-month steps. Consistent win rates across windows indicate the signal logic has stable edge.
 
 ### Status
-System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **Run Analysis Now** (analysis + signals only) and **Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
+System status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run). Manual Controls: **Run Analysis Now** (analysis + signals only), **Refresh Data + Analysis** (price pull + FRED macro fetch + full analysis pipeline — equivalent to the EOD scheduler job), **Backfill FRED History** (full 2019-present FRED series history, for the backtest's macro scoring), and **Backfill Regime Metrics History** (reconstructs the Charts page's trend chart from existing indicators/signals data — day-level resolution only, safe to re-run). Send Test Email and Send Weekly Summary Now buttons for verifying email delivery.
 
 A **T212 Invest Account** panel shows the live connection state when `trading212_invest.enabled: true` in config.yaml, including the DEMO/LIVE badge, position/deployment limits, a "Position sizing" caption showing **VaR** (with its confidence/lookback/max-risk/floor/ceiling params) or **Fixed**, and the effective entry threshold for the current regime (flagged "(override)" when `entry_signal_overrides` applies one, or a `⛔ Entry blocked` caption in place of the threshold when the current regime isn't in `allowed_entry_regimes` — see "Per-regime entry signal overrides" below). It is split into three tabs:
 - **Account tab** — account value, available cash, deployed-capital progress bar, and the last 10 automated orders with colour-coded status (FILLED green / PLACED amber / FAILED·CANCELLED·REJECTED red) plus a "VaR at Entry" column. Data is read from a scheduler-maintained DB snapshot; the **Refresh Account** button queues an out-of-band fetch (handled by the 60-second job dispatcher, "updating within 60s"). When FAILED orders are present a **Retry failed orders** list appears — each row shows the ticker, direction, quantity, and error with a **Retry** and **Delete** button. The Retry button applies the instrument precision/minimum-quantity guard and re-submits.
@@ -428,7 +430,7 @@ P&L on close: `(exit − entry) × qty × leverage` converted to GBP via `fx_rat
 
 ## Database schema
 
-SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `with conn:` block gets a fresh connection, safe for Streamlit's multi-threaded reruns). All writes are upserts keyed on `(ticker, date)`.
+SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `with conn:` block gets a fresh connection, safe for Streamlit's multi-threaded reruns). Almost all writes are upserts keyed on `(ticker, date)`; the one exception is `regime_metrics_history`, which has no ticker and upserts on a minute-truncated timestamp instead (see below).
 
 | Table | Purpose |
 |-------|---------|
@@ -445,6 +447,7 @@ SQLite via SQLAlchemy, WAL mode, `NullPool` (no connection pooling — each `wit
 | `backtest_trades` | Simulated trades from each backtest run with full entry/exit/P&L detail |
 | `t212_invest_orders` | Every T212 Invest order attempt (BUY and SELL, ETF and stock) — the execution audit trail both automation paths write to |
 | `t212_pnl` | Reconstructed realised P&L per closed T212 Invest position, derived from `t212_invest_orders`; see "T212 P&L reconstruction" above |
+| `regime_metrics_history` | Point-in-time regime/market-health snapshot per analysis run (regime, ADX, VIX, S&P%-vs-SMA200, macro health, signal counts, entries-allowed) — powers the Charts page's Market Regime Trend chart; unique on minute-truncated `timestamp`, not `(ticker, date)` |
 | `system_metadata` | Key-value store for operational state (timestamps, learned weights, alert status) |
 
 Schema migrations (`_apply_migrations()`) run on every startup. One-time data fixes (`_apply_data_fixes()`) are guarded by value-based conditions. Stale tickers are purged from all tables on every startup via `_purge_unlisted_tickers()`. Rows with a null or zero close price are also purged from `price_data` on every startup — these are incomplete intraday bars that yfinance occasionally returns for sessions that hadn't closed at fetch time, and a single such row breaks the rolling-mean SMA line on the chart for the following 20–50 trading days. The ingestion layer (`_upsert_price_rows`) now also skips these rows before they reach the database.
@@ -524,6 +527,10 @@ Backtesting showed uneven edge by regime: MIXED had 416 trades at a 37.5% win ra
 - `simulate_trades()` checks it per date, only when no position is open; a trade that opened in an allowed regime still exits normally even if the regime later rolls into a blocked one.
 
 The Daily Briefing and the Status page's T212 Invest Account section both show a `⛔ Entries blocked — MIXED regime` caption in place of the entry-threshold caption whenever the current regime isn't in `allowed_entry_regimes`, so it's immediately visible that no new positions will open. These captions read `allowed_entry_regimes` from config at render time, so they stay accurate automatically as the list changes.
+
+### Regime metrics history
+
+`analysis/regime_history.py:record_regime_snapshot()` is called once at the end of every `generate_signals()` run (regardless of which of its five call sites triggered it — every scheduled job, both manual Status/Signals buttons, and first-run startup all resolve to the same function), persisting the regime, ADX, VIX, S&P%-vs-SMA200, macro health, buy/sell signal counts, and an `entries_allowed` snapshot (using the config actually in effect at that run — ground truth, not re-derived later) to `regime_metrics_history`. Powers the Charts page's Market Regime Trend chart — see "Charts" above and "Database schema" below for the table shape. `backfill_regime_metrics_history()` reconstructs day-level (not per-run) history from existing `indicators`/`signals`/`macro_indicators` data for dates before this feature shipped; its `entries_allowed` is necessarily inferred from today's config rather than ground truth, and the chart discloses this distinction explicitly rather than presenting backfilled and live shading as equally authoritative.
 
 ### Tradeable vs analysis-only
 
