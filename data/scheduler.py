@@ -663,7 +663,7 @@ def _weekly_summary_job() -> None:
 
 
 def _fomc_reaction_job() -> None:
-    """19:05 UTC weekdays — run analysis-only if today is an FOMC decision day.
+    """19:05 UTC weekdays — run analysis-only + alert email if today is an FOMC decision day.
 
     FOMC statements are released at 2:00 PM US/Eastern (18:00–19:00 UTC).
     This job fires at 19:05 UTC, captures the immediate post-decision market
@@ -680,6 +680,27 @@ def _fomc_reaction_job() -> None:
     logger.info("FOMC decision day — running post-decision analysis (19:05 UTC)…")
     config = _load_config()
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
+
+    try:
+        from output.briefing import send_central_bank_alert  # noqa: PLC0415
+        ok, msg = send_central_bank_alert(
+            bank="Fed",
+            label="Federal Reserve FOMC Decision",
+            watch_tickers=["^GSPC", "TLT", "HYG"],
+            correlation_pairs=[("TLT", "^GSPC"), ("HYG", "TLT"), ("KBE", "T10Y2Y")],
+            context=(
+                "Fed rate decisions directly affect US equity valuations, bond prices, "
+                "and credit spreads. A hike tightens financial conditions and pressures "
+                "growth stocks; a cut is broadly bullish for risk assets. Watch the yield "
+                "curve shape (KBE vs T10Y2Y below) — if the curve steepens sharply "
+                "post-decision, bond markets are pricing in growth concerns."
+            ),
+            config=config,
+        )
+        logger.info("FOMC reaction alert email: %s — %s", ok, msg)
+    except Exception as exc:
+        logger.warning("FOMC reaction alert email failed: %s", exc)
+
     logger.info("FOMC reaction analysis complete.")
 
 
