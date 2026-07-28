@@ -15,9 +15,9 @@ from typing import Optional
 import yaml
 from sqlalchemy import text
 
-from analysis.regime import is_entry_allowed
+from analysis.regime import get_latest_regime_name, is_entry_allowed
 from data.database import get_engine, get_metadata_str, set_metadata
-from output.performance import get_t212_closed_positions
+from output.performance import get_current_signal, get_t212_closed_positions
 
 logger = logging.getLogger(__name__)
 
@@ -670,6 +670,157 @@ def send_vix_spike_alert(
     if ok:
         set_metadata("last_vix_spike_alert", now.date().isoformat())
         return True, f"VIX spike alert sent ({vix_pct:.1f}%)"
+    return False, msg
+
+
+# Colours match the region-pill convention on the Signals page (main.py's
+# MACRO REGIONS strip): Europe indigo, Asia amber — chosen so a bank's
+# accent colour reads consistently across the app rather than picking a
+# fresh one just for this email.
+_CENTRAL_BANK_COLOURS: dict[str, str] = {
+    "BoJ": "#f59e0b",
+    "ECB": "#6366f1",
+}
+
+
+def send_central_bank_alert(
+    bank: str,
+    label: str,
+    watch_tickers: list[str],
+    correlation_pairs: list[tuple[str, str]],
+    context: str,
+    config: dict,
+) -> tuple[bool, str]:
+    """Send an HTML+plain-text alert after a BoJ/ECB policy decision.
+
+    Called from data/scheduler.py's _boj_reaction_job()/_ecb_reaction_job()
+    immediately after the post-decision analysis pipeline has run — mirrors
+    send_vix_spike_alert()'s structure (current status table + a plain-English
+    context paragraph), extended with the current signal for each ticker in
+    watch_tickers and the latest z-score/divergence status for each pair in
+    correlation_pairs (read from analysis.correlations.get_stored_correlations()
+    — the same pair rows the Relationships page renders).
+
+    Args:
+        bank:              short code shown in the subject/header, e.g. "BoJ".
+        label:              full event name, e.g. "Bank of Japan Policy Decision".
+        watch_tickers:      research tickers to show the current signal for.
+        correlation_pairs:  (ticker_a, ticker_b) tuples to look up in
+                            get_stored_correlations() — must match a pair's
+                            stored ticker_a/ticker_b exactly (e.g.
+                            ("USDJPY=X", "^GSPC")).
+        context:            plain-English paragraph explaining what to watch.
+        config:             app config dict.
+    Returns:
+        (success, message) tuple.
+    """
+    notif = config.get("notifications", {}).get("email", {})
+    if not notif.get("enabled"):
+        return False, "Email notifications not enabled in config.yaml"
+
+    now     = datetime.utcnow()
+    colour  = _CENTRAL_BANK_COLOURS.get(bank, "#3b82f6")
+    subject = f"{label} — Signals Refreshed ({_fmt_uk(now, '%Y-%m-%d %H:%M')})"
+
+    try:
+        regime_str = get_latest_regime_name() or "UNKNOWN"
+    except Exception:
+        regime_str = "UNKNOWN"
+
+    ticker_rows: list[tuple[str, str, "float | None"]] = []
+    for t in watch_tickers:
+        try:
+            sig = get_current_signal(t)
+        except Exception:
+            sig = {}
+        ticker_rows.append((t, sig.get("signal") or "—", sig.get("confluence_score")))
+
+    pair_rows: list[tuple[str, "float | None", str]] = []
+    try:
+        from analysis.correlations import get_stored_correlations  # noqa: PLC0415
+        stored = get_stored_correlations()
+        for a, b in correlation_pairs:
+            match = next(
+                (r for r in stored if r["ticker_a"] == a and r["ticker_b"] == b), None
+            )
+            if match:
+                pair_rows.append((
+                    match.get("label", f"{a}/{b}"),
+                    match.get("z_score"),
+                    match.get("divergence", "NEUTRAL"),
+                ))
+    except Exception as exc:
+        logger.warning("Central bank alert (%s): correlation lookup failed: %s", bank, exc)
+
+    # ── Plain text ──────────────────────────────────────────────────────────
+    text_lines = [
+        f"SP500Invest — {label}",
+        f"Generated: {_fmt_uk(now, '%Y-%m-%d %H:%M')}",
+        "",
+        f"Current regime: {regime_str.replace('_', ' ')}",
+        "Action taken: An immediate analysis run has been triggered.",
+        "",
+    ]
+    if ticker_rows:
+        text_lines.append("Watch tickers:")
+        for t, sig, score in ticker_rows:
+            score_str = f" ({score:+.2f})" if score is not None else ""
+            text_lines.append(f"  {t}: {sig}{score_str}")
+        text_lines.append("")
+    if pair_rows:
+        text_lines.append("Correlation pairs:")
+        for pair_label, z, div in pair_rows:
+            z_str = f"z={z:.2f}" if z is not None else "z=—"
+            text_lines.append(f"  {pair_label}: {div} ({z_str})")
+        text_lines.append("")
+    text_lines += [
+        context,
+        "",
+        "Review signals on the Signals page and open positions on the Daily Briefing page.",
+        "---",
+        "To disable: set notifications.email.enabled: false in config.yaml",
+    ]
+    text_body = "\n".join(text_lines)
+
+    # ── HTML ────────────────────────────────────────────────────────────────
+    _rows_html = (
+        f'<tr><td style="padding:6px 0;font-size:13px;color:#64748b;width:40%">Current Regime</td>'
+        f'<td style="padding:6px 0;font-size:14px;font-weight:600;color:#1e293b">'
+        f'{html.escape(regime_str.replace("_", " "))}</td></tr>'
+    )
+    for t, sig, score in ticker_rows:
+        score_str = f" ({score:+.2f})" if score is not None else ""
+        _rows_html += (
+            f'<tr><td style="padding:6px 0;font-size:13px;color:#64748b">{html.escape(t)}</td>'
+            f'<td style="padding:6px 0">{_sig_badge_h(sig)}'
+            f'<span style="font-size:12px;color:#64748b">{html.escape(score_str)}</span></td></tr>'
+        )
+    for pair_label, z, div in pair_rows:
+        z_str = f"z={z:.2f}" if z is not None else "z=—"
+        _rows_html += (
+            f'<tr><td style="padding:6px 0;font-size:13px;color:#64748b">{html.escape(pair_label)}</td>'
+            f'<td style="padding:6px 0;font-size:13px;font-weight:600;color:#1e293b">'
+            f'{html.escape(div)} <span style="color:#64748b;font-weight:400">({html.escape(z_str)})</span>'
+            f'</td></tr>'
+        )
+
+    html_body = _email_wrap_h(
+        _email_header_h(label, _fmt_uk(now, "%Y-%m-%d %H:%M"), accent=colour),
+        _section_h(
+            f"{bank.upper()} DECISION — SIGNALS REFRESHED",
+            (
+                f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="border-collapse:collapse;margin-bottom:12px">{_rows_html}</table>'
+                f'<p style="margin:8px 0 0;font-size:13px;color:#475569">{html.escape(context)}</p>'
+            ),
+            border=colour,
+        ),
+        _email_footer_h("To disable: set notifications.email.enabled: false in config.yaml"),
+    )
+
+    ok, msg = _smtp_send(subject, text_body, html_body, config)
+    if ok:
+        return True, f"{bank} reaction alert sent"
     return False, msg
 
 

@@ -683,6 +683,85 @@ def _fomc_reaction_job() -> None:
     logger.info("FOMC reaction analysis complete.")
 
 
+def _boj_reaction_job() -> None:
+    """03:30 UTC weekdays — run analysis-only + alert email if today is a BoJ decision day.
+
+    Mirrors _fomc_reaction_job(): fires every weekday but is a no-op unless
+    today matches config.yaml's central_bank_events.boj.dates. BoJ decisions
+    land approximately 02:00-05:00 BST with no fixed time (unlike the Fed's
+    consistent 2:00 PM US/Eastern), so 03:30 UTC (04:30 BST) is a safe default
+    that catches the post-decision market reaction without firing too early.
+    Silently exits on non-BoJ days so it adds no cost on normal weekdays.
+    """
+    from analysis.central_bank import is_boj_decision_day  # noqa: PLC0415
+
+    config = _load_config()
+    if not is_boj_decision_day(config):
+        logger.debug("BoJ reaction check: not a BoJ decision day — skipping.")
+        return
+
+    logger.info("BoJ decision day — running post-decision analysis (03:30 UTC)…")
+    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
+
+    try:
+        from output.briefing import send_central_bank_alert  # noqa: PLC0415
+        ok, msg = send_central_bank_alert(
+            bank="BoJ",
+            label="Bank of Japan Policy Decision",
+            watch_tickers=["USDJPY=X", "EWJ"],
+            correlation_pairs=[("USDJPY=X", "^GSPC")],
+            context=(
+                "Rising BoJ rates strengthen JPY, risking a carry-trade unwind. "
+                "Watch USDJPY — a sharp drop from current levels signals carry-trade stress."
+            ),
+            config=config,
+        )
+        logger.info("BoJ reaction alert email: %s — %s", ok, msg)
+    except Exception as exc:
+        logger.warning("BoJ reaction alert email failed: %s", exc)
+
+    logger.info("BoJ reaction analysis complete.")
+
+
+def _ecb_reaction_job() -> None:
+    """12:30 UTC weekdays — run analysis-only + alert email if today is an ECB decision day.
+
+    Mirrors _fomc_reaction_job(): fires every weekday but is a no-op unless
+    today matches config.yaml's central_bank_events.ecb.dates. The ECB
+    announces its rate decision at 12:15 UTC (13:15 CET); this job fires 15
+    minutes later at 12:30 UTC to capture the immediate market reaction.
+    Silently exits on non-ECB days so it adds no cost on normal weekdays.
+    """
+    from analysis.central_bank import is_ecb_decision_day  # noqa: PLC0415
+
+    config = _load_config()
+    if not is_ecb_decision_day(config):
+        logger.debug("ECB reaction check: not an ECB decision day — skipping.")
+        return
+
+    logger.info("ECB decision day — running post-decision analysis (12:30 UTC)…")
+    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
+
+    try:
+        from output.briefing import send_central_bank_alert  # noqa: PLC0415
+        ok, msg = send_central_bank_alert(
+            bank="ECB",
+            label="ECB Monetary Policy Decision",
+            watch_tickers=["VGK", "EWG"],
+            correlation_pairs=[("VGK", "ECBDFR")],
+            context=(
+                "ECB rate changes affect European equity valuations directly. "
+                "Rate hikes pressure VGK/EWG; cuts are bullish for European exposure."
+            ),
+            config=config,
+        )
+        logger.info("ECB reaction alert email: %s — %s", ok, msg)
+    except Exception as exc:
+        logger.warning("ECB reaction alert email failed: %s", exc)
+
+    logger.info("ECB reaction analysis complete.")
+
+
 def _check_missed_eod_run(config: dict) -> None:
     """Trigger an immediate EOD catch-up if today's 21:30 UTC EOD run was missed.
 
@@ -911,6 +990,41 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info(
         "Scheduled FOMC reaction analysis at 19:05 %s weekdays "
         "(active on FOMC decision days only).", tz,
+    )
+
+    # BoJ / ECB reaction runs — same pattern as the FOMC job above: fire every
+    # weekday at a fixed time, execute the analysis pipeline (+ alert email)
+    # only on days matching config.yaml's central_bank_events.boj/.ecb.dates.
+    _scheduler.add_job(
+        _boj_reaction_job,
+        trigger=CronTrigger(
+            hour=3,
+            minute=30,
+            day_of_week="mon-fri",
+            timezone=tz,
+        ),
+        id="boj_reaction",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled BoJ reaction analysis at 03:30 %s weekdays "
+        "(active on BoJ decision days only).", tz,
+    )
+
+    _scheduler.add_job(
+        _ecb_reaction_job,
+        trigger=CronTrigger(
+            hour=12,
+            minute=30,
+            day_of_week="mon-fri",
+            timezone=tz,
+        ),
+        id="ecb_reaction",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled ECB reaction analysis at 12:30 %s weekdays "
+        "(active on ECB decision days only).", tz,
     )
 
     _scheduler.start()

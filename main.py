@@ -2538,6 +2538,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
         "weekly_summary":       ("Weekly Summary",f"{_uk_sched_time(10, 0)} · Sunday"),
         "fomc_reaction":        ("FOMC Reaction", f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)"),
+        "boj_reaction":         ("BoJ Reaction",  f"{_uk_sched_time(3, 30)} · Mon–Fri (BoJ days only)"),
+        "ecb_reaction":         ("ECB Reaction",  f"{_uk_sched_time(12, 30)} · Mon–Fri (ECB days only)"),
         "job_dispatcher":       ("job_dispatcher","—"),
     }
 
@@ -2647,6 +2649,8 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             ("trade_alert_check", "Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri", _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
             ("weekly_summary",    "Weekly Summary",    f"{_uk_sched_time(10, 0)} · Sunday",         _CronTrigger(hour=10, minute=0, day_of_week="sun", timezone=_tz_s)),
             ("fomc_reaction",     "FOMC Reaction",     f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)", _CronTrigger(hour=19, minute=5, day_of_week="mon-fri", timezone=_tz_s)),
+            ("boj_reaction",      "BoJ Reaction",      f"{_uk_sched_time(3, 30)} · Mon–Fri (BoJ days only)",  _CronTrigger(hour=3, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
+            ("ecb_reaction",      "ECB Reaction",      f"{_uk_sched_time(12, 30)} · Mon–Fri (ECB days only)", _CronTrigger(hour=12, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
         ]
         _static_jobs.extend(_extra_static)
 
@@ -2752,7 +2756,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             "Errors Only": frozenset(),   # handled separately by level
             "Scheduler":   frozenset({"scheduler", "pre-market", "us-open", "eod",
                                       "analysis starting", "pipeline complete",
-                                      "weekly summary", "fomc", "catch-up",
+                                      "weekly summary", "fomc", "boj", "ecb", "catch-up",
                                       "missed eod", "trade alert", "scheduled_"}),
             "Data":        frozenset({"pull_incremental", "yfinance", "new rows", "fred",
                                       "price data", "data pull", "incremental",
@@ -4293,24 +4297,42 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         unsafe_allow_html=True,
     )
 
-    # ── Key Events (FOMC / Fed calendar) ───────────────────────────────────
+    # ── Key Events (FOMC / Fed calendar + BoJ / ECB — see CLAUDE.md's
+    # "Central bank event monitoring" section) ─────────────────────────────
     try:
         from analysis.fomc import get_fomc_events  # noqa: PLC0415
         _fomc_events = get_fomc_events(days_ahead=7)
     except Exception:
         _fomc_events = []
+    try:
+        from analysis.central_bank import get_central_bank_events  # noqa: PLC0415
+        _cb_events = get_central_bank_events(config, days_ahead=7)
+    except Exception:
+        _cb_events = []
 
-    if _fomc_events:
+    _all_cb_events = sorted(_fomc_events + _cb_events, key=lambda e: e["date"])
+
+    if _all_cb_events:
         _EV_COLOURS = {
-            "FOMC Decision":   "#dc2626",
-            "FOMC Minutes":    "#f59e0b",
-            "Fed Speech":      "#3b82f6",
+            "FOMC Decision":    "#dc2626",
+            "FOMC Minutes":     "#f59e0b",
+            "Fed Speech":       "#3b82f6",
             "Fed Announcement": "#8899AA",
+            "BoJ Decision":     "#f59e0b",  # matches the Asia region-pill colour elsewhere
+            "ECB Decision":     "#6366f1",  # matches the Europe region-pill colour elsewhere
+        }
+        # (event_type, caution label, watch text) for events within 2 days that
+        # warrant a caution banner — mirrors the original FOMC-only behaviour,
+        # extended to BoJ/ECB with bank-appropriate wording.
+        _CAUTION_META = {
+            "FOMC Decision": ("Fed Decision", "consider reducing position sizes ahead of the announcement"),
+            "BoJ Decision":  ("BoJ Decision", "watch USDJPY for carry-trade unwind signals"),
+            "ECB Decision":  ("ECB Decision", "European equity signals (VGK/EWG) may move on the announcement"),
         }
         _ev_parts: list[str] = []
         _caution_days: list[tuple[int, str]] = []   # (days_away, event_type)
 
-        for ev in _fomc_events:
+        for ev in _all_cb_events:
             ec      = _EV_COLOURS.get(ev["event_type"], "#8899AA")
             da      = ev["days_away"]
             da_str  = "Today" if da == 0 else ("Tomorrow" if da == 1 else f"in {da}d")
@@ -4322,7 +4344,7 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
                 f'<span style="font-weight:400">{html.escape(ev["date"].strftime("%b") + " " + ev["date"].strftime("%d").lstrip("0"))} '
                 f'({da_str})</span></span>'
             )
-            if ev["event_type"] == "FOMC Decision" and da <= 2:
+            if ev["event_type"] in _CAUTION_META and da <= 2:
                 _caution_days.append((da, ev["event_type"]))
 
         _ev_html = (
@@ -4338,14 +4360,14 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
 
         for days_away, ev_type in _caution_days:
             _when = "Today" if days_away == 0 else ("Tomorrow" if days_away == 1 else f"in {days_away} days")
+            _label, _watch = _CAUTION_META[ev_type]
             st.markdown(
                 '<div style="border-left:4px solid #f59e0b;padding:7px 14px;'
                 'background:#fef3c720;border-radius:0 4px 4px 0;margin:4px 0 6px">'
                 f'<span style="background:#f59e0b;color:#fff;padding:1px 7px;'
                 f'border-radius:3px;font-size:0.68rem;font-weight:800">CAUTION</span> '
-                f'<strong style="color:#fbbf24">Fed Decision {_when}</strong>'
-                f'<span style="font-size:0.82rem;color:#fbbf24"> — consider reducing '
-                f'position sizes ahead of the announcement</span></div>',
+                f'<strong style="color:#fbbf24">{html.escape(_label)} {_when}</strong>'
+                f'<span style="font-size:0.82rem;color:#fbbf24"> — {html.escape(_watch)}</span></div>',
                 unsafe_allow_html=True,
             )
 

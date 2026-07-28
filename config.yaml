@@ -461,6 +461,46 @@ scheduler:
       label: "End of Day"
       type: "full"
 
+# Central bank decision-day reaction jobs — see data/scheduler.py's
+# _boj_reaction_job()/_ecb_reaction_job() and analysis/central_bank.py.
+# Mirrors the FOMC reaction job (data/scheduler.py:_fomc_reaction_job()): a
+# fixed-time weekday cron fires every weekday and internally no-ops unless
+# today matches one of the dates below. Unlike FOMC (whose dates are
+# hardcoded in analysis/fomc.py and updated in code), BoJ/ECB dates are kept
+# here in config.yaml so they can be corrected without a deploy — both
+# calendars are published well in advance and rarely move.
+# IMPORTANT: update all three `dates:` lists every January with that year's
+# published meeting calendar (BoJ: boj.or.jp, ECB: ecb.europa.eu).
+central_bank_events:
+  fomc:
+    # Placeholder for structural parity only — NOT currently read by any code.
+    # FOMC decision/minutes dates remain hardcoded in analysis/fomc.py
+    # (_FOMC_DECISION_DATES / _FOMC_MINUTES_DATES) and are updated there, not
+    # here. Left empty rather than removed so this section documents all
+    # three central banks the scheduler watches in one place.
+    reaction_time_utc: "19:05"  # 20:05 BST — see data/scheduler.py:_fomc_reaction_job()
+    dates: []
+
+  boj:
+    label: "Bank of Japan Policy Decision"
+    reaction_time_utc: "03:30"  # 04:30 BST — BoJ decisions land ~02:00-05:00 BST;
+                                 # this catches the post-decision market reaction
+    # BoJ 2026 remaining meeting dates (UTC date of decision day)
+    dates:
+      - "2026-07-31"
+      - "2026-09-19"
+      - "2026-10-29"
+      - "2026-12-19"
+
+  ecb:
+    label: "ECB Monetary Policy Decision"
+    reaction_time_utc: "12:30"  # 13:30 BST — 15 min after the 12:15 BST announcement
+    # ECB 2026 remaining meeting dates
+    dates:
+      - "2026-09-11"
+      - "2026-10-30"
+      - "2026-12-17"
+
 macro:
   # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html
   # Set via FRED_API_KEY env var (preferred) or leave blank to skip yield-curve scoring.
