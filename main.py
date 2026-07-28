@@ -1147,14 +1147,20 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             f"{_REGION_LABEL_SIG.get(r, r.upper())} {((v + 1) / 2):.0%}</span>"
             for r, v in _region_scores_sig.items()
         )
+        _region_weights_cfg_sig = _macro_region_dash.get("region_weights_config", {}) or {}
+        _weight_bits_sig = " · ".join(
+            f"{_REGION_LABEL_SIG.get(r, r.upper()).title()} {w:.0%}"
+            for r, w in _region_weights_cfg_sig.items()
+        )
         macro_regional_strip = (
             "<div style='border-left:3px solid #0ea5e9;padding:3px 10px;"
             f"background:{_hex_rgba('#0ea5e9', 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
             "<span style='background:#0ea5e9;color:#fff;padding:0 5px;"
             "border-radius:2px;font-size:0.64rem;font-weight:800'>MACRO REGIONS</span> "
             f"{_region_pills}"
-            "<span style='color:#8899AA;font-size:0.78rem'>bullishness by region "
-            "(macro_regional_weights) — see Macro Dashboard for detail</span></div>"
+            "<span style='color:#8899AA;font-size:0.78rem'>regional bullishness"
+            + (f" — {_weight_bits_sig} portfolio weights" if _weight_bits_sig else "")
+            + " · see Macro Dashboard for detail</span></div>"
         )
 
     intel_strips = overlay_strips + catch_up_strips + macro_regional_strip
