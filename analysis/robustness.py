@@ -1071,11 +1071,20 @@ _IMPROVEMENT_ROADMAP: list[tuple[str, list[str]]] = [
         [
             "Mobile-first retail interface — consumer-grade UX for non-technical investors",
             "Multi-currency account support — GBP, USD, EUR portfolio management",
-            "Institutional white-label API — signal engine and regime detection as standalone B2B product",
+            "Institutional white-label API — a broader, self-service standalone B2B product, beyond the initial near-term pilot licensing motion",
             "Global market expansion — US, European, Asian exchange coverage with per-market regime detection",
         ],
     ),
 ]
+
+_GTM_STRATEGY_NOTE = (
+    "Near-term go-to-market is B2B: licensing the signal engine to regulated distribution "
+    "partners — wealth managers, IFA networks, and robo-advisors — via API access or a "
+    "white-label platform, rather than launching direct-to-retail first. A "
+    "research/due-diligence-reporting tier is a further option, pending confirmation of its "
+    "regulatory classification. Direct-to-retail is deferred to the medium-term roadmap "
+    "below, alongside the FCA authorisation it would require."
+)
 
 _FOUNDERS_NOTE = (
     "This is Version 1.0. It demonstrably works — the regime gate preserved capital during the "
@@ -2262,6 +2271,7 @@ def _known_limitations_section(styles: dict) -> list:
     first_tier_heading, first_tier_bullets = _IMPROVEMENT_ROADMAP[0]
     flow.append(KeepTogether([
         Paragraph("Improvement Roadmap", styles["SubHeading"]),
+        Paragraph(_GTM_STRATEGY_NOTE, styles["Body"]),
         Paragraph(f'<font color="#00C2FF"><b>{first_tier_heading}</b></font>', styles["Body"]),
         Paragraph(f"→ {first_tier_bullets[0]}", styles["Body"]),
     ]))
