@@ -929,22 +929,72 @@ def test_backfill_upsert_does_not_duplicate_rows_when_run_twice(db_engine, mocke
     assert _row_count(db_engine, "DFII10") == len(dates)
 
 
-def test_backfill_updates_values_on_second_run_not_just_leaves_rows_unchanged(db_engine, mocker):
-    """The upsert must genuinely update stored values on conflict, not just
-    silently no-op on an existing (series_id, date) row."""
+def test_backfill_never_overwrites_an_already_stored_date(db_engine, mocker):
+    """Fixed 2026-07-30: backfill_macro_indicators() used to re-score and
+    re-write its ENTIRE fetched range on every call, including dates already
+    stored — re-running it with an earlier start_date silently shifted
+    already-validated scores nowhere near the old boundary (a rolling-window
+    edge effect: a date near the old fetch boundary was originally scored
+    from an incomplete trailing window that becomes complete once the range
+    extends further back). A second run must now leave every already-stored
+    value untouched, even when FRED would return something different for
+    that same date on this call."""
     dates = pd.date_range("2019-01-01", periods=10, freq="B")
     fake = _fake_fred(dates, [1.0] * len(dates))
     mocker.patch("fredapi.Fred", return_value=fake)
     backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
 
     fake.get_series.return_value = pd.Series([9.0] * len(dates), index=pd.DatetimeIndex(dates))
-    backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+    results = backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
 
     with db_engine.connect() as conn:
         value = conn.execute(
             text("SELECT value FROM macro_indicators WHERE series_id='DFII10' ORDER BY date LIMIT 1")
         ).scalar()
-    assert value == 9.0
+    assert value == 1.0  # unchanged — the second run's differing fetch is ignored for existing dates
+    assert results["DFII10"] == 0  # nothing new to write; every date was already stored
+
+
+def test_backfill_with_earlier_start_date_adds_new_rows_without_touching_existing(db_engine, mocker):
+    """The exact regression this fix targets: backfill an already-populated
+    series, then re-run with an EARLIER start_date (extending history
+    backward, as the 2026-07-30 historical data extension did). Every
+    previously-stored (series_id, date) value must be byte-identical
+    afterward, and genuinely new rows must still be added for the new,
+    earlier date range."""
+    later_dates = pd.date_range("2019-01-01", periods=10, freq="B")
+    fake = _fake_fred(later_dates, np.linspace(1.0, 2.0, len(later_dates)))
+    mocker.patch("fredapi.Fred", return_value=fake)
+    backfill_macro_indicators(_BACKFILL_CFG, start_date="2019-01-01")
+
+    with db_engine.connect() as conn:
+        before = conn.execute(
+            text("SELECT date, value, pct_change_30d, z_score_2y, score FROM macro_indicators "
+                 "WHERE series_id='DFII10' ORDER BY date")
+        ).fetchall()
+
+    # Second run: earlier start_date, and — as would genuinely happen with a
+    # deeper rolling-window lookback — different computed values for the
+    # SAME later dates, to prove they're skipped rather than coincidentally
+    # matching.
+    earlier_dates = pd.date_range("2007-01-01", periods=20, freq="B").append(later_dates)
+    fake.get_series.return_value = pd.Series(
+        np.linspace(0.1, 9.9, len(earlier_dates)), index=earlier_dates
+    )
+    results = backfill_macro_indicators(_BACKFILL_CFG, start_date="2007-01-01")
+
+    with db_engine.connect() as conn:
+        after = conn.execute(
+            text("SELECT date, value, pct_change_30d, z_score_2y, score FROM macro_indicators "
+                 "WHERE series_id='DFII10' AND date >= '2019-01-01' ORDER BY date")
+        ).fetchall()
+        new_count = conn.execute(
+            text("SELECT COUNT(*) FROM macro_indicators WHERE series_id='DFII10' AND date < '2019-01-01'")
+        ).scalar()
+
+    assert after == before  # every previously-stored row byte-identical
+    assert new_count == 20  # the genuinely new, earlier rows were still added
+    assert results["DFII10"] == 20  # reported count reflects only the new rows
 
 
 def test_backfill_one_series_failure_does_not_abort_remaining_series(db_engine, mocker):

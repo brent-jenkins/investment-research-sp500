@@ -896,6 +896,28 @@ def _last_stored_date(series_id: str) -> Optional[datetime]:
         return None
 
 
+def _existing_dates(series_id: str) -> set[str]:
+    """Every date already stored for series_id, as "YYYY-MM-DD" strings —
+    used by backfill_macro_indicators() to guarantee it never overwrites an
+    already-stored (series_id, date) pair (see that function's docstring for
+    why). Compares via SQLite's date() function rather than an exact string
+    match against the stored (microsecond-precision) column, since this
+    table has historically held more than one literal datetime string format
+    for the same date — see _scored_df_to_rows()'s own docstring for that
+    history — so a plain string-equality set would silently under-match and
+    let old rows slip through as "new" again."""
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT date(date) AS d FROM macro_indicators WHERE series_id = :sid"),
+                {"sid": series_id},
+            ).fetchall()
+    except Exception:
+        return set()
+    return {r[0] for r in rows if r[0]}
+
+
 def _scored_df_to_rows(series_id: str, scored: pd.DataFrame) -> list[dict]:
     """Convert a _fetch_scored_series() DataFrame into macro_indicators row dicts.
 
@@ -1033,13 +1055,35 @@ def backfill_macro_indicators(config: Optional[dict] = None, start_date: str = "
     the whole fetched span's statistics — so the backfilled history stays
     look-ahead free and safe to feed into the backtest.
 
+    Never overwrites a (series_id, date) pair that's already stored — a
+    real bug found 2026-07-30: this function used to re-score and re-write
+    its ENTIRE fetched range on every call, including dates already in the
+    table. Re-running it with an earlier start_date than a previous run
+    silently shifted already-stored, already-relied-upon scores for dates
+    nowhere near the old boundary (784 of 2,768 ECBDFR dates changed, 28%,
+    spanning well past the old start into 2020-2022) — a rolling-window
+    edge effect, not a data error: a date near the old fetch boundary was
+    originally scored from an incomplete trailing window that becomes
+    complete once the fetched range extends further back, so the same date
+    can legitimately score differently on a second, deeper-reaching run.
+    That's a reasonable thing to happen to a *fresh* computation, but not
+    to a value already stored and already used to validate a live backtest.
+    _existing_dates() is checked before every write so only genuinely new
+    dates are ever written — mirrors backfill_price_history()'s own
+    never-touch-an-existing-date guarantee (analysis/backtest.py's
+    _macro_scores() only ever reads what's actually stored, so a date this
+    function is fetching purely for a correct rolling-window lookback,
+    but has no reason to persist because it's already on disk, must not be
+    persisted just because the fetch happened to pass through it again).
+
     Rate-limited to roughly one series per 0.5s between fetches (17 series
     -> ~8s of throttling, comfortably inside FRED's request limits) — see
     _fetch_scored_series() for the actual per-series FRED call.
 
     Returns:
-        Dict mapping series_id -> number of rows written (0 on failure or
-        insufficient data — a failed series never aborts the remaining ones).
+        Dict mapping series_id -> number of NEW rows written (0 on failure,
+        insufficient data, or when every fetched date was already stored —
+        a failed series never aborts the remaining ones).
     """
     if config is None:
         config = _load_config()
@@ -1078,13 +1122,22 @@ def backfill_macro_indicators(config: Optional[dict] = None, start_date: str = "
                 results[series_id] = 0
             else:
                 rows = _scored_df_to_rows(series_id, scored)
-                _bulk_upsert_macro_rows(rows)
-                results[series_id] = len(rows)
+                # Never overwrite a date already stored for this series — see
+                # this function's own docstring for the bug this guards
+                # against. The fetch above still needed the full range for
+                # correct rolling-window computation; only the WRITE is
+                # restricted to genuinely new dates.
+                already = _existing_dates(series_id)
+                new_rows = [r for r in rows if r["date"][:10] not in already]
+                if new_rows:
+                    _bulk_upsert_macro_rows(new_rows)
+                results[series_id] = len(new_rows)
                 logger.info(
-                    "Backfilling %s: fetched %d observations from %s to %s",
+                    "Backfilling %s: fetched %d observations from %s to %s (%d new, %d already stored and left untouched)",
                     series_id, len(rows),
                     scored.index.min().strftime("%Y-%m-%d"),
                     scored.index.max().strftime("%Y-%m-%d"),
+                    len(new_rows), len(rows) - len(new_rows),
                 )
         except Exception as exc:
             logger.warning("Backfill failed for %s: %s", series_id, exc)
