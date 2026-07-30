@@ -1035,13 +1035,26 @@ _KNOWN_LIMITATIONS: list[dict[str, str]] = [
     {
         "limitation": "Module weight calibration",
         "evidence": (
-            "The TRENDING_BULL regime weights were calibrated against a macro module that was "
-            "later discovered to have a data bug (fillna(0) producing near-zero scores). "
-            "Re-tuning study was inconclusive pending more live data."
+            "The TRENDING_BULL regime weights were originally calibrated against a macro module "
+            "later found to have a data-storage bug that made it near-inert during backtesting "
+            "(a 0.9% historical agreement rate, itself a symptom of the bug rather than genuine "
+            "signal). Once corrected, two independent tests — 2026-07-08, and 2026-07-30 run "
+            "directly against production data — showed the current weight scheme produces "
+            "materially worse outcomes under genuine macro variation: maximum drawdown deepens "
+            "from -35.6% to -64.6% / -75.0%, trade count more than doubles, and the macro module "
+            "itself becomes mildly anti-predictive (a -8 to -14 percentage-point gap the wrong "
+            "way) rather than neutral. Four single-module reweighting attempts across both tests "
+            "failed to recover the documented baseline."
         ),
         "impact": (
-            "Module weights may be suboptimally calibrated. Re-tuning is prioritised once "
-            "sufficient live execution data is available."
+            "The current TRENDING_BULL weights are validated only against a frozen macro "
+            "snapshot broadcast across historical backtesting — not against the genuinely "
+            "time-varying macro conditions the system will actually encounter live. A full "
+            "six-module (and possibly threshold) re-tuning study is required before these "
+            "weights should be considered validated under real market conditions, and has not "
+            "yet been undertaken. Live capital has not been exposed to this risk only because "
+            "the market has remained in the MIXED regime (no new entries) since the parameter "
+            "freeze — this limitation applies in full the next time TRENDING_BULL is confirmed."
         ),
     },
 ]
