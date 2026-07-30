@@ -258,25 +258,39 @@ def _macro_scores(
     of the mapping" pattern already used for VaR sizing elsewhere in this
     file.
 
-    Reverted to latest-observation-only (2026-07-08): each FRED series'
-    single most recent stored value is broadcast as a CONSTANT across the
-    whole backtest date range, rather than read as a genuinely time-varying
-    history from macro_indicators. This deliberately matches what the live
-    system has always done — analysis/macro.py:compute_macro() only ever
-    reads the latest row per series, never a historical lookup for a given
-    past date — and is a regression from feeding this function the full,
-    now-backfilled history: doing so exposed real historical macro variation
-    to the backtest for the first time, and every TRENDING_BULL macro weight
-    tried against it (0.30 down to 0.00, redistributed several different
-    ways) produced materially worse results than the documented 253-trade
-    baseline — see CLAUDE.md's "Macro module regime-weight rebalance
-    (2026-07-08)" section for the full investigation and all four weight
-    variants' results. Until a full six-weight (and possibly threshold)
-    re-tuning study is done — deferred, out of scope here — this reverts to
-    reproducing that baseline. analysis/macro.py:backfill_macro_indicators()
-    and the historical depth it stores are kept in place regardless: they're
-    the necessary groundwork for that deferred study, even though this
-    function doesn't consume the historical depth yet.
+    Uses genuine per-date historical macro values (permanent as of
+    2026-07-30), not a single latest-observation constant broadcast across
+    the whole backtest range. The earlier latest-observation-only design
+    (shipped 2026-07-08, reverted from a brief attempt at real history that
+    same day) rested on a category error: it was framed as "matching what
+    live does" — live's compute_macro() only ever reads the latest row per
+    series — but live is only ever asked about *today*, so "the latest
+    value" and "the correct value for the date being evaluated" are the same
+    thing there. A backtest evaluates thousands of past dates, not today; on
+    each of those dates, "the correct value" is whatever was genuinely latest
+    as of *that* date, not whatever happens to be latest right now. Broadcasting
+    today's value across 2019 doesn't replay what live experienced in 2019 —
+    it replays a scenario ("every historical date sees today's macro reading")
+    that never occurs in live trading at all, which is the opposite of a
+    faithful backtest. `aligned = macro_df.reindex(close.index).ffill()` gives
+    each date its own genuinely-as-of-that-date value (forward-filled from
+    the most recent prior observation, never a future one — still fully
+    look-ahead free).
+
+    This surfaced real, materially worse TRENDING_BULL performance under
+    genuine macro variation on two separate occasions (2026-07-08 and
+    2026-07-30, the latter run directly against production data) — deeper
+    drawdown, roughly double the trade count, and macro's own discriminating
+    power turning mildly anti-predictive — see CLAUDE.md's "Macro module
+    regime-weight rebalance (2026-07-08)" section and the 2026-07-30 DD
+    report limitation for the full findings. That is a genuine finding about
+    the current weight scheme, not a reason to keep testing against an
+    unrealistic scenario instead: the fix ships permanently here, and
+    re-tuning TRENDING_BULL's weights against this now-honest methodology is
+    separate, deferred work (see analysis/regime.py's REGIME_WEIGHTS comment).
+    analysis/macro.py:backfill_macro_indicators() and the historical depth it
+    stores — previously groundwork for a "someday" re-tuning study — are now
+    what every backtest run actually consumes.
     """
     from analysis.macro import _regional_weights, _series_region
 
@@ -294,13 +308,15 @@ def _macro_scores(
         region_series.setdefault("us", []).append(vix_sc)  # VIX is a US-sourced index
 
     if macro_df is not None and not macro_df.empty:
-        latest = macro_df.ffill().iloc[-1]  # each series' single most-recent observation
-        for col in macro_df.columns:
-            val = latest[col]
-            if pd.isna(val):
+        # Each date gets the value genuinely latest as of that date — never a
+        # future observation — so this stays look-ahead free while replaying
+        # the same real macro variation live trading actually experiences.
+        aligned = macro_df.reindex(close.index).ffill()
+        for col in aligned.columns:
+            col_series = aligned[col]
+            if col_series.isna().all():
                 continue
-            const_series = pd.Series(float(val), index=close.index)
-            region_series.setdefault(_series_region(col, config), []).append(const_series)
+            region_series.setdefault(_series_region(col, config), []).append(col_series)
 
     if not region_series:
         return pd.Series(0, index=close.index, dtype=int)

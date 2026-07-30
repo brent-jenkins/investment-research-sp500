@@ -101,6 +101,16 @@ REGIME_WEIGHTS: dict[str, dict[str, float]] = {
         # frozen 2026-07 real conditions, not resampled across market
         # regimes; a repeat once 20+ real T212 closed positions exist would
         # attribute against actual executed outcomes instead).
+        #
+        # ADDENDUM (2026-07-30): the "Reverted" paragraph above is now
+        # historical only — analysis/backtest.py:_macro_scores() no longer
+        # broadcasts a latest-observation constant; it permanently uses
+        # genuine per-date historical macro values, the correct methodology
+        # for a backtest (see that function's own docstring for why "match
+        # what live does" was a category error). The weights below are
+        # UNCHANGED by this — this was a backtest-methodology fix, not a
+        # re-tuning. A proper full re-tuning study against this now-honest
+        # methodology is separate, future work, not done here.
         "trend":          0.20,  # was 0.30 — 100% agreement, zero discrimination
         "mean_reversion": 0.05,  # was 0.10 — almost always contrarian in trends
         "volatility":     0.20,  # was 0.15 — moderate discriminating power

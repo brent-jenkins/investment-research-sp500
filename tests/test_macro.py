@@ -755,15 +755,17 @@ def test_series_staleness_fallback_logs_info_not_warning_for_known_limited_horiz
 # regional weighting itself, the same way _ma_cross_vote() and
 # _mean_rev_scores() already mirror their own live counterparts.
 #
-# Reverted 2026-07-08 to latest-observation-only (see CLAUDE.md's "Macro
-# module regime-weight rebalance (2026-07-08)" section): each series'
-# single most recent value is broadcast as a CONSTANT across the whole
-# backtest date range, matching what analysis/macro.py:compute_macro() does
-# live — rather than a time-varying per-date history. Feeding the backtest
-# genuine historical macro variation (the natural next step once
-# backfill_macro_indicators() existed) produced materially worse results
-# than the documented baseline under every TRENDING_BULL macro weight
-# tried, so this was rolled back pending a full weight re-tuning study.
+# Uses genuine per-date historical macro values (permanent as of
+# 2026-07-30 — see analysis/backtest.py:_macro_scores()'s own docstring for
+# the full rationale): each date is scored using whatever was genuinely the
+# latest observation as of that date (forward-filled, never a future one),
+# not a single latest-observation constant broadcast across the whole
+# backtest range. Two prior tests under this same corrected scoring (
+# 2026-07-08, and 2026-07-30 against production data — see CLAUDE.md's
+# "Macro module regime-weight rebalance (2026-07-08)" section) showed
+# materially worse TRENDING_BULL results under every macro weight tried —
+# a genuine finding about the current weight scheme, not a reason to keep
+# testing against the unrealistic frozen-snapshot scenario instead.
 # ---------------------------------------------------------------------------
 
 _BT_CFG = {
@@ -789,8 +791,8 @@ def test_backtest_macro_scores_mirror_regional_weighting():
     """_macro_scores() must apply the same regional blend as
     _regional_macro_score() — US-neutral/Europe-bullish/Asia-bullish nets to
     the same moderated +0.40, not a flat average. Every date in macro_df is
-    identical here, so this doesn't yet distinguish latest-observation-only
-    from time-varying — see the dedicated test below for that."""
+    identical here, so this doesn't exercise the per-date time-varying
+    behaviour — see the dedicated test below for that."""
     df = _flat_df(10)
     macro_df = pd.DataFrame(
         {"BT_US": [0] * 10, "BT_EU": [1] * 10, "BT_ASIA": [1] * 10},
@@ -801,29 +803,42 @@ def test_backtest_macro_scores_mirror_regional_weighting():
     assert (scores == 1).all()
 
 
-def test_backtest_macro_scores_uses_latest_observation_only_not_time_varying():
-    """Reverted behaviour (2026-07-08): each series' single most recent
-    value is broadcast as a CONSTANT across the whole backtest date range —
-    not read as a time-varying history. A region whose data only starts
-    partway through macro_df must still score using its one latest value
-    for *every* date, including dates before that value's own timestamp,
-    exactly matching how the live compute_macro() only ever reads the
-    latest stored row regardless of which date is being analysed."""
+def test_backtest_macro_scores_uses_time_varying_history_not_latest_observation():
+    """Permanent behaviour (2026-07-30): each date is scored using whatever
+    was genuinely the latest observation as of THAT date (forward-filled,
+    never a future one) — not a single latest-observation constant
+    broadcast across the whole backtest range. A region whose data only
+    starts partway through macro_df must score as unavailable (weight
+    redistributed to the remaining region) for dates before its first
+    observation, then reflect each subsequent value in turn as it arrives —
+    the opposite of the old (2026-07-08, now reverted) broadcast design,
+    which would have scored every one of these six dates identically."""
     df = _flat_df(6)
     macro_df = pd.DataFrame(
         {
-            "BT_US": [np.nan, np.nan, 1, 1, 1, -1],  # latest (last row) value is -1
-            "BT_EU": [-1] * 6,                        # latest value is -1
+            "BT_US": [np.nan, np.nan, 1, 1, 1, -1],  # no data on days 0-1; flips value twice after
+            "BT_EU": [-1] * 6,                        # constant throughout
         },
         index=df.index,
     )
     scores = _macro_scores(df, "SOME_TICKER", vix_s=None, macro_df=macro_df, config=_BT_CFG)
-    # Latest US value -1, latest Europe value -1 -> every date scores the
-    # same constant weighted blend, including day 0 (which the OLD
-    # time-varying behaviour would have scored differently, since BT_US had
-    # no data yet on day 0).
-    assert (scores == -1).all()
-    assert scores.iloc[0] == scores.iloc[-1]
+    # Days 0-1: BT_US has no data yet -> "us" region unavailable, its 0.60
+    # weight is fully redistributed to "europe" alone -> weighted = -1.0.
+    assert scores.iloc[0] == -1
+    assert scores.iloc[1] == -1
+    # Days 2-4: BT_US ffills to +1 -> both regions available, weighted =
+    # (1*0.60 + -1*0.25) / 0.85 = +0.41 -> bullish. Genuinely different
+    # from days 0-1 and from day 5 -- this is the per-date variation the
+    # old constant-broadcast design could never produce.
+    assert scores.iloc[2] == 1
+    assert scores.iloc[3] == 1
+    assert scores.iloc[4] == 1
+    # Day 5: BT_US ffills to -1 -> both regions negative -> weighted = -1.0.
+    assert scores.iloc[5] == -1
+    # The whole point: this series is NOT a constant, unlike the reverted
+    # latest-observation-only design (which would have given -1 for every
+    # single date here, since BT_US's own latest/last value is -1).
+    assert scores.nunique() > 1
 
 
 def test_backtest_macro_scores_backward_compat_config_with_no_macro_section():
