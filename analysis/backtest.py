@@ -942,8 +942,14 @@ def _quick_metrics(trades: list[dict]) -> dict:
     else:
         sr = 0.0
 
-    # Max drawdown on cumulative equity curve
-    cum = (1 + df["pnl_pct"]).cumprod()
+    # Max drawdown on cumulative equity curve — realised in exit_date order
+    # (the order P&L actually lands in a real account), not the incoming
+    # list's insertion order (per-ticker loop order in run_backtest()), which
+    # produces a path-dependent statistic with no correspondence to any real
+    # sequence of events. Mirrors analysis/backtest_metrics.py:equity_curve()'s
+    # own exit-date-sort rationale.
+    dd_df = df.sort_values("exit_date")
+    cum = (1 + dd_df["pnl_pct"]).cumprod()
     peak = cum.cummax()
     dd   = ((cum - peak) / peak).min() * 100
 

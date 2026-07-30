@@ -583,7 +583,6 @@ def compute_drawdown_metrics(run_id: int) -> dict:
         "current_drawdown_pct": 0.0, "max_drawdown_pct": 0.0, "avg_drawdown_pct": 0.0,
         "avg_recovery_days": 0.0, "longest_recovery_days": 0,
     }
-    run    = get_run(run_id)
     trades = get_run_trades(run_id)
     if trades.empty:
         return empty
@@ -596,8 +595,7 @@ def compute_drawdown_metrics(run_id: int) -> dict:
     in_dd = ec["equity"] < peak
     current_drawdown_pct = float(ec["drawdown_pct"].iloc[-1])
 
-    max_dd = run.get("max_drawdown_pct") if run and run.get("max_drawdown_pct") is not None \
-        else float(ec["drawdown_pct"].min())
+    max_dd = float(ec["drawdown_pct"].min())
 
     groups = (in_dd != in_dd.shift()).cumsum()
     depths: list[float] = []
