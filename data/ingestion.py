@@ -322,6 +322,99 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     return results
 
 
+def backfill_price_history(
+    tickers: Optional[list[str]] = None,
+    start_date: str = "2007-01-01",
+) -> dict[str, int]:
+    """One-off backward backfill: extend price history deeper into the past
+    for tickers that already have data, without ever re-fetching or
+    re-writing a date that's already stored.
+
+    pull_incremental()/pull_history() are both forward-only in effect — a
+    ticker that already has data from (say) 2016 onward never gets asked
+    for anything before 2016 again, no matter how large data.history_days
+    is raised, because incremental refreshes use a rolling 10-day window
+    and pull_history() only ever fetches [today - days, today]. This
+    function is the missing backward direction, mirroring
+    analysis/macro.py:backfill_macro_indicators()'s "one-off full-range
+    fetch from start_date" pattern for price data specifically — but
+    deliberately narrower than a full re-fetch-and-upsert of the whole
+    range: it only ever requests [start_date, existing_earliest_date),
+    strictly before whatever a ticker's own earliest stored row already is.
+
+    That narrower range is a deliberate safety choice, not just the
+    simplest implementation. yfinance's "Close" is split-adjusted
+    retroactively — a stock that splits after the DB was first populated
+    can cause a fresh fetch of its own already-stored historical range to
+    return different values than what's currently on disk. Restricting
+    every fetch to dates strictly before the existing floor makes altering
+    an already-stored row impossible by construction, regardless of any
+    split that has happened since — verified directly (2026-07-30): a
+    backfill run followed by a byte-for-byte checksum of the pre-existing
+    date range, and a full compute_signal_history()/simulate_trades() replay
+    over the existing 2019-2026 backtest window, both showed zero change.
+
+    A ticker with no stored data at all falls back to a full fetch from
+    start_date through today (the same first-time-download path
+    pull_incremental() already uses). A ticker whose earliest stored date
+    is already <= start_date is skipped — nothing to backfill.
+    _upsert_price_rows()'s own upsert-on-(ticker, date) semantics make this
+    idempotent and safe to re-run.
+
+    Args:
+        tickers:    List of ticker symbols. Defaults to the full watchlist.
+        start_date: Earliest date to backfill back to (YYYY-MM-DD).
+
+    Returns:
+        Dict mapping ticker -> number of rows written (0 for tickers
+        skipped, or for which no data is available that far back).
+    """
+    init_db()
+    config = _load_config()
+
+    if tickers is None:
+        tickers = get_all_tickers(config)
+
+    rate_limit  = config["data"]["rate_limit_seconds"]
+    max_retries = config["data"]["max_retries"]
+    start_dt    = datetime.strptime(start_date, "%Y-%m-%d")
+
+    results: dict[str, int] = {}
+    for ticker in tickers:
+        with get_engine().connect() as conn:
+            min_date_str = conn.execute(
+                text("SELECT MIN(date) FROM price_data WHERE ticker = :t"),
+                {"t": ticker},
+            ).scalar()
+
+        if min_date_str is not None:
+            # format="mixed": stored datetime strings can differ in exact
+            # format between insert paths — see analysis/backtest.py:
+            # _load_macro_history()'s docstring for the identical reason.
+            min_date = pd.to_datetime(min_date_str, format="mixed").to_pydatetime()
+            if min_date <= start_dt:
+                logger.info("%s already covers %s — nothing to backfill.", ticker, min_date.date())
+                results[ticker] = 0
+                continue
+            fetch_end = min_date - timedelta(days=1)
+        else:
+            fetch_end = datetime.utcnow()
+
+        logger.info("Backfilling %s: %s -> %s", ticker, start_dt.date(), fetch_end.date())
+        df = _fetch_ticker(ticker, start=start_dt, end=fetch_end, max_retries=max_retries, rate_limit=rate_limit)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [col[0] for col in df.columns]
+            count = _upsert_price_rows(df, ticker)
+            results[ticker] = count
+            logger.info("  %s: backfilled %d rows.", ticker, count)
+        else:
+            results[ticker] = 0
+            logger.info("  No data available for %s that far back.", ticker)
+
+    return results
+
+
 def get_last_update_timestamp() -> Optional[datetime]:
     """Return the most recent date for which any price data exists in the DB."""
     session = get_session()

@@ -426,10 +426,13 @@ watchlist:
 
 data:
   # How many calendar days of history to fetch on initial load for any asset
-  # that has no existing data in the database.  3650 = ~10 years; yfinance
-  # returns from the asset's listing date if this precedes it, so newer ETFs
-  # are handled gracefully.
-  history_days: 3650
+  # that has no existing data in the database.  7150 = ~19.6 years, reaching
+  # back to 2007-01-01 (raised from 3650/~10y on 2026-07-30 alongside
+  # data.ingestion:backfill_price_history() extending existing tickers'
+  # history back to the same date -- see CLAUDE.md's "Historical data
+  # extension" section); yfinance returns from the asset's listing date if
+  # this precedes it, so newer ETFs are handled gracefully either way.
+  history_days: 7150
   # Seconds to wait between yfinance requests to avoid throttling
   rate_limit_seconds: 2.5
   # Retry attempts on failed fetch
