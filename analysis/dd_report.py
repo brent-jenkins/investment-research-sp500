@@ -71,11 +71,17 @@ _KNOWN_LIMITATIONS = [
         "backtest a position in a company whose data no longer exists anywhere.",
     ),
     (
-        "Generalisation beyond US mega-caps is unresolved, not disproven.",
-        "A German (DAX) point-in-time-gated robustness check found no edge, on a thinner evidence "
-        "base than the US result. This does not prove the strategy is US-specific — it means a "
-        "second market was tried once and didn't confirm it. No claim is made either way for any "
-        "market beyond the validated US large-cap-plus-ETF universe.",
+        "Generalisation beyond US mega-caps shows risk reduction, not clear return outperformance.",
+        "A German (DAX) point-in-time-gated robustness check (genuine constituent-membership "
+        "history, corrected 2026-07-31 after an earlier attempt used the current constituent list "
+        "in error) found the strategy cuts drawdown substantially versus buy-and-hold DAX in every "
+        "period tested (roughly a third of the benchmark's own drawdown), but does not clearly beat "
+        "the benchmark's return — CAGR is ahead in the training window, roughly level in the test "
+        "window and slightly behind over the full period. 12 of 16 historical blocks pass the same "
+        "bar the US universe is held to, a similar hit rate to the validated US result (14 of 16). "
+        "This is evidence of a real risk-management effect outside the validated US universe, not "
+        "evidence of the same return edge — no claim of comparable return outperformance is made "
+        "for any market beyond the validated US large-cap-plus-ETF universe.",
     ),
     (
         "US concentration is deliberate, not an oversight.",

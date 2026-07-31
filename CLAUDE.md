@@ -1140,62 +1140,87 @@ this exact measure, not just a neutral wash. Directionally this sharpens
 rather than contradicts the original "portfolio-construction trade-off,
 not resolved here" framing.
 
-**3. DAX (European stocks-only) — re-derived with a real, exact, disclosed
-methodology gap; this result does NOT overturn the original finding.**
-A genuine point-in-time DAX constituent-membership dataset (matching the
-rigor of the `fja05680/sp500` source the US universe uses) could not be
-located via free sources in this session — confirmed by checking
-Wikipedia's own DAX article: its "Former DAX components" table is
-explicitly labelled a "Selected Key Changes" excerpt, not a complete
-reconstitution history (e.g. it lists almost no changes between
-2012-2024, which is not plausible for a 30-40-name index over 12 years).
-No usable free alternative was found. This re-derivation therefore uses
-**DAX's current 40 constituents' own available price history** (fetched
-live via yfinance, 2007-01-02 onward for 32 of 40; the remaining 8 phase
-in later per their real listing/spin-off dates, e.g. `DTG.DE` 2021-12-10,
-`ENR.DE` 2020-09-29) — **not** a point-in-time-corrected universe. This is
-a materially weaker methodology than the original claim ("using the same
-point-in-time discipline") and is explicitly, deliberately
-**survivorship-biased**: it only ever tests companies that are DAX
-members *today*, applied to their own past prices — precisely the
-confound the original US Phase 1 work explicitly tested for and ruled out
-("re-tested on the point-in-time-corrected universe specifically to rule
-this out") — a check this DAX re-derivation does **not** perform.
+**3. DAX (European stocks-only) — corrected 2026-07-31, superseding both
+the original "found no edge" prose and this file's own first re-derivation
+attempt earlier the same day.** The first re-derivation attempt (this same
+day) concluded no free point-in-time DAX membership dataset existed,
+having checked only Wikipedia's "Former DAX components" table (correctly
+identified as an incomplete "Selected Key Changes" excerpt) and one
+GitHub aggregator (2023-onward only, too short). **That conclusion was
+wrong.** A follow-up check — prompted by a user-supplied set of specific,
+independently-verifiable DAX membership dates that didn't match anything
+in the first attempt's sources — found STOXX (the DAX index provider
+itself) publishes a complete, official **"Historical Index Compositions
+of DAX Equity Indices"** document, freely available at
+`stoxx.com/document/Indices/Common/Indexguide/Historical_Index_Compositions.pdf`:
+every DAX addition/removal since the index's 30 December 1987 launch,
+with exact dates, through a 22 June 2026 edition. Spot-checked directly:
+SAP's 1995-09-18 addition and Infineon's 2000-06-19 addition /
+2009-03-23 removal / 2009-09-21 re-addition all matched independent web
+sources to the exact day. This is at least as authoritative as the
+`fja05680/sp500` source used for the US universe (it's the index
+provider's own primary record, not a third-party aggregation) — the
+"no genuine point-in-time DAX dataset exists via free sources" claim in
+this file's first attempt is retracted.
+
+A real `DAX_MEMBERSHIP` table for all 40 candidates was built directly
+from this document's text (see the deleted research clone's
+`dax_check_pit.py` for the exact per-ticker windows) and used to re-run
+the backtest with genuine point-in-time gating — the same `is_member()`
+role `analysis/universe.py` plays for the US universe. The correction is
+large: **20 of the 40 tickers** had a real membership window meaningfully
+narrower than "always eligible since 2007" — including several where the
+first attempt's current-constituents approach was fabricating well over
+a decade of false eligibility (`G24.DE` Scout24 joined 2025-09-22;
+`G1A.DE` GEA Group joined 2025-09-22; `HNR1.DE` Hannover Re was a member
+only 2009-03-23→2009-09-20 and 2022-03-21→present; `RHM.DE` Rheinmetall
+joined 2023-03-20; `MTX.DE` MTU Aero Engines joined 2019-09-23; the seven
+2021-09-20 DAX-30→40-expansion additions `AIR.PA`/`BNR.DE`/`PAH3.DE`/
+`QIA.DE`/`SHL.DE`/`SY1.DE`/`ZAL.DE` were not members at all before that
+date). Total trades dropped from 7,379 (first, wrong attempt) to **5,548**
+(point-in-time corrected) — a 25% reduction, exactly the direction and
+rough magnitude survivorship bias would predict.
 
 Same signal/crisis-override logic (crisis trigger still keyed to the
 S&P's own ≥7% single-day decline, matching what the live system actually
-uses — not a DAX-specific trigger), benchmarked against `^GDAXI`:
+uses), benchmarked against `^GDAXI`, now with real point-in-time gating:
 
-| | Strategy | DAX (`^GDAXI`) benchmark |
+| | Strategy (point-in-time) | DAX (`^GDAXI`) benchmark |
 |---|---|---|
-| Train (2007-2019) CAGR | 8.92% | 5.41% |
-| Train max drawdown | -21.01% | -54.77% |
-| Test (2020-2026) CAGR | 12.09% | 10.37% |
-| Test max drawdown | -15.45% | -38.78% |
-| Profit factor (train / test) | 1.47 / 1.45 | — |
-| Sharpe (train / test) | 0.519 / 0.468 | — |
+| Train (2007-2019) CAGR | 6.71% | 5.41% |
+| Train max drawdown | -14.45% | -54.77% |
+| Test (2020-2026) CAGR | 10.06% | 10.37% |
+| Test max drawdown | -18.56% | -38.78% |
+| Full period CAGR | 6.22% | 7.11% |
+| Full period max drawdown | -18.56% | -54.77% |
+| Profit factor (train / test) | 1.46 / 1.41 | — |
 
-**Blocks passed: 12/16 (75%)** under the identical reconciled rule.
+**Blocks passed: 12/16 (75%)** — unchanged from the first (wrong) attempt
+at the aggregate level, and the same 4 blocks fail both ways (0, 1, 9, 12)
+— but the absolute numbers behind that tally are materially more modest:
+the strategy no longer clearly beats the benchmark's CAGR (it does in
+train, essentially ties in test, and trails slightly over the full
+period), while still cutting max drawdown dramatically in every window
+(e.g. full period -18.56% vs. the benchmark's own -54.77%).
 
-**This is a real, exact, materially different number from "found no
-edge"** — not a rounding difference, and reported per the task's own
-instruction to stop rather than quietly reconcile. But it should **not**
-be read as evidence the original DAX conclusion was wrong: a strategy
-that only ever trades today's surviving DAX winners against their own
-historical prices is expected to look better than one correctly excluded
-from trading a company after it was removed from the index for
-underperforming (which is exactly the scenario point-in-time correction
-exists to prevent, and exactly what genuinely happened to at least
-`Continental`, `Metro`, `Hypo Real Estate`, and `Wirecard` per Wikipedia's
-own (incomplete) change log above). The apparent 12/16, CAGR-beats-
-benchmark result here is the expected symptom of the specific bias this
-re-derivation could not correct for, not independent confirmation of
-edge. **The original "no edge, confirmed not trivially portable" claim
-cannot be genuinely re-validated without a true point-in-time DAX
-membership dataset**, which was not obtainable via free sources in this
-session — this is now the honestly-recorded state of that finding,
-in place of the unrecoverable prior version, rather than a silently
-reconciled number.
+**Final, corrected conclusion — neither "found no edge" nor "beats the
+benchmark" is accurate; this is the trustworthy version, not a third
+guess.** The strategy on point-in-time-gated DAX stocks provides **real,
+substantial risk reduction** (drawdown roughly a third of the benchmark's
+own in every period) but **not clearly better absolute return** —
+CAGR is comparable to, not decisively better than, buy-and-hold DAX. This
+is a genuinely different and more moderate finding than either prior
+version: better than the original unquantified "no edge" (12/16 blocks
+pass, a similar hit rate to the validated US universe's 14/16), and
+substantially weaker than this file's own first re-derivation's apparent
+CAGR outperformance (which is now confirmed to have been a survivorship-
+bias artifact of testing only today's surviving constituents — removing
+that bias cut the CAGR advantage from clearly-ahead to roughly-tied).
+Whether the *original*, now-unrecoverable investigation used this same
+STOXX source or something else can't be determined — its code is deleted
+and no exact numbers were ever recorded — but this corrected re-derivation
+is independently verified against real, dated, cross-checked data and
+should be treated as the reference version going forward.
 
 Not committed as a regression test — this is a one-off research
 reproduction (matching the original findings' own one-off nature), not
