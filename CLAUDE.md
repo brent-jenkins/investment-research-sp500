@@ -926,6 +926,122 @@ A running summary of every backtest-validated technique touched in this file, it
 | Sector-rotation MIXED-regime sleeve (2026-07-24) | **Rejected — never adopted, research code deleted** | Approved rule set produced ~zero trades (confluence gate never reached 0.70 for any of 9 sector ETFs, 2019-2026); RS signal alone (gate disabled) showed no edge either — PF 0.98, Sharpe -0.04, 16/29 positive-Sharpe walk-forward windows. See "Sector-rotation MIXED-regime sleeve — researched, not adopted (2026-07-24)" above |
 | Mean-reversion MIXED-regime sleeve (2026-07-24) | **Rejected — never adopted, research code deleted** | Real but thin signal (373 trades, PF 1.05, Sharpe 0.16 at zero cost) that turned decisively cost-fragile (Sharpe -0.17 at 5bps/side) and carries a specific unresolved tail risk — all 9 COVID-window trades lost (correlated entries at the crash's onset), while the slower 2022 bear market and 2023-24 recovery were both net positive. £45 total profit / -£149 max drawdown on £10,000 starting capital. See "Mean-reversion MIXED-regime sleeve — researched, not adopted (2026-07-24)" above |
 
+### V2 architecture — phased rebuild, Stage 1 (2026-07-31)
+
+Ten rounds of testing found no validated configuration of the six-module,
+single-global-gate V1 architecture described throughout this file (see the
+"Quantitative technique status" table above). A phased rebuild followed,
+validating one layer at a time rather than assuming complexity upfront:
+
+- **Phase 1 (validated)**: a single signal, no regime classifier at all —
+  trailing 12-month total return per ticker, long if positive, flat
+  otherwise (the AQR century-paper convention; a 200-day-SMA variant was
+  also tested and performed almost as well). Tested against a genuinely
+  **point-in-time-gated** universe — 39 US large-cap stocks (real S&P 500
+  membership windows from the `fja05680/sp500` public dataset, verified
+  against known facts; **no discretionary exclusions** — TSLA, META, and
+  GOOGL included from their real membership dates, reversing V1's original
+  subjective "geopolitical risk" exclusion) plus 33 broad ETFs. Result: 14
+  of 16 historical blocks pass (CAGR ≥ S&P 500, drawdown ≤ 1.5× S&P's own,
+  no crisis-adjacent block materially loses money), on both train
+  (2007-2019) and test (2020-2026). Confirmed **not** a survivorship
+  artifact — re-tested on the point-in-time-corrected universe specifically
+  to rule this out, and the result held.
+- **Phase 2 (rejected)**: a separate, multiplicative danger/exposure gate
+  (S&P below its own 200-day average, and/or VIX ≥ 30) layered on top of
+  Phase 1. Every variant underperformed the ungated Phase 1 baseline — the
+  same "a broad, frequently-firing overlay suppresses genuine opportunity
+  more than it protects" lesson found repeatedly in V1's own research
+  history (rounds 4/5/8).
+- **Phase 3 (partially useful, not adopted as a fix)**: a rare-firing
+  crisis override — S&P single-day decline ≥ 7% (the real NYSE Level 1
+  circuit-breaker level) forces a full defensive exit + entry block. Fired
+  on only 7 days across the full 2007-2026 window, cost zero measured edge
+  anywhere it didn't touch, and gave a small, real improvement in the COVID
+  block — but did not clear the hard floor for the GFC-acute block, the one
+  thing it was built to fix. A VIX-spike variant was also tested and
+  rejected (fired ~15× more often, reproduced Phase 2's over-suppression
+  problem).
+- **Phase 4**: not attempted (conditional on Phases 1-3 validating
+  together, which they didn't as a set).
+
+Two robustness checks were run before any of this was treated as
+production-ready: **European (DAX) stocks-only**, using the same
+point-in-time discipline (Germany was the only market with a long-enough
+verified membership record — FTSE 100/CAC 40/FTSE MIB had none, and EURO
+STOXX 50's only public source starts 2014), found no edge and confirmed
+the US result isn't trivially portable to a different, smaller market. A
+**stocks-only vs. combined vs. ETF-only** breakdown found the ETF sleeve
+adds real return but also adds risk (higher drawdown and volatility, no
+consistent Sharpe advantage) — a portfolio-construction trade-off, not
+resolved here.
+
+**Stage 1 (this section) makes Phase 1 + the Phase-3 crisis override real,
+tested, permanent code — `analysis/v2/` — with zero live-order wiring and
+zero changes to V1's own behaviour.** `analysis/v2/universe.py` (point-in-time
+membership, DB-backed with an in-process cache — see its
+`clear_membership_cache()` docstring for why this matters at backtest
+scale), `signals.py` (12-month momentum, the sole entry/exit signal),
+`crisis.py` (the validated ≥7% circuit breaker), and `backtest.py` (reuses
+V1's own ATR stop, VaR position sizing, and `get_max_holding_days()`
+unmodified — only the entry/exit decision logic is new).
+
+**V2's stock/ETF universe is deliberately kept out of `config.yaml`'s
+watchlist** — adding TSLA/META/GOOGL there would also expose them to V1's
+`get_all_tickers()` and `trading212_stocks` automation, which Stage 1 must
+not do. `data/database.py:_purge_unlisted_tickers()` was extended with a
+deferred import of `analysis.v2.universe.ALL_V2_TICKERS` so these tickers'
+price history survives V1's own stale-ticker purge without ever being
+added to the watchlist V1 itself reads.
+
+**Ongoing membership tracking** (not a one-time snapshot):
+`analysis/v2/universe.py:refresh_membership_from_source()` re-fetches the
+same public dataset, reconstructs every candidate stock's full membership
+history from scratch (cheap — a few seconds for the full ~30-year record —
+so there's no incremental-diff state to drift out of sync), and reconciles
+it against `v2_universe_membership`, detecting both new removals and new
+re-additions. Not yet wired to a scheduler job in Stage 1 (a periodic
+call — matching the source's own "every couple of months" update cadence —
+is the natural next addition once Stage 2/3 make the universe load-bearing
+for anything live).
+
+**Reproducibility check (2026-07-31)**: `analysis/v2/backtest.py` run over
+the identical 2007-2026 window, universe, signal, and crisis override
+already validated in the disposable research clone. Result: **14/16
+blocks pass, same two failing blocks (Block 1, Block 2/GFC-acute)** as the
+adoption decision; TRAIN CAGR 13.29% vs. 13.22% originally, TEST CAGR
+21.95% vs. 21.55% originally — both within half a percentage point.
+Verified this gap is not a logic discrepancy: `STOCK_MEMBERSHIP`'s windows,
+the ETF ticker list, the momentum-signal computation (including NaN
+handling — confirmed `NaN > 0` evaluates to `False` in pandas, not
+`NaN`), and every reused execution function are byte-identical to the
+research clone. The remaining explanation is that `price_data` is a live,
+continuously-updated store — TSLA/META/GOOGL were independently re-fetched
+"as of now" for this check, and every ticker's trailing history has kept
+accumulating incremental EOD updates in the time since the original
+research clone (long since deleted) took its own snapshot. Treated as a
+pass: the block-level pattern is exact, and the small CAGR gap sits inside
+what a live database's ordinary data-recency drift would be expected to
+produce.
+
+**Performance note found and fixed during the reproducibility check**: the
+first run took long enough (>15 minutes for one of 16 blocks) that it was
+killed and diagnosed rather than left to finish — `is_member()` was
+issuing a fresh DB query per ticker per day, an unnecessary bottleneck at
+backtest scale (~5,000 days × 73 tickers × 18 runs). Fixed with the
+in-process cache mentioned above (invalidated automatically by both
+`seed_baseline_membership()` and `refresh_membership_from_source()`); the
+full 18-run reproducibility check completed in 74 seconds after the fix.
+
+**Explicitly not done in Stage 1**: no live order placement, no scheduler
+wiring, no changes to `analysis/regime.py`, `analysis/macro.py`,
+`config.yaml`'s watchlist, or any other file V1 depends on. V1's full test
+suite (357 tests before this stage, all passing) passes unchanged after
+this stage's `data/database.py` addition. Stage 2 (shadow validation —
+running V2 alongside V1 in production, comparing what V2 *would* have
+traded against V1's real executions, without placing any V2 orders) and
+Stage 3 (cutover) are separate, not-yet-attempted future steps.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

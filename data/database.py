@@ -556,6 +556,35 @@ class T212Pnl(Base):
     )
 
 
+class V2UniverseMembership(Base):
+    """Point-in-time index-membership windows for analysis/v2's stock
+    universe (see analysis/v2/universe.py).
+
+    One row per contiguous membership window — a ticker that was added,
+    removed, and later re-added to its index (e.g. AMD's 2013-2017 S&P 500
+    gap) gets two rows, not one row with a hole. `source` and `fetched_at`
+    record where and when each window was last confirmed, so a stale row
+    left behind by a source that later changes its mind is identifiable
+    rather than silently trusted forever. Refreshed by
+    analysis/v2/universe.py:refresh_membership_from_source() — see that
+    module for the mechanism that keeps this from becoming a static,
+    decaying snapshot.
+    """
+
+    __tablename__ = "v2_universe_membership"
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    ticker       = Column(String(20), nullable=False, index=True)
+    start_date   = Column(Date, nullable=False)
+    end_date     = Column(Date, nullable=False)
+    source       = Column(String(120), nullable=False)   # e.g. "fja05680/sp500"
+    fetched_at   = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "start_date", name="uq_v2_membership_ticker_start"),
+    )
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -900,6 +929,17 @@ def _purge_unlisted_tickers(engine) -> None:
         for entry in assets:
             if isinstance(entry, dict) and "ticker" in entry:
                 allowed.add(entry["ticker"])
+
+    # analysis/v2's stock/ETF universe is deliberately kept out of
+    # config.yaml's watchlist (adding it there would also expose it to V1's
+    # get_all_tickers()/trading212_stocks automation, which is not what
+    # Stage 1 is for). Deferred import (analysis.v2 imports this module) —
+    # never let a V2 import failure block V1's own startup purge.
+    try:
+        from analysis.v2.universe import ALL_V2_TICKERS
+        allowed |= set(ALL_V2_TICKERS)
+    except Exception as exc:
+        logger.warning("_purge_unlisted_tickers: could not load V2 ticker list — %s", exc)
 
     if not allowed:
         logger.warning("_purge_unlisted_tickers: watchlist is empty — skipping to avoid data loss.")
