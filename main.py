@@ -1890,7 +1890,10 @@ def _render_backtest_page(config: dict) -> None:
 
     result = st.session_state.get("_validation_result")
     if result is None:
-        st.info("Click the button above to run the battery. Reads live price history only — no writes.")
+        st.info(
+            "Click the button above to run the battery. Reads live price history only — no writes. "
+            "This also unlocks a downloadable due diligence PDF report, generated from this same run."
+        )
         _render_footer()
         return
 
@@ -1900,6 +1903,25 @@ def _render_backtest_page(config: dict) -> None:
                    f"{result['start']} → {result['end']} · "
                    f"{result['n_tickers_with_data']}/{result['n_tickers_total']} tickers had usable data")
 
+    st.markdown("### Download Due Diligence Report")
+    if st.button("Generate Due Diligence Report (PDF)", key="gen_dd_report"):
+        with st.spinner("Generating due diligence report…"):
+            try:
+                from analysis.dd_report import generate_dd_report_pdf
+                pdf_bytes = generate_dd_report_pdf(result, config)
+                st.session_state["_dd_report_pdf"] = pdf_bytes
+            except Exception as exc:
+                st.error(f"Report generation failed: {exc}")
+    if st.session_state.get("_dd_report_pdf"):
+        st.download_button(
+            "📄 Download Due Diligence Report (PDF)",
+            data=st.session_state["_dd_report_pdf"],
+            file_name="sp500invest_due_diligence_report.pdf",
+            mime="application/pdf",
+            key="dl_dd_report",
+        )
+
+    st.divider()
     st.markdown("### Train / Test Split vs S&P 500")
     tc1, tc2 = st.columns(2)
     for col, label, m, sp in (
@@ -1995,25 +2017,6 @@ def _render_backtest_page(config: dict) -> None:
             )
             _apply_dark_theme(_fig)
             st.plotly_chart(_fig, width="stretch")
-
-    st.divider()
-    st.markdown("### Download Due Diligence Report")
-    if st.button("Generate Due Diligence Report (PDF)", key="gen_dd_report"):
-        with st.spinner("Generating due diligence report…"):
-            try:
-                from analysis.dd_report import generate_dd_report_pdf
-                pdf_bytes = generate_dd_report_pdf(result, config)
-                st.session_state["_dd_report_pdf"] = pdf_bytes
-            except Exception as exc:
-                st.error(f"Report generation failed: {exc}")
-    if st.session_state.get("_dd_report_pdf"):
-        st.download_button(
-            "📄 Download Due Diligence Report (PDF)",
-            data=st.session_state["_dd_report_pdf"],
-            file_name="sp500invest_due_diligence_report.pdf",
-            mime="application/pdf",
-            key="dl_dd_report",
-        )
 
     _render_footer()
 

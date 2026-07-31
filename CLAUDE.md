@@ -1755,6 +1755,85 @@ No changes to any order-placement path (`brokers/trading212.py`,
 `data/scheduler.py`) — this task is read-only against price/signal data and
 UI-only in main.py.
 
+### Due diligence report UI discoverability fix (2026-07-31)
+
+`analysis/dd_report.py:generate_dd_report_pdf()` was built, tested (direct
+function calls, rendered-PDF text extraction), and extended (the ETF
+execution-venue limitation entry) multiple times the same day — but a
+real user of the deployed app reported no way to find it. **Investigated
+before assuming either way**: `main.py` did have a genuine call site
+("Download Due Diligence Report" heading, "Generate Due Diligence Report
+(PDF)" button, then a `st.download_button` once generated) — it was not
+missing entirely, the way Step 1 of this task's own instructions
+anticipated as one possibility. The problem was placement: the whole
+block sat at the very bottom of the Backtest page, after Train/Test
+Split, Full History & Concentration, the 16-block table, Transaction-Cost
+Sensitivity, Walk-Forward, and the Equity Curve — six sections below
+where a user's eye would land after clicking "Run Full Validated Battery"
+— with no signal anywhere else in the app (sidebar, another page, a
+caption before the button) that generating a report was even possible.
+Reaching it required an expensive, unrelated-looking 1-2 minute
+prerequisite (the battery run) with no upfront indication that doing so
+would unlock anything.
+
+**V1 precedent, confirmed via CLAUDE.md's own "PDF due-diligence export"
+section**: the old Robustness page's equivalent button "sits above the
+four [detail] tabs" — prominent, immediate, not buried below the report
+content it summarises. V2 deliberately consolidated Robustness-equivalent
+content into the one Backtest page rather than reviving a separate
+sidebar page (see "Backtest page restored..." above — "V2's story is one
+signal... the report only needs methodology [and] validated results"),
+so adding a whole new sidebar page here would cut against that
+established consolidation, not follow it. The fix instead moves the
+button **within** the Backtest page, matching V1's own placement
+principle: the "Download Due Diligence Report" section now renders
+immediately after the "Last run: ..." caption — the first thing visible
+once a battery result exists, before any of the six detail sections —
+and the pre-run info message (shown before the battery has ever been
+clicked) now states directly that running it also unlocks a downloadable
+report, so a user who specifically wants the PDF knows what to do before
+waiting through the page.
+
+**Verified via `streamlit.testing.v1.AppTest`, navigating the way a real
+user would** — not just confirming `generate_dd_report_pdf()` runs in
+isolation (already covered by `tests/test_dd_report.py`): set
+`at.session_state["page"] = "backtest"` (the same key the sidebar radio
+itself writes to), ran the script, clicked the "Run Full Validated
+Battery" button (`run_full_validation` mocked to a small, fast, synthetic
+result — the real function is a multi-minute operation, confirmed
+separately via SSH in earlier sections), confirmed the "Download Due
+Diligence Report" heading and its button render immediately at that
+point, clicked "Generate Due Diligence Report (PDF)" (the real,
+unmocked `generate_dd_report_pdf()` — so this exercises actual PDF
+generation, not a stub), and confirmed both a genuine PDF (`b"%PDF-"`
+header, well-formed bytes) lands in the same `st.session_state` key the
+`download_button` reads from, and the download button element itself
+renders with the expected label.
+
+**`main.py` had never been imported in this test suite before, for a
+documented reason** (see `output/performance.py`'s own module
+docstring): importing it runs `_start_scheduler_at_startup()` at module
+level, which starts a real APScheduler background thread — including
+live T212 API calls — as a side effect of the import itself. Making this
+test safe required patching `data.scheduler.start_scheduler` (the
+*source* module's attribute) **before** anything triggers `main.py`'s own
+`from data.scheduler import start_scheduler` import statement — patching
+`main.start_scheduler` directly doesn't work, because that name is a
+frozen snapshot bound at import time, and by the time `main` exists as an
+importable target to patch, the import (and the real scheduler start)
+has already happened. `data.scheduler` itself has no risky module-level
+code, so patching its attribute first, then only afterward touching
+anything under `main.`, keeps the one-time-ever import of `main.py` in
+this test process safe. Confirmed directly: the real `start_scheduler()`
+body (traceable via a `system_metadata` heartbeat write it makes) ran
+once when this ordering was wrong, and stopped appearing once fixed.
+
+Covered by `tests/test_main_ui.py` (new — 3 tests): the Backtest page
+renders via the same session-state page key the sidebar writes to, the
+DD report section appears immediately after a battery run rather than
+requiring a scroll past six other sections, and the full click-through
+path produces a real, well-formed, downloadable PDF.
+
 ### Block pass/fail formula reconciliation (2026-07-31)
 
 Closed the discrepancy flagged immediately above, before anything built on
