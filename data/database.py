@@ -182,6 +182,38 @@ class Pnl(Base):
     )
 
 
+class PendingOrder(Base):
+    """A queued BUY decision awaiting exchange-timed submission.
+
+    Decouples *when the signal is computed* (still EOD, unchanged) from
+    *when the resulting order is actually submitted* — brokers/trading212.py
+    :maybe_place_orders() writes a PENDING row per qualifying entry instead
+    of placing the order immediately; submit_pending_etf_orders() /
+    submit_pending_stock_orders() (each on its own instrument's real trading-
+    session schedule) later read these rows and submit them, after a
+    price-sanity check against `decided_price`. See CLAUDE.md's
+    "Exchange-aware order submission" section.
+    """
+
+    __tablename__ = "pending_orders"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    ticker           = Column(String(20), nullable=False, index=True)
+    t212_ticker      = Column(String(64))
+    is_etf           = Column(Boolean, nullable=False)
+    currency         = Column(String(10))
+    decided_at       = Column(DateTime, default=datetime.utcnow)
+    decided_price    = Column(Float)             # native-currency close used to size/sanity-check against
+    position_gbp     = Column(Float)
+    momentum_pct     = Column(Float)
+    stop_price       = Column(Float)
+    var_pct          = Column(Float)
+    status           = Column(String(24), default="PENDING")  # PENDING / SUBMITTED / FAILED / SKIPPED_PRICE_MOVED / SKIPPED_ALREADY_HELD
+    resolution_note  = Column(Text)
+    resolved_at      = Column(DateTime)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -431,6 +463,7 @@ def init_db() -> None:
         UniverseMembership,
         InvestOrder,
         Pnl,
+        PendingOrder,
         SystemMetadata,
         SchemaMigration,
     )

@@ -2226,6 +2226,130 @@ special case), the neutral-styling invariant above, the exit-rule text's
 content and its known-missing-`max_holding_days` fallback, and the
 summary/explanation copy checks.
 
+### Exchange-aware order submission (2026-07-31)
+
+**What this fixes, and what it doesn't.** ETF orders (the 33 UCITS-wrapped
+instruments, listed on the London Stock Exchange, 07:00–15:30 UTC) were
+submitted at the fixed 21:30 UTC EOD time — over six hours after LSE had
+closed for the day, a dead window. Stock orders (NYSE-listed, regular hours
+13:30–20:00 UTC) landed in an unconfirmed after-hours window with no
+verified fill behaviour on this account. This change decouples *when the
+signal is computed* (still EOD, unchanged and validated) from *when the
+resulting order is actually submitted*, and makes submission exchange-aware
+— each instrument now submits during its own real trading session.
+
+**This does NOT close the calendar gap between decision and execution** — a
+Friday-computed decision still can't submit before Monday's relevant open,
+since neither exchange is open at decide time either (a Friday EOD decision
+waits through the weekend exactly as before). What changed is *ambiguity*:
+predictable, session-correct submission instead of firing into a closed or
+uncertain window. Do not read this as closing the timing gap itself — the
+LSE-only constraint is a UK/EU securities-law restriction (Overseas Funds
+Regime equivalence not extended to US-registered funds, applying equally to
+every UK-regulated retail broker — see the PRIIPs/OFR investigation this
+same day), not an engineering problem this mechanism, or any mechanism on
+this side, can fix. A draft Known-Limitations entry for the eventual V2 DD
+report covering this exact point (ETF execution venue vs. signal
+computation) has been drafted separately and is pending incorporation into
+`analysis/dd_report.py` — not yet wired in as part of this change.
+
+**Mechanism — decide, then submit.** `brokers/trading212.py:maybe_place_orders()`
+(called from the EOD job, unchanged timing) still computes every ticker's
+momentum signal, index membership, and crisis-block status exactly as
+before, and still runs the VaR-sized entry decision for each qualifier — but
+instead of calling `place_market_order()` directly, it writes a `PENDING`
+row to the new `pending_orders` table (`ticker`, `t212_ticker`, `is_etf`,
+`currency`, `decided_at`, `decided_price`, `position_gbp`, `momentum_pct`,
+`stop_price`, `var_pct`). A dedup guard (`_has_pending_order()`) stops a
+ticker whose signal stays on across multiple EOD runs from accumulating
+duplicate `PENDING` rows while submission is paused or behind. Decide-phase
+no longer enforces `max_total_deployed` / `max_open_positions` at all —
+queuing a decision commits no cash and opens no position, so there is
+nothing yet for those caps to protect against; they moved to submission
+time, where the account's live state is what actually matters.
+
+Two new scheduled jobs, each acting only on its own asset class:
+
+| Job | Schedule | Calls |
+|---|---|---|
+| `etf_order_submission` | 07:00 UTC weekdays (LSE open) | `brokers.trading212.submit_pending_etf_orders()` |
+| `stock_order_submission` | 13:30 UTC weekdays (NYSE regular open) | `brokers.trading212.submit_pending_stock_orders()` |
+
+Both are thin wrappers around the shared `_submit_pending_orders(config, is_etf)`,
+which reads every `status = 'PENDING'` row for its own `is_etf` value
+(oldest decision first), then — per row — re-checks it isn't already held or
+already has a recent order (defensive, covers manual intervention or an
+overnight exit), runs the price-sanity check (below), resolves the actual
+share quantity from live instrument metadata (moved here from decide-phase,
+since the real submission-time price is what quantity must be sized
+against, not the decide-time close), and places the order. `max_total_deployed`
+/ `max_open_positions` are enforced exactly as the old immediate-submission
+BUY loop did — just against the account's state *at submission time* — and
+binding either cap stops the run for that pass, leaving every row not yet
+reached still `PENDING` (retried at the next submission window, not marked
+skipped or lost). The exact same per-row exception isolation the 2026-07-31
+BUY-loop fix established (see "V2 first-cycle deployment cap overshoot" /
+"Live pricing bug, exception isolation" below) applies here too — one row's
+unhandled exception never stops the rest of the queue.
+
+**Price-sanity check — fail loud, don't guess.** Before submitting, each
+row's `decided_price` (the close price at decide time) is compared against
+`_latest_close(ticker)` — the ticker's own most recently stored close from
+`price_data`, deliberately **not** a T212 quote: T212 has no live quote at
+all for an unheld UCITS ETF (see `get_instrument_price_gbp()`'s docstring),
+and even where a quote exists, the UCITS wrapper's own price is a different,
+unrelated number from the underlying US ticker's price (see "Live pricing
+bug..." below) — so a T212-side comparison would either be unavailable or
+comparing the wrong thing. The research ticker's own close is exactly what
+`decided_price` was built from, so it's the correct apples-to-apples
+comparison for "has this moved a lot since the decision was made." If the
+move exceeds `trading212_invest.price_sanity_threshold_pct` (default **3%**
+either direction), the row is marked `SKIPPED_PRICE_MOVED` with a
+resolution note and a clear `WARNING` log line naming the ticker, the
+decided/current prices, and the threshold — the order is never placed on a
+stale decision. **Why 3%**: comfortably above ordinary day-to-day noise for
+a diversified ETF or a large-cap stock, but well below a genuine
+earnings-surprise or macro-shock gap — the same "fail loud, don't guess"
+principle as the 2026-07-31 `get_instrument_price_gbp()` pricing-bug fix.
+One shared threshold across both asset classes, not split ETF/stock — kept
+simple per the task's own framing ("some reasonable threshold"); revisit if
+live data shows one asset class needs a different value.
+
+**ETF submission ships paused; stock submission continues as today.**
+`trading212_invest.etf_submission_enabled` defaults `False` when absent —
+ETF submission is explicitly disabled in `config.yaml` (`etf_submission_enabled: false`)
+until this mechanism has been deployed and independently verified against
+the live demo account. **Do not flip this to `true` as part of deploying the
+mechanism itself — that is a separate, later decision once submission
+timing/pricing has been watched through at least one real LSE session.**
+`trading212_stocks_submission_enabled` (`trading212_invest.stock_submission_enabled`)
+defaults `True` — no behavioural change was requested for stocks, so the
+stock submission path is live from this deploy. Both flags are read fresh
+by `_submit_pending_orders()` on every call, so flipping ETF submission on
+later needs no code change — only a config edit and a deploy.
+
+**New table — `pending_orders`** (`PendingOrder` in `data/database.py`,
+`id` PK, no unique constraint on `ticker` — dedup is enforced in code via
+`_has_pending_order()`, not the schema). `status` is one of `PENDING` /
+`SUBMITTED` / `FAILED` / `SKIPPED_PRICE_MOVED` / `SKIPPED_ALREADY_HELD`.
+Rows are never deleted — a resolved row's `resolution_note`/`resolved_at`
+give a full audit trail of every decision from the moment it was queued to
+however it was ultimately resolved (or never resolved, if a row is still
+sitting `PENDING` because e.g. ETF submission remains paused).
+
+Covered by `tests/test_execution.py`: decide-phase queuing (a qualifying
+entry writes a `PENDING` row, never calls `place_market_order()` directly),
+the dedup guard, decide-phase ignoring both caps even when already blown,
+submission acting only on its own asset class's rows, both submission
+enable/disable defaults, the price-sanity check's skip and pass paths, both
+caps enforced at submission time (pre-loop-equivalent and mid-run,
+mirroring the original 2026-07-31 cap-overshoot fix's own test shape), the
+locked-out-ETF clean-skip case (now at submission time, since quantity
+resolution moved there), and per-row exception isolation. `tests/test_scheduler.py`
+covers both new jobs' registration (schedule, job id, target function) and
+that each job calls its corresponding `submit_pending_*` function and never
+raises on failure.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

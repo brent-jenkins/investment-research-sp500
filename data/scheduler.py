@@ -477,6 +477,47 @@ def _membership_refresh_job() -> None:
         logger.warning("Membership refresh job failed: %s", exc)
 
 
+def _etf_order_submission_job() -> None:
+    """07:00 UTC weekdays (LSE regular open) — submit queued ETF entry
+    decisions from pending_orders.
+
+    Signal computation and decision-queuing already happened at the prior
+    EOD run (brokers.trading212:maybe_place_orders()); this job only submits
+    whatever is still PENDING for ETFs, with its own price-sanity check
+    against the price recorded at decide time. See CLAUDE.md's
+    "Exchange-aware order submission" section — ETF submission ships
+    disabled by default (trading212_invest.etf_submission_enabled) until
+    manually verified, so this job is a no-op until that flag is set.
+    """
+    logger.info("ETF order submission job starting (07:00 UTC, LSE open)…")
+    config = _load_config()
+    try:
+        from brokers.trading212 import submit_pending_etf_orders  # noqa: PLC0415
+        n = submit_pending_etf_orders(config)
+        if n:
+            logger.info("ETF submission: %d order(s) placed.", n)
+    except Exception as exc:
+        logger.error("ETF order submission failed: %s", exc, exc_info=True)
+
+
+def _stock_order_submission_job() -> None:
+    """13:30 UTC weekdays (NYSE regular open) — submit queued stock entry
+    decisions from pending_orders.
+
+    Deliberately timed to the regular open rather than any after-hours
+    window — see CLAUDE.md's "Exchange-aware order submission" section.
+    """
+    logger.info("Stock order submission job starting (13:30 UTC, NYSE open)…")
+    config = _load_config()
+    try:
+        from brokers.trading212 import submit_pending_stock_orders  # noqa: PLC0415
+        n = submit_pending_stock_orders(config)
+        if n:
+            logger.info("Stock submission: %d order(s) placed.", n)
+    except Exception as exc:
+        logger.error("Stock order submission failed: %s", exc, exc_info=True)
+
+
 def _check_missed_eod_run(config: dict) -> None:
     """Trigger an immediate EOD catch-up if today's 21:30 UTC EOD run was missed.
 
@@ -655,6 +696,29 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info(
         "Scheduled trade alert check hourly 00:00–21:00 + 23:00 %s on weekdays.", tz,
     )
+
+    # Exchange-aware order submission (2026-07-31) — see CLAUDE.md's
+    # "Exchange-aware order submission" section. Decision-queuing happens at
+    # EOD (unchanged, folded into maybe_place_orders() via the jobs above);
+    # these two jobs submit whatever is still PENDING, each only for its own
+    # asset class, during that exchange's own real trading session, rather
+    # than everything firing at one fixed 21:30 UTC time regardless of
+    # instrument.
+    _scheduler.add_job(
+        _etf_order_submission_job,
+        trigger=CronTrigger(hour=7, minute=0, day_of_week="mon-fri", timezone=tz),
+        id="etf_order_submission",
+        replace_existing=True,
+    )
+    logger.info("Scheduled ETF order submission at 07:00 %s weekdays (LSE open).", tz)
+
+    _scheduler.add_job(
+        _stock_order_submission_job,
+        trigger=CronTrigger(hour=13, minute=30, day_of_week="mon-fri", timezone=tz),
+        id="stock_order_submission",
+        replace_existing=True,
+    )
+    logger.info("Scheduled stock order submission at 13:30 %s weekdays (NYSE open).", tz)
 
     # Membership refresh — 15 minutes ahead of the EOD job's own 21:30 slot,
     # so any real S&P 500 addition/removal is reflected before that run's

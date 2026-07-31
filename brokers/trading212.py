@@ -918,6 +918,122 @@ def _has_recent_sell_order(ticker: str, hours: int = 24) -> bool:
         return False
 
 
+def _queue_pending_order(
+    *,
+    ticker: str,
+    t212_ticker: str,
+    is_etf: bool,
+    currency: str,
+    decided_price: float,
+    position_gbp: float,
+    momentum_pct: Optional[float],
+    stop_price: Optional[float],
+    var_pct: Optional[float],
+) -> None:
+    """Insert one PENDING row into pending_orders (best-effort; never raises).
+
+    Decide-phase (maybe_place_orders()) writes here instead of calling
+    place_market_order() directly — see "Exchange-aware order submission"
+    in CLAUDE.md. A separate, exchange-timed job submits this later.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        engine = get_engine()
+        now = datetime.utcnow().isoformat()
+        with engine.begin() as conn:
+            conn.execute(sa_text("""
+                INSERT INTO pending_orders (
+                    ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                    position_gbp, momentum_pct, stop_price, var_pct, status, created_at
+                ) VALUES (
+                    :ticker, :t212_ticker, :is_etf, :currency, :now, :decided_price,
+                    :position_gbp, :momentum_pct, :stop_price, :var_pct, 'PENDING', :now
+                )
+            """), {
+                "ticker": ticker, "t212_ticker": t212_ticker, "is_etf": is_etf,
+                "currency": currency, "now": now, "decided_price": decided_price,
+                "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+                "stop_price": stop_price, "var_pct": var_pct,
+            })
+    except Exception as exc:
+        logger.warning("Failed to queue pending order for %s: %s", ticker, exc)
+
+
+def _has_pending_order(ticker: str) -> bool:
+    """True if *ticker* already has an unresolved (PENDING) queued decision —
+    dedup guard so a decide-phase run doesn't queue a duplicate entry for a
+    ticker whose signal has stayed on across multiple EOD runs while
+    submission remains paused/behind (e.g. ETF submission paused — see
+    CLAUDE.md)."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            row = conn.execute(sa_text(
+                "SELECT 1 FROM pending_orders WHERE ticker = :t AND status = 'PENDING' LIMIT 1"
+            ), {"t": ticker}).fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning("_has_pending_order check failed for %s: %s", ticker, exc)
+        return False
+
+
+def _load_pending_orders(is_etf: bool) -> list:
+    """PENDING rows for one asset class, oldest decision first."""
+    from sqlalchemy import text as sa_text
+    from data.database import get_engine
+    eng = get_engine()
+    with eng.connect() as conn:
+        rows = conn.execute(sa_text("""
+            SELECT id, ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                   position_gbp, momentum_pct, stop_price, var_pct
+            FROM pending_orders
+            WHERE status = 'PENDING' AND is_etf = :is_etf
+            ORDER BY decided_at ASC
+        """), {"is_etf": is_etf}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def _resolve_pending(row_id: int, status: str, note: Optional[str] = None) -> None:
+    """Mark a pending_orders row resolved (best-effort; never raises)."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.begin() as conn:
+            conn.execute(sa_text("""
+                UPDATE pending_orders SET status = :status, resolution_note = :note, resolved_at = :now
+                WHERE id = :id
+            """), {"status": status, "note": note, "now": datetime.utcnow().isoformat(), "id": row_id})
+    except Exception as exc:
+        logger.warning("Failed to resolve pending_orders row %s: %s", row_id, exc)
+
+
+def _latest_close(ticker: str) -> Optional[float]:
+    """Most recently stored close for *ticker* — used by the submission-time
+    price-sanity check. Deliberately reuses the same price_data close series
+    the momentum signal itself is built from (not a T212 quote): T212 has no
+    live quote for an unheld UCITS ETF at all (see get_instrument_price_gbp's
+    docstring), and the UCITS wrapper's own price is a different, unrelated
+    number from the underlying US ticker's price anyway (see the 2026-07-31
+    ETF pricing-bug fix) — so a T212-side comparison would either be
+    unavailable or comparing the wrong thing. The research ticker's own
+    close is what decided_price was built from, so it's the correct
+    apples-to-apples comparison for "has this moved a lot since the decision
+    was made."
+    """
+    try:
+        df = get_price_df(ticker, days=5)
+        if df is None or df.empty:
+            return None
+        return float(df["close"].astype(float).iloc[-1])
+    except Exception as exc:
+        logger.warning("_latest_close failed for %s: %s", ticker, exc)
+        return None
+
+
 def _ticker_state(ticker: str, config: dict, gspc_close: pd.Series) -> Optional[dict]:
     """Compute today's momentum signal, ATR, membership, and crisis flags for
     one ticker — the live equivalent of one row of
@@ -1322,9 +1438,32 @@ def maybe_exit_positions(config: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def maybe_place_orders(config: dict, run_type: str = "full") -> None:
-    """Exit stale positions, then place new BUY orders for tickers whose
+    """Exit stale positions, then QUEUE entry decisions for tickers whose
     momentum signal is on, that are currently index-eligible, and that
     aren't inside the crisis entry-block window.
+
+    Signal computation stays here, at EOD, exactly as before (unchanged and
+    validated) — but a qualifying entry is written to `pending_orders` as a
+    PENDING row instead of being submitted immediately. Two separate,
+    exchange-timed jobs (submit_pending_etf_orders() / submit_pending_stock_
+    orders(), further below in this module) later read their own asset
+    class's PENDING rows and submit them during that instrument's own real
+    trading session, after a price-sanity check against the decided-at
+    price. See CLAUDE.md's "Exchange-aware order submission" section for
+    why: submitting every order at one fixed EOD time landed ETF orders
+    (LSE-listed UCITS wrappers) in a dead window hours after that exchange
+    closed, and stock orders in an unconfirmed after-hours window.
+
+    This does NOT close the calendar gap between decision and execution — a
+    Friday-computed decision still can't submit before Monday's relevant
+    open, since neither exchange is open at decide time either. It only
+    removes submission-timing *ambiguity*: predictable, session-correct
+    submission instead of firing into a closed or uncertain window.
+
+    Exits are unaffected by this split — maybe_exit_positions() already runs
+    on an hourly cadence independent of this EOD-only decide phase, and a
+    stop-loss/signal-off/crisis exit is safety-critical enough that it
+    should not wait for a session-open submission window.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -1335,8 +1474,10 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
     # falling back to an unrelated proxy price) and a structural exception-
     # isolation gap in this loop are under investigation/fix. Exits must
     # keep running (a stop-loss/signal-off/crisis exit is safety-critical),
-    # only new entries are paused. Remove this flag from config.yaml once
-    # the fix is deployed and verified.
+    # only new entries are paused. Also blocks decide-phase queuing entirely
+    # (not just submission) — a global pause should stop new decisions from
+    # even being recorded, not just from being acted on later. Remove this
+    # flag from config.yaml once the fix is deployed and verified.
     if t212_cfg.get("pause_new_entries", False):
         maybe_exit_positions(config)
         logger.warning("New order placement PAUSED (trading212_invest.pause_new_entries) — exit-only.")
@@ -1344,7 +1485,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
 
     if run_type != "full":
         maybe_exit_positions(config)
-        logger.debug("Skipping BUY-phase order placement on %s run (full only).", run_type)
+        logger.debug("Skipping BUY-phase decision queuing on %s run (full only).", run_type)
         return
 
     api_key    = os.environ.get("T212_API_KEY", "")
@@ -1360,23 +1501,17 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         return
 
     live = t212_cfg.get("live", False)
-    max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
     max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
 
     try:
         client = Trading212Client(live=live)
         summary = client.get_account_summary()
         _s_cash = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
-        _s_inv  = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
         total_val = float(summary.get("totalValue", 0) or 0)
-        invested  = float(_s_inv.get("currentValue", 0) or 0)
         free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
 
         positions = client.get_positions()
         positions_by_t212 = {p.get("ticker", ""): p for p in (positions or [])}
-
-        instruments = client.get_instruments()
-        instrument_meta = {i["ticker"]: i for i in (instruments or []) if "ticker" in i}
     except Exception as exc:
         logger.error("API error during setup — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
@@ -1386,7 +1521,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
     # Fetched account state BEFORE the delegated exit call, so a ticker sold
     # during this call's own exit phase still reads as held in
     # positions_by_t212 for the rest of this run rather than immediately
-    # re-bought.
+    # re-queued.
     maybe_exit_positions(config)
 
     try:
@@ -1397,57 +1532,27 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         _set_t212_error(f"read failed: {exc}")
         return
 
-    account_label = "LIVE" if live else "DEMO"
+    orders_queued = 0
 
-    if total_val > 0 and (invested / total_val) >= max_deployed_pct:
-        logger.info("%.0f%% deployed (limit %.0f%%) — no new orders.",
-                    (invested / total_val) * 100, max_deployed_pct * 100)
-        return
-
-    max_open = t212_cfg.get("max_open_positions", 999)
-    current_open = len(positions_by_t212)
-    if current_open >= max_open:
-        logger.info("%d/%d positions open — max_open_positions reached, skipping new entries.",
-                    current_open, max_open)
-        return
-
-    orders_placed = 0
-
-    # current_open/invested are running totals updated after every FILLED-
-    # bound BUY placed below — the checks immediately above only gate entry
-    # into this loop from the account's state *before* the loop started.
-    # Without also re-checking per-iteration, a cold start (0 pre-existing
-    # positions/deployment) can walk through every qualifying ticker in one
-    # pass before either cap ever has a chance to bind — this is exactly
-    # what happened on 2026-07-31's first live cycle (32 orders placed,
-    # ~74% deployed, both caps blown through) — see CLAUDE.md's "V2 first-
-    # cycle deployment cap overshoot" section for the incident this fixed.
+    # No max_total_deployed / max_open_positions enforcement in this loop —
+    # unlike the old immediate-submission design, queuing a decision commits
+    # no cash and opens no position, so there is nothing yet for those caps
+    # to protect against. They are enforced for real in
+    # _submit_pending_orders(), against the account's live state *at
+    # submission time*, which can genuinely differ from right now (an
+    # overnight exit can free up room between this EOD decide and the next
+    # session's submission).
     for ticker, raw in mapping.items():
-        if current_open >= max_open:
-            logger.info("%d/%d positions open — max_open_positions reached mid-run, stopping.",
-                        current_open, max_open)
-            break
-        if total_val > 0 and (invested / total_val) >= max_deployed_pct:
-            logger.info("%.0f%% deployed (limit %.0f%%) — stopping mid-run.",
-                        (invested / total_val) * 100, max_deployed_pct * 100)
-            break
-
         t212_ticker = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
         instrument_currency = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
 
-        # Per-ticker exception isolation (2026-07-31) — everything from here
-        # to the end of this iteration used to run with no isolation at all:
-        # one unhandled exception (e.g. a transient T212 rate-limit exceeding
-        # the retry budget) silently killed the rest of the run for every
-        # ticker after this one in dict order, with nothing logged. Confirmed
-        # this happened for real: a live cycle placed 13 BUY orders through
-        # position 19/73 in instrument_mapping, then produced zero orders for
-        # the remaining 54 tickers (14 ETFs + all 40 stocks) with no trace in
-        # either service's log. `break` (cap/cash exhaustion — a legitimate
-        # reason to stop the whole run) and `continue` (a ticker cleanly
-        # skipped by its own gating logic) are control flow, not exceptions,
-        # so they still propagate through this try/except exactly as before;
-        # only a genuine unhandled exception is caught here.
+        # Per-ticker exception isolation (2026-07-31) — see CLAUDE.md's "V2
+        # first-cycle deployment cap overshoot" / "Live pricing bug,
+        # exception isolation" sections for the incident this originally
+        # fixed. `continue` (a ticker cleanly skipped by its own gating
+        # logic) is control flow, not an exception, so it still propagates
+        # through this try/except exactly as before; only a genuine
+        # unhandled exception is caught here.
         try:
             state = _ticker_state(ticker, config, gspc_close)
             if state is None:
@@ -1463,6 +1568,9 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 continue
             if ticker in open_order_tickers:
                 logger.debug("%s has a recent order in DB — skipping.", ticker)
+                continue
+            if _has_pending_order(ticker):
+                logger.debug("%s already has an unresolved pending decision — skipping.", ticker)
                 continue
 
             max_hold = get_max_holding_days(ticker, config)
@@ -1494,43 +1602,203 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             position_gbp = min(position_gbp, free_cash * 0.25)
 
             if position_gbp < 10:
-                logger.warning("Insufficient free cash (£%.2f) — stopping new orders.", free_cash)
+                logger.debug("%s: sized position (£%.2f) below minimum viable order — skipping.",
+                             ticker, position_gbp)
+                continue
+
+            _queue_pending_order(
+                ticker=ticker, t212_ticker=t212_ticker, is_etf=state["is_etf"],
+                currency=instrument_currency, decided_price=entry_price,
+                position_gbp=position_gbp, momentum_pct=state["momentum_pct"],
+                stop_price=stop_price, var_pct=holding_var,
+            )
+            orders_queued += 1
+            logger.info(
+                "Queued %s entry for %s (%s) — decided price %.2f %s, target £%.0f, "
+                "awaiting %s submission window.",
+                "ETF" if state["is_etf"] else "stock", ticker, t212_ticker,
+                entry_price, instrument_currency, position_gbp,
+                "LSE 07:00 UTC" if state["is_etf"] else "NYSE 13:30 UTC",
+            )
+        except Exception as ticker_exc:
+            logger.error(
+                "Unhandled error evaluating entry for %s (%s) — skipping this "
+                "ticker and continuing with the rest of the run: %s",
+                ticker, t212_ticker, ticker_exc, exc_info=True,
+            )
+            continue
+
+    if orders_queued > 0:
+        _clear_t212_error()
+
+    logger.info("Decide phase complete — %d entry decision(s) queued for submission.", orders_queued)
+
+
+# ---------------------------------------------------------------------------
+# Exchange-aware submission — reads pending_orders and actually places the
+# order, during each asset class's own real trading session. See
+# maybe_place_orders()'s docstring above for the full rationale.
+# ---------------------------------------------------------------------------
+
+def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
+    """Submit every still-PENDING decision for one asset class.
+
+    Applies, in order: an enabled/paused gate specific to this asset class
+    (etf_submission_enabled / stock_submission_enabled — see CLAUDE.md for
+    why ETF submission ships paused), a price-sanity check per row against
+    the price recorded at decide time, then the same max_total_deployed /
+    max_open_positions / free-cash caps the old immediate-submission design
+    enforced — just applied here, against the account's live state at
+    submission time, instead of at decide time.
+
+    Never raises. Returns the number of orders actually placed.
+    """
+    label = "ETF" if is_etf else "stock"
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return 0
+
+    flag_key = "etf_submission_enabled" if is_etf else "stock_submission_enabled"
+    # ETF submission defaults OFF (paused) if the key is absent; stock
+    # submission defaults ON ("continue as today") — see CLAUDE.md's
+    # "Exchange-aware order submission" section for why the two differ.
+    default_enabled = not is_etf
+    if not t212_cfg.get(flag_key, default_enabled):
+        logger.info("%s order submission disabled (trading212_invest.%s) — skipping.", label, flag_key)
+        return 0
+
+    api_key    = os.environ.get("T212_API_KEY", "")
+    api_secret = os.environ.get("T212_API_SECRET", "")
+    if not api_key or not api_secret:
+        logger.warning("T212_API_KEY or T212_API_SECRET not set — skipping %s submission.", label)
+        return 0
+
+    try:
+        pending = _load_pending_orders(is_etf)
+    except Exception as exc:
+        logger.error("Could not read pending %s orders — %s", label, exc, exc_info=True)
+        return 0
+
+    if not pending:
+        logger.debug("No pending %s orders to submit.", label)
+        return 0
+
+    threshold_pct = float(t212_cfg.get("price_sanity_threshold_pct", 0.03))
+    live = t212_cfg.get("live", False)
+    max_deployed_pct  = float(t212_cfg.get("max_total_deployed", 0.5))
+    max_position_gbp  = float(t212_cfg.get("max_position_gbp", 500))
+    max_open          = t212_cfg.get("max_open_positions", 999)
+
+    try:
+        client = Trading212Client(live=live)
+        summary = client.get_account_summary()
+        _s_cash = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        _s_inv  = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_val = float(summary.get("totalValue", 0) or 0)
+        invested  = float(_s_inv.get("currentValue", 0) or 0)
+        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
+
+        positions = client.get_positions()
+        positions_by_t212 = {p.get("ticker", ""): p for p in (positions or [])}
+
+        instruments = client.get_instruments()
+        instrument_meta = {i["ticker"]: i for i in (instruments or []) if "ticker" in i}
+    except Exception as exc:
+        logger.error("API error during %s submission setup — %s", label, exc, exc_info=True)
+        _set_t212_error(str(exc))
+        _send_t212_error_email(str(exc), config)
+        return 0
+
+    try:
+        open_order_tickers = _load_open_order_tickers()
+    except Exception as exc:
+        logger.error("Read error during %s submission — %s", label, exc, exc_info=True)
+        return 0
+
+    account_label = "LIVE" if live else "DEMO"
+    current_open = len(positions_by_t212)
+    submitted = 0
+
+    for row in pending:
+        # Cap enforcement — same shape as the BUY loop used before this
+        # change, just against submission-time account state. A cap binding
+        # here stops the run entirely; every row not yet reached stays
+        # PENDING and is retried at the next submission window rather than
+        # being marked skipped or lost.
+        if current_open >= max_open:
+            logger.info("%d/%d positions open — max_open_positions reached, stopping %s submission.",
+                        current_open, max_open, label)
+            break
+        if total_val > 0 and (invested / total_val) >= max_deployed_pct:
+            logger.info("%.0f%% deployed (limit %.0f%%) — stopping %s submission.",
+                        (invested / total_val) * 100, max_deployed_pct * 100, label)
+            break
+
+        ticker = row["ticker"]
+        t212_ticker = row["t212_ticker"]
+
+        try:
+            if t212_ticker in positions_by_t212:
+                logger.info("%s (%s) already held at submission time — skipping.", ticker, t212_ticker)
+                _resolve_pending(row["id"], "SKIPPED_ALREADY_HELD", note="already held at submission time")
+                continue
+            if ticker in open_order_tickers:
+                logger.info("%s already has a recent order in DB — skipping.", ticker)
+                _resolve_pending(row["id"], "SKIPPED_ALREADY_HELD", note="recent order already exists in DB")
+                continue
+
+            # Price-sanity check — compare the price at decide time against
+            # the latest available price now. Fail loud, don't guess: if the
+            # ticker has moved beyond threshold_pct since the decision was
+            # made, skip and log clearly rather than execute on a stale
+            # decision (same principle as the 2026-07-31 pricing-bug fix —
+            # see CLAUDE.md).
+            decided_price = row["decided_price"]
+            current_price = _latest_close(ticker)
+            if current_price is None or current_price <= 0:
+                logger.warning(
+                    "%s: no current price available at submission time — leaving pending, will retry.",
+                    ticker,
+                )
+                continue
+            pct_move = ((current_price - decided_price) / decided_price) if decided_price else 0.0
+            if abs(pct_move) > threshold_pct:
+                note = (
+                    f"price moved {pct_move:+.2%} since decision "
+                    f"(decided {decided_price:.2f} -> now {current_price:.2f}), "
+                    f"exceeds {threshold_pct:.0%} sanity threshold"
+                )
+                logger.warning("Skipping %s (%s) submission — %s", ticker, t212_ticker, note)
+                _resolve_pending(row["id"], "SKIPPED_PRICE_MOVED", note=note)
+                continue
+
+            position_gbp = min(row["position_gbp"] or 0.0, free_cash * 0.25)
+            if position_gbp < 10:
+                logger.warning("Insufficient free cash (£%.2f) — stopping %s submission.", free_cash, label)
                 break
 
             quantity = client.get_quantity_for_gbp(
                 t212_ticker, position_gbp, research_ticker=ticker,
-                floor_to_whole_share=not state["is_etf"], is_etf=state["is_etf"],
+                floor_to_whole_share=not row["is_etf"], is_etf=row["is_etf"],
             )
             if quantity <= 0:
-                # By this point the entry gate has already passed (sig_on,
-                # is_member, not entry_blocked all True — see above), so a
-                # zero quantity here is not "no signal", it is specifically
-                # "signal wants this ticker but it has no viable price" — for
-                # an ETF, that almost always means audit_etf_pricing_paths()
-                # would report it "locked out" (see "XLK mapping resolution
-                # and ETF pricing lockout audit" in CLAUDE.md). Named
-                # explicitly and pointed at the fix so this reads as an
-                # actionable, self-documenting trigger for exactly when a
-                # ticker needs seeding — not a generic skip a reader has to
-                # go correlate with a signal state themselves.
-                if state["is_etf"]:
+                if row["is_etf"]:
                     logger.warning(
-                        "%s (%s): momentum signal is positive and this ticker is otherwise "
-                        "entry-eligible, but no viable price is available (not currently "
-                        "held, no cached price) — entry skipped. Needs a manual price seed "
-                        "(Status page -> T212 Invest Account -> ETF pricing-path audit -> "
-                        "Seed a manual price) before this ticker can ever be entered.",
+                        "%s (%s): entry-eligible but no viable price is available (not "
+                        "currently held, no cached price) — leaving pending. Needs a manual "
+                        "price seed (Status page -> T212 Invest Account -> ETF pricing-path "
+                        "audit -> Seed a manual price) before this ticker can ever submit.",
                         ticker, t212_ticker,
                     )
                 else:
-                    logger.warning("Could not calculate quantity for %s (%s) — skipping.", ticker, t212_ticker)
+                    logger.warning("Could not calculate quantity for %s (%s) — leaving pending.", ticker, t212_ticker)
                 continue
 
             meta = instrument_meta.get(t212_ticker, {})
             min_qty = float(meta.get("minTradeQuantity", 1.0))
             precision = int(meta.get("maxQuantityPrecision", 0) or 0)
 
-            if state["is_etf"]:
+            if row["is_etf"]:
                 quantity = math.floor(quantity)  # ETFs: whole shares only
             elif precision > 0:
                 quantity = round(quantity, precision)  # fractional-capable stock
@@ -1538,12 +1806,12 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 quantity = math.floor(quantity)
 
             if quantity < min_qty or quantity <= 0:
-                logger.warning("%s (%s) qty %.4f below instrument minimum %.4f — skipping.",
+                logger.warning("%s (%s) qty %.4f below instrument minimum %.4f — leaving pending.",
                                 ticker, t212_ticker, quantity, min_qty)
                 continue
 
             price_gbp = client.get_instrument_price_gbp(
-                t212_ticker, research_ticker=ticker, is_etf=state["is_etf"],
+                t212_ticker, research_ticker=ticker, is_etf=row["is_etf"],
             )
             est_value_gbp = quantity * price_gbp if price_gbp else position_gbp
 
@@ -1555,7 +1823,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 free_cash -= position_gbp
                 invested += est_value_gbp
                 current_open += 1
-                orders_placed += 1
+                submitted += 1
                 logger.info("BUY %s (%s) qty=%s approx £%.0f id=%s",
                             ticker, t212_ticker, quantity, position_gbp, order_id)
             except Exception as order_exc:
@@ -1567,28 +1835,51 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             _api_ccy = meta.get("currencyCode")
             _log_order(
                 ticker=ticker, t212_ticker=t212_ticker, direction="BUY",
-                quantity=quantity, estimated_price=entry_price, estimated_value_gbp=est_value_gbp,
-                status=status, order_id=order_id, is_etf=state["is_etf"],
-                account_type=account_label, currency_code=_api_ccy or instrument_currency,
-                momentum_pct=state["momentum_pct"], stop_price=stop_price,
-                var_pct=holding_var, error_message=error_msg,
+                quantity=quantity, estimated_price=decided_price, estimated_value_gbp=est_value_gbp,
+                status=status, order_id=order_id, is_etf=row["is_etf"],
+                account_type=account_label, currency_code=_api_ccy or row.get("currency") or "USD",
+                momentum_pct=row["momentum_pct"], stop_price=row["stop_price"],
+                var_pct=row["var_pct"], error_message=error_msg,
+            )
+            _resolve_pending(
+                row["id"], "SUBMITTED" if status == "PLACED" else "FAILED",
+                note=(f"order_id={order_id}" if order_id else error_msg),
             )
 
             if status == "FAILED":
-                logger.warning("Halting placement after buy-order failure.")
+                logger.warning("Halting %s submission after buy-order failure.", label)
                 break
 
             time.sleep(0.5)
-        except Exception as ticker_exc:
+        except Exception as row_exc:
             logger.error(
-                "Unhandled error sizing/placing order for %s (%s) — skipping this "
-                "ticker and continuing with the rest of the run: %s",
-                ticker, t212_ticker, ticker_exc, exc_info=True,
+                "Unhandled error submitting pending order for %s (%s) — skipping this "
+                "row and continuing with the rest of the run: %s",
+                ticker, t212_ticker, row_exc, exc_info=True,
             )
             continue
 
-    if orders_placed > 0:
+    if submitted > 0:
         _clear_t212_error()
 
-    logger.info("Pipeline complete — %d order(s) placed, free cash approx £%.0f.",
-                orders_placed, free_cash)
+    logger.info("%s submission complete — %d order(s) placed, free cash approx £%.0f.",
+                label, submitted, free_cash)
+    return submitted
+
+
+def submit_pending_etf_orders(config: dict) -> int:
+    """07:00 UTC weekdays (LSE open) — submit queued ETF entry decisions.
+
+    ETF submission ships disabled by default (trading212_invest.
+    etf_submission_enabled must be explicitly set true) — see CLAUDE.md's
+    "Exchange-aware order submission" section for why this stays paused
+    until manually verified.
+    """
+    return _submit_pending_orders(config, is_etf=True)
+
+
+def submit_pending_stock_orders(config: dict) -> int:
+    """13:30 UTC weekdays (NYSE regular open) — submit queued stock entry
+    decisions. Deliberately not timed to any after-hours window, since
+    after-hours order behaviour on this account is unconfirmed."""
+    return _submit_pending_orders(config, is_etf=False)

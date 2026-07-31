@@ -231,3 +231,26 @@ trading212_invest:
   # backtest.max_holding_days.
   max_holding_days: 90
   stock_max_holding_days: 30
+  # Exchange-aware order submission (2026-07-31) -- see CLAUDE.md's
+  # "Exchange-aware order submission" section. EOD still computes signals
+  # and queues entry decisions into pending_orders exactly as before; these
+  # two flags gate the separate exchange-timed jobs that actually submit
+  # them (submit_pending_etf_orders() at 07:00 UTC / LSE open,
+  # submit_pending_stock_orders() at 13:30 UTC / NYSE open).
+  #
+  # ETF submission stays PAUSED (explicitly false) until this mechanism has
+  # been deployed and verified live -- do not flip this to true as part of
+  # deploying the mechanism itself; that is a separate, later decision.
+  etf_submission_enabled: false
+  # Stock submission continues as today (no change in behaviour requested
+  # for stocks) -- defaults true even if this key were removed, but kept
+  # explicit for symmetry with etf_submission_enabled above.
+  stock_submission_enabled: true
+  # Submission-time sanity check: if a ticker's price has moved more than
+  # this fraction since the EOD decision was made, skip submission and log
+  # clearly rather than execute on a stale decision (same "fail loud, don't
+  # guess" principle as the 2026-07-31 pricing-bug fix). 3% is comfortably
+  # above ordinary day-to-day noise for a diversified ETF or large-cap
+  # stock, but well below a genuine earnings-surprise/macro-shock gap --
+  # see CLAUDE.md for the full rationale.
+  price_sanity_threshold_pct: 0.03

@@ -102,6 +102,36 @@ def _mock_price_data(mocker, frames: dict):
     mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
 
 
+def _pending_rows(engine, status=None) -> list:
+    """Read pending_orders rows for assertions -- exchange-aware submission
+    split (2026-07-31, see CLAUDE.md)."""
+    with engine.connect() as conn:
+        if status is None:
+            rows = conn.execute(sa_text("SELECT * FROM pending_orders")).mappings().all()
+        else:
+            rows = conn.execute(
+                sa_text("SELECT * FROM pending_orders WHERE status = :s"), {"s": status},
+            ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def _seed_pending_order(engine, *, ticker, t212_ticker, is_etf, decided_price=100.0,
+                         position_gbp=500.0, status="PENDING", currency="USD"):
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+            VALUES (:ticker, :t212_ticker, :is_etf, :currency, :now, :decided_price,
+                    :position_gbp, 0.05, :stop_price, 0.02, :status, :now)
+        """), {
+            "ticker": ticker, "t212_ticker": t212_ticker, "is_etf": is_etf,
+            "currency": currency, "now": datetime.utcnow().isoformat(),
+            "decided_price": decided_price, "position_gbp": position_gbp,
+            "stop_price": decided_price * 0.9, "status": status,
+        })
+
+
 # ---------------------------------------------------------------------------
 # Disabled / missing-credentials early returns
 # ---------------------------------------------------------------------------
@@ -152,6 +182,10 @@ def test_pause_new_entries_blocks_buy_but_still_exits(db_engine, v2_mocks, mocke
 # ---------------------------------------------------------------------------
 
 def test_entry_fires_when_all_three_conditions_hold(db_engine, v2_mocks, mocker):
+    """maybe_place_orders() no longer submits directly -- a qualifying entry
+    is QUEUED into pending_orders (exchange-aware submission split,
+    2026-07-31, see CLAUDE.md); a separate, exchange-timed job submits it
+    later. Decide-phase itself must never call place_market_order()."""
     from brokers.trading212 import maybe_place_orders
 
     _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
@@ -160,10 +194,13 @@ def test_entry_fires_when_all_three_conditions_hold(db_engine, v2_mocks, mocker)
     cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
-    v2_mocks.place_market_order.assert_called_once()
-    args, _ = v2_mocks.place_market_order.call_args
-    assert args[0] == "I50Dl_EQ"
-    assert args[1] > 0  # BUY = positive quantity
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="PENDING")
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "VOO"
+    assert rows[0]["t212_ticker"] == "I50Dl_EQ"
+    assert rows[0]["position_gbp"] > 0
+    assert rows[0]["decided_price"] > 0
 
 
 def test_entry_blocked_when_momentum_negative(db_engine, v2_mocks, mocker):
@@ -206,7 +243,8 @@ def test_entry_blocked_during_crisis_cooldown_window(db_engine, v2_mocks, mocker
 
 def test_etf_always_eligible_regardless_of_membership_check(db_engine, v2_mocks, mocker):
     """ETFs have no membership concept -- is_member() must never even be
-    consulted for the is_etf branch (see _v2_ticker_state's is_member computation)."""
+    consulted for the is_etf branch (see _v2_ticker_state's is_member computation).
+    Queues a decision (does not place directly) -- see the decide/submit split."""
     from brokers.trading212 import maybe_place_orders
 
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
@@ -215,8 +253,53 @@ def test_etf_always_eligible_regardless_of_membership_check(db_engine, v2_mocks,
     cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
-    v2_mocks.place_market_order.assert_called_once()
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1
     spy.assert_not_called()
+
+
+def test_decide_phase_skips_ticker_with_existing_unresolved_pending_order(db_engine, v2_mocks, mocker):
+    """Dedup guard -- a ticker whose signal stays on across multiple EOD runs
+    while submission is paused/behind must not accumulate duplicate PENDING
+    rows."""
+    from brokers.trading212 import maybe_place_orders
+
+    _mock_price_data(mocker, {"VOO": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True)
+
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    maybe_place_orders(cfg, run_type="full")
+
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1  # still just the seeded one
+
+
+def test_decide_phase_queues_regardless_of_deployed_and_open_position_caps(db_engine, v2_mocks, mocker):
+    """Decide-phase no longer enforces max_total_deployed / max_open_positions
+    -- those are submission-time concerns now (account state can genuinely
+    differ by the time submission runs). A cold-start run with 5 qualifiers
+    and tight caps must still queue all 5 -- nothing is lost, just deferred."""
+    from brokers.trading212 import maybe_place_orders
+
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "X_US_EQ", "quantity": 1.0}, {"ticker": "Y_US_EQ", "quantity": 1.0},
+    ]
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0,
+        "cash": {"availableToTrade": 1_000.0},
+        "investments": {"currentValue": 6_000.0},  # 60% deployed
+    }
+    frames = {f"T{i}": _bullish_frame() for i in range(5)}
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping=_n_ticker_mapping(5))
+    cfg["trading212_invest"]["max_open_positions"] = 2   # already "exceeded" by the 2 seeded positions
+    cfg["trading212_invest"]["max_total_deployed"] = 0.5  # already exceeded (60%)
+    maybe_place_orders(cfg, run_type="full")
+
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -383,49 +466,6 @@ def test_exit_skips_duplicate_when_placed_sell_order_exists(db_engine, v2_mocks,
     v2_mocks.place_market_order.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# max_open_positions / max_total_deployed gates
-# ---------------------------------------------------------------------------
-
-def test_max_open_positions_blocks_new_entries(db_engine, v2_mocks, mocker):
-    from brokers.trading212 import maybe_place_orders
-
-    v2_mocks.get_positions.return_value = [
-        {"ticker": "X_US_EQ", "quantity": 1.0}, {"ticker": "Y_US_EQ", "quantity": 1.0},
-    ]
-    _mock_price_data(mocker, {"VOO": _bullish_frame()})
-
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
-    cfg["trading212_invest"]["max_open_positions"] = 2
-    maybe_place_orders(cfg, run_type="full")
-
-    v2_mocks.place_market_order.assert_not_called()
-
-
-def test_max_total_deployed_blocks_new_entries(db_engine, v2_mocks, mocker):
-    from brokers.trading212 import maybe_place_orders
-
-    v2_mocks.get_account_summary.return_value = {
-        "totalValue": 10_000.0,
-        "cash": {"availableToTrade": 1_000.0},
-        "investments": {"currentValue": 6_000.0},  # 60% deployed > 50% cap
-    }
-    _mock_price_data(mocker, {"VOO": _bullish_frame()})
-
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
-    maybe_place_orders(cfg, run_type="full")
-
-    v2_mocks.place_market_order.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Per-iteration cap enforcement — the 2026-07-31 first-cycle overshoot fix.
-# The pre-loop checks above only ever gate entry into the loop from the
-# account's state *before* the run started; a cold start (0 positions, 0%
-# deployed) must still stop mid-run once either cap is crossed by orders
-# placed earlier in the *same* run, not walk through every qualifier.
-# ---------------------------------------------------------------------------
-
 def _n_ticker_mapping(n: int) -> dict:
     return {
         f"T{i}": {"t212_instrument_id": f"T{i}_EQ", "currency": "USD", "is_etf": True}
@@ -433,60 +473,188 @@ def _n_ticker_mapping(n: int) -> dict:
     }
 
 
-def test_max_open_positions_stops_mid_run_from_cold_start(db_engine, v2_mocks, mocker):
-    """5 simultaneously-qualifying tickers, cold start (0 open positions),
-    max_open_positions=2 -- must place exactly 2 orders, not 5."""
-    from brokers.trading212 import maybe_place_orders
+# ---------------------------------------------------------------------------
+# Exchange-aware order submission (2026-07-31, see CLAUDE.md) --
+# _submit_pending_orders() / submit_pending_etf_orders() /
+# submit_pending_stock_orders(). max_total_deployed / max_open_positions /
+# the price-sanity check all now live here, applied against the account's
+# live state *at submission time* rather than at EOD decide time.
+# ---------------------------------------------------------------------------
+
+def _submission_config(max_open=999, max_deployed=1.0, threshold=0.03,
+                        etf_enabled=None, stock_enabled=None) -> dict:
+    cfg = _config()
+    cfg["trading212_invest"]["max_open_positions"] = max_open
+    cfg["trading212_invest"]["max_total_deployed"] = max_deployed
+    cfg["trading212_invest"]["price_sanity_threshold_pct"] = threshold
+    if etf_enabled is not None:
+        cfg["trading212_invest"]["etf_submission_enabled"] = etf_enabled
+    if stock_enabled is not None:
+        cfg["trading212_invest"]["stock_submission_enabled"] = stock_enabled
+    return cfg
+
+
+def test_etf_submission_disabled_by_default_leaves_rows_pending(db_engine, v2_mocks, mocker):
+    """etf_submission_enabled defaults False when the key is absent -- ETF
+    submission ships paused until explicitly enabled and verified (see
+    CLAUDE.md)."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True)
+    cfg = _config()  # no etf_submission_enabled key at all
+
+    n = submit_pending_etf_orders(cfg)
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1
+
+
+def test_stock_submission_enabled_by_default(db_engine, v2_mocks, mocker):
+    """stock_submission_enabled defaults True when the key is absent --
+    stocks continue submitting as before this change."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    last_close = float(frame["close"].iloc[-1])
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=last_close)
+    _mock_price_data(mocker, {"AAPL": frame})
+    cfg = _config()  # no stock_submission_enabled key at all
+
+    n = submit_pending_stock_orders(cfg)
+
+    assert n == 1
+    v2_mocks.place_market_order.assert_called_once()
+
+
+def test_submission_only_processes_its_own_asset_class(db_engine, v2_mocks, mocker):
+    """submit_pending_etf_orders() must only ever act on is_etf=True rows;
+    submit_pending_stock_orders() only on is_etf=False rows."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    etf_frame = _bullish_frame()
+    stock_frame = _bullish_frame()
+    etf_close = float(etf_frame["close"].iloc[-1])
+    _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True, decided_price=etf_close)
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=float(stock_frame["close"].iloc[-1]))
+    _mock_price_data(mocker, {"VOO": etf_frame, "AAPL": stock_frame})
+
+    cfg = _submission_config(etf_enabled=True)
+    n = submit_pending_etf_orders(cfg)
+
+    assert n == 1
+    v2_mocks.place_market_order.assert_called_once()
+    args, _ = v2_mocks.place_market_order.call_args
+    assert args[0] == "I50Dl_EQ"  # only the ETF row submitted
+
+    remaining_pending = {r["ticker"] for r in _pending_rows(db_engine, status="PENDING")}
+    assert remaining_pending == {"AAPL"}  # stock row untouched by the ETF submission job
+
+
+# ---------------------------------------------------------------------------
+# Submission-time price-sanity check -- fail loud, don't guess (same
+# principle as the 2026-07-31 pricing-bug fix). Compares the price recorded
+# at decide time against the latest available price at submission time.
+# ---------------------------------------------------------------------------
+
+def test_sanity_check_skips_submission_when_price_moved_beyond_threshold(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    last_close = float(frame["close"].iloc[-1])
+    decided_price = last_close / 1.10  # decided price is 10% below "current" -- well past the 3% threshold
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=decided_price)
+    _mock_price_data(mocker, {"AAPL": frame})
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="SKIPPED_PRICE_MOVED")
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "AAPL"
+    assert rows[0]["resolution_note"] is not None and "threshold" in rows[0]["resolution_note"]
+
+
+def test_sanity_check_allows_submission_when_price_within_threshold(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    last_close = float(frame["close"].iloc[-1])
+    decided_price = last_close / 1.01  # ~1% move -- comfortably inside the 3% threshold
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=decided_price)
+    _mock_price_data(mocker, {"AAPL": frame})
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 1
+    v2_mocks.place_market_order.assert_called_once()
+    assert len(_pending_rows(db_engine, status="SUBMITTED")) == 1
+
+
+# ---------------------------------------------------------------------------
+# max_open_positions / max_total_deployed gates, applied at submission time
+# ---------------------------------------------------------------------------
+
+def _seed_n_pending(engine, n: int, frames: dict) -> None:
+    for i in range(n):
+        ticker = f"T{i}"
+        close = float(frames[ticker]["close"].iloc[-1])
+        _seed_pending_order(engine, ticker=ticker, t212_ticker=f"T{i}_EQ", is_etf=True, decided_price=close)
+
+
+def test_max_open_positions_stops_submission_partway(db_engine, v2_mocks, mocker):
+    """5 pending ETF decisions, cold start (0 open positions),
+    max_open_positions=2 -- must submit exactly 2, leaving 3 still PENDING."""
+    from brokers.trading212 import submit_pending_etf_orders
 
     v2_mocks.get_positions.return_value = []  # cold start
     frames = {f"T{i}": _bullish_frame() for i in range(5)}
     _mock_price_data(mocker, frames)
-    mocker.patch("analysis.universe.is_member", return_value=True)
+    _seed_n_pending(db_engine, 5, frames)
 
-    cfg = _config(mapping=_n_ticker_mapping(5))
-    cfg["trading212_invest"]["max_open_positions"] = 2
-    cfg["trading212_invest"]["max_total_deployed"] = 1.0  # deployed cap not the limiting factor here
-    maybe_place_orders(cfg, run_type="full")
+    n = submit_pending_etf_orders(_submission_config(max_open=2, etf_enabled=True))
 
+    assert n == 2
     assert v2_mocks.place_market_order.call_count == 2
+    assert len(_pending_rows(db_engine, status="PENDING")) == 3
 
 
-def test_max_total_deployed_stops_mid_run_from_cold_start(db_engine, v2_mocks, mocker):
-    """5 simultaneously-qualifying tickers, cold start (0% deployed),
-    max_total_deployed=0.15 with each order sizing to a fixed £500 (10 qty x
-    £50 mocked price) against a £10,000 account (5% each) -- must stop after
-    the 3rd order (15% reached), not place all 5."""
-    from brokers.trading212 import maybe_place_orders
-
-    v2_mocks.get_positions.return_value = []
-    frames = {f"T{i}": _bullish_frame() for i in range(5)}
-    _mock_price_data(mocker, frames)
-    mocker.patch("analysis.universe.is_member", return_value=True)
-
-    cfg = _config(mapping=_n_ticker_mapping(5))
-    cfg["trading212_invest"]["max_open_positions"] = 999  # position count not the limiting factor here
-    cfg["trading212_invest"]["max_total_deployed"] = 0.15
-    maybe_place_orders(cfg, run_type="full")
-
-    assert v2_mocks.place_market_order.call_count == 3
-
-
-def test_uncapped_run_still_places_every_qualifier(db_engine, v2_mocks, mocker):
-    """Sanity check the fix doesn't over-suppress: with both caps generous,
-    all 5 qualifying tickers from a cold start still get an order."""
-    from brokers.trading212 import maybe_place_orders
+def test_max_total_deployed_stops_submission_partway(db_engine, v2_mocks, mocker):
+    """5 pending ETF decisions, cold start (0% deployed), max_total_deployed
+    =0.15 with each order sizing to £500 (10 qty x £50 mocked price) against
+    a £10,000 account (5% each) -- must stop after the 3rd, 3 still PENDING."""
+    from brokers.trading212 import submit_pending_etf_orders
 
     v2_mocks.get_positions.return_value = []
     frames = {f"T{i}": _bullish_frame() for i in range(5)}
     _mock_price_data(mocker, frames)
-    mocker.patch("analysis.universe.is_member", return_value=True)
+    _seed_n_pending(db_engine, 5, frames)
 
-    cfg = _config(mapping=_n_ticker_mapping(5))
-    cfg["trading212_invest"]["max_open_positions"] = 999
-    cfg["trading212_invest"]["max_total_deployed"] = 1.0
-    maybe_place_orders(cfg, run_type="full")
+    n = submit_pending_etf_orders(_submission_config(max_open=999, max_deployed=0.15, etf_enabled=True))
 
-    assert v2_mocks.place_market_order.call_count == 5
+    assert n == 3
+    assert len(_pending_rows(db_engine, status="PENDING")) == 2
+
+
+def test_uncapped_submission_still_places_every_pending_row(db_engine, v2_mocks, mocker):
+    """Sanity check the caps don't over-suppress: with both caps generous,
+    all 5 pending ETF decisions still submit."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    v2_mocks.get_positions.return_value = []
+    frames = {f"T{i}": _bullish_frame() for i in range(5)}
+    _mock_price_data(mocker, frames)
+    _seed_n_pending(db_engine, 5, frames)
+
+    n = submit_pending_etf_orders(_submission_config(max_open=999, max_deployed=1.0, etf_enabled=True))
+
+    assert n == 5
+    assert len(_pending_rows(db_engine, status="PENDING")) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -725,31 +893,33 @@ def test_live_position_price_refreshes_the_cache(db_engine, monkeypatch, mocker)
 def test_locked_out_etf_with_positive_signal_is_a_clean_logged_skip_not_a_silent_failure(
     db_engine, v2_mocks, mocker, caplog,
 ):
-    """A locked-out ETF (no held position, no cached price) whose momentum
-    signal is genuinely positive must: (1) not place an order, (2) not raise
-    or halt the run -- the next ticker in dict order must still be
-    processed, and (3) log a specific, actionable warning naming the ticker
-    and pointing at the seed mechanism, not a generic message a reader would
-    have to correlate with a signal state themselves."""
+    """A locked-out ETF (no held position, no cached price) whose entry
+    decision was queued must: (1) not have an order placed for it at
+    submission time, (2) not raise or halt the submission run -- the next
+    pending row must still be processed, and (3) log a specific, actionable
+    warning naming the ticker and pointing at the seed mechanism, not a
+    generic message a reader would have to correlate with a signal state
+    themselves. (Quantity resolution -- and therefore this lockout -- now
+    happens at submission time, not decide time; see the decide/submit
+    split.)"""
     import logging
-    from brokers.trading212 import maybe_place_orders
+    from brokers.trading212 import submit_pending_etf_orders
 
-    _mock_price_data(mocker, {"XLK": _bullish_frame(), "VOO": _bullish_frame()})
-    mocker.patch("analysis.universe.is_member", return_value=True)
+    xlk_frame, voo_frame = _bullish_frame(), _bullish_frame()
+    _mock_price_data(mocker, {"XLK": xlk_frame, "VOO": voo_frame})
+    _seed_pending_order(db_engine, ticker="XLK", t212_ticker="SXLKl_EQ", is_etf=True,
+                        decided_price=float(xlk_frame["close"].iloc[-1]))
+    _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True,
+                        decided_price=float(voo_frame["close"].iloc[-1]))
 
     # XLK: entry-eligible but unpriceable (locked out). VOO: entry-eligible
-    # and priceable -- proves the loop keeps going past XLK, in dict order.
+    # and priceable -- proves the loop keeps going past XLK, in row order.
     def _qty_side_effect(t212_ticker, *args, **kwargs):
         return 0.0 if t212_ticker == "SXLKl_EQ" else 10.0
     v2_mocks.get_quantity_for_gbp.side_effect = _qty_side_effect
 
-    cfg = _config(mapping={
-        "XLK": {"t212_instrument_id": "SXLKl_EQ", "currency": "USD", "is_etf": True},
-        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
-    })
-
     with caplog.at_level(logging.WARNING, logger="brokers.trading212"):
-        maybe_place_orders(cfg, run_type="full")
+        submit_pending_etf_orders(_submission_config(etf_enabled=True))
 
     # (1) No order for the locked-out ticker; (2) VOO still went through --
     # the run didn't halt or silently drop everything after XLK.
@@ -757,12 +927,16 @@ def test_locked_out_etf_with_positive_signal_is_a_clean_logged_skip_not_a_silent
     assert "SXLKl_EQ" not in placed_tickers
     assert "I50Dl_EQ" in placed_tickers
 
-    # (3) The skip is self-documenting: names the ticker, confirms the
-    # signal was positive/eligible (not just "no data"), and points at the
-    # seed mechanism as the fix.
+    # XLK's row stays PENDING (retryable once seeded) -- it is not FAILED or
+    # silently dropped.
+    still_pending = {r["ticker"] for r in _pending_rows(db_engine, status="PENDING")}
+    assert "XLK" in still_pending
+
+    # (3) The skip is self-documenting: names the ticker, confirms it's
+    # entry-eligible (not just "no data"), and points at the seed mechanism.
     warning_text = " ".join(r.message for r in caplog.records if r.levelname == "WARNING")
     assert "XLK" in warning_text and "SXLKl_EQ" in warning_text
-    assert "momentum signal is positive" in warning_text
+    assert "entry-eligible" in warning_text
     assert "manual price seed" in warning_text
     assert "Seed a manual price" in warning_text
 
@@ -962,6 +1136,10 @@ def test_audit_etf_pricing_paths_handles_live_position_fetch_failure(db_engine, 
 # ---------------------------------------------------------------------------
 
 def test_buy_loop_one_ticker_exception_does_not_stop_the_rest(db_engine, v2_mocks, mocker):
+    """Decide-phase exception isolation -- a failure evaluating one ticker
+    must not stop the rest of the mapping from being queued. Decide-phase
+    never calls place_market_order() at all now (see the decide/submit
+    split), so the assertion is against the pending_orders queue instead."""
     from brokers.trading212 import maybe_place_orders
 
     good_frame = _bullish_frame()
@@ -980,10 +1158,11 @@ def test_buy_loop_one_ticker_exception_does_not_stop_the_rest(db_engine, v2_mock
     })
     maybe_place_orders(cfg, run_type="full")
 
-    # VOO's exception must not have stopped AAPL from still being ordered.
-    v2_mocks.place_market_order.assert_called_once()
-    args, _ = v2_mocks.place_market_order.call_args
-    assert args[0] == "AAPL_US_EQ"
+    # VOO's exception must not have stopped AAPL from still being queued.
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="PENDING")
+    queued_tickers = {r["ticker"] for r in rows}
+    assert queued_tickers == {"AAPL"}
 
 
 def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_mocks, mocker):
@@ -1016,6 +1195,36 @@ def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_m
     v2_mocks.place_market_order.assert_called_once()
     args, _ = v2_mocks.place_market_order.call_args
     assert args[0] == "AAPL_US_EQ"
+
+
+def test_submission_one_row_exception_does_not_stop_the_rest(db_engine, v2_mocks, mocker):
+    """A failure evaluating one pending row (e.g. the price-sanity lookup
+    blowing up) must not stop the rest of the pending queue from being
+    submitted."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    good_frame = _bullish_frame()
+    good_close = float(good_frame["close"].iloc[-1])
+
+    def _fake_get_price_df(ticker, days=8000):
+        if ticker == "VOO":
+            raise RuntimeError("simulated transient failure")
+        return good_frame.copy()
+
+    mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+    _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True, decided_price=good_close)
+    _seed_pending_order(db_engine, ticker="XLK", t212_ticker="SXLKl_EQ", is_etf=True, decided_price=good_close)
+
+    n = submit_pending_etf_orders(_submission_config(etf_enabled=True))
+
+    assert n == 1
+    v2_mocks.place_market_order.assert_called_once()
+    args, _ = v2_mocks.place_market_order.call_args
+    assert args[0] == "SXLKl_EQ"
+    # VOO's row is untouched (still PENDING, not marked FAILED) -- the
+    # exception happened before any resolution decision could be made.
+    still_pending = {r["ticker"] for r in _pending_rows(db_engine, status="PENDING")}
+    assert still_pending == {"VOO"}
 
 
 # ---------------------------------------------------------------------------

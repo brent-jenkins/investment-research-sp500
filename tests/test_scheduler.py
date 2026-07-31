@@ -357,6 +357,79 @@ def test_scheduler_registers_membership_refresh_job(monkeypatch):
         scheduler.stop_scheduler()
 
 
+def test_scheduler_registers_etf_and_stock_submission_jobs(monkeypatch):
+    """start_scheduler() must register etf_order_submission at 07:00 UTC
+    (LSE open) and stock_order_submission at 13:30 UTC (NYSE open), both
+    weekdays only -- see CLAUDE.md's "Exchange-aware order submission"
+    section for why submission is split from EOD decide-phase timing."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        def field(job_id: str, name: str) -> str:
+            job = sched.get_job(job_id)
+            assert job is not None, f"job '{job_id}' was not registered"
+            return next(str(f) for f in job.trigger.fields if f.name == name)
+
+        etf_job = sched.get_job("etf_order_submission")
+        assert etf_job is not None
+        assert etf_job.func is scheduler._etf_order_submission_job
+        assert field("etf_order_submission", "day_of_week") == "mon-fri"
+        assert field("etf_order_submission", "hour") == "7"
+        assert field("etf_order_submission", "minute") == "0"
+
+        stock_job = sched.get_job("stock_order_submission")
+        assert stock_job is not None
+        assert stock_job.func is scheduler._stock_order_submission_job
+        assert field("stock_order_submission", "day_of_week") == "mon-fri"
+        assert field("stock_order_submission", "hour") == "13"
+        assert field("stock_order_submission", "minute") == "30"
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_etf_order_submission_job_calls_submit_pending_etf_orders(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_submit = mocker.patch("brokers.trading212.submit_pending_etf_orders", return_value=2)
+
+    scheduler._etf_order_submission_job()
+
+    mock_submit.assert_called_once_with({"k": "v"})
+
+
+def test_etf_order_submission_job_never_raises_on_failure(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mocker.patch("brokers.trading212.submit_pending_etf_orders", side_effect=RuntimeError("boom"))
+
+    scheduler._etf_order_submission_job()  # must not raise
+
+
+def test_stock_order_submission_job_calls_submit_pending_stock_orders(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
+
+    scheduler._stock_order_submission_job()
+
+    mock_submit.assert_called_once_with({"k": "v"})
+
+
+def test_stock_order_submission_job_never_raises_on_failure(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mocker.patch("brokers.trading212.submit_pending_stock_orders", side_effect=RuntimeError("boom"))
+
+    scheduler._stock_order_submission_job()  # must not raise
+
+
 def test_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
     mock_refresh = mocker.patch(
         "analysis.universe.refresh_membership_from_source",
