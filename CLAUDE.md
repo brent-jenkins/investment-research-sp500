@@ -2813,6 +2813,95 @@ covers both new jobs' registration (schedule, job id, target function) and
 that each job calls its corresponding `submit_pending_*` function and never
 raises on failure.
 
+### Membership-window bug — false INDEX_REMOVAL exits (2026-07-31)
+
+`analysis/universe.py:_reconstruct_windows()` closed an **in-progress**
+membership window (a ticker still present in the source CSV's most
+recent/final row — i.e. genuinely still an active constituent as of the
+latest available data) using that final row's own date, rather than
+`_SENTINEL_END = date(2099, 12, 31)` — a constant defined in the module
+specifically for this case ("still a member as of the latest known
+data") but never actually referenced anywhere in the function. The
+practical effect: the moment "today" advances past whatever date the
+source dataset (`fja05680/sp500`) last happened to update, `is_member()`
+incorrectly reports every currently-active constituent as removed.
+
+**Discovered via a real incident, not a code review.** The
+`v2_membership_refresh_job` (21:15 UTC weekdays) ran normally on
+2026-07-31 and, per this bug, wrote `end_date = 2026-06-30` (the
+source's own last-updated row at the time) for every ticker still active
+as of that row — including `AAPL`, `AMZN`, `AMD`, `AVGO`, `BAC`, `CAT`.
+The 21:30 UTC EOD run's exit phase then evaluated `is_member(ticker,
+2026-07-31)` for these six (the only six stock tickers this system had
+ever actually bought a position in), got `False`, and placed 6 real —
+if queued/unfilled, demo-account — SELL orders logged `exit_reason =
+INDEX_REMOVAL` against stocks that plainly never left the S&P 500.
+
+**Scope check (2026-07-31), before any fix landed:** queried
+`is_member()` for all 39 non-empty-window tickers in `STOCK_MEMBERSHIP`
+as of today — **all 39 (100%) were misclassified** as non-members,
+confirming this is a universe-wide defect, not specific to the six that
+happened to trigger a real order. Cross-referenced against `invest_orders`
+for every `INDEX_REMOVAL`-tagged row and every stock BUY ever placed:
+**only those same 6 tickers had ever been bought** in this system's
+history, so no additional false exits existed or were queued beyond the
+known 6 — the other 33 were misclassified too (and would have been
+wrongly blocked from new entries) but had no open position to falsely
+sell.
+
+**Fix.** `_reconstruct_windows()`'s trailing-window close now uses
+`_SENTINEL_END` instead of `rows[-1][0]` when the ticker is still
+present in the source's final row:
+
+```python
+if in_window and rows:
+    windows.append((start, _SENTINEL_END))   # was: (start, rows[-1][0])
+```
+
+Two pre-existing tests (`test_refresh_detects_removal_and_readdition`,
+`test_refresh_merges_known_ticker_rename`) had themselves codified the
+buggy behaviour as correct — both asserted a still-open trailing window
+closed at the synthetic CSV's own last-row date. Both updated to expect
+`_SENTINEL_END` and to assert continued eligibility well past that row
+(`2026-07-31`, `2099-01-01`). A new dedicated regression,
+`test_reconstruct_windows_still_active_at_source_end`, covers the exact
+real-world shape directly: a ticker present only in the source's final
+row must resolve as a member for any date after that row, not silently
+flip to removed.
+
+**Deployed, then the stored data itself corrected.** The code fix alone
+doesn't retroactively repair the `2026-06-30`-end-dated rows already
+sitting in `universe_membership` — those were written by the buggy
+function's last real run and stay wrong until a fresh
+`refresh_membership_from_source()` call rewrites them (the function
+always does a full per-ticker `DELETE` + re-`INSERT`, never a partial
+patch). Ran that once by hand immediately after deploying, against a
+`.backup`-snapshotted copy of the live DB taken first — confirmed all 39
+previously-misclassified tickers, not just the original 6, now resolve
+`is_member(ticker, date.today())` correctly.
+
+**Cleanup.** The 6 queued (T212 status `NEW`, `filledQuantity: 0`,
+`extendedHours: False` — unfilled, not rejected) false SELL orders were
+cancelled directly via the T212 API and each cancellation verified
+against a fresh `get_order()`/`get_positions()` read afterward, not
+assumed from the local DB alone — matching this project's standing
+"confirm directly against T212, not just the DB" discipline (see the
+2026-07-31 pricing-bug and mapping-audit sections above). All 6 original
+positions (`AAPL`, `AMZN`, `AMD`, `AVGO`, `BAC`, `CAT`) confirmed still
+genuinely held afterward, with no erroneous order remaining against any
+of them.
+
+**A second, lower-severity imprecision noted but not changed as part of
+this fix**: `STOCK_MEMBERSHIP`'s hardcoded baseline dict (the one-time
+seed used only when `universe_membership` has no rows yet for a ticker)
+closes its own "still active" windows at a fixed `"2026-12-31"` rather
+than `_SENTINEL_END` — the identical shape of imprecision, just with a
+longer fuse (won't misfire until the 2026 year boundary) and on a
+code path that only ever matters before the first real refresh has run.
+Left as-is since it's outside this fix's literal scope and materially
+lower urgency; worth revisiting alongside any future universe-tracking
+work.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

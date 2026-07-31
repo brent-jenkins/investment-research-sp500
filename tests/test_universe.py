@@ -76,10 +76,17 @@ def test_refresh_detects_removal_and_readdition(db_engine, mocker):
     """A ticker present at the start, absent from a later row, and present
     again in the latest row must reconstruct as two windows -- the same
     multi-window shape already verified for AMD/Beiersdorf in the research
-    clone. The window's end date is the last row where the ticker was
-    still confirmed present (2015-06-10), not the earlier row that opened
-    the window -- matching how the real, densely-updated source dataset
-    behaves (verified there against AMD/Infineon's real removal dates)."""
+    clone. The first window's end date is the last row where the ticker
+    was still confirmed present (2015-06-10), not the earlier row that
+    opened the window -- matching how the real, densely-updated source
+    dataset behaves (verified there against AMD/Infineon's real removal
+    dates). The second window is still open as of the source's own last
+    row (2020-01-10) -- it must close at _SENTINEL_END, not at that same
+    row's own date; see test_reconstruct_windows_still_active_at_source_end
+    for the dedicated regression covering why (2026-07-31 bug: closing an
+    in-progress window at the source's last-row date instead of the
+    sentinel falsely marks every still-active ticker as removed the
+    moment "today" passes that date)."""
     mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"NEWCO": []})
     mocker.patch.object(v2u, "_fetch_source_csv", return_value=_SYNTHETIC_CSV)
 
@@ -90,12 +97,45 @@ def test_refresh_detects_removal_and_readdition(db_engine, mocker):
     assert "NEWCO" in changed_tickers
 
     windows = v2u.get_membership_windows("NEWCO")
-    assert windows == [(date(2007, 1, 2), date(2015, 6, 10)), (date(2020, 1, 10), date(2020, 1, 10))]
+    assert windows == [(date(2007, 1, 2), date(2015, 6, 10)), (date(2020, 1, 10), v2u._SENTINEL_END)]
 
     # Point-in-time eligibility must reflect the gap correctly.
     assert v2u.is_member("NEWCO", date(2010, 1, 1))
     assert not v2u.is_member("NEWCO", date(2017, 1, 1))
     assert v2u.is_member("NEWCO", date(2020, 1, 10))
+    # Still a member long after the source's last confirming row -- the
+    # exact real-world shape of the 2026-07-31 bug.
+    assert v2u.is_member("NEWCO", date(2026, 7, 31))
+    assert v2u.is_member("NEWCO", date(2099, 1, 1))
+
+
+def test_reconstruct_windows_still_active_at_source_end(db_engine, mocker):
+    """Dedicated regression for the 2026-07-31 incident: a ticker present
+    in the source's most recent (final) row must resolve as a still-open
+    membership window (closing at _SENTINEL_END), not one that silently
+    closes at that final row's own date. Closing at the row's own date is
+    exactly the bug that misclassified all 39 real stock candidates as
+    "removed" the moment the evaluation date passed the source's last
+    update (2026-06-30 at the time), producing 6 real false INDEX_REMOVAL
+    exits (BAC, AMD, AMZN, AAPL, AVGO, CAT) against genuinely-still-active
+    S&P 500 constituents."""
+    csv_text = (
+        "date,tickers\n"
+        '2020-01-01,"STILLIN,ZZZ"\n'
+        '2026-06-30,"STILLIN,ZZZ"\n'  # source's last available row
+    )
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"STILLIN": []})
+    mocker.patch.object(v2u, "_fetch_source_csv", return_value=csv_text)
+
+    v2u.refresh_membership_from_source()
+    windows = v2u.get_membership_windows("STILLIN")
+    assert windows == [(date(2020, 1, 1), v2u._SENTINEL_END)]
+
+    # The core regression: eligibility must still hold for any date after
+    # the source's last row, not just up to it.
+    assert v2u.is_member("STILLIN", date(2026, 6, 30))
+    assert v2u.is_member("STILLIN", date(2026, 7, 31))
+    assert v2u.is_member("STILLIN", date(2030, 1, 1))
 
 
 def test_refresh_is_a_noop_when_nothing_changed(db_engine, mocker):
@@ -141,7 +181,10 @@ def test_refresh_invalidates_the_cache(db_engine, mocker):
 
 def test_refresh_merges_known_ticker_rename(db_engine, mocker):
     """FB -> META must reconstruct as one continuous window, not a gap +
-    a fresh window starting the day the new symbol appears."""
+    a fresh window starting the day the new symbol appears. META is still
+    present in the CSV's final row, so the window stays open (closes at
+    _SENTINEL_END, not that row's own date -- see
+    test_reconstruct_windows_still_active_at_source_end)."""
     csv = (
         "date,tickers\n"
         '2013-12-23,"AAPL,FB"\n'
@@ -153,6 +196,7 @@ def test_refresh_merges_known_ticker_rename(db_engine, mocker):
 
     v2u.refresh_membership_from_source()
     windows = v2u.get_membership_windows("META")
-    assert windows == [(date(2013, 12, 23), date(2026, 1, 5))]
+    assert windows == [(date(2013, 12, 23), v2u._SENTINEL_END)]
     assert v2u.is_member("META", date(2018, 1, 1))
     assert v2u.is_member("META", date(2023, 1, 1))
+    assert v2u.is_member("META", date(2026, 7, 31))

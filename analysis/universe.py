@@ -289,7 +289,7 @@ def _reconstruct_windows(csv_text: str, ticker: str) -> list[tuple[date, date]]:
             in_window = False
         prev_date = d
     if in_window and rows:
-        windows.append((start, rows[-1][0]))
+        windows.append((start, _SENTINEL_END))
     return windows
 
 
