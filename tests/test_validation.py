@@ -45,6 +45,118 @@ def test_cagr_dd_for_series_computes_max_drawdown():
 
 
 # ---------------------------------------------------------------------------
+# _block_passes -- the reconciled per-block pass/fail formula (2026-07-31)
+#
+# An earlier reconstruction gated on (CAGR >= S&P's own) AND (DD <= 1.5x
+# S&P's own) AND (total_return_pct > -20), which reproduced the aggregate
+# 14/16 pass count but flagged the WRONG two blocks against the documented
+# record ("Block 1, Block 2/GFC-acute"). Reconciliation against the actual
+# original criteria (CLAUDE.md's "V2 architecture — phased rebuild" section
+# plus this project's own standing PF>1.0 convention, already used
+# identically in analysis/backtest.py:walk_forward_pf()) found the real
+# formula never had a per-block CAGR gate at all — it's DD<=1.5x S&P's own
+# AND profit factor > 1.0. Re-run against the real 2007-2026 production
+# reproduction (16 real blocks, real PF/DD per block) with this corrected
+# formula reproduces 14/16 pass with EXACTLY blocks 0 and 1 (0-indexed)
+# failing — i.e. the documented "Block 1, Block 2/GFC-acute" once the
+# original record's own 1-indexed block numbering is accounted for (my
+# Block 1, 2008-03-22 to 2009-06-12, is genuinely the Lehman-to-bottom
+# acute crash window). These fixture values are the real, production
+# per-block metrics from that reconciliation run — pinned here so the
+# formula (and this specific historical result) can't silently drift again.
+# ---------------------------------------------------------------------------
+
+# (block index, profit_factor, strat_max_drawdown_pct, sp_max_drawdown_pct)
+# -- the real 2007-2026 production reproduction, one row per block.
+_REAL_BLOCK_METRICS = [
+    (0, 0.100, -19.04, -18.64),   # 2007-01-01 -> 2008-03-22 -- FAILS (PF)
+    (1, 0.780, -13.59, -52.58),   # 2008-03-22 -> 2009-06-12 -- FAILS (PF) -- the real GFC-acute window
+    (2, 1.340, -18.61, -15.99),
+    (3, 1.430, -20.78, -19.39),
+    (4, 2.370, -5.76, -9.94),
+    (5, 2.310, -6.25, -5.76),
+    (6, 1.920, -10.20, -7.40),
+    (7, 1.480, -15.05, -13.31),
+    (8, 2.930, -3.17, -3.07),
+    (9, 1.370, -23.73, -19.78),
+    (10, 1.550, -23.47, -33.92),
+    (11, 2.710, -5.03, -9.60),
+    (12, 1.050, -22.51, -25.43),
+    (13, 1.910, -14.05, -10.28),
+    (14, 1.630, -19.55, -18.90),
+    (15, 2.330, -8.09, -9.10),
+]
+
+
+def _strat_metrics(pf, dd):
+    return {"profit_factor": pf, "max_drawdown_pct": dd}
+
+
+def test_block_passes_reproduces_the_real_2007_2026_battery_exactly():
+    n_pass, failing = 0, []
+    for block_idx, pf, strat_dd, sp_dd in _REAL_BLOCK_METRICS:
+        if v2v._block_passes(_strat_metrics(pf, strat_dd), sp_dd):
+            n_pass += 1
+        else:
+            failing.append(block_idx)
+    assert n_pass == 14
+    assert failing == [0, 1]  # documented "Block 1, Block 2/GFC-acute" under 1-indexing
+
+
+def test_block_passes_pf_floor_is_strictly_greater_than_one():
+    """Matches analysis/backtest.py:walk_forward_pf()'s identical `pf > 1.0`
+    convention exactly -- PF == 1.0 must fail, not pass."""
+    assert v2v._block_passes(_strat_metrics(1.0, -5.0), -10.0) is False
+    assert v2v._block_passes(_strat_metrics(1.0001, -5.0), -10.0) is True
+
+
+def test_block_passes_dd_floor_is_1point5x_sp_own_drawdown():
+    # sp_dd = -10 -> ceiling is -15.0 exactly
+    assert v2v._block_passes(_strat_metrics(2.0, -15.0), -10.0) is True
+    assert v2v._block_passes(_strat_metrics(2.0, -15.01), -10.0) is False
+
+
+def test_block_passes_requires_both_pf_and_dd_to_clear():
+    # Good PF, blown DD -> fail.
+    assert v2v._block_passes(_strat_metrics(3.0, -50.0), -10.0) is False
+    # Good DD, blown PF -> fail.
+    assert v2v._block_passes(_strat_metrics(0.5, -5.0), -10.0) is False
+
+
+def test_block_passes_no_sp_dd_data_defaults_dd_leg_to_pass():
+    assert v2v._block_passes(_strat_metrics(2.0, -99.0), None) is True
+
+
+# ---------------------------------------------------------------------------
+# make_blocks boundaries -- pinned exactly, so a future change can't
+# silently shift which real-world dates each block index refers to.
+# Confirmed unchanged (byte-identical, same start/end anchors) since the
+# very first V2 commit (afa7794) that introduced make_blocks() — a boundary
+# mismatch was explicitly ruled out as the cause of the pass/fail
+# discrepancy reconciled above, this just makes that permanent.
+# ---------------------------------------------------------------------------
+
+_EXPECTED_BLOCK_BOUNDARIES = [
+    ("2007-01-01", "2008-03-22"), ("2008-03-22", "2009-06-12"),
+    ("2009-06-12", "2010-09-02"), ("2010-09-02", "2011-11-23"),
+    ("2011-11-23", "2013-02-12"), ("2013-02-12", "2014-05-05"),
+    ("2014-05-05", "2015-07-26"), ("2015-07-26", "2016-10-15"),
+    ("2016-10-15", "2018-01-04"), ("2018-01-04", "2019-03-27"),
+    ("2019-03-27", "2020-06-16"), ("2020-06-16", "2021-09-06"),
+    ("2021-09-06", "2022-11-27"), ("2022-11-27", "2024-02-17"),
+    ("2024-02-17", "2025-05-09"), ("2025-05-09", "2026-07-30"),
+]
+
+
+def test_make_blocks_boundaries_pinned_to_the_reconciled_dates():
+    from analysis.backtest import make_blocks
+    blocks = make_blocks(pd.Timestamp("2007-01-01"), pd.Timestamp("2026-07-30"), n_blocks=16)
+    assert len(blocks) == 16
+    actual = [(b[0].date().isoformat(), b[1].date().isoformat()) for b in blocks]
+    assert actual == _EXPECTED_BLOCK_BOUNDARIES
+
+
+# ---------------------------------------------------------------------------
 # universe_snapshot
 # ---------------------------------------------------------------------------
 

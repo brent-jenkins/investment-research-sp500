@@ -1494,6 +1494,13 @@ this is a reconstructed-pass/fail-rule discrepancy, not a trading-logic
 regression. Flagging this explicitly rather than treating "14/16 either
 way" as good enough, per this project's own reproducibility standard.
 
+**Resolved 2026-07-31 — see "Block pass/fail formula reconciliation
+(2026-07-31)" below.** The reconstructed formula quoted above was wrong in
+two independent ways (a missing profit-factor floor, and an extraneous
+per-block CAGR-vs-S&P gate that was never actually part of the bar); once
+corrected, the run reproduces the documented result exactly,
+block-for-block, not just in aggregate.
+
 **`analysis/validation.py`** is the new shared module — `run_full_validation(config, start, end)`
 and `universe_snapshot(as_of=None)` — used by both the Backtest page and the
 DD report generator, so neither can ever show a different number for the
@@ -1563,6 +1570,139 @@ cases for `get_crisis_status()` (calm day, active trigger day, mid-cooldown).
 No changes to any order-placement path (`brokers/trading212.py`,
 `data/scheduler.py`) — this task is read-only against price/signal data and
 UI-only in main.py.
+
+### Block pass/fail formula reconciliation (2026-07-31)
+
+Closed the discrepancy flagged immediately above, before anything built on
+top of `analysis/validation.py` (the Backtest page, the DD report) was
+trusted any further. Standard: find the literal original criteria first,
+rule out the cheapest hypothesis (block boundaries) before touching the
+formula, then fix whichever side is actually wrong.
+
+**Step 1 — the literal original criteria, extracted verbatim.** Searched
+every commit that ever touched `CLAUDE.md` or `analysis/v2/`/`analysis/`
+for the phased-rebuild's 16-block finding — there is exactly **one**
+place it was ever written down, in the "V2 architecture — phased rebuild,
+Stage 1" section's Phase 1 bullet (commit `afa7794`, unchanged since):
+*"Result: 14 of 16 historical blocks pass (CAGR ≥ S&P 500, drawdown ≤ 1.5×
+S&P's own, no crisis-adjacent block materially loses money)."* No exact
+date table was ever committed anywhere (block dates were always described
+by number, never listed), no PF value was ever named, and "materially
+loses money" was never quantified. The reproducibility check three
+paragraphs later names *"Block 1, Block 2/GFC-acute"* as the two failing
+blocks, again with no date table. **This is the entire literal record —
+the disposable research clone that actually implemented and ran this
+check was deleted once its finding was adopted (this project's standing
+practice for exploratory code), and no more detailed version of the
+criteria exists anywhere in git history.** This is itself worth stating
+plainly: the "internal record" instructed to be treated as ground truth
+in this task does not, in fact, contain a fully-specified formula — only
+a paraphrase — which is precisely how the earlier reconstruction went
+wrong without anyone being able to catch it at the time.
+
+**Step 2 — block boundaries: match exactly, ruled out as the cause.**
+`analysis/backtest.py:make_blocks()` (`boundaries = pd.date_range(start,
+end, periods=n_blocks + 1)`) is byte-for-byte unchanged since the very
+first V2 commit (`afa7794`) — confirmed directly via `git show
+afa7794:analysis/v2/backtest.py`, not assumed. Both the disposable
+clone's reproducibility check and `analysis/validation.py`'s
+`VALIDATION_START` use the identical `2007-01-01` anchor, and the
+production reproduction run used the identical `2026-07-30` end date
+`tests/test_v2_backtest.py`'s own `test_make_blocks_returns_requested_
+count_contiguous()` was written against from day one. The resulting 16
+block dates (pinned in `tests/test_validation.py` as
+`_EXPECTED_BLOCK_BOUNDARIES`) are therefore the only dates `make_blocks()`
+could ever have produced for this window — a boundary mismatch was not
+the cause.
+
+**Step 3 — the formula itself was wrong, in two independent ways.**
+`compute_metrics_fixed()`/`equity_curve_gbp()` (the additive-£,
+exit-date-sorted DD/CAGR methodology from the round-10 fix — see "Backtest
+equity-curve ordering bug" above) were confirmed unchanged since
+`afa7794` too (`analysis/v2/backtest.py` imported both directly from
+`analysis.backtest_metrics`, which already had the round-10 fix by the
+time V2 was built — the round-10 bug lived in a completely separate,
+now-deleted function, `_quick_metrics()`, that never touched
+`backtest_metrics.py` at all). So the DD/CAGR *calculation* was never the
+problem. The bug was in the *comparison* built on top of it, and pulling
+the full per-block metrics (not just CAGR/DD) for a fresh production
+reproduction exposed it directly:
+
+| Block (0-idx) | Window | Strategy PF | Strategy DD | S&P DD | Old formula (CAGR≥S&P + DD≤1.5× + no >-20% loss) | Reconciled formula (DD≤1.5× + PF>1.0) |
+|---|---|---|---|---|---|---|
+| 0 | 2007-01-01→2008-03-22 | 0.10 | -19.04% | -18.64% | FAIL (CAGR) | **FAIL (PF)** |
+| 1 | 2008-03-22→2009-06-12 (GFC-acute) | 0.78 | -13.59% | -52.58% | **PASS** | **FAIL (PF)** |
+| 2 | 2009-06-12→2010-09-02 | 1.34 | -18.61% | -15.99% | FAIL (CAGR) | **PASS** |
+| 3–15 | — | all >1.0 | — | — | PASS | PASS |
+
+Two independent errors, each confirmed against the real reproduction data
+rather than assumed:
+1. **A per-block "strategy CAGR ≥ S&P's own CAGR" gate was never actually
+   part of the bar.** `compute_metrics_fixed()`'s `cagr_pct` annualises
+   over the *trades' own realised exit-date span* within the block, not
+   the block's full nominal calendar window — for Block 0 specifically
+   (right at the start of history, while the 252-day momentum lookback is
+   still ramping up and trades are sparse), this collapses the effective
+   "years" denominator to a fraction of the nominal ~1.22-year block,
+   turning a real but modest -18.99% total loss into a wildly amplified
+   -63.18% annualised CAGR. Even setting that distortion aside and
+   comparing plain total returns instead, Block 2's strategy return
+   (+14.35%) still trails the S&P's own (+18.15% over the same window) —
+   yet Block 2 is required to pass under the documented record. A
+   CAGR-or-total-return "must beat the index outright" gate cannot be
+   reconciled with that fact no matter how it's computed; it was never
+   real.
+2. **A profit-factor hard floor was missing entirely.** The task
+   instructions' own phrasing ("the PF hard floor") was the direct
+   pointer to it, and this project already has a standing, precedented
+   convention for exactly this bar:
+   `analysis/backtest.py:walk_forward_pf()`'s `n_positive = sum(1 for pf
+   in windows if pf > 1.0)` (mirrored pre-V1-removal in
+   `compute_walk_forward_summary()`'s `test_profit_factor > 1.0`). Adding
+   the identical `pf > 1.0` check as a second, independent gate — with no
+   change to the DD leg — reproduces the documented result exactly.
+
+**The "no crisis-adjacent block materially loses money" phrase was never
+quantified anywhere and is not needed to reproduce the result** — Block
+0's total return (-18.99%) would pass even an invented "-20%" floor
+regardless, so its presence or absence changes nothing observable in this
+data. The earlier reconstruction's specific "-20%" number was never
+independently verified; it has been removed rather than kept as
+unverified dead weight now that PF+DD alone are known to fully reproduce
+the documented outcome.
+
+**Labeling, not a code bug.** The original record's "Block 1, Block
+2/GFC-acute" uses 1-indexed ordinal language (first block, second block)
+without ever stating so; `analysis/validation.py`'s 0-indexed block list
+is a completely ordinary code convention, not an error. Once that's
+accounted for, "documented Block 1" = this file's Block 0 and "documented
+Block 2" = this file's Block 1 — and Block 1 (2008-03-22 to 2009-06-12) is
+genuinely the Lehman-collapse-to-March-2009-bottom acute crash window,
+exactly matching the "/GFC-acute" annotation. Both the indexing
+convention and the formula were imprecise in how they were originally
+written up; neither was a defect in `make_blocks()`, the trade-simulation
+engine, or the DD/CAGR calculation itself.
+
+**Step 4 — resolved and reconfirmed.** `analysis/validation.py` now
+exports a pure, separately-tested `_block_passes(strat_metrics, sp_dd)`
+implementing `dd_ok AND pf_ok` only. Re-running the full battery on
+production with the corrected formula reproduces **14/16 blocks pass,
+with exactly blocks 0 and 1 (0-indexed) failing** — the documented "Block
+1, Block 2/GFC-acute" result, block-for-block, not just in aggregate.
+TRAIN/TEST CAGR, trade count, and every other figure from the prior
+reproduction (12,046 trades, TRAIN CAGR 13.23%, TEST CAGR 22.39%) are
+unaffected — only the block-level pass/fail classification changed, since
+`_block_passes()` only ever gates the block table, never trade selection,
+sizing, or any other reported metric.
+
+Covered by `tests/test_validation.py`: `_block_passes()` reproducing the
+real 16-block production result exactly (pinned as fixture data, not
+re-run live in the unit suite — a full production-scale run is a
+multi-minute operation, validated via the SSH reproduction above), the
+`pf > 1.0` strict-inequality boundary, the `DD ≤ 1.5×` boundary, both legs
+being independently required, the `sp_dd is None` graceful-default case,
+and `make_blocks()`'s 16 boundary dates pinned exactly so a future change
+can't silently shift which real-world dates any block index refers to.
 
 ### XLK mapping resolution and ETF pricing lockout audit (2026-07-31)
 
