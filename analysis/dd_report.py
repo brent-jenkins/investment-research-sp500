@@ -84,6 +84,28 @@ _KNOWN_LIMITATIONS = [
         "validation, and no attempt has yet been made to build or validate a genuinely "
         "geographically diversified version.",
     ),
+    (
+        "ETF sleeve execution occurs on a different exchange, different hours, than the signal "
+        "is computed against.",
+        "The 33 ETF instruments in the tradeable universe are UCITS-wrapped funds, listed "
+        "exclusively on the London Stock Exchange (07:00–15:30 UTC) — no genuine US-domiciled ETF "
+        "listing is accessible through the platform, a UK/EU securities-law restriction (Overseas "
+        "Funds Regime equivalence not extended to US-registered funds) applying equally to every "
+        "UK-regulated retail broker, not a limitation specific to this platform. The momentum "
+        "signal and crisis override are both computed from US market closing prices, but the "
+        "resulting order can only execute once LSE's own session next opens — a minimum gap of "
+        "roughly 9.5 hours on an ordinary weekday, extending to roughly 57.5 hours across a "
+        "weekend. The backtest's execution model assumes a same-day, zero-lag fill at the "
+        "computed closing price; live ETF execution cannot match this, since the real fill occurs "
+        "at whatever price LSE's next session opens at. Order submission is timed to each "
+        "instrument's own real trading session with a price-deviation check before executing, as "
+        "the best achievable mitigation — this reduces uncertainty and avoids executing into a "
+        "clearly-stale price, but does not close the underlying timing gap, which is a "
+        "structural, permanent property of UK retail access to US-domiciled ETFs, not an "
+        "engineering problem awaiting a better fix. The individual stock sleeve is not affected "
+        "by this specific constraint — single-name US equities are directly NYSE-listed and not "
+        "subject to the same fund-marketing restriction.",
+    ),
 ]
 
 
