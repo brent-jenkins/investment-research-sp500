@@ -200,6 +200,8 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
         styles["BodyText"],
     ))
     story.append(Spacer(1, 0.3 * cm))
+    gg = result.get("gbp_growth", {})
+    cap = gg.get("starting_capital_gbp", 0)
     exec_rows = [
         ["Metric", "Train (2007–2019)", "Test (2020–present)"],
         ["Trades", str(result["train"].get("total_trades", 0)), str(result["test"].get("total_trades", 0))],
@@ -209,9 +211,23 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
          f"{result.get('test_sp', {}).get('cagr_pct', 0) or 0:+.2f}%"],
         ["Max Drawdown", f"{result['train'].get('max_drawdown_pct', 0):.2f}%", f"{result['test'].get('max_drawdown_pct', 0):.2f}%"],
         ["Win Rate", f"{result['train'].get('win_rate', 0) * 100:.1f}%", f"{result['test'].get('win_rate', 0) * 100:.1f}%"],
+        [f"£{cap:,.0f} invested — Strategy",
+         f"£{gg.get('train', {}).get('strategy_ending_gbp', cap):,.0f}",
+         f"£{gg.get('test', {}).get('strategy_ending_gbp', cap):,.0f}"],
+        [f"£{cap:,.0f} invested — S&amp;P 500 (buy &amp; hold)",
+         f"£{gg.get('train', {}).get('sp500_ending_gbp', cap):,.0f}",
+         f"£{gg.get('test', {}).get('sp500_ending_gbp', cap):,.0f}"],
     ]
     exec_rows = [[Paragraph(c, styles["BodyText"]) if isinstance(c, str) and "&amp;" in c else c for c in row] for row in exec_rows]
     story.append(_metric_table(exec_rows, col_widths=[6 * cm, 5 * cm, 5 * cm]))
+    story.append(Spacer(1, 0.15 * cm))
+    story.append(Paragraph(
+        "£ figures are a real, additive-£ trajectory (equity_curve_gbp()) for the strategy vs. a "
+        "buy-and-hold position in the S&amp;P 500 (price return, no dividend reinvestment — the same "
+        "series the CAGR row above uses), train and test kept separate rather than blended into one "
+        "full-period number.",
+        styles["Footnote"],
+    ))
     story.append(Spacer(1, 0.3 * cm))
     story.append(Paragraph(
         f"<b>{result['n_blocks_pass']} of {result['n_blocks_total']}</b> historical blocks pass "

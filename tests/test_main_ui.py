@@ -59,6 +59,16 @@ def _fast_validation_result():
         "blocks": blocks, "n_blocks_pass": 15, "n_blocks_total": 16,
         "walk_forward": {"n_total": 223, "n_positive": 183, "success_rate_pct": 82.1},
         "cost_sensitivity": {0: dict(metrics_shape), 10: dict(metrics_shape), 25: dict(metrics_shape)},
+        # Deliberately distinctive numbers, shared verbatim with
+        # tests/test_dd_report.py's own sample result -- see that file's
+        # matching comment. If the Backtest page ever started recomputing
+        # this instead of reading it from `result`, these specific figures
+        # would stop showing up and this file's own test would catch it.
+        "gbp_growth": {
+            "starting_capital_gbp": 50000.0,
+            "train": {"strategy_ending_gbp": 71234.56, "sp500_ending_gbp": 65432.10},
+            "test": {"strategy_ending_gbp": 88765.43, "sp500_ending_gbp": 54321.98},
+        },
         "trades": trades,
     }
 
@@ -140,3 +150,21 @@ def test_dd_report_downloads_a_real_pdf_via_the_ui_path(app):
     downloads = at.get("download_button")
     assert len(downloads) == 1
     assert "Download Due Diligence Report" in downloads[0].label
+
+
+def test_gbp_growth_shown_on_backtest_page_from_result_not_recomputed(app):
+    """The £50k V2-vs-S&P comparison on the Backtest page must come
+    straight from result['gbp_growth'] -- proven by the same deliberately
+    distinctive numbers used in tests/test_dd_report.py's sample result
+    (see that file's matching comment). If the Backtest page ever started
+    recomputing this instead of reading it from `result`, these specific
+    figures would stop appearing here."""
+    at = app.run()
+    at.button(key="run_full_validation").click().run()
+
+    assert not at.exception
+    metric_values = [m.value for m in at.metric]
+    assert any("71,235" in v for v in metric_values)  # train strategy ending
+    assert any("65,432" in v for v in metric_values)  # train S&P ending
+    assert any("88,765" in v for v in metric_values)  # test strategy ending
+    assert any("54,322" in v for v in metric_values)  # test S&P ending

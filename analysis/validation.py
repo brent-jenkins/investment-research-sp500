@@ -36,6 +36,7 @@ from analysis import universe
 from analysis.backtest import (
     compute_cost_sensitivity,
     compute_metrics_fixed,
+    equity_curve_gbp,
     full_metrics_fixed,
     make_blocks,
     precompute_ticker,
@@ -62,6 +63,79 @@ def _cagr_dd_for_series(close: pd.Series, b_start: pd.Timestamp, b_end: pd.Times
     peak = s.cummax()
     dd = float(((s - peak) / peak * 100).min())
     return cagr, dd
+
+
+def _sp500_ending_balance_gbp(
+    close: pd.Series, start: pd.Timestamp, end: pd.Timestamp, starting_capital: float,
+) -> Optional[float]:
+    """£ ending balance for a buy-and-hold position in *close* over
+    [start, end], sized at starting_capital -- computed directly from the
+    window's first/last price rather than re-derived from a rounded CAGR
+    percentage, so it matches _cagr_dd_for_series()'s own CAGR exactly
+    (same start_v/end_v, same window bounds) rather than compounding a
+    second, lossier calculation on top of it. None only when the series
+    has fewer than 2 rows in the window (nothing to compare against) --
+    same "no data, not zero" convention _cagr_dd_for_series() uses.
+    """
+    s = close[(close.index >= start) & (close.index <= end)]
+    if len(s) < 2 or float(s.iloc[0]) <= 0:
+        return None
+    return starting_capital * (float(s.iloc[-1]) / float(s.iloc[0]))
+
+
+def _strategy_ending_balance_gbp(trades: list[dict], starting_capital: float) -> float:
+    """£ ending balance for *trades* under the additive-£ methodology
+    (equity_curve_gbp()) -- the same one behind every other £ figure this
+    project reports (compute_metrics_fixed(), the DD report's own equity
+    curve, the Run #26 real-return reconciliation). No trades -> the
+    account never moved, so it's still sitting at starting_capital.
+    """
+    if not trades:
+        return starting_capital
+    ec = equity_curve_gbp(pd.DataFrame(trades), starting_capital_gbp=starting_capital)
+    if ec.empty:
+        return starting_capital
+    return float(ec["equity_gbp"].iloc[-1])
+
+
+def compute_gbp_growth(
+    gspc_close_full: pd.Series,
+    train_trades: list[dict],
+    test_trades: list[dict],
+    starting_capital: float,
+    start: pd.Timestamp,
+    split: pd.Timestamp,
+    end: pd.Timestamp,
+) -> dict:
+    """What a real £starting_capital investment would have actually become,
+    V2 vs. buy-and-hold S&P 500 -- train and test kept separate, never
+    blended into one full-period number (blending would hide how much of
+    any headline figure comes from the in-sample training window).
+
+    The S&P leg reuses the identical ^GSPC series (price_data, sourced via
+    get_price_df() -- a price-only index level, no dividend reinvestment;
+    ^SP500TR, the total-return variant, is not tracked anywhere in this
+    project) already used for train_sp/test_sp's CAGR figures elsewhere in
+    run_full_validation() -- same series, same window boundaries, so this
+    is a £-terms restatement of the exact same comparison already
+    validated, not a second, differently-sourced or differently-
+    conventioned one running alongside it.
+    """
+    return {
+        "starting_capital_gbp": starting_capital,
+        "train": {
+            "strategy_ending_gbp": round(_strategy_ending_balance_gbp(train_trades, starting_capital), 2),
+            "sp500_ending_gbp": round(
+                _sp500_ending_balance_gbp(gspc_close_full, start, split, starting_capital) or starting_capital, 2,
+            ),
+        },
+        "test": {
+            "strategy_ending_gbp": round(_strategy_ending_balance_gbp(test_trades, starting_capital), 2),
+            "sp500_ending_gbp": round(
+                _sp500_ending_balance_gbp(gspc_close_full, split, end, starting_capital) or starting_capital, 2,
+            ),
+        },
+    }
 
 
 def _block_passes(strat_metrics: dict, sp_dd: Optional[float]) -> bool:
@@ -174,6 +248,10 @@ def run_full_validation(
 
     wf = walk_forward_pf(all_trades)
     cost_sensitivity = compute_cost_sensitivity(all_trades, starting_capital, cost_bps_list=(0, 10, 25))
+    gbp_growth = compute_gbp_growth(
+        gspc_close_full, train_trades, test_trades, starting_capital,
+        start, VALIDATION_TRAIN_TEST_SPLIT, end,
+    )
 
     return {
         "start": start.date().isoformat(), "end": end.date().isoformat(),
@@ -189,5 +267,6 @@ def run_full_validation(
         "blocks": block_results, "n_blocks_pass": n_pass, "n_blocks_total": len(blocks_raw),
         "walk_forward": wf,
         "cost_sensitivity": cost_sensitivity,
+        "gbp_growth": gbp_growth,
         "trades": all_trades,
     }

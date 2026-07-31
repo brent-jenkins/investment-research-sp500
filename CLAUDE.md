@@ -1859,6 +1859,80 @@ DD report section appears immediately after a battery run rather than
 requiring a scroll past six other sections, and the full click-through
 path produces a real, well-formed, downloadable PDF.
 
+### Real £ comparison — V2 vs. buy-and-hold S&P 500 (2026-07-31)
+
+The existing train/test CAGR comparison is accurate but not intuitive.
+Added a genuine "what would £50,000 actually have become" comparison,
+computed by the validation engine itself and shown on the Backtest page
+and in the DD report — not derived externally and pasted in, matching
+the same "one shared function, not two implementations that could
+quietly diverge" lesson the walk-forward discrepancy earlier the same
+day already established.
+
+**S&P leg reuses the identical `^GSPC` series and window boundaries the
+existing CAGR benchmarks already use** — `gspc_close_full` from
+`get_price_df("^GSPC", ...)`, the same object `train_sp`/`test_sp`'s
+`_cagr_dd_for_series()` calls already read. This is a **price-only**
+index level, no dividend reinvestment (`^SP500TR`, the total-return
+variant, is not tracked anywhere in this project) — deliberately the
+same convention every other S&P figure in this file already uses, not a
+second, differently-sourced or differently-conventioned benchmark
+running alongside it. `analysis/validation.py:_sp500_ending_balance_gbp()`
+computes the £ ending balance directly from the window's first/last
+price (`starting_capital * end_price / start_price`) rather than
+re-deriving it from an already-rounded CAGR percentage, so it matches
+the CAGR figure's own math exactly rather than compounding a second,
+lossier calculation on top of it.
+
+**V2's leg reuses `equity_curve_gbp()`** — the same additive-£
+methodology behind every other £ figure this project reports
+(`compute_metrics_fixed()`, the DD report's own equity curve, the Run
+#26 real-return reconciliation) — via
+`analysis/validation.py:_strategy_ending_balance_gbp()`, which just reads
+the final row of that curve for whichever trade subset (train or test)
+it's given.
+
+**`analysis/validation.py:compute_gbp_growth()`** ties both together and
+is called once, inside `run_full_validation()`, using its own
+already-computed `gspc_close_full`/`train_trades`/`test_trades`/
+`starting_capital` — train and test are kept as two separate legs in
+the returned dict, never blended into one full-period number (blending
+would hide how much of any headline figure comes from the in-sample
+training window, the same discipline the V2 total-return task earlier
+today insisted on). The result lands under a new `"gbp_growth"` key in
+`run_full_validation()`'s return dict, alongside (not replacing) the
+existing CAGR/drawdown figures — both the Backtest page (`main.py`, a
+new "£ Invested — Real Ending Balance" block directly under the
+Train/Test CAGR section) and the DD report (`analysis/dd_report.py`,
+two new rows in the Executive Summary's existing train/test table) read
+this same key from the same `result` dict — neither computes its own
+version.
+
+Like every other figure `run_full_validation()` returns, this reflects
+whatever `end` date the function naturally resolves to (today, live) —
+never a hardcoded date — so it drifts by the same small day-to-day
+amounts as TRAIN/TEST CAGR and walk-forward already do, for the same
+reason (see the annotation on this file's "Backtest page restored..."
+section above).
+
+**Verified against real production data** (2026-07-31, `end` pinned to
+match the day's other confirmed figures): £50,000 invested in TRAIN
+(2007–2019) reached **£227,036** under the strategy vs. **£114,033**
+buy-and-hold S&P 500; in TEST (2020–present), **£188,662** vs.
+**£114,149** — consistent with the already-confirmed TRAIN CAGR 13.23%
+(vs. S&P 6.55%) and TEST CAGR 22.39% (vs. S&P 13.38%).
+
+Covered by `tests/test_validation.py` (new — 5 tests: the S&P leg matches
+a direct price-ratio calculation, the strategy leg matches
+`equity_curve_gbp()`'s own final balance, a no-trades leg stays flat at
+starting capital, and `run_full_validation()`'s own shape test extended
+to cover the new key), `tests/test_dd_report.py`, and `tests/test_main_ui.py`
+(one new test each, both feeding the exact same deliberately distinctive,
+not-plausibly-real numbers into their sample `result` fixtures and
+confirming those exact figures appear in the rendered PDF / Backtest
+page respectively — proving both consumers read from `result` rather
+than recomputing their own version).
+
 ### Block pass/fail formula reconciliation (2026-07-31)
 
 Closed the discrepancy flagged immediately above, before anything built on

@@ -184,6 +184,50 @@ def test_universe_snapshot_defaults_as_of_to_today(db_engine):
 # and train/test split logic against small synthetic trades.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# compute_gbp_growth -- pure helper
+# ---------------------------------------------------------------------------
+
+def test_compute_gbp_growth_sp500_ending_matches_price_ratio():
+    """S&P leg is starting_capital * (end_price / start_price) directly --
+    not re-derived from a rounded CAGR percentage."""
+    dates = pd.date_range("2019-01-01", periods=400, freq="D")
+    close = pd.Series([100.0 * (1.10 ** (i / 365.25)) for i in range(len(dates))], index=dates)
+
+    gg = v2v.compute_gbp_growth(
+        close, [], [], 50000.0,
+        dates[0], dates[200], dates[-1],
+    )
+    train_expected = 50000.0 * (float(close.loc[dates[200]]) / float(close.loc[dates[0]]))
+    assert gg["train"]["sp500_ending_gbp"] == pytest.approx(train_expected, abs=1.0)
+
+
+def test_compute_gbp_growth_strategy_ending_matches_equity_curve_gbp():
+    """Strategy leg is equity_curve_gbp()'s own final balance -- the same
+    additive-£ methodology as everywhere else, not a differently-computed
+    figure."""
+    from analysis.backtest import equity_curve_gbp
+
+    dates = pd.date_range("2019-01-01", periods=10, freq="D")
+    close = pd.Series([100.0] * len(dates), index=dates)
+    trades = [
+        _synthetic_trade("VOO", "2019-01-01", "2019-01-03", 0.05, position_gbp=1000.0),
+        _synthetic_trade("VOO", "2019-01-04", "2019-01-06", -0.02, position_gbp=1000.0),
+    ]
+
+    gg = v2v.compute_gbp_growth(close, trades, [], 50000.0, dates[0], dates[-1], dates[-1])
+    expected = float(equity_curve_gbp(pd.DataFrame(trades), starting_capital_gbp=50000.0)["equity_gbp"].iloc[-1])
+    assert gg["train"]["strategy_ending_gbp"] == pytest.approx(expected, abs=0.01)
+
+
+def test_compute_gbp_growth_no_trades_stays_at_starting_capital():
+    dates = pd.date_range("2019-01-01", periods=10, freq="D")
+    close = pd.Series([100.0] * len(dates), index=dates)
+    gg = v2v.compute_gbp_growth(close, [], [], 50000.0, dates[0], dates[5], dates[-1])
+    assert gg["train"]["strategy_ending_gbp"] == 50000.0
+    assert gg["test"]["strategy_ending_gbp"] == 50000.0
+
+
 def _synthetic_trade(ticker, entry, exit_, pnl_pct, position_gbp=1000.0):
     return {
         "ticker": ticker, "direction": "LONG",
@@ -230,6 +274,12 @@ def test_run_full_validation_shape_and_train_test_split(db_engine, mocker):
     assert result["full_ex_best"]["total_trades"] == 2
     assert result["train_sp"]["cagr_pct"] is not None
     assert result["test_sp"]["cagr_pct"] is not None
+
+    gg = result["gbp_growth"]
+    assert gg["starting_capital_gbp"] == 10000
+    assert set(gg.keys()) == {"starting_capital_gbp", "train", "test"}
+    for leg in ("train", "test"):
+        assert set(gg[leg].keys()) == {"strategy_ending_gbp", "sp500_ending_gbp"}
 
 
 def test_run_full_validation_no_trades_all_blocks_fail_gracefully(db_engine, mocker):

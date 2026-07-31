@@ -1938,6 +1938,26 @@ def _render_backtest_page(config: dict) -> None:
                       f"vs S&P {sp.get('max_drawdown_pct', 0):.2f}%" if sp.get("max_drawdown_pct") is not None else None)
             r4.metric("Win Rate", f"{m.get('win_rate', 0) * 100:.1f}%")
 
+    gg = result.get("gbp_growth", {})
+    if gg:
+        st.markdown("**£ Invested — Real Ending Balance**")
+        st.caption(
+            "Additive-£ trajectory (equity_curve_gbp()) vs. buy-and-hold S&P 500 (price return, "
+            "no dividend reinvestment — the same ^GSPC series behind the CAGR figures above), train "
+            "and test kept separate rather than blended into one full-period number."
+        )
+        cap = gg.get("starting_capital_gbp", 0)
+        gc1, gc2 = st.columns(2)
+        for col, label, key in ((gc1, "TRAIN (2007–2019)", "train"), (gc2, "TEST (2020–2026)", "test")):
+            with col:
+                st.markdown(f"**{label}**")
+                leg = gg.get(key, {})
+                g1, g2 = st.columns(2)
+                g1.metric("Strategy", f"£{leg.get('strategy_ending_gbp', cap):,.0f}",
+                          f"from £{cap:,.0f}")
+                g2.metric("S&P 500 (buy & hold)", f"£{leg.get('sp500_ending_gbp', cap):,.0f}",
+                          f"from £{cap:,.0f}")
+
     st.divider()
     st.markdown("### Full History (2007–present) & Concentration Check")
     fc1, fc2 = st.columns(2)

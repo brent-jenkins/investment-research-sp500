@@ -54,6 +54,17 @@ def _sample_result(with_trades=True):
         "blocks": blocks, "n_blocks_pass": 15, "n_blocks_total": 16,
         "walk_forward": {"n_total": 223, "n_positive": 183, "success_rate_pct": 82.1},
         "cost_sensitivity": {0: dict(metrics_shape), 10: dict(metrics_shape), 25: dict(metrics_shape)},
+        # Deliberately distinctive numbers, not values a real computation
+        # would plausibly produce -- shared verbatim with
+        # tests/test_main_ui.py's own sample result. If either consumer
+        # ever started recomputing this figure instead of reading it from
+        # `result`, these specific numbers would stop appearing in its
+        # output and the corresponding test would catch it.
+        "gbp_growth": {
+            "starting_capital_gbp": 50000.0,
+            "train": {"strategy_ending_gbp": 71234.56, "sp500_ending_gbp": 65432.10},
+            "test": {"strategy_ending_gbp": 88765.43, "sp500_ending_gbp": 54321.98},
+        },
         "trades": trades,
     }
 
@@ -93,3 +104,18 @@ def test_generate_dd_report_pdf_shows_block_pass_fail_counts():
     reader = PdfReader(io.BytesIO(pdf_bytes))
     text = "\n".join(p.extract_text() for p in reader.pages)
     assert "15" in text and "16" in text
+
+
+def test_generate_dd_report_pdf_shows_gbp_growth_from_result_not_recomputed():
+    """The £50k V2-vs-S&P comparison must come straight from
+    result['gbp_growth'] -- proven by using deliberately distinctive
+    numbers no real computation would produce and confirming they appear
+    verbatim (rounded to the nearest pound, matching the report's own
+    f"£{...:,.0f}" formatting) in the rendered PDF."""
+    pdf_bytes = generate_dd_report_pdf(_sample_result(), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(p.extract_text() for p in reader.pages)
+    assert "71,235" in text  # train strategy ending, rounded
+    assert "65,432" in text  # train S&P ending, rounded
+    assert "88,765" in text  # test strategy ending, rounded
+    assert "54,322" in text  # test S&P ending, rounded
