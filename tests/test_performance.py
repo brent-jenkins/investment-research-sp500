@@ -371,3 +371,94 @@ def test_crisis_status_within_cooldown_after_trigger(mocker):
     assert status["entry_blocked"] is True
     assert status["is_crisis_today"] is False
     assert status["days_since_trigger"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Position context — decision-relevant, neutral-tone position card content
+# added 2026-07-31 (see CLAUDE.md's "..." section for the tone requirements
+# this exists to satisfy: no color-coded urgency, no ranking, no CTAs).
+# ---------------------------------------------------------------------------
+
+from output.performance import (
+    POSITIONS_RULES_EXPLANATION,
+    compute_position_context,
+    position_context_style,
+    position_exit_rule_text,
+    positions_summary_text,
+)
+
+
+def test_compute_position_context_computes_pct_above_stop_and_days_remaining():
+    ctx = compute_position_context({
+        "live_price": 110.0, "stop_price": 100.0,
+        "days_held": 12, "max_holding_days": 90,
+    })
+    assert ctx["pct_above_stop"] == pytest.approx(10.0)
+    assert ctx["days_remaining"] == 78
+
+
+def test_compute_position_context_handles_missing_fields():
+    assert compute_position_context({})["pct_above_stop"] is None
+    assert compute_position_context({})["days_remaining"] is None
+    assert compute_position_context({"live_price": 110.0})["pct_above_stop"] is None
+    assert compute_position_context({"days_held": 5})["days_remaining"] is None
+
+
+def test_compute_position_context_zero_stop_price_does_not_divide_by_zero():
+    ctx = compute_position_context({"live_price": 100.0, "stop_price": 0.0})
+    assert ctx["pct_above_stop"] is None
+
+
+def test_compute_position_context_price_below_stop_is_still_a_plain_number():
+    """A position past its stop is still just a fact, not a special case --
+    e.g. mid-exit, live_price can sit right at or fractionally below the
+    stop; the function must not raise or special-case it."""
+    ctx = compute_position_context({
+        "live_price": 99.0, "stop_price": 100.0,
+        "days_held": 5, "max_holding_days": 30,
+    })
+    assert ctx["pct_above_stop"] == pytest.approx(-1.0)
+
+
+def test_position_context_style_is_neutral_regardless_of_proximity():
+    """The core tone requirement: no position is ever styled differently
+    based on how close it is to its stop or its holding deadline. Sweeps
+    a wide range of values on both sides of every meaningful threshold
+    (deep in-the-money, a hair above stop, exactly at stop, past stop;
+    plenty of days left, one day left, zero days left, overdue) and
+    asserts the returned colour never varies."""
+    pct_values = [500.0, 50.0, 5.0, 1.0, 0.1, 0.0, -0.1, -5.0, None]
+    days_values = [365, 30, 5, 1, 0, -1, None]
+
+    colours = {
+        position_context_style(pct, days)
+        for pct in pct_values
+        for days in days_values
+    }
+    assert len(colours) == 1, f"styling must be invariant to proximity, got: {colours}"
+
+
+def test_position_exit_rule_text_is_descriptive_not_predictive():
+    text = position_exit_rule_text(90)
+    assert "90" in text
+    assert "stop-loss hit" in text
+    assert "momentum turning negative" in text
+    # No alarmist/predictive language.
+    for word in ("risk", "danger", "urgent", "warning", "act now", "review"):
+        assert word not in text.lower()
+
+
+def test_position_exit_rule_text_handles_missing_max_holding_days():
+    text = position_exit_rule_text(None)
+    assert "stop-loss" in text.lower()
+
+
+def test_positions_summary_text_pluralises_correctly():
+    assert positions_summary_text(0) == "No positions open."
+    assert positions_summary_text(1) == "1 position open — portfolio operating within its normal rules."
+    assert positions_summary_text(3) == "3 positions open — portfolio operating within its normal rules."
+
+
+def test_positions_rules_explanation_has_no_call_to_action_language():
+    for phrase in ("click", "review", "close this", "consider", "you should"):
+        assert phrase not in POSITIONS_RULES_EXPLANATION.lower()

@@ -33,7 +33,18 @@ from analysis.backtest import compute_metrics, equity_curve_gbp
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_all_watchlist_entries, get_price_df, pull_incremental
 from data.scheduler import start_scheduler
-from output.performance import get_brief_cards, get_crisis_status, get_pnl_rows, get_ticker_status, pnl_metrics_df
+from output.performance import (
+    POSITIONS_RULES_EXPLANATION,
+    compute_position_context,
+    get_brief_cards,
+    get_crisis_status,
+    get_pnl_rows,
+    get_ticker_status,
+    position_context_style,
+    position_exit_rule_text,
+    positions_summary_text,
+    pnl_metrics_df,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -538,6 +549,33 @@ def _render_trade_card(e: dict) -> None:
     if stop_price is not None:
         detail_parts.append(html.escape(f"Stop: {stop_price:,.4f}"))
 
+    # Decision-relevant context, added 2026-07-31 — plainly descriptive of
+    # how this position's exit rules work, never color-coded or ranked by
+    # proximity (position_context_style() always returns the same neutral
+    # colour regardless of either value — see its own docstring and
+    # tests/test_performance.py's proximity-sweep test).
+    ctx = compute_position_context(e)
+    ctx_colour = position_context_style(ctx["pct_above_stop"], ctx["days_remaining"])
+    ctx_parts = []
+    if ctx["pct_above_stop"] is not None:
+        ctx_parts.append(html.escape(f"{ctx['pct_above_stop']:.1f}% above stop"))
+    if ctx["days_remaining"] is not None:
+        ctx_parts.append(html.escape(
+            f"day {days_held} of {max_hold} ({ctx['days_remaining']} days until max-holding limit)"
+        ))
+    context_html = ""
+    if ctx_parts:
+        context_html = (
+            f"<div style='font-size:0.82rem;color:{ctx_colour};margin-top:4px'>"
+            f"{' · '.join(ctx_parts)}"
+            f"</div>"
+        )
+    rule_html = (
+        f"<div style='font-size:0.78rem;color:{ctx_colour};margin-top:2px'>"
+        f"{html.escape(position_exit_rule_text(max_hold))}"
+        f"</div>"
+    )
+
     st.markdown(
         f"<div style='border-left:4px solid {colour};padding:10px 16px;"
         f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:8px'>"
@@ -553,6 +591,8 @@ def _render_trade_card(e: dict) -> None:
         f"<div style='font-size:0.82rem;color:#8899AA'>"
         f"{' · '.join(detail_parts)}"
         f"</div>"
+        f"{context_html}"
+        f"{rule_html}"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -590,6 +630,21 @@ def _render_trade_card_compact(e: dict) -> None:
         pnl_html = "—"
         pnl_col  = "#8899AA"
 
+    # Decision-relevant context, added 2026-07-31 — same neutral, non-ranked
+    # treatment as the full-detail card on the Performance page (see
+    # _render_trade_card() and output/performance.py:position_context_style()).
+    ctx = compute_position_context(e)
+    ctx_colour = position_context_style(ctx["pct_above_stop"], ctx["days_remaining"])
+    ctx_bits = []
+    if ctx["pct_above_stop"] is not None:
+        ctx_bits.append(f"{ctx['pct_above_stop']:.1f}% above stop")
+    if ctx["days_remaining"] is not None:
+        ctx_bits.append(f"{ctx['days_remaining']}d until max-hold")
+    ctx_html = (
+        f"<span style='color:{ctx_colour};font-size:0.78rem'>{html.escape(' · '.join(ctx_bits))}</span>"
+        if ctx_bits else ""
+    )
+
     st.markdown(
         f"<div style='border-left:4px solid {colour};padding:6px 14px;"
         f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:6px;"
@@ -600,6 +655,7 @@ def _render_trade_card_compact(e: dict) -> None:
         f"<strong style='font-size:0.92rem'>{ticker}</strong>"
         f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held} · Entered {entry_disp}</span>"
         f"<span style='color:#8899AA;font-size:0.78rem'>Signal: {sig_disp}</span>"
+        f"{ctx_html}"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
         f"</div>",
         unsafe_allow_html=True,
@@ -847,10 +903,16 @@ def _render_briefing_page(config: dict) -> None:
     st.markdown("### Open Positions")
     open_cards = _get_open_cards(config)
     held_tickers = {c.get("ticker") for c in open_cards}
+    st.markdown(f"**{positions_summary_text(len(open_cards))}**")
+    if open_cards:
+        st.caption(POSITIONS_RULES_EXPLANATION)
     if not open_cards:
         st.info("No open positions.")
     else:
-        all_cards = sorted(open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
+        # Stable, neutral order — alphabetical by ticker. Deliberately not
+        # sorted by status/proximity to a threshold, which would imply
+        # some positions need more attention than others.
+        all_cards = sorted(open_cards, key=lambda x: x.get("ticker", ""))
         for e in all_cards:
             _render_trade_card_compact(e)
         st.caption("Full position detail is on the **Performance** page.")
@@ -1977,10 +2039,16 @@ def _render_performance_page(config: dict) -> None:
     st.divider()
     st.markdown("### Open Positions")
     open_cards = _get_open_cards(config)
+    st.markdown(f"**{positions_summary_text(len(open_cards))}**")
+    if open_cards:
+        st.caption(POSITIONS_RULES_EXPLANATION)
     if not open_cards:
         st.info("No open positions.")
     else:
-        all_cards = sorted(open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
+        # Stable, neutral order — alphabetical by ticker, not by status/
+        # proximity to a threshold (see the Daily Briefing's identical
+        # ordering choice above).
+        all_cards = sorted(open_cards, key=lambda x: x.get("ticker", ""))
         for e in all_cards:
             _render_trade_card(e)
 

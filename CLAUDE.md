@@ -2150,6 +2150,82 @@ within the cooldown window is skipped, an error after the cooldown has
 elapsed sends again, and a disabled-config error never consumes the
 cooldown timestamp.
 
+### Decision-relevant, tone-neutral context on open position cards (2026-07-31)
+
+Position cards showed a trade was open with no sense of why it was still
+open or what would close it — a plain functional gap, but the tone of any
+fix mattered as much as the data: this system exists specifically to
+remove reactive, emotionally-driven decision-making from investing, and a
+dashboard that makes individual trades look urgent or at-risk would
+quietly reintroduce exactly that. Uses only data already on the card
+(`live_price`, `stop_price`, `days_held`, `max_holding_days` — see
+`output/performance.py:get_brief_cards()`) — no new API call, no new
+pricing pipeline.
+
+**What was added, per position, on both the Daily Briefing's compact
+cards and the Performance page's full-detail cards:**
+- Distance to stop, stated plainly — `"{pct:.1f}% above stop"` — computed
+  by `output/performance.py:compute_position_context()`.
+- Days remaining until the max-holding backstop — `"{n}d until max-hold"`
+  (compact) / `"day {held} of {max} ({n} days until max-holding limit)"`
+  (full) — from the same function.
+- A plain statement of the shared exit-rule shape —
+  `position_exit_rule_text(max_holding_days)`: *"Closes automatically on
+  any of: stop-loss hit, momentum turning negative, or day {N} of holding
+  reached — whichever comes first."* Descriptive of the mechanism, not a
+  prediction of which one will fire.
+
+**Tone requirements, and how each was met:**
+- **No color-coded urgency.** `position_context_style(pct_above_stop,
+  days_remaining)` always returns the same neutral colour (`#8899AA`)
+  regardless of either input — there is no conditional/threshold logic in
+  it at all, by construction. Directly enforced by
+  `test_position_context_style_is_neutral_regardless_of_proximity`, which
+  sweeps both values across a wide range on either side of every
+  meaningful threshold (deep in-the-money through past-stop; a year of
+  runway through overdue) and asserts the returned colour set has exactly
+  one member.
+- **No ranking by proximity.** Both "Open Positions" lists (Daily Briefing
+  and Performance page) previously sorted `open_cards` by
+  `status_priority` descending — literally "most urgent first," the exact
+  pattern this task's tone requirements name directly. Changed to a
+  stable alphabetical sort by ticker on both pages. (Not independently
+  unit-tested — main.py cannot be imported in tests, see
+  `output/performance.py`'s own module docstring for why — verified by
+  reading the changed sort key directly.)
+- **No call-to-action elements.** Confirmed neither card ever had a
+  button, link, or intervention prompt before this change, and none was
+  added — the new content is text only.
+- **Calm aggregate summary first.** `positions_summary_text(n)` —
+  *"N position(s) open — portfolio operating within its normal rules."* —
+  rendered before the per-position list on both pages, immediately
+  followed by the one-time, page-level `POSITIONS_RULES_EXPLANATION`
+  caption (the exit-rule mechanism explained once, so individual cards
+  only need to state their own numbers, not repeat the full rule text
+  every time).
+- **Descriptive, not alarmist, language throughout.**
+  `test_position_exit_rule_text_is_descriptive_not_predictive` and
+  `test_positions_rules_explanation_has_no_call_to_action_language` grep
+  the actual shipped strings for alarmist/CTA vocabulary ("risk",
+  "danger", "urgent", "warning", "review", "click", "consider") and assert
+  none of it is present — a real check against the copy, not just a
+  writing-style intention.
+
+**Scope note.** The pre-existing `_STATUS_COLOURS`/`_STATUS_ICONS`
+green/amber/red badge system (ON TRACK/SIGNAL OFF/STOP LOSS/etc.) was left
+unchanged — it reflects a genuine discrete state (which exit condition, if
+any, is currently true), not a continuous proximity measure, and
+redesigning it was a larger, separate decision outside this task's literal
+scope ("using data already computed... add the following"). The tone
+requirements were applied in full to everything newly added.
+
+Covered by `tests/test_performance.py` (9 new tests): `compute_position_context()`'s
+arithmetic and its None-handling for missing/zero fields (including a
+price already past its stop, handled as a plain negative number, not a
+special case), the neutral-styling invariant above, the exit-rule text's
+content and its known-missing-`max_holding_days` fallback, and the
+summary/explanation copy checks.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

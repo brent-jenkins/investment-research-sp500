@@ -245,6 +245,84 @@ def get_brief_cards(
     return cards
 
 
+def compute_position_context(card: dict) -> dict:
+    """Neutral, descriptive context for one open position — how far the
+    live price sits from its stop, and how many days remain before the
+    max-holding backstop — computed entirely from data already on the
+    card (live_price, stop_price, days_held, max_holding_days; see
+    get_brief_cards() above), no new API calls or pricing pipeline.
+
+    This exists specifically so the numbers are computed once, in one
+    tested place, rather than re-derived inline in main.py's rendering —
+    main.py cannot be unit-tested directly (see this module's own
+    docstring), so anything worth pinning behaviour on lives here.
+    """
+    live_price = card.get("live_price")
+    stop_price = card.get("stop_price")
+    pct_above_stop = None
+    if live_price is not None and stop_price is not None and stop_price > 0:
+        pct_above_stop = (live_price - stop_price) / stop_price * 100.0
+
+    days_held = card.get("days_held")
+    max_holding_days = card.get("max_holding_days")
+    days_remaining = None
+    if days_held is not None and max_holding_days is not None:
+        days_remaining = int(max_holding_days) - int(days_held)
+
+    return {"pct_above_stop": pct_above_stop, "days_remaining": days_remaining}
+
+
+_NEUTRAL_POSITION_COLOUR = "#8899AA"
+
+
+def position_context_style(pct_above_stop: Optional[float], days_remaining: Optional[int]) -> str:
+    """Colour to use for the stop-distance / holding-countdown text on an
+    open position card.
+
+    Always returns the same neutral colour regardless of either value —
+    there is deliberately no proximity-based styling (no red for "close
+    to stop", no traffic-light gradient as a position nears its deadline).
+    This system exists to remove reactive, emotionally-driven decision-
+    making from investing; a dashboard that makes an individual trade look
+    urgent as a number approaches a threshold would quietly reintroduce
+    exactly that. Kept as its own function (rather than inlined where it's
+    used) specifically so this invariant is directly testable — see
+    tests/test_performance.py's proximity-sweep test — not just "true
+    because nothing currently branches on it."
+    """
+    return _NEUTRAL_POSITION_COLOUR
+
+
+def position_exit_rule_text(max_holding_days) -> str:
+    """Plain, descriptive statement of how this position's exit rules
+    work — not a prediction of which one will fire, not a warning.
+    Every open position shares the same rule shape; only the holding-day
+    number is position-specific."""
+    if max_holding_days is None:
+        return "Closes automatically on a stop-loss hit or momentum turning negative."
+    return (
+        f"Closes automatically on any of: stop-loss hit, momentum turning negative, "
+        f"or day {int(max_holding_days)} of holding reached — whichever comes first."
+    )
+
+
+def positions_summary_text(n: int) -> str:
+    """Calm, aggregate one-line summary shown above the per-position list
+    — deliberately the first thing read on the page, so the page's first
+    impression is composed rather than a wall of individual trade data."""
+    if n == 0:
+        return "No positions open."
+    plural = "s" if n != 1 else ""
+    return f"{n} position{plural} open — portfolio operating within its normal rules."
+
+
+POSITIONS_RULES_EXPLANATION = (
+    "Each position closes automatically when its stop is hit, momentum turns negative, "
+    "or its maximum holding period is reached — whichever comes first. This describes how "
+    "the system's exit rules work, not a signal that anything needs attention."
+)
+
+
 def get_crisis_status() -> dict:
     """Today's crisis-override state plus how close the day's S&P 500 move
     is to the -7% single-day trigger threshold — not just an active/inactive
