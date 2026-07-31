@@ -37,12 +37,12 @@ Every analysis run executes `run_analysis()` → `generate_signals()` → `compu
 
 The Friday 21:30 UTC EOD run can place BUY orders that are still sitting in `PLACED` status when markets reopen Monday — T212 doesn't fill market orders outside trading hours, so a Friday-evening order can sit unfilled all weekend. A lot can change in that window (geopolitical events, Sunday futures pricing, macro news), so an order that made sense Friday afternoon may no longer reflect a signal worth acting on by Monday morning.
 
-`data/scheduler.py:_monday_premarket_job()` fires at 07:00 UTC Mondays only (`_pre_market_job()` itself is now registered `tue-fri` — see `start_scheduler()` — so the two never both fire the same morning) and does two things in sequence:
+`data/scheduler.py:_monday_premarket_job()` fires at 07:00 UTC Mondays only (fixed directly in `start_scheduler()`'s own `CronTrigger` — the Tue-Fri sibling job this used to coordinate with, `_pre_market_job()`, was removed 2026-07-31 as confirmed-redundant; see "Pre-market/US-open scheduled runs removed" below) and does two things in sequence:
 
 1. **`_cancel_stale_weekend_orders(config)`** — reads every `PLACED` `BUY` row from `t212_invest_orders` (both ETF and stock orders — they share the table, and a stale order is a stale order regardless of which automation path placed it) older than `_STALE_ORDER_HOURS` (30h). For each, calls `client.cancel_order(order_id)` via the T212 API and updates the row to `CANCELLED` with a `cancelled_at` timestamp, logging `"Monday pre-market: cancelling stale weekend order for {ticker} (placed {N} hours ago)."` No-op if T212 credentials aren't configured; never raises — a failure to cancel one order is logged and the rest still get a chance, matching the "never raises" contract the rest of `brokers/trading212.py`'s automation functions follow.
 2. **`_run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)`** — recomputes signals against the latest stored price data (Friday's closing prices; no data pull, since prices haven't changed since Friday close). `maybe_place_t212_orders()` / `maybe_place_stock_orders()` and `maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` all fire as part of this same call (identical to every other analysis run) — a ticker still showing `STRONG_BUY` in `TRENDING_BULL` after cancellation gets a fresh order; a signal that weakened over the weekend does not get a replacement, and any position whose signal now calls for exit is closed.
 
-30 hours was chosen over the ~33.5h a genuine Friday-EOD order would actually be by Monday 07:00 to leave a safety margin, while staying well clear of same-day orders if this job were ever triggered on an unexpected day. Both the hour/minute and the stale-order cancellation are registered directly in `start_scheduler()` (reading `scheduler.runs.pre_market`'s hour/minute from config so the Monday job always matches whatever time the Tue–Fri job is configured for) rather than via `config.yaml` — there is no separate `scheduler.runs.monday_premarket` config key.
+30 hours was chosen over the ~33.5h a genuine Friday-EOD order would actually be by Monday 07:00 to leave a safety margin, while staying well clear of same-day orders if this job were ever triggered on an unexpected day. Both the hour/minute and the stale-order cancellation are registered directly in `start_scheduler()`, hardcoded at 07:00 UTC — there is no separate `scheduler.runs.monday_premarket` config key. (Until 2026-07-31 this hour/minute was instead read from `scheduler.runs.pre_market`, so the Monday job always matched whatever time its Tue-Fri sibling was configured for; now that the sibling job itself is gone, hardcoding is simpler and equally correct.)
 
 **Cutoff comparison uses `strftime`, not `isoformat()`.** SQLAlchemy's SQLite `DateTime` dialect stores `placed_at` as `"YYYY-MM-DD HH:MM:SS.ffffff"` (space-separated); `datetime.isoformat()` produces `"YYYY-MM-DDTHH:MM:SS.ffffff"` (`T`-separated). SQLite compares these as plain strings, and `' '` (0x20) sorts before `'T'` (0x54) — so whenever an order's `placed_at` falls on the *same calendar date* as the cutoff, an `isoformat()`-built cutoff string would make that order compare as "older" regardless of its actual clock time, incorrectly cancelling orders younger than `_STALE_ORDER_HOURS`. `_cancel_stale_weekend_orders()` builds the cutoff string via `cutoff.strftime("%Y-%m-%d %H:%M:%S.%f")` to match the storage format exactly — the same class of bug documented in "T212 P&L reconstruction" below for `_fx_rate_as_of()`/`_module_scores_as_of()`, caught here via `test_monday_premarket_cutoff_comparison_correct_when_dates_match` in `tests/test_scheduler.py` before it ever reached production.
 
@@ -1989,6 +1989,113 @@ was never built with a toggle) worth bringing back rather than making
 unilaterally alongside an unrelated config consolidation. The
 crisis-override-trigger idea mentioned in this task's own framing was not
 built either, for the same reason.
+
+### Pre-market/US-open scheduled runs removed (2026-07-31)
+
+Two of the three daily scheduled runs — 07:00 UTC pre-market (Tue-Fri) and
+13:30 UTC US-open — were `analysis_only`: they re-ran the order-logic
+pipeline without pulling any new price data. Investigated whether this was
+a genuine V1 vestige (this project's own established pattern this session
+— same shape as the XLF/XLK mapping errors and the watchlist/
+instrument_mapping duplication) before removing anything, per this
+project's own "confirm precisely, don't just assume" standard.
+
+**Step 1 — traced what `analysis_only` actually executes, end to end.**
+`_run_analysis_pipeline(config, all_tickers, run_type)` (`data/scheduler.py`)
+does exactly two things: stamps `last_run_type` in `system_metadata`, and
+calls `brokers/trading212.py:maybe_place_orders(config, run_type)`. Inside
+`maybe_place_orders()`, `run_type != "full"` takes one specific branch:
+call `maybe_exit_positions(config)` and return immediately — no BUY phase,
+no order-status polling, no account snapshot refresh. So the *entire*
+effect of both runs, individually, reduces to one function call:
+`maybe_exit_positions()`. Separately, `_pre_market_job()` (the Tue-Fri
+07:00 job) also had its own data-pull step — for "exchanges that just
+closed" (originally Asian markets, JPX/HKEX, under V1's much broader
+112-asset watchlist) — which by construction can never affect anything
+`analysis_only` itself does (a data pull and the order-logic call are two
+separate steps in the same function). Confirmed the hourly
+`trade_alert_check` job (`_trade_alert_job()`) independently calls all
+three of `poll_placed_orders()`, `maybe_exit_positions()`, and
+`_fetch_t212_snapshot()` on every firing, 00:00-21:00 + 23:00 UTC every
+weekday — i.e. it already does everything either of the two runs in
+question did, plus more, on its own unconditional hourly cadence.
+
+**Step 2 — confirmed empirically, not just from reading the code.**
+1. **The pre-market job's own data pull is a permanent no-op today**,
+   confirmed by calling the actual live function against the actual live
+   config rather than inferring it: `_build_ticker_exchange_map(config)`
+   returns `{"NYSE", "FX"}` as the only two exchanges present anywhere in
+   the current `instruments:` + `watchlist.core` universe (73+3 tickers,
+   all either US-listed or FX — see "Unified instrument structure" above),
+   and `_exchanges_closed_before({"NYSE", "FX"}, now)` returns an empty
+   set — FX is explicitly excluded (never "closes"), and NYSE's own
+   session for *today* hasn't even opened yet at 07:00 UTC, so it can
+   never satisfy "closed before 07:00 UTC today." This is a direct
+   consequence of the 2026-07-31 watchlist trim (V1's ~112-asset universe,
+   which genuinely included Tokyo/Hong Kong-session tickers, cut down to
+   V2's US-and-FX-only 73+3) — real historical log lines from Jul 29-31
+   still showed a `JPX`-exchange data pull firing, but those all predate
+   that trim's deploy; nothing in the *current* deployed config can ever
+   trigger that branch again.
+2. **The hourly job already fires at the identical minute.** Production
+   logs for 2026-07-31 show `"Scheduled pre-market analysis starting"` and
+   `"Trade alert check starting…"` both logging at `07:00:00` — the same
+   second, from the same scheduler process. For the 13:30 US-open job,
+   logs show the hourly job firing at 13:00:00, the US-open job at
+   13:30:00, and the hourly job again at 14:00:00 — the US-open job sits
+   inside a 30-60 minute window already bounded on both sides by the
+   identical `maybe_exit_positions()` call the hourly job makes, using the
+   same stored price data (unchanged since the prior EOD close) and the
+   same live T212 position state. Genuinely direct evidence, not an
+   inference from reading the scheduler code alone.
+
+**Not touched: the Monday-only pre-market job.** `_monday_premarket_job()`
+has one real, non-redundant action — `_cancel_stale_weekend_orders()` — not
+replicated anywhere else in the system, so it was kept in full. Its own
+trailing `_run_analysis_pipeline(..., RUN_ANALYSIS_ONLY)` call is subject
+to the *exact same* redundancy argument as the two removed jobs (it's the
+identical `maybe_exit_positions()`-only call), but this task's scope was
+specifically the Tue-Fri 07:00 and 13:30 jobs — flagged here as an open
+finding, not acted on unilaterally.
+
+**Removed**: `_pre_market_job()`, `_us_open_job()`, and (now-dead once
+`_pre_market_job()` was gone) `_get_calendar_session()` /
+`_exchanges_closed_before()` — all deleted rather than left disabled, this
+project's standing practice for confirmed-rejected code (same precedent as
+the GARCH stop loss and HMM regime gate removals). `config.yaml`'s
+`scheduler.runs` now has only `eod`; `start_scheduler()`'s `_JOB_FNS` dict
+correspondingly only maps `"eod"`. The Monday job's hour/minute, previously
+derived from `scheduler.runs.pre_market` so it tracked its Tue-Fri
+sibling's schedule, is now hardcoded at 07:00 UTC directly in
+`start_scheduler()` (that sibling no longer exists to track). `main.py`'s
+Status page ("Next Scheduled Run" card, "Scheduled Runs" cards, Scheduler
+Health table's in-process branch which reads live APScheduler jobs
+directly and needed no change, and its daemon-mode reconstruction branch)
+all updated to match — a new `_next_monday_at(hour, minute)` helper
+computes the Monday job's own next-fire time directly (unlike
+`_next_run_for_time()`, which only ever skips weekends, not the other four
+weekdays), since that job no longer has a `scheduler.runs` entry to derive
+a "next run" display from generically.
+
+**Current schedule**: 21:30 UTC EOD (the only run that pulls prices),
+07:00 UTC Monday-only pre-market (stale-order cancellation), hourly
+trade-alert checks (00:00-21:00 + 23:00 UTC weekdays), 21:15 UTC membership
+refresh, and the 60-second job dispatcher — five scheduled activities,
+down from the wider set this file's top-of-file schedule table still
+describes (that table, and the FOMC/BoJ/ECB reaction-job sections
+immediately following the "Monday pre-market job" section above, predate
+the V1 removal and describe jobs that no longer exist in this codebase —
+a pre-existing documentation gap, out of scope to fully reconcile here,
+but worth flagging so a future reader doesn't trust that table at face
+value for the current schedule).
+
+Covered by `tests/test_scheduler.py`:
+`test_scheduler_registers_monday_job_mon_only_fixed_at_0700` (Monday job
+still registers correctly at 07:00 UTC with no `scheduler.runs.pre_market`
+key present at all, and confirms `scheduled_pre_market`/`scheduled_us_open`
+are never registered under any job id) plus the existing Monday
+stale-order-cancellation and membership-refresh registration tests, all of
+which pass unchanged against the simplified config.
 
 ### Broker integration — Trading212 Invest
 

@@ -1,13 +1,19 @@
 """Tests for data/scheduler.py.
 
 Covers the missed-EOD catch-up check, the Monday pre-market stale-order
-cancellation job, job registration (Monday-only vs Tue-Fri pre-market,
+cancellation job, job registration (Monday-only pre-market, EOD,
 membership refresh), and the simplified _run_analysis_pipeline() /
 _trade_alert_job() bodies -- both of which now just delegate straight to
 brokers/trading212.py's maybe_place_orders()/poll_placed_orders()/
 maybe_exit_positions(), since there is no separate "analysis pipeline" step
 in the momentum + crisis-override system (see data/scheduler.py's module
 docstring).
+
+The Tue-Fri 07:00 pre-market and 13:30 US-open "analysis only" jobs were
+removed 2026-07-31 (confirmed genuinely redundant with the hourly
+trade_alert_check job — see CLAUDE.md's "Pre-market/US-open scheduled runs
+removed" section) — there is no `_pre_market_job()`/`_us_open_job()` left
+to test.
 """
 
 from datetime import datetime, timedelta
@@ -282,16 +288,16 @@ def test_monday_premarket_runs_pipeline_even_with_no_stale_orders(db_engine, mon
     assert len(pipeline_calls) == 1
 
 
-def test_scheduler_registers_monday_job_mon_only_and_premarket_tue_fri(monkeypatch):
-    """start_scheduler() must register monday_premarket with day_of_week='mon'
-    and the regular pre_market job with 'tue-fri' — not both firing Monday."""
+def test_scheduler_registers_monday_job_mon_only_fixed_at_0700(monkeypatch):
+    """start_scheduler() must register monday_premarket with day_of_week='mon',
+    fixed at 07:00 UTC directly (no longer derived from a scheduler.runs.pre_market
+    slot, since the Tue-Fri sibling job that slot used to also drive was
+    removed 2026-07-31 as confirmed-redundant)."""
     fake_config = {
         "scheduler": {
             "timezone": "UTC",
             "runs": {
-                "pre_market": {"hour": 7, "minute": 0, "label": "Pre-Market", "type": "analysis_only"},
-                "us_open":    {"hour": 13, "minute": 30, "label": "US Open", "type": "analysis_only"},
-                "eod":        {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
             },
         },
     }
@@ -301,15 +307,20 @@ def test_scheduler_registers_monday_job_mon_only_and_premarket_tue_fri(monkeypat
 
     sched = scheduler.start_scheduler()
     try:
-        def day_of_week(job_id: str) -> str:
+        def field(job_id: str, name: str) -> str:
             job = sched.get_job(job_id)
             assert job is not None, f"job '{job_id}' was not registered"
-            return next(str(f) for f in job.trigger.fields if f.name == "day_of_week")
+            return next(str(f) for f in job.trigger.fields if f.name == name)
 
-        assert day_of_week("monday_premarket") == "mon"
-        assert day_of_week("scheduled_pre_market") == "tue-fri"
-        assert day_of_week("scheduled_us_open") == "mon-fri"
-        assert day_of_week("scheduled_eod") == "mon-fri"
+        assert field("monday_premarket", "day_of_week") == "mon"
+        assert field("monday_premarket", "hour") == "7"
+        assert field("monday_premarket", "minute") == "0"
+        assert field("scheduled_eod", "day_of_week") == "mon-fri"
+
+        # The removed Tue-Fri pre-market and 13:30 US-open jobs must not
+        # come back under any job id.
+        assert sched.get_job("scheduled_pre_market") is None
+        assert sched.get_job("scheduled_us_open") is None
     finally:
         scheduler.stop_scheduler()
 
@@ -322,9 +333,7 @@ def test_scheduler_registers_membership_refresh_job(monkeypatch):
         "scheduler": {
             "timezone": "UTC",
             "runs": {
-                "pre_market": {"hour": 7, "minute": 0, "label": "Pre-Market", "type": "analysis_only"},
-                "us_open":    {"hour": 13, "minute": 30, "label": "US Open", "type": "analysis_only"},
-                "eod":        {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
             },
         },
     }

@@ -214,6 +214,20 @@ def _next_run_for_time(hour: int, minute: int) -> datetime:
     return candidate
 
 
+def _next_monday_at(hour: int, minute: int) -> datetime:
+    """Return the next Monday's hour:minute UTC occurrence (today counts if
+    it's already Monday and that time hasn't passed yet). Used for the
+    Monday-only pre-market job (data/scheduler.py:_monday_premarket_job()),
+    which fires on no other day of the week -- unlike _next_run_for_time()
+    above, which only ever skips weekends, not the other four weekdays."""
+    now = datetime.utcnow()
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    days_ahead = (0 - candidate.weekday()) % 7   # 0 = Monday
+    if days_ahead == 0 and candidate <= now:
+        days_ahead = 7
+    return candidate + timedelta(days=days_ahead)
+
+
 def _git_log_info() -> tuple[str, str]:
     """Return (timestamp_str, short_message) for the most recent git commit."""
     try:
@@ -938,14 +952,19 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub, _sched_lvl)
 
     _sched_cfg_runs = config.get("scheduler", {}).get("runs", {})
-    _RUN_LABELS = {"pre_market": "Pre-Market", "us_open": "US Open", "eod": "End of Day"}
+    _RUN_LABELS = {"eod": "End of Day"}
     _nxt_dt, _nxt_label = None, ""
     for _rn, _rl in _RUN_LABELS.items():
         _rc = _sched_cfg_runs.get(_rn, {})
         _nt = _next_run_for_time(int(_rc.get("hour", 0)), int(_rc.get("minute", 0)))
-        _rl_eff = "Monday Pre-Market" if (_rn == "pre_market" and _nt.weekday() == 0) else _rl
         if _nxt_dt is None or _nt < _nxt_dt:
-            _nxt_dt, _nxt_label = _nt, _rl_eff
+            _nxt_dt, _nxt_label = _nt, _rl
+    # Monday pre-market (stale-order cancellation) is a separate, Monday-only
+    # job fixed at 07:00 UTC (data/scheduler.py:_monday_premarket_job()) —
+    # included in the same "which fires soonest" comparison as EOD above.
+    _nt_mon = _next_monday_at(7, 0)
+    if _nxt_dt is None or _nt_mon < _nxt_dt:
+        _nxt_dt, _nxt_label = _nt_mon, "Monday Pre-Market"
     if _nxt_dt:
         _nxt_delta = (_nxt_dt - datetime.utcnow()).total_seconds()
         _nxt_until = (
@@ -1016,15 +1035,17 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
     st.markdown("### Scheduled Runs")
+    st.caption(
+        "The 07:00 (Tue–Fri) pre-market and 13:30 US-open analysis-only runs "
+        "that used to sit here were removed 2026-07-31 — confirmed redundant "
+        "with the hourly trade-alert job below, not just assumed. See "
+        "CLAUDE.md's \"Pre-market/US-open scheduled runs removed\" section."
+    )
     sched_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_DISPLAY = {
-        "pre_market": ("Pre-Market",  "Tue–Fri: order logic only — Asian closed, European opening. "
-                                       "Mon: Monday Pre-Market job runs instead — cancels stale "
-                                       "weekend BUY orders first, then the same order-logic-only run."),
-        "us_open":    ("US Open",     "Order logic only — catches overnight moves before US open"),
-        "eod":        ("End of Day",  "Full data refresh + order logic after NYSE close"),
+        "eod": ("End of Day", "Full data refresh + order logic after NYSE close"),
     }
-    run_cols = st.columns(len(_RUN_DISPLAY))
+    run_cols = st.columns(len(_RUN_DISPLAY) + 1)
     for col, (run_name, (label, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
         run_cfg = sched_runs.get(run_name, {})
         h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
@@ -1038,6 +1059,24 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         )
         _status_card(col, f"{label} · {time_str}", _fmt_uk(nxt, "%a %H:%M"),
                      f"{until} — {desc}", "info")
+
+    # Monday-only stale-order cancellation — fixed at 07:00 UTC directly in
+    # data/scheduler.py, not driven by config.yaml's scheduler.runs (see that
+    # module's own comment on why there is deliberately no separate
+    # scheduler.runs.monday_premarket config key).
+    _mon_nxt = _next_monday_at(7, 0)
+    _mon_delta = (_mon_nxt - datetime.utcnow()).total_seconds()
+    _mon_until = (
+        f"in {int(_mon_delta / 60)}m" if _mon_delta < 3600
+        else f"in {_mon_delta / 3600:.1f}h" if _mon_delta < 86400
+        else f"in {_mon_delta / 86400:.1f}d"
+    )
+    _status_card(
+        run_cols[-1], f"Monday Pre-Market · {_uk_sched_time(7, 0)}",
+        _fmt_uk(_mon_nxt, "%a %H:%M"),
+        f"{_mon_until} — Cancels stale weekend BUY orders, then order logic",
+        "info",
+    )
 
     st.divider()
     st.markdown("### Data Coverage")
@@ -1424,8 +1463,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         pass
 
     _JOB_LABELS: dict[str, tuple[str, str]] = {
-        "scheduled_pre_market": ("Pre-Market",    f"{_uk_sched_time(7, 0)} · Mon–Fri"),
-        "scheduled_us_open":    ("US Open",       f"{_uk_sched_time(13, 30)} · Mon–Fri"),
         "scheduled_eod":        ("End of Day",    f"{_uk_sched_time(21, 30)} · Mon–Fri"),
         "monday_premarket":     ("Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday"),
         "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
@@ -1517,17 +1554,18 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         for _rn, _rc in _cfg_s.get("runs", {}).items():
             _sid = f"scheduled_{_rn}"
             _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
-            _day_of_week = "tue-fri" if _rn == "pre_market" else "mon-fri"
             _trigger = _CronTrigger(
                 hour=_rc["hour"], minute=_rc["minute"],
-                day_of_week=_day_of_week, timezone=_tz_s,
+                day_of_week="mon-fri", timezone=_tz_s,
             )
             _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
 
-        _pm_cfg = _cfg_s.get("runs", {}).get("pre_market", {})
+        # Monday pre-market is fixed at 07:00 UTC directly in
+        # data/scheduler.py, not driven by scheduler.runs (see that
+        # module's own comment on why).
         _extra_static = [
-            ("monday_premarket", "Monday Pre-Market", f"{_uk_sched_time(_pm_cfg.get('hour', 7), _pm_cfg.get('minute', 0))} · Monday",
-             _CronTrigger(day_of_week="mon", hour=_pm_cfg.get("hour", 7), minute=_pm_cfg.get("minute", 0), timezone=_tz_s)),
+            ("monday_premarket", "Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday",
+             _CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=_tz_s)),
             ("trade_alert_check", "Trade Alerts", "Hourly 00–21, 23 · Mon–Fri",
              _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
             ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri",

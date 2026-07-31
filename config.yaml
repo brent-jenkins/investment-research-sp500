@@ -137,21 +137,22 @@ database:
 
 scheduler:
   timezone: "UTC"
-  # Three daily runs on weekdays (Mon–Fri):
-  #   07:00 UTC  Pre-market  — analysis only (Asian session closed, European markets opening)
-  #   13:30 UTC  US open     — analysis only (catches overnight moves before US open)
-  #   21:30 UTC  End of day  — full data refresh + analysis (primary run, after NYSE close)
+  # One daily run on weekdays (Mon-Fri), plus the hourly trade-alert job and
+  # the Monday-only stale-order cancellation (both registered directly in
+  # data/scheduler.py:start_scheduler(), not driven by this `runs:` dict):
+  #   21:30 UTC  End of day  — full data refresh + order logic (the only run that pulls prices)
+  #
+  # The 07:00 (Tue-Fri) pre-market and 13:30 US-open "analysis only" runs
+  # that used to also live here were removed 2026-07-31 -- confirmed
+  # genuinely redundant, not assumed: both ever did was call
+  # maybe_exit_positions(), which the hourly trade_alert_check job already
+  # calls at the exact same 07:00 minute and within 30-60 minutes of 13:30
+  # either way. The pre-market job's own data pull (for exchanges that
+  # "just closed") had separately become a permanent no-op, since the
+  # current instruments: universe is exclusively NYSE/FX-listed -- see
+  # CLAUDE.md's "Pre-market/US-open scheduled runs removed" section for
+  # the full investigation.
   runs:
-    pre_market:
-      hour: 7
-      minute: 0
-      label: "Pre-Market"
-      type: "analysis_only"
-    us_open:
-      hour: 13
-      minute: 30
-      label: "US Open"
-      type: "analysis_only"
     eod:
       hour: 21
       minute: 30

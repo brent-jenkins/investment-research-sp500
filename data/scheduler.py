@@ -1,18 +1,29 @@
 """APScheduler-based scheduled jobs: daily runs with per-exchange holiday awareness.
 
 Run schedule (UTC):
-  07:00  Pre-market (Tue-Fri) — pull fresh data for exchanges that just closed (Asian
-                       markets), then place/exit orders
   07:00  Monday pre-market (Mon only) — cancel stale weekend BUY orders left PLACED
-                       from Friday's EOD run, then the same order-logic-only pipeline
-                       as the Tue-Fri pre-market job (no data pull — see
-                       _monday_premarket_job() for why Monday needs its own job
-                       instead of just widening _pre_market_job() to "mon-fri")
-  13:30  US open     — order logic only, no data pull
+                       from Friday's EOD run, then run the order-logic-only pipeline
+                       so Friday's still-open orders are re-evaluated before markets
+                       reopen (see _monday_premarket_job())
   21:15  Membership refresh — refresh point-in-time index-membership windows
                        15 minutes ahead of the EOD job's own trading decisions
   21:30  End of day  — full data refresh, then place/exit orders (all exchanges)
   00-21,23  Hourly   — T212 order-status poll, exit check, account snapshot refresh
+
+The 07:00 (Tue-Fri) pre-market and 13:30 US-open "analysis only" runs that
+used to sit between Monday's job and the EOD run were removed 2026-07-31 —
+confirmed genuinely redundant, not just assumed. Both ever did was call
+maybe_exit_positions() (no BUY phase — analysis_only always skips it, and
+in the Tue-Fri pre-market job's case, its own data pull for "exchanges that
+just closed" had already become a permanent no-op: the current V2 universe
+is exclusively NYSE/FX-listed instruments, and NYSE never satisfies "closed
+before 07:00 UTC" — confirmed directly by calling
+_exchanges_closed_before() against the live config). The hourly
+trade_alert_check job (below) already calls maybe_exit_positions() at the
+exact same 07:00 minute and again at 13:00/14:00 either side of 13:30 — so
+neither run added anything the hourly cadence didn't already cover. See
+CLAUDE.md's "Pre-market/US-open scheduled runs removed" section for the
+full investigation.
 
 Every scheduled trading run calls brokers/trading212.py:maybe_place_orders()
 (which itself calls maybe_exit_positions() first) — there is no separate
@@ -122,62 +133,6 @@ def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
         return True
 
 
-def _get_calendar_session(
-    calendar_name: str, check_date: date
-) -> tuple[datetime, datetime] | None:
-    """Return (open_utc, close_utc) for the exchange on check_date, or None if closed.
-
-    Crypto and FX are treated as open 24 h — returns None (callers handle the
-    special case by treating None as 'always eligible').
-    """
-    if calendar_name in ("Crypto", "FX"):
-        return None  # always open; caller treats None as unconditionally eligible
-    name = _resolve_calendar(calendar_name)
-    try:
-        cal = mcal.get_calendar(name)
-        schedule = cal.schedule(
-            start_date=check_date.isoformat(),
-            end_date=check_date.isoformat(),
-        )
-        if schedule.empty:
-            return None
-        row = schedule.iloc[0]
-        open_dt  = row["market_open"].to_pydatetime()
-        close_dt = row["market_close"].to_pydatetime()
-        # Ensure UTC-aware
-        if open_dt.tzinfo is None:
-            open_dt  = open_dt.replace(tzinfo=timezone.utc)
-        if close_dt.tzinfo is None:
-            close_dt = close_dt.replace(tzinfo=timezone.utc)
-        return open_dt, close_dt
-    except Exception as exc:
-        logger.warning("Session lookup failed for %s on %s: %s", calendar_name, check_date, exc)
-        return None
-
-
-def _exchanges_closed_before(
-    exchanges: set[str], cutoff_utc: datetime
-) -> set[str]:
-    """Return exchanges whose session ENDED today before *cutoff_utc*.
-
-    Used by the pre-market (07:00 UTC) run to identify which exchanges just
-    closed and therefore have fresh end-of-day data ready to pull.
-    Crypto and FX are excluded (they never 'close').
-    """
-    closed: set[str] = set()
-    check_date = cutoff_utc.date()
-    for exch in exchanges:
-        if exch in ("Crypto", "FX"):
-            continue
-        session = _get_calendar_session(exch, check_date)
-        if session is None:
-            continue  # market was closed all day — nothing to pull
-        _, close_dt = session
-        if close_dt < cutoff_utc:
-            closed.add(exch)
-    return closed
-
-
 def _fetch_t212_snapshot(config: dict) -> None:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
@@ -265,51 +220,6 @@ def _run_analysis_pipeline(
         logger.error("Order placement failed: %s", exc, exc_info=True)
 
     logger.info("Order pipeline complete (run_type=%s).", run_type)
-
-
-def _pre_market_job() -> None:
-    """07:00 UTC — pull fresh data for exchanges that just closed, then run order logic.
-
-    Asian markets (JPX/Tokyo ~06:30, HKEX ~08:00) close before this run fires.
-    For any exchange whose session ended before 07:30 UTC today, we pull
-    incremental price data for those tickers. The 13:30 and 21:30 runs
-    handle European and US markets respectively.
-    """
-    logger.info("Scheduled pre-market run starting (07:00 UTC)…")
-    try:
-        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
-        set_metadata("last_scheduled_run_name", "Pre-Market")
-    except Exception as _exc:
-        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
-    config = _load_config()
-    ticker_exchange = _build_ticker_exchange_map(config)
-
-    now_utc = datetime.now(timezone.utc)
-    # Allow a 30-min grace window — catches exchanges that close at/around run time
-    cutoff_utc = now_utc
-
-    unique_exchanges = set(ticker_exchange.values())
-    recently_closed = _exchanges_closed_before(unique_exchanges, cutoff_utc)
-
-    if recently_closed:
-        closed_tickers = [t for t, e in ticker_exchange.items() if e in recently_closed]
-        logger.info(
-            "Pre-market: exchanges closed before %s UTC — %s (%d tickers). Pulling fresh data.",
-            now_utc.strftime("%H:%M"), recently_closed, len(closed_tickers),
-        )
-        try:
-            results = pull_incremental(tickers=closed_tickers)
-            logger.info(
-                "Pre-market data pull complete — %d new rows.", sum(results.values())
-            )
-        except Exception as exc:
-            logger.error("Pre-market incremental pull failed: %s", exc, exc_info=True)
-
-    _run_analysis_pipeline(
-        config,
-        get_all_tickers(config),
-        run_type=RUN_ANALYSIS_ONLY,
-    )
 
 
 def _cancel_stale_weekend_orders(config: dict) -> int:
@@ -439,22 +349,6 @@ def _monday_premarket_job() -> None:
         logger.error("Monday pre-market: stale order cancellation failed: %s", exc, exc_info=True)
 
     _run_analysis_pipeline(config, get_all_tickers(config), run_type=RUN_ANALYSIS_ONLY)
-
-
-def _us_open_job() -> None:
-    """13:30 UTC — order logic only using most recently stored price data.
-
-    European markets are mid-session; US is about to open. No data pull —
-    requires a complete session close.
-    """
-    logger.info("Scheduled US-open run starting (13:30 UTC)…")
-    try:
-        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
-        set_metadata("last_scheduled_run_name", "US Open")
-    except Exception as _exc:
-        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
-    config = _load_config()
-    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
 
 
 def _eod_job() -> None:
@@ -682,62 +576,58 @@ def start_scheduler() -> BackgroundScheduler:
     logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
     logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 
+    # Only "eod" remains in config.yaml's scheduler.runs — the 07:00 Tue-Fri
+    # pre-market and 13:30 US-open "analysis only" jobs were removed
+    # 2026-07-31 as confirmed-redundant (see this module's own docstring
+    # above and CLAUDE.md's "Pre-market/US-open scheduled runs removed"
+    # section). This loop is kept generic (rather than hardcoding "eod"
+    # directly) so a future genuinely-new scheduled run only needs a
+    # config.yaml entry + a _JOB_FNS mapping, not a change here too.
     _JOB_FNS = {
-        "pre_market": _pre_market_job,
-        "us_open":    _us_open_job,
-        "eod":        _eod_job,
+        "eod": _eod_job,
     }
-
-    # pre_market fires Tue-Fri only — Monday morning is handled by the separate
-    # monday_premarket job below, which adds stale weekend-order cancellation
-    # before running the same order-logic-only pipeline. Every other job below
-    # still fires mon-fri.
-    _JOB_DAY_OVERRIDES = {"pre_market": "tue-fri"}
 
     for run_name, run_cfg in sched_cfg["runs"].items():
         job_fn = _JOB_FNS.get(run_name)
         if job_fn is None:
             logger.warning("Unknown scheduler run name '%s' — skipping.", run_name)
             continue
-        day_of_week = _JOB_DAY_OVERRIDES.get(run_name, "mon-fri")
         _scheduler.add_job(
             job_fn,
             trigger=CronTrigger(
                 hour=run_cfg["hour"],
                 minute=run_cfg["minute"],
-                day_of_week=day_of_week,
+                day_of_week="mon-fri",
                 timezone=tz,
             ),
             id=f"scheduled_{run_name}",
             replace_existing=True,
         )
         logger.info(
-            "Scheduled '%s' job at %02d:%02d %s (%s).",
-            run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz, day_of_week,
+            "Scheduled '%s' job at %02d:%02d %s (mon-fri).",
+            run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz,
         )
 
     # Monday-only pre-market job: cancels stale weekend BUY orders (Friday EOD
-    # orders that never filled over the weekend) before re-running the same
-    # order-logic-only pipeline the regular pre-market job runs Tue-Fri. Hour/minute
-    # follow the same config.yaml scheduler.runs.pre_market slot so both jobs
-    # always fire at the same time of day even if that's ever retimed.
-    _pre_market_cfg = sched_cfg["runs"].get("pre_market", {})
+    # orders that never filled over the weekend) before re-running the
+    # order-logic-only pipeline. Fixed at 07:00 UTC directly — this no longer
+    # tracks a config.yaml scheduler.runs.pre_market slot, since the Tue-Fri
+    # sibling job that slot used to also drive was removed (see above); there
+    # is still deliberately no separate scheduler.runs.monday_premarket
+    # config key for this one weekly job.
     _scheduler.add_job(
         _monday_premarket_job,
         trigger=CronTrigger(
             day_of_week="mon",
-            hour=_pre_market_cfg.get("hour", 7),
-            minute=_pre_market_cfg.get("minute", 0),
+            hour=7,
+            minute=0,
             timezone=tz,
         ),
         id="monday_premarket",
         name="Monday Pre-Market",
         replace_existing=True,
     )
-    logger.info(
-        "Scheduled Monday pre-market job (stale-order cancellation + order logic) at %02d:%02d %s.",
-        _pre_market_cfg.get("hour", 7), _pre_market_cfg.get("minute", 0), tz,
-    )
+    logger.info("Scheduled Monday pre-market job (stale-order cancellation + order logic) at 07:00 %s.", tz)
 
     # 60-second dispatcher: executes pending UI-requested jobs (e.g. T212 refresh).
     _scheduler.add_job(
