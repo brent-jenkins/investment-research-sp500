@@ -286,6 +286,12 @@ def _run_analysis_pipeline(
     except Exception as exc:
         logger.error("T212 Stocks order placement failed: %s", exc, exc_info=True)
 
+    try:
+        from brokers.trading212_v2 import maybe_place_v2_orders  # noqa: PLC0415
+        maybe_place_v2_orders(config, run_type)
+    except Exception as exc:
+        logger.error("V2 order placement failed: %s", exc, exc_info=True)
+
     logger.info("Analysis pipeline complete (run_type=%s).", run_type)
 
 
@@ -628,6 +634,14 @@ def _trade_alert_job() -> None:
     except Exception as _poll_exc:
         logger.warning("T212 order poll failed: %s", _poll_exc)
 
+    try:
+        from brokers.trading212_v2 import poll_v2_placed_orders as _poll_v2  # noqa: PLC0415
+        _n_v2_updated = _poll_v2(config)
+        if _n_v2_updated:
+            logger.info("V2 order poll: %d order(s) updated to terminal status.", _n_v2_updated)
+    except Exception as _poll_exc:
+        logger.warning("V2 order poll failed: %s", _poll_exc)
+
     # Exit checks run hourly so a confirmed EXIT SIGNAL closes within ~1h
     # rather than waiting up to 24h for the next EOD run. The EOD pipeline
     # calls the same two functions via maybe_place_t212_orders() /
@@ -645,6 +659,12 @@ def _trade_alert_job() -> None:
         maybe_exit_stock_positions(config)
     except Exception as exc:
         logger.error("T212 Stocks hourly exit check failed: %s", exc, exc_info=True)
+
+    try:
+        from brokers.trading212_v2 import maybe_exit_v2_positions  # noqa: PLC0415
+        maybe_exit_v2_positions(config)
+    except Exception as exc:
+        logger.error("V2 hourly exit check failed: %s", exc, exc_info=True)
 
     try:
         _fetch_t212_snapshot(config)
@@ -702,6 +722,38 @@ def _fomc_reaction_job() -> None:
         logger.warning("FOMC reaction alert email failed: %s", exc)
 
     logger.info("FOMC reaction analysis complete.")
+
+
+def _v2_membership_refresh_job() -> None:
+    """21:15 UTC weekdays — refresh analysis/v2's point-in-time S&P 500
+    membership windows from source, 15 minutes before the 21:30 EOD job's
+    live trading decisions run, so V2 eligibility is never computed against
+    stale membership data (see CLAUDE.md's "V2 architecture" section for why
+    this exists — a ticker's real S&P 500 addition/removal must reach V2's
+    eligibility check before it can affect that day's entries/exits).
+
+    refresh_membership_from_source() is already internally "never raises"
+    (per-ticker failures are caught and logged, not propagated) — the outer
+    try/except here is an extra layer specifically because this is new,
+    less battle-tested code sitting directly ahead of the EOD job in the
+    schedule, and a refresh failure must never block that job from running.
+    """
+    from analysis.v2.universe import refresh_membership_from_source  # noqa: PLC0415
+
+    try:
+        summary = refresh_membership_from_source()
+        if summary.get("changed"):
+            logger.info(
+                "V2 membership refresh: %d ticker(s) changed — %s",
+                len(summary["changed"]), [c["ticker"] for c in summary["changed"]],
+            )
+        if summary.get("errors"):
+            logger.warning(
+                "V2 membership refresh: %d error(s) — %s",
+                len(summary["errors"]), summary["errors"],
+            )
+    except Exception as exc:
+        logger.warning("V2 membership refresh job failed: %s", exc)
 
 
 def _boj_reaction_job() -> None:
@@ -1047,6 +1099,26 @@ def start_scheduler() -> BackgroundScheduler:
         "Scheduled ECB reaction analysis at 12:30 %s weekdays "
         "(active on ECB decision days only).", tz,
     )
+
+    # V2 membership refresh — 15 minutes ahead of the EOD job's own 21:30
+    # slot, so any real S&P 500 addition/removal is reflected before that
+    # run's trading decisions. Fixed at 21:15 rather than derived from
+    # sched_cfg["runs"]["eod"] — unlike the Monday pre-market job (which
+    # deliberately tracks the pre_market slot if it's ever retimed), this
+    # job's only requirement is "shortly before EOD", not "exactly N
+    # minutes before whatever EOD currently is".
+    _scheduler.add_job(
+        _v2_membership_refresh_job,
+        trigger=CronTrigger(
+            hour=21,
+            minute=15,
+            day_of_week="mon-fri",
+            timezone=tz,
+        ),
+        id="v2_membership_refresh",
+        replace_existing=True,
+    )
+    logger.info("Scheduled V2 membership refresh at 21:15 %s weekdays.", tz)
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))

@@ -15,7 +15,7 @@ python -m streamlit run main.py
 
 First-run sequence: **Run Analysis** → **Generate Signals**. On the very first run with no data in the database, click Run Analysis on the Signals page; subsequent runs are fully automatic. Refresh pulls up to 10 years of OHLCV history per asset on the first load for each ticker; subsequent runs are incremental (only days since the last stored date). Run Analysis computes all technical indicators and writes them to the `indicators` table. Generate Signals detects the market regime then scores every asset and writes to the `signals` table.
 
-After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Ten APScheduler jobs fire automatically:
+After the first run, analysis and signals are automated. On every Streamlit startup the app re-runs analysis if price data exists. Eleven APScheduler jobs fire automatically:
 
 | Schedule | Type | What it does |
 |---|---|---|
@@ -26,8 +26,9 @@ After the first run, analysis and signals are automated. On every Streamlit star
 | **Mon–Fri 12:30** | ECB reaction | Analysis-only pipeline + alert email on ECB decision days only (`analysis/central_bank.py:is_ecb_decision_day()` gates execution) — see "Central bank event monitoring — BoJ / ECB" below |
 | **Mon–Fri 13:30** | Analysis only | `run_analysis()` → `generate_signals()` → `compute_all_pairs()` — no data pull (EU mid-session, US about to open) |
 | **Mon–Fri 19:05** | FOMC reaction | Analysis-only pipeline on FOMC decision days only (`analysis/fomc.py:is_fomc_decision_day()` gates execution); silently exits on non-FOMC days |
-| **Mon–Fri 21:30** | Full refresh | `pull_incremental()` for all open exchanges, FRED macro fetch, `refresh_release_calendars()` (see "Macro module — release-calendar staleness" below), then full analysis pipeline; places T212 orders; calls `_fetch_t212_snapshot()` at the end |
-| **Mon–Fri 00:00–21:00 + 23:00 (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS / EXIT SIGNAL — filtered per-trade by home exchange session (only alerts when the asset's market is open); runs the T212 Invest exit check (`maybe_exit_t212_positions()` / `maybe_exit_stock_positions()`); calls `_fetch_t212_snapshot()` at the end to keep the account/positions snapshot current |
+| **Mon–Fri 21:15** | V2 membership refresh | `analysis/v2/universe.py:refresh_membership_from_source()` — re-fetches V2's point-in-time S&P 500 membership source, 15 minutes ahead of the EOD job so V2's eligibility check is never computed against stale membership data; see "V2 architecture" below |
+| **Mon–Fri 21:30** | Full refresh | `pull_incremental()` for all open exchanges, FRED macro fetch, `refresh_release_calendars()` (see "Macro module — release-calendar staleness" below), then full analysis pipeline; places T212 orders (V1's `maybe_place_t212_orders()`/`maybe_place_stock_orders()` are called but are no-ops as of the 2026-07-31 V2 cutover — see "V2 live execution and cutover" below — `maybe_place_v2_orders()` is the live path); calls `_fetch_t212_snapshot()` at the end |
+| **Mon–Fri 00:00–21:00 + 23:00 (hourly)** | Trade alerts | Fetches live prices for open trades; emails alert on STOP LOSS / EXIT SIGNAL — filtered per-trade by home exchange session (only alerts when the asset's market is open); runs the T212 Invest exit check (`maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` — both no-ops post-cutover) and V2's exit check/order-status poll (`maybe_exit_v2_positions()` / `poll_v2_placed_orders()` — the live path); calls `_fetch_t212_snapshot()` at the end to keep the account/positions snapshot current |
 | **Sunday 10:00** | Weekly summary | Sends the weekly performance summary email (regime, signals, open trades, P&L, accuracy, macro, diverging pairs) |
 
 Every analysis run executes `run_analysis()` → `generate_signals()` → `compute_all_pairs()` and stamps `last_analysis_run` + `last_run_type`. The EOD run additionally stamps `last_full_refresh`. Manual clicks are only needed on the very first run.
@@ -696,7 +697,7 @@ Below that top-level state, the Status page also renders a per-job Scheduler Hea
 
 `_render_home_page()` powers both the **Status** page and the Charts landing (shown when no asset is selected). It draws a 2×3 status grid (Last Deployment, Service Uptime, Database Size, Last Data Refresh, Last Analysis Run, Next Scheduled Run) using `st.cache_data.clear()` at entry to flush stale values, then `@st.cache_data(ttl=60)` wrappers for the two metadata reads. Cards are colour-coded green/amber/red via `_age_level()`. All dynamic values passed to `unsafe_allow_html` are sanitised with `html.escape()`. Service uptime is read from `psutil.Process().create_time()`.
 
-**`data/scheduler.py`** registers ten APScheduler jobs. All standard analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → stamps `last_run_type` → `maybe_place_t212_orders()` → `maybe_place_stock_orders()`. `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check), stamps `last_full_refresh`, and calls `_fetch_t212_snapshot(config)` to keep the account/positions snapshot current. Each step is in its own `try/except` so one failure never blocks the rest. A `_dispatch_pending_jobs()` job runs every 60 seconds; it writes the current UTC time to `system_metadata` under `scheduler_heartbeat` (used by `_start_scheduler_at_startup()` to detect a live daemon), then checks `pending_t212_fetch` and, when set, calls `_fetch_t212_snapshot()` — this is how the UI Refresh button triggers an out-of-band T212 data fetch without making direct API calls from the Streamlit thread. `_fomc_reaction_job()` fires at 19:05 UTC every weekday but calls `analysis/fomc.py:is_fomc_decision_day()` and immediately returns on non-FOMC days; on decision days it runs `_run_analysis_pipeline()` to capture the post-announcement market reaction before the regular 21:30 EOD run. The FOMC calendar uses a hardcoded 2025–2026 schedule plus a Fed press-release API check for real-time confirmation. `_boj_reaction_job()` (03:30 UTC weekdays) and `_ecb_reaction_job()` (12:30 UTC weekdays) follow the identical fire-every-weekday-and-no-op-unless-decision-day shape, but check `analysis/central_bank.py:is_boj_decision_day()`/`is_ecb_decision_day()` against config.yaml-sourced dates instead of a hardcoded list, and additionally send an alert email — see "Central bank event monitoring — BoJ / ECB" below. One more job, `_monday_premarket_job()` (registered as `monday_premarket`, `day_of_week="mon"` only), replaces `_pre_market_job()` on Mondays — see "Monday pre-market job" above.
+**`data/scheduler.py`** registers eleven APScheduler jobs. All standard analysis runs share `_run_analysis_pipeline(config, tickers, run_type)` which calls `run_analysis()` → `generate_signals()` → stamps `last_run_type` → `maybe_place_t212_orders()` → `maybe_place_stock_orders()` → `maybe_place_v2_orders()` (the first two are no-ops as of the 2026-07-31 V2 cutover — see "V2 live execution and cutover" below — the third is the live path). `generate_signals()` itself stamps `last_analysis_run`. The EOD job additionally calls `pull_incremental()` for open exchanges (per-exchange calendar check), stamps `last_full_refresh`, and calls `_fetch_t212_snapshot(config)` to keep the account/positions snapshot current. Each step is in its own `try/except` so one failure never blocks the rest. A `_dispatch_pending_jobs()` job runs every 60 seconds; it writes the current UTC time to `system_metadata` under `scheduler_heartbeat` (used by `_start_scheduler_at_startup()` to detect a live daemon), then checks `pending_t212_fetch` and, when set, calls `_fetch_t212_snapshot()` — this is how the UI Refresh button triggers an out-of-band T212 data fetch without making direct API calls from the Streamlit thread. `_fomc_reaction_job()` fires at 19:05 UTC every weekday but calls `analysis/fomc.py:is_fomc_decision_day()` and immediately returns on non-FOMC days; on decision days it runs `_run_analysis_pipeline()` to capture the post-announcement market reaction before the regular 21:30 EOD run. The FOMC calendar uses a hardcoded 2025–2026 schedule plus a Fed press-release API check for real-time confirmation. `_boj_reaction_job()` (03:30 UTC weekdays) and `_ecb_reaction_job()` (12:30 UTC weekdays) follow the identical fire-every-weekday-and-no-op-unless-decision-day shape, but check `analysis/central_bank.py:is_boj_decision_day()`/`is_ecb_decision_day()` against config.yaml-sourced dates instead of a hardcoded list, and additionally send an alert email — see "Central bank event monitoring — BoJ / ECB" below. One more job, `_monday_premarket_job()` (registered as `monday_premarket`, `day_of_week="mon"` only), replaces `_pre_market_job()` on Mondays — see "Monday pre-market job" above. `_v2_membership_refresh_job()` (registered as `v2_membership_refresh`, 21:15 UTC weekdays, 15 minutes ahead of the EOD job) calls `analysis/v2/universe.py:refresh_membership_from_source()` inside its own try/except — see "V2 architecture" below.
 
 `_trade_alert_job()` runs hourly 00:00–21:00 + 23:00 UTC on weekdays (covering all major market sessions). Manually-logged CFD trade alerting (the STOP LOSS / EXIT SIGNAL email loop, and the price-level SL/TP proximity check) was removed along with the Trade Log page — see "Removed: manual CFD trade logging" above; any CFD rows already in the `trades` table are no longer monitored or alerted on. The job now runs, unconditionally on every firing: a VIX spike check (>20% intraday jump vs. the previous close triggers an immediate analysis-only pipeline run and a spike alert email, once per calendar day), `poll_placed_orders()`, a T212 account/positions snapshot refresh, and `maybe_exit_t212_positions()` / `maybe_exit_stock_positions()` (see "Broker integration" below).
 
@@ -1041,6 +1042,180 @@ this stage's `data/database.py` addition. Stage 2 (shadow validation —
 running V2 alongside V1 in production, comparing what V2 *would* have
 traded against V1's real executions, without placing any V2 orders) and
 Stage 3 (cutover) are separate, not-yet-attempted future steps.
+
+### V2 live execution and cutover (2026-07-31)
+
+Stage 2 (shadow validation) was deliberately skipped in favour of going
+straight to cutover, on the reasoning that `trading212_v2.live` stays
+`false` throughout (T212 **demo** account, no capital risk) — so the risk
+worth managing wasn't financial, it was a bug reaching real (if play-money)
+order placement and contaminating the demo track record V2 is about to
+start building. Three pre-launch checks ran first, gated by an explicit
+"stop and report" standard rather than pushing through on any surprise.
+
+**Pre-launch Check 1 — V2 membership refresh wired into the scheduler.**
+`data/scheduler.py:_v2_membership_refresh_job()` (21:15 UTC weekdays, 15
+minutes ahead of the 21:30 EOD job) calls
+`analysis.v2.universe.refresh_membership_from_source()` inside its own
+try/except, registered via `_scheduler.add_job(..., id="v2_membership_refresh")`.
+Covered by `tests/test_scheduler.py` confirming actual schedule registration
+(day_of_week/hour/minute), not just that the underlying function works
+standalone.
+
+**Pre-launch Check 2 — crisis override verified against real historical
+data, in the production code path.** The 7 real ≥7% single-day S&P declines
+in the full price history (2008-09-29, 2008-10-09, 2008-10-15, 2008-12-01;
+2020-03-09, 2020-03-12, 2020-03-16) were located directly from production
+`^GSPC` data via `analysis/v2/crisis.py:compute_raw_trigger()`. Replaying
+2020-03-12 (S&P −9.51%) through the actual deployed `is_crisis_day()` /
+`is_entry_blocked()` confirmed both fire `True` that day, and tracing the
+cooldown window day-by-day confirmed it correctly re-extends through
+2020-03-16 (itself a second ≥7% day) and clears exactly 5 trading days
+later on 2020-03-24 — the mechanism behaves exactly as designed against
+genuine market data, not just synthetic test fixtures.
+
+**Pre-launch Check 3 — zero open V1 positions, confirmed at the source.**
+Cross-referencing `t212_invest_orders` initially showed an apparently
+unbalanced XLF BUY/SELL count; investigating the actual rows found this
+was an already-resolved, explicitly-documented "ghost position reconciled
+manually" artifact (a cancelled SELL followed by a manual reconciliation
+row), not a real open position. Confirmed directly against T212's live
+demo API (not just the cached snapshot): `get_positions()` returned zero
+positions, `get_account_summary()` showed £0 invested / £50,000 all cash.
+
+**A real, unrelated V1 bug was found as a side effect of Check 3/mapping
+verification, not fixed (V1 is being retired, not patched).**
+`trading212_stocks`'s `us_large_cap` tickers were mapped to T212 using the
+bare research ticker (e.g. `"AAPL"`) as the T212 instrument ticker — but
+T212's actual live instrument tickers for direct US-listed stocks are
+suffixed `_US_EQ` (e.g. `AAPL_US_EQ`; confirmed via `GET
+/equity/metadata/instruments` returning zero matches for any bare ticker
+and a match for every one of them under the `_US_EQ` suffix). Confirmed
+zero stock-path orders have ever actually been placed (`trading212_stocks`
+never had a qualifying TRENDING_BULL + STRONG_BUY signal fire), so this bug
+was latent and never surfaced in production — but `trading212_stocks.enabled`
+was `true` at the time of discovery, meaning the very next qualifying
+signal would very likely have failed with a T212 "instrument not found"
+rejection. Left as-is and undocumented-as-fixed in the code itself (V1's
+own code is frozen, not extended, per this cutover) — recorded here as a
+finding, not a change.
+
+**V2's own instrument mapping, verified live per-ticker before use, not
+just trusted from config.** All 33 V2 ETF tickers reuse
+`trading212_invest.ucits_mapping`'s existing, already-verified T212 IDs
+directly (same instrument, no reason to re-derive). All 40 V2 stock
+tickers were checked individually against the live instruments endpoint:
+38 resolve via the plain `{TICKER}_US_EQ` convention; **`META` resolves to
+`FB_US_EQ`** (T212 never renamed the instrument's own ticker after the
+Facebook→Meta rename — confirmed via the instrument's `name`/`shortName`
+fields, "Meta Platforms"/"META") and **`RTX` resolves to `UTX_US_EQ`** (T212
+retains the pre-merger "UTX" United Technologies ticker post-Raytheon
+merger — confirmed via `name`/`shortName` "RTX"/"RTX"). `GOLD` (Barrick
+Mining) also resolves live (`GOLD_US_EQ`) despite having an empty
+membership window in `analysis/v2/universe.py:STOCK_MEMBERSHIP` — kept in
+the mapping for completeness (matches the module's existing "fixed
+candidate, permanently zero-eligible" pattern) but will never actually
+place an order. The full, verified mapping lives in
+`config.yaml:trading212_v2.instrument_mapping`.
+
+**New tables — `V2InvestOrder` / `V2Pnl` (`v2_invest_orders` / `v2_pnl`),
+not a shared extension of V1's `T212InvestOrder` / `T212Pnl`.** V1 is
+retired, not extended, so V2's track record needed to be unambiguous from
+the start — the same reasoning that made the corrected backtest a new run
+rather than an overwrite of an existing one (see "Backtest equity-curve
+ordering bug" above). `V2InvestOrder` gained a `stop_price` column V1's own
+table no longer has: V1's live path has **no** stop-loss enforcement at all
+(removed with the GARCH stop — see "T212 order fields (post-GARCH-removal)"
+above), but V2's validated backtest actively enforces an ATR stop as its
+3rd exit priority, so unlike V1, V2's live execution has to replicate that
+— `stop_price` is fixed at entry (via the same `_resolve_entry_stop()`
+helper the backtest calls) and compared against the latest stored close on
+every exit check.
+
+**`brokers/trading212_v2.py`** mirrors `brokers/trading212.py`'s structure
+and safety invariants (retry/back-off HTTP client reuse, duplicate-SELL
+guard, "never raises" contract, FIFO P&L reconstruction, order-status
+polling for 404-on-fill) but with a genuinely new entry/exit decision core,
+built to mirror `analysis/v2/backtest.py:simulate_trades()` **exactly**,
+not a redesigned approximation:
+
+- **Entry** (all three required): momentum signal on
+  (`analysis.v2.signals.compute_signal_series()`), ticker currently a
+  genuine index member or an ETF (`analysis.v2.universe.is_member()`), not
+  inside the crisis entry-block window (`analysis.v2.crisis.is_entry_blocked()`).
+- **Exit priority**, checked in this exact order — read directly from
+  `simulate_trades()`'s own code, not assumed: `CRISIS_EXIT` (raw
+  single-day trigger) → `INDEX_REMOVAL` (stocks only) → `STOP_LOSS`
+  (fixed-at-entry ATR stop vs. latest close) → `SIGNAL_OFF` (momentum
+  turned non-positive) → `MAX_HOLDING` (`analysis.regime.get_max_holding_days()`).
+- **Position sizing reuses `trading212_invest`'s VaR config verbatim**
+  (`var_confidence`/`var_lookback_days`/`max_risk_pct`/`min_position_gbp`/
+  `max_position_gbp`), for both the ETF and stock legs of V2's universe
+  alike — because that is what `simulate_trades()` itself reads
+  (`var_cfg = config.get("trading212_invest", {})`), regardless of
+  `is_etf`. Matching this exactly, not introducing a V2-specific VaR
+  block, is what "exactly mirrors the validated backtest" means for
+  sizing. `get_max_holding_days()` is reused unmodified too — V2's 33 ETFs
+  and 37 of its 40 stocks already match a `trading212_invest.ucits_mapping`
+  / `watchlist.us_large_cap` entry from V1 and get that ticker's proper
+  ETF/stock-specific holding limit; `TSLA`/`META`/`GOOGL` (deliberately
+  kept out of V1's watchlist — see Stage 1 above) fall through to the
+  generic `backtest.max_holding_days` default, exactly as they did inside
+  the validated backtest run itself.
+- `poll_v2_placed_orders()` — a V2-specific counterpart to
+  `poll_placed_orders()`, reusing `brokers.trading212._historical_fill()`
+  directly (already generic — takes a client and order ID, no V1-table
+  dependency). Without this, a `PLACED` row in `v2_invest_orders` would
+  never resolve to `FILLED`, and P&L reconstruction (which only ever pairs
+  `FILLED` rows) would never see a closed V2 position.
+
+Wired into `data/scheduler.py`: `maybe_place_v2_orders()` alongside the two
+V1 calls inside `_run_analysis_pipeline()` (every scheduled analysis run);
+`maybe_exit_v2_positions()` and `poll_v2_placed_orders()` alongside V1's
+inside `_trade_alert_job()` (hourly). Each call is in its own try/except,
+matching the "one path's failure never blocks another's" convention every
+other call in these two functions already follows. Covered by
+`tests/test_scheduler.py` (call verification, not just registration) and
+`tests/test_v2_execution.py` (21 tests: entry-gate combinations, all five
+exit-priority orderings tested in isolation against each other, duplicate-
+order guards, `max_open_positions`/`max_total_deployed` gates, the
+never-raises contract, and FIFO P&L reconstruction including idempotency).
+
+**Reproducibility check (Step 4) — two independent passes, both clean, run
+directly against real production data on the server before any config flag
+changed.** Rather than reimplementing the live decision logic a second time
+(which would only prove the reimplementation agrees with itself), both
+checks called the actual shared primitive functions
+(`analysis.v2.signals`/`universe`/`crisis`) the same way
+`brokers/trading212_v2.py` does, and compared against
+`analysis/v2/backtest.py`'s own computed values for the same tickers/dates:
+
+1. **Entry-gate inputs** (`sig_on`, `is_member`, `crisis_now`,
+   `entry_blocked`) compared across all 73 V2 tickers × the 5 most recent
+   real trading dates (365 combinations) — **0 mismatches**.
+2. **Exit-precedence logic** applied to every ticker `simulate_trades()`
+   itself left with an open position as of the latest real date (52 of 73
+   tickers) — every one independently re-evaluated as "no exit," agreeing
+   exactly with what the validated backtest's own walk-forward concluded —
+   **52/52 agreements, 0 mismatches**.
+
+Run from a temporary, read-only checkout on the server (symlinked to the
+real `database/` directory, no writes) — the live services were never
+touched until both checks passed cleanly.
+
+**Cutover.** `config.yaml`: `trading212_invest.enabled` and
+`trading212_stocks.enabled` both flipped to `false` (code kept intact, not
+deleted — every call site's own `enabled` early-return is what actually
+stops it acting); `trading212_v2.enabled` flipped to `true`.
+`trading212_v2.live` stays `false`, matching `trading212_invest`/
+`trading212_stocks`'s own hard block — this task does not touch the
+demo/live distinction. Mutual exclusion between the two systems has no
+separate code-level lock beyond these three flags: since
+`maybe_place_t212_orders()`/`maybe_exit_t212_positions()`/
+`maybe_place_stock_orders()`/`maybe_exit_stock_positions()` all early-return
+the moment their own section's `enabled` is `false`, V1 becoming fully
+inert is a direct, verified consequence of the flag flip, not a new
+invariant to maintain elsewhere.
 
 ### Broker integration — Trading212 Invest
 

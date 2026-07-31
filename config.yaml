@@ -817,7 +817,13 @@ backtest:
     - TRENDING_BULL
 
 trading212_invest:
-  enabled: true            # Set true when ready to connect
+  enabled: false           # RETIRED 2026-07-31 -- superseded by trading212_v2 below.
+                           # Code kept intact (not deleted) but disabled at every call
+                           # site (maybe_place_t212_orders() / maybe_exit_t212_positions()
+                           # both early-return on this flag) -- confirmed zero open
+                           # positions at cutover time. Do not re-enable alongside
+                           # trading212_v2.enabled: true -- see that section's own
+                           # comment for the mutual-exclusion invariant this maintains.
   live: false              # NEVER set true until demo-validated — place_market_order() blocks it
   long_only: true          # T212 Invest is a cash account — no shorting allowed
   max_position_gbp: 2500   # Hard ceiling GBP limit per order — unchanged; VaR sizing never exceeds this
@@ -925,7 +931,10 @@ trading212_invest:
 # stocks than for ETFs (a single company's earnings miss moves the stock far more than
 # any one constituent moves a diversified ETF) and is not currently mitigated in code.
 trading212_stocks:
-  enabled: true
+  enabled: false                 # RETIRED 2026-07-31 -- superseded by trading212_v2 below.
+                                  # Same rationale as trading212_invest.enabled above:
+                                  # code kept intact, disabled at every call site, zero
+                                  # open positions confirmed at cutover time.
   live: false                    # NEVER set true until demo-validated — place_market_order() blocks it
   long_only: true
   max_position_gbp: 1000         # smaller than ETFs (2500) — higher individual stock volatility; hard ceiling, VaR sizing never exceeds this
@@ -976,6 +985,124 @@ trading212_stocks:
   # No ucits_mapping needed — stock tickers map directly to T212 instrument names (e.g.
   # "AAPL" -> "AAPL"). Set trading212_instrument on a watchlist entry only where the T212
   # instrument name differs from the research ticker.
+
+# analysis/v2's execution path — a single momentum signal (12-month trailing
+# return, long/flat, no regime classifier) plus a rare-firing crisis circuit
+# breaker, replacing trading212_invest/trading212_stocks above (V1 — retired
+# 2026-07-31, code kept intact but enabled: false, not deleted). See CLAUDE.md's
+# "V2 architecture — phased rebuild" section for the full validation history.
+#
+# VaR position sizing is deliberately NOT duplicated here — brokers/trading212_v2.py
+# reuses trading212_invest's var_confidence/var_lookback_days/max_risk_pct/
+# min_position_gbp/max_position_gbp verbatim (section="trading212_invest"), because
+# that is what analysis/v2/backtest.py:simulate_trades() itself reads
+# (var_cfg = config.get("trading212_invest", {})) — matching this exactly, for both
+# the ETF and stock legs of V2's universe alike, is what "exactly mirrors the
+# validated backtest" means for position sizing. get_max_holding_days() is reused
+# unmodified too, for the same reason (see that function's per-ticker precedence
+# in analysis/regime.py — V2's 33 ETFs and 37 of its 40 stocks already match a
+# trading212_invest.ucits_mapping / watchlist.us_large_cap entry from V1, so they
+# get the exact same ETF/stock-specific holding limit; TSLA/META/GOOGL (deliberately
+# NOT added to V1's watchlist — see CLAUDE.md's V2 Stage 1 section) fall through to
+# the generic backtest.max_holding_days default, exactly as they did inside the
+# validated backtest run itself).
+trading212_v2:
+  enabled: true             # LIVE (demo) as of 2026-07-31 cutover -- Steps 1-4 (instrument
+                            # mapping verified live, tables built, module built and tested,
+                            # dry-run reproducibility check passed 365/365 + 52/52) all
+                            # passed cleanly first. trading212_invest/trading212_stocks
+                            # above are both disabled in lockstep -- the two systems must
+                            # never both be able to place orders at the same time, since
+                            # they share one T212 demo account and several overlapping
+                            # instrument IDs (e.g. VOO's I50Dl_EQ). This flag pairing is
+                            # the entire mutual-exclusion mechanism; there is no additional
+                            # code-level lock beyond each path's own `enabled` early-return.
+  live: false               # NEVER set true — same hard block as trading212_invest/trading212_stocks
+  max_total_deployed: 0.5   # V2 has no ETF/stock split — one universe, one cap
+  max_open_positions: 20    # broader universe than either V1 path (73 tickers vs 33/37) — a higher ceiling than V1's 10, still far below "unlimited"
+  # T212 instrument mapping for all 73 analysis/v2 tickers, verified directly against
+  # the live GET /equity/metadata/instruments endpoint on 2026-07-31 (not just trusted
+  # from this file) — see CLAUDE.md's V2 live-execution section for the verification
+  # method and the two identity-mapping exceptions found (META, RTX).
+  #
+  # ETF legs (33) reuse trading212_invest.ucits_mapping's own verified T212 IDs
+  # verbatim — same instrument, same UCITS wrapper, no reason to re-derive them.
+  instrument_mapping:
+    # --- ETFs (33) — identical to trading212_invest.ucits_mapping above ---
+    VOO:  {ticker: I50Dl_EQ,  currency: USD, is_etf: true}
+    TLT:  {ticker: IDGAl_EQ,  currency: USD, is_etf: true}
+    IEF:  {ticker: TREXl_EQ,  currency: USD, is_etf: true}
+    HYG:  {ticker: XUHEd_EQ,  currency: USD, is_etf: true}
+    LQD:  {ticker: VDCPl_EQ,  currency: USD, is_etf: true}
+    GLD:  {ticker: WGLDl_EQ,  currency: USD, is_etf: true}
+    SLV:  {ticker: PHAGa_EQ,  currency: USD, is_etf: true}
+    XLK:  {ticker: XDWTl_EQ,  currency: USD, is_etf: true}
+    XLF:  {ticker: STZXs_EQ,  currency: USD, is_etf: true}
+    XLE:  {ticker: SXLEl_EQ,  currency: USD, is_etf: true}
+    XLV:  {ticker: IUHCl_EQ,  currency: USD, is_etf: true}
+    SOXX: {ticker: SEMGl_EQ,  currency: USD, is_etf: true}
+    EWJ:  {ticker: SGJPl_EQ,  currency: USD, is_etf: true}
+    EWG:  {ticker: VGERd_EQ,  currency: EUR, is_etf: true}
+    EEM:  {ticker: JEEMd_EQ,  currency: USD, is_etf: true}
+    EWZ:  {ticker: IBZLa_EQ,  currency: USD, is_etf: true}
+    INDA: {ticker: IINDl_EQ,  currency: USD, is_etf: true}
+    FXI:  {ticker: LCCGl_EQ,  currency: EUR, is_etf: true}
+    VGK:  {ticker: H4ZEd_EQ,  currency: EUR, is_etf: true}
+    SKYY: {ticker: SKYEa_EQ,  currency: USD, is_etf: true}
+    XLI:  {ticker: SXLIl_EQ,  currency: USD, is_etf: true}
+    XLY:  {ticker: SXLYl_EQ,  currency: USD, is_etf: true}
+    XLP:  {ticker: SXLPl_EQ,  currency: USD, is_etf: true}
+    XLU:  {ticker: SXLUl_EQ,  currency: USD, is_etf: true}
+    XLB:  {ticker: SXLBl_EQ,  currency: USD, is_etf: true}
+    KBE:  {ticker: BNKTa_EQ,  currency: USD, is_etf: true}
+    PDBC: {ticker: XCMCd_EQ,  currency: EUR, is_etf: true}
+    EMB:  {ticker: IEMBl_EQ,  currency: USD, is_etf: true}
+    TIP:  {ticker: IBC5d_EQ,  currency: EUR, is_etf: true}
+    AMLP: {ticker: SMLPd_EQ,  currency: EUR, is_etf: true}
+    MUB:  {ticker: MUNIl_EQ,  currency: USD, is_etf: true}
+    IBB:  {ticker: FBTUl_EQ,  currency: USD, is_etf: true}
+    IWM:  {ticker: RU2Kl_EQ,  currency: GBP, is_etf: true}
+    # --- Stocks (40) — {TICKER}_US_EQ convention, verified live; two exceptions noted ---
+    AAPL:  {ticker: AAPL_US_EQ,  currency: USD, is_etf: false}
+    ADBE:  {ticker: ADBE_US_EQ,  currency: USD, is_etf: false}
+    AMD:   {ticker: AMD_US_EQ,   currency: USD, is_etf: false}
+    AMZN:  {ticker: AMZN_US_EQ,  currency: USD, is_etf: false}
+    AVGO:  {ticker: AVGO_US_EQ,  currency: USD, is_etf: false}
+    BAC:   {ticker: BAC_US_EQ,   currency: USD, is_etf: false}
+    CAT:   {ticker: CAT_US_EQ,   currency: USD, is_etf: false}
+    COST:  {ticker: COST_US_EQ,  currency: USD, is_etf: false}
+    CRM:   {ticker: CRM_US_EQ,   currency: USD, is_etf: false}
+    CVX:   {ticker: CVX_US_EQ,   currency: USD, is_etf: false}
+    DIS:   {ticker: DIS_US_EQ,   currency: USD, is_etf: false}
+    GE:    {ticker: GE_US_EQ,    currency: USD, is_etf: false}
+    GOLD:  {ticker: GOLD_US_EQ,  currency: USD, is_etf: false}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/v2/universe.py docstring)
+    GOOGL: {ticker: GOOGL_US_EQ, currency: USD, is_etf: false}
+    GS:    {ticker: GS_US_EQ,    currency: USD, is_etf: false}
+    HD:    {ticker: HD_US_EQ,    currency: USD, is_etf: false}
+    ISRG:  {ticker: ISRG_US_EQ,  currency: USD, is_etf: false}
+    JNJ:   {ticker: JNJ_US_EQ,   currency: USD, is_etf: false}
+    JPM:   {ticker: JPM_US_EQ,   currency: USD, is_etf: false}
+    LIN:   {ticker: LIN_US_EQ,   currency: USD, is_etf: false}
+    LLY:   {ticker: LLY_US_EQ,   currency: USD, is_etf: false}
+    MA:    {ticker: MA_US_EQ,    currency: USD, is_etf: false}
+    MRK:   {ticker: MRK_US_EQ,   currency: USD, is_etf: false}
+    MSFT:  {ticker: MSFT_US_EQ,  currency: USD, is_etf: false}
+    NEM:   {ticker: NEM_US_EQ,   currency: USD, is_etf: false}
+    NFLX:  {ticker: NFLX_US_EQ,  currency: USD, is_etf: false}
+    NVDA:  {ticker: NVDA_US_EQ,  currency: USD, is_etf: false}
+    ORCL:  {ticker: ORCL_US_EQ,  currency: USD, is_etf: false}
+    PFE:   {ticker: PFE_US_EQ,   currency: USD, is_etf: false}
+    PG:    {ticker: PG_US_EQ,    currency: USD, is_etf: false}
+    QCOM:  {ticker: QCOM_US_EQ,  currency: USD, is_etf: false}
+    SPGI:  {ticker: SPGI_US_EQ,  currency: USD, is_etf: false}
+    TMO:   {ticker: TMO_US_EQ,   currency: USD, is_etf: false}
+    TSLA:  {ticker: TSLA_US_EQ,  currency: USD, is_etf: false}
+    UNH:   {ticker: UNH_US_EQ,   currency: USD, is_etf: false}
+    V:     {ticker: V_US_EQ,     currency: USD, is_etf: false}
+    WMT:   {ticker: WMT_US_EQ,   currency: USD, is_etf: false}
+    XOM:   {ticker: XOM_US_EQ,   currency: USD, is_etf: false}
+    META:  {ticker: FB_US_EQ,    currency: USD, is_etf: false}  # T212 never renamed this instrument's own ticker after Facebook->Meta; shortName/name confirm it's the right instrument (name: "Meta Platforms")
+    RTX:   {ticker: UTX_US_EQ,   currency: USD, is_etf: false}  # T212 retains the pre-merger "UTX" (United Technologies) instrument ticker; shortName/name confirm it (shortName: "RTX", name: "RTX")
 
 learning:
   enabled: true

@@ -585,6 +585,87 @@ class V2UniverseMembership(Base):
     )
 
 
+class V2InvestOrder(Base):
+    """Record of every analysis/v2 (momentum + crisis override) order attempt
+    on the T212 Invest DEMO account — brokers/trading212_v2.py's counterpart
+    to T212InvestOrder above.
+
+    Deliberately a separate table, not a shared one with t212_invest_orders:
+    V1 is being retired, not extended, so V2's track record must be
+    unambiguous from the start — the same reason the corrected backtest
+    became a new run rather than overwriting an existing one (see CLAUDE.md's
+    "Backtest equity-curve ordering bug" section for that precedent).
+
+    stop_price is a field V1's own T212InvestOrder no longer has (removed
+    with the GARCH stop — see CLAUDE.md's "T212 order fields
+    (post-GARCH-removal)" section, since V1's live path has no stop-loss
+    enforcement at all). V2's validated backtest (analysis/v2/backtest.py)
+    *does* actively enforce an ATR stop as its 3rd exit priority, so unlike
+    V1, V2's live execution must replicate that — stop_price is fixed at
+    entry (from _resolve_entry_stop(), the same helper the backtest calls)
+    and compared against the latest stored close on every exit check.
+    """
+
+    __tablename__ = "v2_invest_orders"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    order_id         = Column(String(64))           # T212 API order ID; null if failed before placement
+    ticker           = Column(String(20), nullable=False, index=True)  # internal V2 research ticker
+    t212_ticker      = Column(String(64))           # T212 internal instrument ticker
+    direction        = Column(String(5))            # BUY / SELL
+    quantity         = Column(Float)
+    estimated_price  = Column(Float)
+    estimated_value_gbp = Column(Float)
+    fill_price       = Column(Float)
+    filled_quantity  = Column(Float)
+    status           = Column(String(20))           # PLACED / FILLED / FAILED / CANCELLED / REJECTED
+    is_etf           = Column(Boolean)               # True for the 33-ticker ETF sleeve, False for stocks
+    momentum_pct     = Column(Float)                 # trailing 12m return that triggered this BUY; null for SELL
+    stop_price       = Column(Float)                 # ATR-based stop fixed at entry; null for SELL orders
+    account_type     = Column(String(10))            # DEMO / LIVE
+    currency_code    = Column(String(10))
+    exit_reason      = Column(String(20))            # CRISIS_EXIT / INDEX_REMOVAL / STOP_LOSS / SIGNAL_OFF / MAX_HOLDING; null for BUY
+    var_pct          = Column(Float)                 # holding-period VaR used to size this BUY; null for SELL
+    error_message    = Column(Text)
+    placed_at        = Column(DateTime, default=datetime.utcnow)
+    filled_at        = Column(DateTime)
+    cancelled_at     = Column(DateTime)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+
+class V2Pnl(Base):
+    """Reconstructed realised P&L for closed analysis/v2 positions — V2's own
+    counterpart to T212Pnl, built from v2_invest_orders the same FIFO way
+    brokers/t212_learning.py:_reconstruct_t212_pnl() builds t212_pnl from
+    t212_invest_orders. Separate table, same reasoning as V2InvestOrder above.
+    """
+
+    __tablename__ = "v2_pnl"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    ticker           = Column(String(20), nullable=False, index=True)
+    t212_ticker      = Column(String(64))
+    buy_order_id     = Column(Integer, nullable=False)   # v2_invest_orders.id of the FILLED BUY row
+    sell_order_id    = Column(Integer, nullable=False)   # v2_invest_orders.id of the FILLED SELL row
+    entry_date       = Column(DateTime)
+    exit_date        = Column(DateTime)
+    entry_price      = Column(Float)
+    exit_price       = Column(Float)
+    quantity         = Column(Float)
+    currency         = Column(String(10))
+    pnl_gbp          = Column(Float)
+    pnl_pct          = Column(Float)
+    holding_days     = Column(Integer)
+    is_etf           = Column(Boolean)
+    momentum_pct_at_entry = Column(Float)            # trailing 12m return on the BUY order
+    exit_reason      = Column(String(20))            # CRISIS_EXIT / INDEX_REMOVAL / STOP_LOSS / SIGNAL_OFF / MAX_HOLDING
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("buy_order_id", "sell_order_id", name="uq_v2_pnl_buy_sell"),
+    )
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 

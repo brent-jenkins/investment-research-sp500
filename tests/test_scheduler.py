@@ -312,3 +312,115 @@ def test_scheduler_registers_monday_job_mon_only_and_premarket_tue_fri(monkeypat
         assert day_of_week("scheduled_eod") == "mon-fri"
     finally:
         scheduler.stop_scheduler()
+
+
+def test_scheduler_registers_v2_membership_refresh_job(monkeypatch):
+    """start_scheduler() must actually register v2_membership_refresh on the
+    schedule -- not just leave refresh_membership_from_source() callable in
+    isolation. Fires 15 minutes ahead of the 21:30 EOD job, weekdays only."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "pre_market": {"hour": 7, "minute": 0, "label": "Pre-Market", "type": "analysis_only"},
+                "us_open":    {"hour": 13, "minute": 30, "label": "US Open", "type": "analysis_only"},
+                "eod":        {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        job = sched.get_job("v2_membership_refresh")
+        assert job is not None, "v2_membership_refresh was not registered"
+        assert job.func is scheduler._v2_membership_refresh_job
+
+        def field(name: str) -> str:
+            return next(str(f) for f in job.trigger.fields if f.name == name)
+
+        assert field("day_of_week") == "mon-fri"
+        assert field("hour") == "21"
+        assert field("minute") == "15"
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_v2_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
+    mock_refresh = mocker.patch(
+        "analysis.v2.universe.refresh_membership_from_source",
+        return_value={"checked": 40, "changed": [{"ticker": "XYZ", "old": [], "new": [("2026-01-01", "2026-12-31")]}], "errors": []},
+    )
+    with caplog.at_level("INFO"):
+        scheduler._v2_membership_refresh_job()
+    mock_refresh.assert_called_once()
+    assert any("XYZ" in r.message for r in caplog.records)
+
+
+def test_v2_membership_refresh_job_never_raises_on_failure(mocker):
+    mocker.patch(
+        "analysis.v2.universe.refresh_membership_from_source",
+        side_effect=RuntimeError("network down"),
+    )
+    scheduler._v2_membership_refresh_job()  # must not raise
+
+
+def test_run_analysis_pipeline_calls_v2_order_placement(mocker):
+    """_run_analysis_pipeline() must call V2's order placement alongside V1's
+    two paths on every scheduled analysis run -- not just leave
+    maybe_place_v2_orders() callable in isolation."""
+    mocker.patch("data.scheduler.run_analysis")
+    mocker.patch("data.scheduler.generate_signals")
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("brokers.trading212.maybe_place_t212_orders")
+    mocker.patch("brokers.trading212.maybe_place_stock_orders")
+    mock_v2 = mocker.patch("brokers.trading212_v2.maybe_place_v2_orders")
+
+    scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")
+
+    mock_v2.assert_called_once_with({"k": "v"}, "full")
+
+
+def test_run_analysis_pipeline_v2_failure_does_not_block_pipeline(mocker):
+    mocker.patch("data.scheduler.run_analysis")
+    mocker.patch("data.scheduler.generate_signals")
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("brokers.trading212.maybe_place_t212_orders")
+    mocker.patch("brokers.trading212.maybe_place_stock_orders")
+    mocker.patch("brokers.trading212_v2.maybe_place_v2_orders", side_effect=RuntimeError("boom"))
+
+    scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")  # must not raise
+
+
+def test_trade_alert_job_calls_v2_exit_check_and_poll(mocker):
+    """The hourly job must call V2's poller and exit check alongside V1's --
+    not just leave them callable in isolation."""
+    mocker.patch("data.scheduler._load_config", return_value={})
+    # Skip the VIX-spike branch cheaply (empty df => len < 2 => branch never runs).
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.maybe_exit_t212_positions")
+    mocker.patch("brokers.trading212.maybe_exit_stock_positions")
+    mock_poll_v2 = mocker.patch("brokers.trading212_v2.poll_v2_placed_orders")
+    mock_exit_v2 = mocker.patch("brokers.trading212_v2.maybe_exit_v2_positions")
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._trade_alert_job()
+
+    mock_poll_v2.assert_called_once()
+    mock_exit_v2.assert_called_once()
+
+
+def test_trade_alert_job_v2_failure_does_not_block_job(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.maybe_exit_t212_positions")
+    mocker.patch("brokers.trading212.maybe_exit_stock_positions")
+    mocker.patch("brokers.trading212_v2.poll_v2_placed_orders", side_effect=RuntimeError("boom"))
+    mocker.patch("brokers.trading212_v2.maybe_exit_v2_positions", side_effect=RuntimeError("boom"))
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._trade_alert_job()  # must not raise
