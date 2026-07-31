@@ -1217,6 +1217,43 @@ the moment their own section's `enabled` is `false`, V1 becoming fully
 inert is a direct, verified consequence of the flag flip, not a new
 invariant to maintain elsewhere.
 
+### V2 first-cycle deployment cap overshoot (2026-07-31)
+
+The first real cycle triggered immediately after cutover placed **32 BUY
+orders in a single pass**, deploying **~74% of the account (£36,754 of
+£49,858)** — well above the configured 50% `max_total_deployed` cap, and
+above the 20-position `max_open_positions` cap too (25 of the 32 had
+already resolved to FILLED positions by the time this was caught).
+
+**Root cause.** `maybe_place_v2_orders()`'s deployed-capital and open-position
+checks (`if total_val > 0 and (invested / total_val) >= max_deployed_pct:
+return` and the `current_open >= max_open` check) are both evaluated
+**once, before the ticker loop starts** — not re-checked after each order
+placed inside the loop. This is not a new bug introduced by V2: it is the
+exact same pattern `brokers/trading212.py`'s own
+`maybe_place_t212_orders()`/`maybe_place_stock_orders()` have always used.
+V1 never exercised this failure mode in practice — its STRONG_BUY-in-
+TRENDING_BULL entry gate rarely produced more than a handful of
+simultaneous qualifiers from a cold start. V2's 12-month-momentum signal is
+structurally different: a rising market can leave a large fraction of a
+73-ticker universe simultaneously "long" at once, so the very first run
+from a completely empty account (zero pre-loop deployed-%/position-count
+to gate against) walked through most of the qualifying tickers before
+either cap had any effect.
+
+**Status as of this writing:** the T212 demo account was manually reset to
+a clean £50,000 (confirmed live via the T212 API — `totalValue: 50000.0`,
+`investments.currentValue: 0`, 0 open positions). **The cap-enforcement
+code fix itself had not yet been applied** at the point this section was
+written — checked directly against both the local repository and the
+deployed server (`brokers/trading212_v2.py`'s `max_total_deployed`/
+`max_open_positions` checks were still the original pre-loop-only version
+in both places). Do not trigger a fresh V2 cycle, and do not clear
+`v2_invest_orders`/`v2_pnl` as a "fresh start," until this fix is
+confirmed actually deployed and active — otherwise a fresh cycle against
+the newly-reset £50,000 account will very likely reproduce the identical
+overshoot immediately.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
