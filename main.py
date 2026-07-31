@@ -1616,7 +1616,8 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                                       "ingestion", "rows across"}),
             "Orders":      frozenset({"stop loss", "crisis", "index removal",
                                       "signal off", "max holding", "buy", "sell",
-                                      "order", "pnl", "position"}),
+                                      "order", "pnl", "position", "price seed",
+                                      "no viable price", "locked out"}),
         }
         _GREEN_KEYS = frozenset({
             "complete", "success", "opened", "closed at", "started", "sent",

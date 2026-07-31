@@ -1457,7 +1457,28 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 floor_to_whole_share=not state["is_etf"], is_etf=state["is_etf"],
             )
             if quantity <= 0:
-                logger.warning("Could not calculate quantity for %s (%s) — skipping.", ticker, t212_ticker)
+                # By this point the entry gate has already passed (sig_on,
+                # is_member, not entry_blocked all True — see above), so a
+                # zero quantity here is not "no signal", it is specifically
+                # "signal wants this ticker but it has no viable price" — for
+                # an ETF, that almost always means audit_etf_pricing_paths()
+                # would report it "locked out" (see "XLK mapping resolution
+                # and ETF pricing lockout audit" in CLAUDE.md). Named
+                # explicitly and pointed at the fix so this reads as an
+                # actionable, self-documenting trigger for exactly when a
+                # ticker needs seeding — not a generic skip a reader has to
+                # go correlate with a signal state themselves.
+                if state["is_etf"]:
+                    logger.warning(
+                        "%s (%s): momentum signal is positive and this ticker is otherwise "
+                        "entry-eligible, but no viable price is available (not currently "
+                        "held, no cached price) — entry skipped. Needs a manual price seed "
+                        "(Status page -> T212 Invest Account -> ETF pricing-path audit -> "
+                        "Seed a manual price) before this ticker can ever be entered.",
+                        ticker, t212_ticker,
+                    )
+                else:
+                    logger.warning("Could not calculate quantity for %s (%s) — skipping.", ticker, t212_ticker)
                 continue
 
             meta = instrument_meta.get(t212_ticker, {})

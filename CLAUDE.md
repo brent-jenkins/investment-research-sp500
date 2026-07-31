@@ -1665,6 +1665,59 @@ subsequent live-position quote correctly superseding a manual seed, and
 `audit_etf_pricing_paths()`'s held/cached/locked-out classification
 (including graceful handling of a live-position-fetch failure).
 
+**Follow-up: is a locked-out ETF's signal-positive-but-unpriceable state
+actually noticed, not just silently skipped?** Checked directly rather than
+assumed. `maybe_place_orders()`'s BUY loop only ever reaches the
+`get_quantity_for_gbp()` call for a ticker that has *already* cleared the
+full entry gate (`sig_on` AND `is_member` AND not `entry_blocked`) — so a
+`quantity <= 0` result at that point is never "no signal", it is
+specifically "signal wants this ticker but it has no viable price."
+Before this fix, the log line at that point (`"Could not calculate
+quantity for %s (%s) — skipping."`) was generic — true, and not silent
+(it's a `continue`, not a swallowed exception, so the loop correctly moves
+on to the next ticker), but it didn't confirm the signal was actually
+positive or point anywhere toward the fix, so a reader scanning logs would
+have to already know the context to recognise this as "go seed this
+ticker now" rather than some more mundane skip. Fixed by branching on
+`state["is_etf"]`: for an ETF, the warning now reads *"momentum signal is
+positive and this ticker is otherwise entry-eligible, but no viable price
+is available (not currently held, no cached price) — entry skipped. Needs
+a manual price seed (Status page → T212 Invest Account → ETF pricing-path
+audit → Seed a manual price) before this ticker can ever be entered."* —
+naming the ticker, confirming the signal state, and naming the exact fix
+and where to find it, so the log line itself is the trigger for exactly
+when to go seed it rather than needing a separate tracking mechanism. The
+non-ETF branch is unchanged (a stock reaching this point is a different,
+rarer failure mode — missing price data entirely — not something the seed
+mechanism addresses). Also added `"price seed"` / `"no viable price"` /
+`"locked out"` to the Status page Log Viewer's `"Orders"` filter category
+keywords, so this surfaces there without needing "Errors Only" (which
+already caught it too, since it logs at `WARNING`).
+
+One nuance worth being explicit about: this event is only ever recorded in
+the application log (`journalctl` / the Status page's Log Viewer) — unlike
+a placed order, a skipped-for-no-price entry never gets a row in
+`invest_orders`, so there is no queryable DB-backed record of "signal X
+wanted ticker Y on date Z but couldn't price it." An operator who never
+opens the Log Viewer (or whose retention window has rolled past the event)
+would miss it. Left as-is for now, since the log line itself is
+self-documenting and this system has no other precedent for logging
+skipped-entry attempts to a table (a placed order is the unit of record
+throughout `invest_orders`) — a DB-backed "unpriceable entry attempts"
+table would be a reasonable future addition if this in practice proves too
+easy to miss, not built pre-emptively here.
+
+Verified with a new test in `tests/test_execution.py`
+(`test_locked_out_etf_with_positive_signal_is_a_clean_logged_skip_not_a_silent_failure`):
+two ETFs configured, one locked out (mocked `get_quantity_for_gbp` returns
+`0.0` for it) and one priceable — confirms no order is placed for the
+locked-out ticker, confirms the *other* ticker still gets its order (the
+run does not halt after the locked-out ticker, proving this is a clean
+`continue` and not something that trips the per-ticker exception-isolation
+fix — see "Live pricing bug, exception isolation, and ETF mapping audit"
+above), and asserts the exact warning text names both tickers, confirms
+the signal was positive, and names the seed mechanism.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

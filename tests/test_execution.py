@@ -722,6 +722,51 @@ def test_live_position_price_refreshes_the_cache(db_engine, monkeypatch, mocker)
     assert _get_cached_price_gbp("I50Dl_EQ") == pytest.approx(6.40)
 
 
+def test_locked_out_etf_with_positive_signal_is_a_clean_logged_skip_not_a_silent_failure(
+    db_engine, v2_mocks, mocker, caplog,
+):
+    """A locked-out ETF (no held position, no cached price) whose momentum
+    signal is genuinely positive must: (1) not place an order, (2) not raise
+    or halt the run -- the next ticker in dict order must still be
+    processed, and (3) log a specific, actionable warning naming the ticker
+    and pointing at the seed mechanism, not a generic message a reader would
+    have to correlate with a signal state themselves."""
+    import logging
+    from brokers.trading212 import maybe_place_orders
+
+    _mock_price_data(mocker, {"XLK": _bullish_frame(), "VOO": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    # XLK: entry-eligible but unpriceable (locked out). VOO: entry-eligible
+    # and priceable -- proves the loop keeps going past XLK, in dict order.
+    def _qty_side_effect(t212_ticker, *args, **kwargs):
+        return 0.0 if t212_ticker == "SXLKl_EQ" else 10.0
+    v2_mocks.get_quantity_for_gbp.side_effect = _qty_side_effect
+
+    cfg = _config(mapping={
+        "XLK": {"ticker": "SXLKl_EQ", "currency": "USD", "is_etf": True},
+        "VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True},
+    })
+
+    with caplog.at_level(logging.WARNING, logger="brokers.trading212"):
+        maybe_place_orders(cfg, run_type="full")
+
+    # (1) No order for the locked-out ticker; (2) VOO still went through --
+    # the run didn't halt or silently drop everything after XLK.
+    placed_tickers = [c.args[0] for c in v2_mocks.place_market_order.call_args_list]
+    assert "SXLKl_EQ" not in placed_tickers
+    assert "I50Dl_EQ" in placed_tickers
+
+    # (3) The skip is self-documenting: names the ticker, confirms the
+    # signal was positive/eligible (not just "no data"), and points at the
+    # seed mechanism as the fix.
+    warning_text = " ".join(r.message for r in caplog.records if r.levelname == "WARNING")
+    assert "XLK" in warning_text and "SXLKl_EQ" in warning_text
+    assert "momentum signal is positive" in warning_text
+    assert "manual price seed" in warning_text
+    assert "Seed a manual price" in warning_text
+
+
 # ---------------------------------------------------------------------------
 # Manual price seed mechanism -- 2026-07-31
 #
