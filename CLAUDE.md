@@ -1265,6 +1265,177 @@ under `max_open_positions: 2`, correctly stops at exactly 3 orders under
 value), and a generous-caps control case confirms the fix doesn't
 over-suppress — all 5 qualifiers still get an order when neither cap binds.
 
+### Live pricing bug, exception isolation, and ETF mapping audit (2026-07-31)
+
+Investigating why the account showed only ETF fills and no stock fills after
+the V1 removal (see "V1 removal" section above) surfaced two independent,
+real bugs in the live order-placement code — both predating the V1 removal
+itself, inherited verbatim from the original `brokers/trading212_v2.py` —
+plus a full identity audit of all 33 ETF mappings.
+
+**Bug 1 — `get_instrument_price_gbp()`'s "live quote" path never worked, for
+any instrument.** The function's original primary path read
+`currentPrice`/`price` from `get_instruments()`'s response
+(`/equity/metadata/instruments`) — but that endpoint never carries a price
+field at all, for any instrument, stock or ETF (confirmed live against
+`AAPL_US_EQ`, `CAT_US_EQ`, and `I50Dl_EQ`'s raw records — none have it).
+Confirmed against T212's own public API documentation directly (not
+guessed): the complete endpoint set is `/equity/account/summary`,
+`/equity/orders*`, `/equity/positions`, `/equity/metadata/instruments`,
+`/equity/metadata/exchanges`, and `/equity/history/*` — there is no
+quotes/prices endpoint for an instrument not currently held, and
+`/equity/orders/market` only accepts a share `quantity`, never a notional
+value (T212's own docs: "the API currently only supports placing orders by
+QUANTITY... value-based ordering exists on other Trading 212 platforms but
+is not currently supported via the API"). This is a permanent, external
+constraint, not something fixable by calling a different endpoint.
+
+Every order placed to date had actually been sized off the *fallback* path
+(the research ticker's own close price from `price_data`, assumed USD,
+converted via GBPUSD) — silently, with no visibility into how far that
+proxy price was from the T212 instrument's real per-share price. For a
+single-stock mapping (e.g. `AAPL` → `AAPL_US_EQ`) this is a reasonable
+proxy — same underlying share, same price. For an ETF/UCITS wrapper it is
+not: wrapper providers pick an arbitrary NAV-per-share convention
+independent of any US-listed equivalent, confirmed live — VOO trades around
+$681/share on its US listing; its UCITS wrapper `I50Dl_EQ` trades around
+£6.26/share, a ~109x difference with nothing to do with currency. XLF's
+position (see Bug/mapping section below) was the case that made this
+visible, but the same proxy-price mechanism sized *every* one of the first
+13 live orders — most of them just happened to size to something
+plausible-looking rather than obviously broken.
+
+**Fix.** `get_instrument_price_gbp()` now has three tiers: (1) a genuinely
+live quote from `get_positions()`'s `currentPrice`, if the instrument is
+currently held; (2) a persisted last-known-price cache
+(`system_metadata`, key `last_known_price_gbp:{t212_ticker}`, refreshed
+every time tier 1 succeeds, valid up to 30 days old) — without this, fully
+exiting any ETF position would make that instrument permanently unpriceable
+for a future re-entry, since tier 1 has no data once a position closes;
+(3) the research-ticker-close fallback, but **only** when `is_etf=False` —
+for an ETF/UCITS wrapper with no live position and no usable cache entry,
+the function now returns `0.0` (refuses to guess) and logs an explicit
+`ERROR`, rather than silently sizing off a proxy that can be wrong by
+orders of magnitude. Callers already treat `0.0` as "skip this ticker" (the
+existing `if quantity <= 0: continue` guard), so this is a real, immediate
+behavioural change: **a brand-new ETF mapping that has never once been
+filled cannot be auto-traded** — there is no way to price it in advance
+given T212's API, and the only way to bootstrap the cache is a deliberate,
+manually-verified seed trade. This is an inherent consequence of the fix,
+not a gap in it.
+
+**Bug 2 — zero per-ticker/per-position exception isolation.** Neither the
+BUY loop (`maybe_place_orders()`) nor the exit loop (`maybe_exit_positions()`)
+wrapped their per-ticker computation (`_ticker_state()`,
+`get_quantity_for_gbp()`, `get_instrument_price_gbp()`) in a try/except —
+only the actual `place_market_order()` call had its own. An unhandled
+exception on any one ticker (e.g. a T212 rate-limit exceeding the 3-retry
+budget — observed directly, repeatedly, during this investigation) silently
+killed every ticker after it in `instrument_mapping`'s dict order, with
+nothing logged. This exactly explains an observed live incident: a real
+cycle placed 13 BUY orders (`VOO` through `VGK`, positions 1–19 of 73 in
+dict order, skipping non-qualifying tickers normally in between) and then
+produced *zero* orders for all 54 remaining tickers — 14 more ETFs and every
+one of the 40 stocks — even though a live re-check the same day found 26 of
+those 40 stocks genuinely signal-eligible. Re-running `_ticker_state()` for
+all 54 tickers the same day raised no exception for any of them, so the
+specific transient trigger from that one run couldn't be reproduced or
+named — but the structural gap (confirmed present in both the pre- and
+post-V1-removal code) is the most parsimonious explanation for the exact
+observed cutoff pattern, and was real regardless of what triggered it that
+day. Fixed: both loops now wrap their per-item body in try/except, logging
+which ticker/position and what exception, then `continue`-ing to the next
+item — a `break`/`return` from a legitimate stopping condition (caps
+exhausted, insufficient cash, a hard order failure) is control flow, not an
+exception, so it still propagates through exactly as before.
+
+**CAT's apparent zero-quantity bug — not a real bug, a test artifact.**
+An earlier diagnostic pass sized CAT against an arbitrary flat £500 test
+target and got `quantity=0` (floored from `500/600.96 ≈ 0.83`), read at the
+time as a possible silent-failure case. Re-checked against the *real* VaR-sized
+target the live system actually computes for CAT (£2,404.51, not £500):
+`raw_qty ≈ 4.00`, quantity floors to 4 — a normal, correct, non-zero order.
+No separate fix was needed; the original finding was an artifact of the
+diagnostic's own arbitrary test amount, not a defect in the sizing code.
+
+**ETF mapping audit — all 33 `instrument_mapping` ETF entries checked
+against live T212 metadata (name, ISIN, currencyCode), 2026-07-31.**
+
+- **`XLF` was mapped to a genuinely wrong instrument.** `STZXs_EQ` is
+  "SPDR MSCI Europe Financials (Acc)" — European financials, not the US
+  Financial Select Sector Index `XLF`'s momentum signal is computed
+  against. Inherited verbatim from V1's `ucits_mapping` and never caught
+  until a real live position exposed it (the position's real notional was
+  roughly £8,000 — nowhere near the ~£25 the corrupted `estimated_value_gbp`
+  record implied, since that record's own CHF-conversion had also silently
+  failed to `0.0`; see Bug 1). The correct instrument does exist and was
+  found live: **`SXLFl_EQ`** — "SPDR S&P U.S. Financials Select Sector
+  (Acc)", ISIN `IE00BWBXM500`, USD-denominated — the same
+  SPDR/State-Street Select Sector family every sibling `XL*` mapping
+  already uses (`XLB`/`XLE`/`XLI`/`XLP`/`XLU`/`XLY` are all exact-match
+  "SPDR S&P U.S. ... Select Sector (Acc)" instruments in USD). The old
+  `STZXs_EQ` position (59 shares) was closed live via a real market SELL
+  order (realised P&L −£5.46, logged in `invest_orders`/`pnl` with
+  `exit_reason = MAPPING_CORRECTION` to distinguish it from a normal
+  signal-driven exit) and `instrument_mapping.XLF` now points at
+  `SXLFl_EQ`. Since this is a brand-new-to-us instrument with no live
+  position and no cache entry, it is — correctly, per Bug 1's fix —
+  untradeable by the automated pipeline until a deliberate seed trade
+  establishes a real reference price.
+- **`XLK` flagged, not remapped.** `XDWTl_EQ` is "Xtrackers MSCI World
+  Information Technology" — global technology exposure, not the US-only
+  Technology Select Sector Index `XLK` represents. A real scope mismatch,
+  materially less severe than XLF's (still genuinely the technology sector,
+  just broader geography than intended) — left in place pending a decision
+  on whether to remap, flagged inline in `config.yaml`.
+- **12 of the 33 ETF mappings had a wrong declared `currency` in
+  config.yaml** relative to the instrument's real, live `currencyCode`
+  (`VOO`, `TLT`, `HYG`, `SLV`, `SOXX`, `EWJ`, `EEM`, `EWZ`, `INDA`, `FXI`,
+  `SKYY` — plus `XLF`'s old mapping, moot now that it's been replaced).
+  These didn't corrupt live pricing (the fixed `get_instrument_price_gbp()`
+  reads currency from the live API directly, not from this declared
+  field) but `_log_order()`'s `currency_code` falls back to it when the
+  live lookup fails, so all 12 were corrected to match T212's real
+  `currencyCode` for defence in depth.
+- **The other 20 mappings** (`AMLP`, `EMB`, `EWG`, `GLD`, `IBB`, `IEF`,
+  `IWM`, `KBE`, `LQD`, `MUB`, `PDBC`, `TIP`, `VGK`, and the six exact-match
+  SPDR sector siblings above) all check out — either an exact match to the
+  same provider/index, or (for a handful, e.g. `EEM`→a JPMorgan active EM
+  fund, `SOXX`→an Amundi semiconductor fund) a different provider tracking
+  the same underlying asset class/region, the same kind of substitution
+  already documented and accepted elsewhere in this file (see "Ticker
+  substitution" below).
+
+**Track-record caveat.** The 13 filled orders from the 2026-07-31 cutover
+cycle (see "V2 first-cycle deployment cap overshoot" above) were placed
+under code that predates every fix in this section — the unpatched pricing
+fallback (Bug 1), no exception isolation (Bug 2), and XLF's wrong mapping
+were all live at the time. That cycle also did not run through either
+systemd service (no trace in either service's journal for the exact
+placement window), strongly suggesting it was placed via an ad-hoc manual
+script during the cap-enforcement work rather than a genuine scheduled run.
+**Treat those 13 orders as pre-production/shakedown activity, not the start
+of V2's real track record.** The first cycle to run after this section's
+fixes are deployed, verified, and `trading212_invest.pause_new_entries` is
+lifted is the actual first cycle of the trustworthy, ongoing live record —
+`analysis/robustness.py`-style out-of-sample accounting for this system (if
+reintroduced) should treat that as the true starting point, not 2026-07-31's
+initial cutover.
+
+**Safety switch during this work.** `trading212_invest.pause_new_entries: true`
+was added to `config.yaml` as soon as Bug 1/Bug 2 were found, blocking
+`maybe_place_orders()`'s BUY phase entirely (any `run_type`) while both were
+root-caused and fixed; `maybe_exit_positions()` was explicitly unaffected
+throughout, since a stop-loss/signal-off/crisis exit is safety-critical and
+must never be paused. Removed once this section's fixes were deployed and
+verified.
+
+Covered by new tests in `tests/test_execution.py`: live-position pricing,
+ETF refusal with no cache, stock fallback still working, cache hit/staleness
+behaviour, cache refresh on every live read, and per-item exception
+isolation in both the BUY and exit loops (a simulated failure on one ticker
+must not prevent the next ticker in the same run from being processed).
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

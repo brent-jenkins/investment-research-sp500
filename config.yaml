@@ -201,26 +201,49 @@ trading212_invest:
 
   instrument_mapping:
     # --- ETFs (33) ---
-    VOO:  {ticker: I50Dl_EQ,  currency: USD, is_etf: true}
-    TLT:  {ticker: IDGAl_EQ,  currency: USD, is_etf: true}
+    # currency values below are the T212 instrument's OWN live currencyCode,
+    # verified 2026-07-31 against get_instruments() (see CLAUDE.md's ETF
+    # mapping audit) -- 12 entries had a wrong declared currency here before
+    # that audit (mostly assumed USD without checking); get_instrument_price_gbp()'s
+    # live-position pricing path reads currencyCode from the API directly so
+    # those didn't corrupt live pricing, but _log_order()'s currency_code
+    # falls back to this field when the live API lookup fails, so it's worth
+    # keeping accurate.
+    VOO:  {ticker: I50Dl_EQ,  currency: GBP, is_etf: true}
+    TLT:  {ticker: IDGAl_EQ,  currency: GBP, is_etf: true}
     IEF:  {ticker: TREXl_EQ,  currency: USD, is_etf: true}
-    HYG:  {ticker: XUHEd_EQ,  currency: USD, is_etf: true}
+    HYG:  {ticker: XUHEd_EQ,  currency: EUR, is_etf: true}
     LQD:  {ticker: VDCPl_EQ,  currency: USD, is_etf: true}
     GLD:  {ticker: WGLDl_EQ,  currency: USD, is_etf: true}
-    SLV:  {ticker: PHAGa_EQ,  currency: USD, is_etf: true}
+    SLV:  {ticker: PHAGa_EQ,  currency: EUR, is_etf: true}
+    # XLK flagged (not remapped) 2026-07-31 -- XDWTl_EQ tracks "Xtrackers MSCI
+    # World Information Technology", i.e. GLOBAL tech, not the US-only
+    # Technology Select Sector Index the XLK momentum signal is computed
+    # against. A real scope mismatch, less severe than XLF's (still
+    # genuinely "technology sector", just broader geography) -- left as-is
+    # pending a decision on whether to remap; see CLAUDE.md's ETF mapping
+    # audit section.
     XLK:  {ticker: XDWTl_EQ,  currency: USD, is_etf: true}
-    XLF:  {ticker: STZXs_EQ,  currency: USD, is_etf: true}
+    # XLF remapped 2026-07-31 -- STZXs_EQ ("SPDR MSCI Europe Financials") was
+    # a wrong-underlying mapping (European financials, not US) inherited
+    # verbatim from V1 and never caught until a real live position exposed
+    # it. SXLFl_EQ ("SPDR S&P U.S. Financials Select Sector (Acc)",
+    # ISIN IE00BWBXM500, USD) is the genuinely correct instrument -- same
+    # SPDR/State Street Select Sector family as every sibling XL* mapping
+    # below, verified live. The old STZXs_EQ position was closed
+    # (see CLAUDE.md's "V2 live execution" ETF mapping audit section).
+    XLF:  {ticker: SXLFl_EQ,  currency: USD, is_etf: true}
     XLE:  {ticker: SXLEl_EQ,  currency: USD, is_etf: true}
     XLV:  {ticker: IUHCl_EQ,  currency: USD, is_etf: true}
-    SOXX: {ticker: SEMGl_EQ,  currency: USD, is_etf: true}
-    EWJ:  {ticker: SGJPl_EQ,  currency: USD, is_etf: true}
+    SOXX: {ticker: SEMGl_EQ,  currency: GBX, is_etf: true}
+    EWJ:  {ticker: SGJPl_EQ,  currency: GBP, is_etf: true}
     EWG:  {ticker: VGERd_EQ,  currency: EUR, is_etf: true}
-    EEM:  {ticker: JEEMd_EQ,  currency: USD, is_etf: true}
-    EWZ:  {ticker: IBZLa_EQ,  currency: USD, is_etf: true}
-    INDA: {ticker: IINDl_EQ,  currency: USD, is_etf: true}
-    FXI:  {ticker: LCCGl_EQ,  currency: EUR, is_etf: true}
+    EEM:  {ticker: JEEMd_EQ,  currency: EUR, is_etf: true}
+    EWZ:  {ticker: IBZLa_EQ,  currency: EUR, is_etf: true}
+    INDA: {ticker: IINDl_EQ,  currency: GBP, is_etf: true}
+    FXI:  {ticker: LCCGl_EQ,  currency: GBP, is_etf: true}
     VGK:  {ticker: H4ZEd_EQ,  currency: EUR, is_etf: true}
-    SKYY: {ticker: SKYEa_EQ,  currency: USD, is_etf: true}
+    SKYY: {ticker: SKYEa_EQ,  currency: EUR, is_etf: true}
     XLI:  {ticker: SXLIl_EQ,  currency: USD, is_etf: true}
     XLY:  {ticker: SXLYl_EQ,  currency: USD, is_etf: true}
     XLP:  {ticker: SXLPl_EQ,  currency: USD, is_etf: true}

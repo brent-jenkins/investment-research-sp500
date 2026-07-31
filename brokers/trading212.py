@@ -80,6 +80,52 @@ _instruments_cache: dict[str, tuple[datetime, list]] = {}
 # (currencyCode, minTradeQuantity) this cache originally existed for.
 _INSTRUMENTS_TTL = timedelta(hours=1)
 
+# ---------------------------------------------------------------------------
+# Last-known real price cache (persisted in system_metadata) — 2026-07-31.
+#
+# get_instrument_price_gbp()'s primary path (get_positions()'s live
+# currentPrice) only has data while a position is actually open. Without
+# this cache, fully exiting any ETF position would make that same T212
+# instrument permanently unpriceable for a future re-entry (T212's API has
+# no other quote source for it — see that method's docstring), silently
+# freezing the whole ETF sleeve out of ever trading again after its first
+# exit. Every successful live-position price read refreshes this cache, so
+# a later re-entry within _LAST_PRICE_CACHE_MAX_AGE_DAYS still has a real,
+# T212-confirmed reference price to size against.
+# ---------------------------------------------------------------------------
+_LAST_PRICE_CACHE_MAX_AGE_DAYS = 30
+
+
+def _cache_last_known_price_gbp(t212_ticker: str, price_gbp: float) -> None:
+    try:
+        from data.database import set_metadata
+        import json as _json
+        set_metadata(
+            f"last_known_price_gbp:{t212_ticker}",
+            _json.dumps({"price_gbp": price_gbp, "as_of": datetime.utcnow().isoformat()}),
+        )
+    except Exception as exc:
+        logger.warning("_cache_last_known_price_gbp: failed to cache %s: %s", t212_ticker, exc)
+
+
+def _get_cached_price_gbp(t212_ticker: str) -> Optional[float]:
+    try:
+        from data.database import get_metadata_str
+        import json as _json
+        raw = get_metadata_str(f"last_known_price_gbp:{t212_ticker}")
+        if not raw:
+            return None
+        data = _json.loads(raw)
+        as_of = datetime.fromisoformat(data["as_of"])
+        age_days = (datetime.utcnow() - as_of).total_seconds() / 86400
+        if age_days > _LAST_PRICE_CACHE_MAX_AGE_DAYS:
+            return None
+        price_gbp = float(data["price_gbp"])
+        return price_gbp if price_gbp > 0 else None
+    except Exception as exc:
+        logger.warning("_get_cached_price_gbp: failed to read cache for %s: %s", t212_ticker, exc)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Trading212Client
@@ -259,50 +305,107 @@ class Trading212Client:
 
     def get_instrument_price_gbp(
         self, t212_ticker: str, research_ticker: Optional[str] = None,
+        is_etf: Optional[bool] = None,
     ) -> float:
         """Return the T212 instrument's own per-share price, converted to GBP.
 
-        Primary path: reads currentPrice + currencyCode for t212_ticker from
-        get_instruments() metadata and converts to GBP via live FX rates.
-        UCITS/US instrument prices can differ from the research ticker's own
-        price by an order of magnitude in either direction (different
-        listing venue, different share structure) — sizing must always
-        prefer the instrument's own price when it is available.
+        T212's public API has no endpoint that returns a live price/quote for
+        an instrument that is not currently held (confirmed directly against
+        T212's own API docs — /equity/account/summary, /equity/orders*,
+        /equity/positions, /equity/metadata/instruments, /equity/metadata/exchanges,
+        and /equity/history/* are the complete endpoint set; no quotes/prices
+        endpoint exists, and /equity/orders/market only accepts a share
+        quantity, never a notional value). get_instruments()'s response
+        objects never carry a currentPrice/price field at all — an earlier
+        version of this method tried to read one from there on the mistaken
+        assumption that endpoint carried live pricing; it never did, for any
+        instrument, stock or ETF (confirmed live: AAPL_US_EQ, CAT_US_EQ, and
+        I50Dl_EQ's raw records all lack the field entirely).
 
-        Fallback path: if the instruments API has no usable price for this
-        instrument, falls back to research_ticker's close price from
-        price_data (assumed USD). Logs a clear warning since this may
-        misestimate order size for instruments whose price diverges from
-        the research ticker.
+        Primary path (genuinely live): if we already hold t212_ticker,
+        get_positions() DOES return a real live currentPrice for it —
+        converted to GBP via the instrument's own currencyCode. Every time
+        this path succeeds it also refreshes a persisted last-known-price
+        cache (system_metadata) so a LATER re-entry, after this position has
+        since been fully exited (and therefore no longer appears in
+        get_positions() at all), doesn't fall all the way back to refusing —
+        see the cache path below.
 
-        Returns 0.0 if no price could be determined at all.
+        Cache path (persisted last-known real price, up to
+        _LAST_PRICE_CACHE_MAX_AGE_DAYS old): covers the gap the primary path
+        can't — a ticker that was held (and priced) at some point but is
+        fully exited right now. Still a real, T212-confirmed price, just not
+        necessarily today's.
+
+        Fallback path (research_ticker's own close from price_data, assumed
+        USD): safe ONLY for a direct single-stock mapping (is_etf=False) —
+        the T212 instrument and the research ticker are the same underlying
+        share, so their prices should track closely. It is NOT safe for an
+        ETF/UCITS wrapper (is_etf=True): wrapper providers pick an arbitrary
+        NAV-per-share convention independent of any US-listed equivalent —
+        confirmed live, e.g. VOO ($681ish) vs its own I50Dl_EQ wrapper
+        (£6.26ish), a ~109x difference that has nothing to do with currency
+        conversion. For an is_etf=True instrument with no live position and
+        no usable cache entry, this returns 0.0 (refuses to guess) rather
+        than silently using a proxy price that could be wrong by orders of
+        magnitude — callers must treat 0.0 as "skip this trade", not "no
+        data, assume something reasonable". This is the expected, permanent
+        state for a brand-new ETF mapping that has never once been filled —
+        T212's API gives no way to price it in advance; a deliberate,
+        manually-verified seed trade is the only way to bootstrap the cache
+        for a genuinely new instrument.
+
+        Returns 0.0 if no safe price could be determined.
         """
         gbpusd, eurusd = self._fx_rates()
 
+        # Primary: a genuinely live quote, if T212 already shows us holding it.
         try:
-            instruments = self.get_instruments()
-            inst = next(
-                (i for i in (instruments or []) if i.get("ticker") == t212_ticker), None,
+            positions = self.get_positions()
+            pos = next(
+                (p for p in (positions or []) if p.get("ticker") == t212_ticker), None,
             )
-            if inst:
-                raw_price = inst.get("currentPrice") or inst.get("price")
-                currency  = inst.get("currencyCode") or ""
-                if raw_price:
-                    price_gbp = self._to_gbp(float(raw_price), currency, gbpusd, eurusd)
-                    if price_gbp and price_gbp > 0:
-                        return price_gbp
+            if pos and pos.get("currentPrice"):
+                instruments = self.get_instruments()
+                inst = next(
+                    (i for i in (instruments or []) if i.get("ticker") == t212_ticker), None,
+                )
+                currency = (inst or {}).get("currencyCode") or ""
+                price_gbp = self._to_gbp(float(pos["currentPrice"]), currency, gbpusd, eurusd)
+                if price_gbp and price_gbp > 0:
+                    _cache_last_known_price_gbp(t212_ticker, price_gbp)
+                    return price_gbp
         except Exception as exc:
             logger.warning(
-                "get_instrument_price_gbp: instrument lookup failed for %s: %s",
+                "get_instrument_price_gbp: live position price lookup failed for %s: %s",
                 t212_ticker, exc,
             )
+
+        cached = _get_cached_price_gbp(t212_ticker)
+        if cached is not None:
+            logger.info(
+                "get_instrument_price_gbp: using cached last-known price for %s "
+                "(not currently held) — £%.4f.", t212_ticker, cached,
+            )
+            return cached
+
+        if is_etf:
+            logger.error(
+                "get_instrument_price_gbp: no live price for ETF instrument %s "
+                "(not currently held, no cached price) — refusing to size "
+                "off the research-ticker proxy, which is unsafe for wrapper "
+                "instruments (arbitrary NAV-per-share convention). Skipping.",
+                t212_ticker,
+            )
+            return 0.0
 
         if not research_ticker:
             return 0.0
 
         logger.warning(
-            "WARNING: Using research ticker price for %s quantity estimation — "
-            "T212 instrument price unavailable. Order size may be inaccurate.",
+            "Using research ticker price for %s quantity estimation — "
+            "T212 has no live quote for an unheld instrument. Safe only because "
+            "this is a direct single-stock mapping (is_etf=False).",
             research_ticker,
         )
         try:
@@ -329,17 +432,21 @@ class Trading212Client:
         gbp_amount: float,
         research_ticker: Optional[str] = None,
         floor_to_whole_share: bool = True,
+        is_etf: Optional[bool] = None,
     ) -> float:
         """Calculate share quantity for a given GBP order size.
 
         Sizes against the T212 instrument's own price (via
         get_instrument_price_gbp), not the research ticker's price — see
-        that method's docstring for why. floor_to_whole_share defaults to
-        True (whole-share ETF orders); callers placing fractional share
-        orders should pass False and apply their own precision rounding to
-        the raw quantity.
+        that method's docstring for why the research-ticker fallback it
+        falls back to is only safe when is_etf=False. floor_to_whole_share
+        defaults to True (whole-share ETF orders); callers placing
+        fractional share orders should pass False and apply their own
+        precision rounding to the raw quantity.
         """
-        price_gbp = self.get_instrument_price_gbp(t212_ticker, research_ticker=research_ticker)
+        price_gbp = self.get_instrument_price_gbp(
+            t212_ticker, research_ticker=research_ticker, is_etf=is_etf,
+        )
         if not price_gbp or price_gbp <= 0:
             logger.warning("get_quantity_for_gbp: no usable price for %s — returning 0.", t212_ticker)
             return 0.0
@@ -941,65 +1048,80 @@ def maybe_exit_positions(config: dict) -> None:
         if current_qty <= 0:
             continue
 
-        state = _ticker_state(ticker, config, gspc_close)
-        if state is None:
-            continue
-
-        ctx = context.get(t212_ticker, {})
-        entry_date = ctx.get("entry_date")
-        stop_price = ctx.get("stop_price")
-        max_hold = get_max_holding_days(ticker, config)
-        holding_days = (datetime.utcnow() - entry_date).days if entry_date else 0
-
-        # Exit priority — must match analysis/backtest.py:simulate_trades()
-        # exactly: crisis > index-removal > stop-loss > signal-off > max-holding.
-        exit_reason = None
-        if state["crisis_now"]:
-            exit_reason = "CRISIS_EXIT"
-        elif not state["is_etf"] and not state["is_member"]:
-            exit_reason = "INDEX_REMOVAL"
-        elif stop_price is not None and state["price"] <= stop_price:
-            exit_reason = "STOP_LOSS"
-        elif not state["sig_on"]:
-            exit_reason = "SIGNAL_OFF"
-        elif holding_days >= max_hold:
-            exit_reason = "MAX_HOLDING"
-
-        if exit_reason is None:
-            continue
-
-        if _has_recent_sell_order(ticker):
-            logger.info("%s already has a recent SELL order — skipping duplicate.", ticker)
-            continue
-
-        close_qty = abs(current_qty)
-        logger.info("Exiting %s (%s) — %s, qty=%.4f", ticker, t212_ticker, exit_reason, close_qty)
-
-        status, order_id, error_msg = "FAILED", None, None
+        # Per-position exception isolation (2026-07-31) — same fix as
+        # maybe_place_orders()'s BUY loop, and more important here: this is
+        # the safety-critical exit path, so one position's unhandled
+        # exception must never silently stop every other open position from
+        # being checked for exit. `return` (a hard order-failure halt) is
+        # control flow, not an exception, so it still propagates through
+        # this try/except exactly as before.
         try:
-            response = client.place_market_order(t212_ticker, -close_qty)
-            order_id = str(response.get("id", ""))
-            status = "PLACED"
-            logger.info("SELL %s qty=%.4f id=%s", t212_ticker, close_qty, order_id)
-        except Exception as exc:
-            error_msg = str(exc)
-            logger.error("Sell order failed for %s: %s", ticker, exc)
-            _set_t212_error(f"Sell order failed for {ticker}: {error_msg}")
-            _send_t212_error_email(error_msg, config)
+            state = _ticker_state(ticker, config, gspc_close)
+            if state is None:
+                continue
 
-        _log_order(
-            ticker=ticker, t212_ticker=t212_ticker, direction="SELL",
-            quantity=close_qty, estimated_price=state["price"], estimated_value_gbp=None,
-            status=status, order_id=order_id, is_etf=state["is_etf"],
-            account_type=account_label, currency_code=ccy_map.get(t212_ticker),
-            exit_reason=exit_reason, error_message=error_msg,
-        )
+            ctx = context.get(t212_ticker, {})
+            entry_date = ctx.get("entry_date")
+            stop_price = ctx.get("stop_price")
+            max_hold = get_max_holding_days(ticker, config)
+            holding_days = (datetime.utcnow() - entry_date).days if entry_date else 0
 
-        if status == "FAILED":
-            logger.warning("Halting exit phase after sell-order failure.")
-            return
+            # Exit priority — must match analysis/backtest.py:simulate_trades()
+            # exactly: crisis > index-removal > stop-loss > signal-off > max-holding.
+            exit_reason = None
+            if state["crisis_now"]:
+                exit_reason = "CRISIS_EXIT"
+            elif not state["is_etf"] and not state["is_member"]:
+                exit_reason = "INDEX_REMOVAL"
+            elif stop_price is not None and state["price"] <= stop_price:
+                exit_reason = "STOP_LOSS"
+            elif not state["sig_on"]:
+                exit_reason = "SIGNAL_OFF"
+            elif holding_days >= max_hold:
+                exit_reason = "MAX_HOLDING"
 
-        time.sleep(0.5)
+            if exit_reason is None:
+                continue
+
+            if _has_recent_sell_order(ticker):
+                logger.info("%s already has a recent SELL order — skipping duplicate.", ticker)
+                continue
+
+            close_qty = abs(current_qty)
+            logger.info("Exiting %s (%s) — %s, qty=%.4f", ticker, t212_ticker, exit_reason, close_qty)
+
+            status, order_id, error_msg = "FAILED", None, None
+            try:
+                response = client.place_market_order(t212_ticker, -close_qty)
+                order_id = str(response.get("id", ""))
+                status = "PLACED"
+                logger.info("SELL %s qty=%.4f id=%s", t212_ticker, close_qty, order_id)
+            except Exception as exc:
+                error_msg = str(exc)
+                logger.error("Sell order failed for %s: %s", ticker, exc)
+                _set_t212_error(f"Sell order failed for {ticker}: {error_msg}")
+                _send_t212_error_email(error_msg, config)
+
+            _log_order(
+                ticker=ticker, t212_ticker=t212_ticker, direction="SELL",
+                quantity=close_qty, estimated_price=state["price"], estimated_value_gbp=None,
+                status=status, order_id=order_id, is_etf=state["is_etf"],
+                account_type=account_label, currency_code=ccy_map.get(t212_ticker),
+                exit_reason=exit_reason, error_message=error_msg,
+            )
+
+            if status == "FAILED":
+                logger.warning("Halting exit phase after sell-order failure.")
+                return
+
+            time.sleep(0.5)
+        except Exception as position_exc:
+            logger.error(
+                "Unhandled error checking exit for %s (%s) — skipping this "
+                "position and continuing with the rest of the run: %s",
+                ticker, t212_ticker, position_exc, exc_info=True,
+            )
+            continue
 
 
 # ---------------------------------------------------------------------------
@@ -1120,113 +1242,136 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         t212_ticker = raw.get("ticker") if isinstance(raw, dict) else raw
         instrument_currency = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
 
-        state = _ticker_state(ticker, config, gspc_close)
-        if state is None:
-            continue
-
-        # Entry gate — must match simulate_trades()'s open_trade-is-None
-        # branch exactly: sig_on AND is_member AND not blocked_now.
-        if not state["sig_on"] or not state["is_member"] or state["entry_blocked"]:
-            continue
-
-        if t212_ticker in positions_by_t212:
-            logger.debug("%s already held — skipping.", ticker)
-            continue
-        if ticker in open_order_tickers:
-            logger.debug("%s has a recent order in DB — skipping.", ticker)
-            continue
-
-        max_hold = get_max_holding_days(ticker, config)
-        entry_price = state["price"]
-        atr = state["atr"]
-        stop_price, _stop_pct = _resolve_entry_stop("LONG", entry_price, atr, config)
-
-        # VaR position sizing — same formula/inputs the validated backtest
-        # itself uses (analysis/volatility.py:_var_position_size_core(), via
-        # analysis/backtest.py:simulate_trades()), except sourced from live
-        # account value and live prior-close history instead of a notional
-        # backtest constant.
-        close_series = state["close_series"]
-        var_confidence = float(t212_cfg.get("var_confidence", 0.95))
-        var_lookback = int(t212_cfg.get("var_lookback_days", 252))
-        max_risk_pct = float(t212_cfg.get("max_risk_pct", 0.01))
-        min_position_gbp = float(t212_cfg.get("min_position_gbp", 50))
-
-        prior_closes = close_series.tail(var_lookback + 1)
-        log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
-        if len(log_returns) >= _MIN_VAR_RETURNS:
-            position_gbp, _dv, holding_var = _var_position_size_core(
-                log_returns, total_val, max_position_gbp, max_hold,
-                var_confidence, max_risk_pct, min_position_gbp,
-            )
-        else:
-            position_gbp = round(max_position_gbp * 0.5, 2)
-            holding_var = None
-        position_gbp = min(position_gbp, free_cash * 0.25)
-
-        if position_gbp < 10:
-            logger.warning("Insufficient free cash (£%.2f) — stopping new orders.", free_cash)
-            break
-
-        quantity = client.get_quantity_for_gbp(
-            t212_ticker, position_gbp, research_ticker=ticker,
-            floor_to_whole_share=not state["is_etf"],
-        )
-        if quantity <= 0:
-            logger.warning("Could not calculate quantity for %s (%s) — skipping.", ticker, t212_ticker)
-            continue
-
-        meta = instrument_meta.get(t212_ticker, {})
-        min_qty = float(meta.get("minTradeQuantity", 1.0))
-        precision = int(meta.get("maxQuantityPrecision", 0) or 0)
-
-        if state["is_etf"]:
-            quantity = math.floor(quantity)  # ETFs: whole shares only
-        elif precision > 0:
-            quantity = round(quantity, precision)  # fractional-capable stock
-        else:
-            quantity = math.floor(quantity)
-
-        if quantity < min_qty or quantity <= 0:
-            logger.warning("%s (%s) qty %.4f below instrument minimum %.4f — skipping.",
-                            ticker, t212_ticker, quantity, min_qty)
-            continue
-
-        price_gbp = client.get_instrument_price_gbp(t212_ticker, research_ticker=ticker)
-        est_value_gbp = quantity * price_gbp if price_gbp else position_gbp
-
-        status, order_id, error_msg = "FAILED", None, None
+        # Per-ticker exception isolation (2026-07-31) — everything from here
+        # to the end of this iteration used to run with no isolation at all:
+        # one unhandled exception (e.g. a transient T212 rate-limit exceeding
+        # the retry budget) silently killed the rest of the run for every
+        # ticker after this one in dict order, with nothing logged. Confirmed
+        # this happened for real: a live cycle placed 13 BUY orders through
+        # position 19/73 in instrument_mapping, then produced zero orders for
+        # the remaining 54 tickers (14 ETFs + all 40 stocks) with no trace in
+        # either service's log. `break` (cap/cash exhaustion — a legitimate
+        # reason to stop the whole run) and `continue` (a ticker cleanly
+        # skipped by its own gating logic) are control flow, not exceptions,
+        # so they still propagate through this try/except exactly as before;
+        # only a genuine unhandled exception is caught here.
         try:
-            response = client.place_market_order(t212_ticker, quantity)
-            order_id = str(response.get("id", ""))
-            status = "PLACED"
-            free_cash -= position_gbp
-            invested += est_value_gbp
-            current_open += 1
-            orders_placed += 1
-            logger.info("BUY %s (%s) qty=%s approx £%.0f id=%s",
-                        ticker, t212_ticker, quantity, position_gbp, order_id)
-        except Exception as order_exc:
-            error_msg = str(order_exc)
-            logger.error("Buy order failed for %s: %s", ticker, order_exc)
-            _set_t212_error(f"Buy order failed for {ticker}: {error_msg}")
-            _send_t212_error_email(error_msg, config)
+            state = _ticker_state(ticker, config, gspc_close)
+            if state is None:
+                continue
 
-        _api_ccy = meta.get("currencyCode")
-        _log_order(
-            ticker=ticker, t212_ticker=t212_ticker, direction="BUY",
-            quantity=quantity, estimated_price=entry_price, estimated_value_gbp=est_value_gbp,
-            status=status, order_id=order_id, is_etf=state["is_etf"],
-            account_type=account_label, currency_code=_api_ccy or instrument_currency,
-            momentum_pct=state["momentum_pct"], stop_price=stop_price,
-            var_pct=holding_var, error_message=error_msg,
-        )
+            # Entry gate — must match simulate_trades()'s open_trade-is-None
+            # branch exactly: sig_on AND is_member AND not blocked_now.
+            if not state["sig_on"] or not state["is_member"] or state["entry_blocked"]:
+                continue
 
-        if status == "FAILED":
-            logger.warning("Halting placement after buy-order failure.")
-            break
+            if t212_ticker in positions_by_t212:
+                logger.debug("%s already held — skipping.", ticker)
+                continue
+            if ticker in open_order_tickers:
+                logger.debug("%s has a recent order in DB — skipping.", ticker)
+                continue
 
-        time.sleep(0.5)
+            max_hold = get_max_holding_days(ticker, config)
+            entry_price = state["price"]
+            atr = state["atr"]
+            stop_price, _stop_pct = _resolve_entry_stop("LONG", entry_price, atr, config)
+
+            # VaR position sizing — same formula/inputs the validated backtest
+            # itself uses (analysis/volatility.py:_var_position_size_core(), via
+            # analysis/backtest.py:simulate_trades()), except sourced from live
+            # account value and live prior-close history instead of a notional
+            # backtest constant.
+            close_series = state["close_series"]
+            var_confidence = float(t212_cfg.get("var_confidence", 0.95))
+            var_lookback = int(t212_cfg.get("var_lookback_days", 252))
+            max_risk_pct = float(t212_cfg.get("max_risk_pct", 0.01))
+            min_position_gbp = float(t212_cfg.get("min_position_gbp", 50))
+
+            prior_closes = close_series.tail(var_lookback + 1)
+            log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
+            if len(log_returns) >= _MIN_VAR_RETURNS:
+                position_gbp, _dv, holding_var = _var_position_size_core(
+                    log_returns, total_val, max_position_gbp, max_hold,
+                    var_confidence, max_risk_pct, min_position_gbp,
+                )
+            else:
+                position_gbp = round(max_position_gbp * 0.5, 2)
+                holding_var = None
+            position_gbp = min(position_gbp, free_cash * 0.25)
+
+            if position_gbp < 10:
+                logger.warning("Insufficient free cash (£%.2f) — stopping new orders.", free_cash)
+                break
+
+            quantity = client.get_quantity_for_gbp(
+                t212_ticker, position_gbp, research_ticker=ticker,
+                floor_to_whole_share=not state["is_etf"], is_etf=state["is_etf"],
+            )
+            if quantity <= 0:
+                logger.warning("Could not calculate quantity for %s (%s) — skipping.", ticker, t212_ticker)
+                continue
+
+            meta = instrument_meta.get(t212_ticker, {})
+            min_qty = float(meta.get("minTradeQuantity", 1.0))
+            precision = int(meta.get("maxQuantityPrecision", 0) or 0)
+
+            if state["is_etf"]:
+                quantity = math.floor(quantity)  # ETFs: whole shares only
+            elif precision > 0:
+                quantity = round(quantity, precision)  # fractional-capable stock
+            else:
+                quantity = math.floor(quantity)
+
+            if quantity < min_qty or quantity <= 0:
+                logger.warning("%s (%s) qty %.4f below instrument minimum %.4f — skipping.",
+                                ticker, t212_ticker, quantity, min_qty)
+                continue
+
+            price_gbp = client.get_instrument_price_gbp(
+                t212_ticker, research_ticker=ticker, is_etf=state["is_etf"],
+            )
+            est_value_gbp = quantity * price_gbp if price_gbp else position_gbp
+
+            status, order_id, error_msg = "FAILED", None, None
+            try:
+                response = client.place_market_order(t212_ticker, quantity)
+                order_id = str(response.get("id", ""))
+                status = "PLACED"
+                free_cash -= position_gbp
+                invested += est_value_gbp
+                current_open += 1
+                orders_placed += 1
+                logger.info("BUY %s (%s) qty=%s approx £%.0f id=%s",
+                            ticker, t212_ticker, quantity, position_gbp, order_id)
+            except Exception as order_exc:
+                error_msg = str(order_exc)
+                logger.error("Buy order failed for %s: %s", ticker, order_exc)
+                _set_t212_error(f"Buy order failed for {ticker}: {error_msg}")
+                _send_t212_error_email(error_msg, config)
+
+            _api_ccy = meta.get("currencyCode")
+            _log_order(
+                ticker=ticker, t212_ticker=t212_ticker, direction="BUY",
+                quantity=quantity, estimated_price=entry_price, estimated_value_gbp=est_value_gbp,
+                status=status, order_id=order_id, is_etf=state["is_etf"],
+                account_type=account_label, currency_code=_api_ccy or instrument_currency,
+                momentum_pct=state["momentum_pct"], stop_price=stop_price,
+                var_pct=holding_var, error_message=error_msg,
+            )
+
+            if status == "FAILED":
+                logger.warning("Halting placement after buy-order failure.")
+                break
+
+            time.sleep(0.5)
+        except Exception as ticker_exc:
+            logger.error(
+                "Unhandled error sizing/placing order for %s (%s) — skipping this "
+                "ticker and continuing with the rest of the run: %s",
+                ticker, t212_ticker, ticker_exc, exc_info=True,
+            )
+            continue
 
     if orders_placed > 0:
         _clear_t212_error()

@@ -579,3 +579,211 @@ def test_pnl_reconstruction_is_idempotent(db_engine, mocker):
 
     count = db_engine.connect().execute(sa_text("SELECT COUNT(*) FROM pnl")).fetchone()[0]
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# get_instrument_price_gbp() -- 2026-07-31 pricing fix
+#
+# T212's public API has no endpoint that returns a live quote for an
+# instrument that isn't currently held (confirmed against T212's own docs --
+# see brokers/trading212.py:get_instrument_price_gbp()'s docstring). The old
+# "primary path" (reading currentPrice from get_instruments()) never worked
+# for any instrument; these tests cover the real primary path (a live
+# position's currentPrice), the persisted last-known-price cache that
+# survives a full exit, and the is_etf-gated fallback/refusal behaviour.
+# ---------------------------------------------------------------------------
+
+def test_price_uses_live_position_when_held(db_engine, monkeypatch, mocker):
+    from brokers.trading212 import Trading212Client
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(
+        Trading212Client, "get_positions",
+        lambda self: [{"ticker": "I50Dl_EQ", "currentPrice": 6.26, "quantity": 4.0}],
+    )
+    mocker.patch.object(
+        Trading212Client, "get_instruments",
+        lambda self: [{"ticker": "I50Dl_EQ", "currencyCode": "GBP"}],
+    )
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("I50Dl_EQ", research_ticker="VOO", is_etf=True)
+
+    assert price_gbp == pytest.approx(6.26)
+
+
+def test_price_refuses_unheld_etf_with_no_cache(db_engine, monkeypatch, mocker):
+    """An ETF/UCITS wrapper never held and never cached must refuse (0.0) --
+    the research-ticker fallback is unsafe for wrapper instruments (arbitrary
+    NAV-per-share convention, confirmed via XLF's real mis-sizing)."""
+    from brokers.trading212 import Trading212Client
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(Trading212Client, "get_positions", lambda self: [])
+    mocker.patch.object(Trading212Client, "get_instruments", lambda self: [])
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("SXLFl_EQ", research_ticker="XLF", is_etf=True)
+
+    assert price_gbp == 0.0
+
+
+def test_price_falls_back_to_research_ticker_for_unheld_stock(db_engine, monkeypatch, mocker):
+    """A direct single-stock mapping (is_etf=False) is safe to size off the
+    research ticker's own close -- same underlying share, same convention."""
+    from brokers.trading212 import Trading212Client
+    from sqlalchemy import text as sa_text
+
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO price_data (ticker, date, open, high, low, close, volume)
+            VALUES ('AAPL', :d, 200.0, 200.0, 200.0, 200.0, 1000000)
+        """), {"d": datetime.utcnow()})
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.25, 1.08)))
+    mocker.patch.object(Trading212Client, "get_positions", lambda self: [])
+    mocker.patch.object(Trading212Client, "get_instruments", lambda self: [])
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("AAPL_US_EQ", research_ticker="AAPL", is_etf=False)
+
+    assert price_gbp == pytest.approx(200.0 / 1.25)
+
+
+def test_price_uses_cache_for_unheld_etf_previously_traded(db_engine, monkeypatch, mocker):
+    """An ETF fully exited (no longer in get_positions()) but priced at some
+    point in the past must use that cached price rather than refusing --
+    otherwise every ETF sleeve position would become permanently unpriceable
+    for a future re-entry after its first exit."""
+    from brokers.trading212 import Trading212Client, _cache_last_known_price_gbp
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    _cache_last_known_price_gbp("I50Dl_EQ", 6.30)
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(Trading212Client, "get_positions", lambda self: [])
+    mocker.patch.object(Trading212Client, "get_instruments", lambda self: [])
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("I50Dl_EQ", research_ticker="VOO", is_etf=True)
+
+    assert price_gbp == pytest.approx(6.30)
+
+
+def test_price_cache_ignored_when_stale(db_engine, monkeypatch, mocker):
+    from brokers.trading212 import Trading212Client, _LAST_PRICE_CACHE_MAX_AGE_DAYS
+    from data.database import set_metadata
+    import json
+
+    stale_ts = (datetime.utcnow() - timedelta(days=_LAST_PRICE_CACHE_MAX_AGE_DAYS + 1)).isoformat()
+    set_metadata(
+        "last_known_price_gbp:I50Dl_EQ",
+        json.dumps({"price_gbp": 6.30, "as_of": stale_ts}),
+    )
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(Trading212Client, "get_positions", lambda self: [])
+    mocker.patch.object(Trading212Client, "get_instruments", lambda self: [])
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("I50Dl_EQ", research_ticker="VOO", is_etf=True)
+
+    assert price_gbp == 0.0  # is_etf=True, stale cache must not be used
+
+
+def test_live_position_price_refreshes_the_cache(db_engine, monkeypatch, mocker):
+    from brokers.trading212 import Trading212Client, _get_cached_price_gbp
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(
+        Trading212Client, "get_positions",
+        lambda self: [{"ticker": "I50Dl_EQ", "currentPrice": 6.40, "quantity": 4.0}],
+    )
+    mocker.patch.object(
+        Trading212Client, "get_instruments",
+        lambda self: [{"ticker": "I50Dl_EQ", "currencyCode": "GBP"}],
+    )
+
+    client = Trading212Client(live=False)
+    client.get_instrument_price_gbp("I50Dl_EQ", research_ticker="VOO", is_etf=True)
+
+    assert _get_cached_price_gbp("I50Dl_EQ") == pytest.approx(6.40)
+
+
+# ---------------------------------------------------------------------------
+# Per-ticker/per-position exception isolation -- 2026-07-31
+#
+# Confirmed live: a real cycle placed 13 BUY orders through position 19/73 in
+# instrument_mapping, then produced zero orders for the remaining 54 tickers
+# with no trace in any log -- consistent with an unhandled exception on one
+# ticker silently killing every ticker after it in dict order. Neither loop
+# had per-item exception isolation around its sizing/state computation.
+# ---------------------------------------------------------------------------
+
+def test_buy_loop_one_ticker_exception_does_not_stop_the_rest(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import maybe_place_orders
+
+    good_frame = _bullish_frame()
+
+    def _fake_get_price_df(ticker, days=8000):
+        if ticker == "VOO":
+            raise RuntimeError("simulated transient failure")
+        return good_frame.copy()
+
+    mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={
+        "VOO":  {"ticker": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
+        "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+    })
+    maybe_place_orders(cfg, run_type="full")
+
+    # VOO's exception must not have stopped AAPL from still being ordered.
+    v2_mocks.place_market_order.assert_called_once()
+    args, _ = v2_mocks.place_market_order.call_args
+    assert args[0] == "AAPL_US_EQ"
+
+
+def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import maybe_exit_positions
+
+    bearish = _bearish_frame()  # signal off -> both should exit
+
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "I50Dl_EQ", "quantity": 4.0},
+        {"ticker": "AAPL_US_EQ", "quantity": 2.0},
+    ]
+
+    def _fake_get_price_df(ticker, days=8000):
+        if ticker == "VOO":
+            raise RuntimeError("simulated transient failure")
+        return bearish.copy()
+
+    mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+
+    cfg = _config(mapping={
+        "VOO":  {"ticker": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
+        "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+    })
+    maybe_exit_positions(cfg)
+
+    # VOO's exception must not have stopped AAPL from still being exited.
+    v2_mocks.place_market_order.assert_called_once()
+    args, _ = v2_mocks.place_market_order.call_args
+    assert args[0] == "AAPL_US_EQ"
