@@ -1933,6 +1933,107 @@ confirming those exact figures appear in the rendered PDF / Backtest
 page respectively — proving both consumers read from `result` rather
 than recomputing their own version).
 
+### Weekly summary email — Sunday 09:00 UK local time (2026-07-31)
+
+Re-adds the one piece of V1's original `output/briefing.py` scope with a
+genuine V2 equivalent (daily narrative, macro context, opportunity
+building, VIX-spike/central-bank alerts were all signal/regime-driven
+content tied to the six-module confluence system and had nothing to carry
+forward). Sends a calm, factual weekly status email: every open position
+(ticker, entry date, current signal state, unrealised P&L), account total,
+the week's combined realised+unrealised P&L, positions closed since the
+last summary with their exit reason, whether the crisis override fired,
+and a one-line system-health confirmation.
+
+**Own trigger path, deliberately separate from the T212 error-alert
+cooldown.** `brokers/trading212.py:_send_t212_error_email()`'s cooldown
+(`_T212_ERROR_EMAIL_LAST_SENT_KEY` / `notifications.email.alert_cooldown_hours`,
+see "notifications.email enabled + cooldown wired up" below) exists to
+stop a *persistent error* from flooding inboxes — a completely different
+problem from "send exactly one scheduled email a week." Sharing a gate
+between the two would mean a real error alert could go unsent because the
+weekly summary "used up" the cooldown window, or vice versa.
+`output/briefing.py:send_weekly_summary_email()` calls `_smtp_send()`
+directly — same `notifications.email.enabled` master switch every caller
+already respects, but no cooldown check at all, since the Sunday-only
+schedule is itself the only gate this path needs. The one piece of state
+it tracks, `last_weekly_summary_sent` (`system_metadata`), is written only
+on a genuinely successful send and is used purely to bound *content* —
+"what happened since last time" — never to decide *whether* to send.
+Verified directly: a fresh `t212_error_email_last_sent` cooldown timestamp
+does not block a weekly send, and a weekly send does not touch that key at
+all (`tests/test_briefing.py`).
+
+**Genuinely UK local time, not a fixed UTC hour — confirmed directly
+against APScheduler's real `CronTrigger`, not assumed from documentation.**
+`data/scheduler.py:_weekly_summary_job()` is registered with
+`CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")`
+— the trigger's own `timezone` parameter, independent of
+`start_scheduler()`'s scheduler-wide default (`tz`, always `"UTC"` for
+every other job). Checked `get_next_fire_time()` directly for a January
+Sunday (GMT) and a July Sunday (BST): the January fire time is 09:00 UTC,
+the July one is 08:00 UTC — the same 9am UK wall-clock time, correctly
+shifted by DST, not a value that would drift an hour off across the
+boundary the way a hardcoded UTC hour would.
+
+**Content sources — every figure reuses an existing, already-tested data
+path, none of it re-derived.** Open positions: `output/performance.py:
+get_brief_cards()`, the identical source and shape the Daily Briefing and
+Performance page already use, sorted alphabetically by ticker (never by
+status or P&L — see "Decision-relevant, tone-neutral context on open
+position cards" below for why ranking by risk was removed from the UI in
+the first place; the same principle applies here). Closed positions:
+`output/performance.py:get_pnl_rows()`, filtered to `exit_date >=
+last_weekly_summary_sent` (or 7 days ago on the very first run), each with
+its stored `exit_reason` (`STOP_LOSS` / `SIGNAL_OFF` / `MAX_HOLDING` /
+`CRISIS_EXIT` / `INDEX_REMOVAL`) stated plainly. Account total:
+`t212_account_snapshot`'s own `totalValue` (`system_metadata`, the
+scheduler-maintained snapshot — no direct API call from this path).
+Crisis override: `analysis/crisis.py:compute_raw_trigger()` over the
+window, reporting the specific date(s) if it fired and stating plainly
+when it didn't (never omitting the field either way). System health:
+`last_full_refresh` recency (3-day threshold — comfortably covers an
+ordinary Friday-EOD-to-Sunday-morning gap without needing the Monday-
+specific weekend exemption the Status page's own OVERDUE badge uses,
+since this check only ever runs on a Sunday) plus both error-metadata keys
+this project has accumulated (`invest_error`, set by
+`brokers/trading212.py`'s order-placement error path, and
+`t212_invest_error`, set by `data/scheduler.py:_fetch_t212_snapshot()`'s
+own — a pre-existing, not-yet-reconciled duplication found while building
+this, not something this task changes) checked together, either one being
+non-empty reported as an unresolved error.
+
+**Tone — same standard as the Daily Briefing/Performance page rebuild,
+carried forward deliberately.** One neutral colour (`#334155`) used
+unconditionally in the HTML body regardless of any figure's own sign — a
+losing week renders with exactly the same styling as a winning one, never
+red/green. No ranking by risk or performance anywhere (alphabetical
+throughout). No call-to-action language — closed positions are named with
+their exit reason as a plain record of what happened, not flagged for
+attention. The Friday-close caveat is stated directly in both the text
+and HTML bodies so a Sunday-morning read doesn't land as unexpectedly
+stale.
+
+Sample generated against real production data (2026-07-31): 0 open
+positions, 1 position closed this week (`XLF`, `MAPPING_CORRECTION` — the
+instrument-remapping close from earlier the same day, not a signal-driven
+exit), account total £49,795.71, crisis override did not fire, system
+healthy.
+
+Covered by `tests/test_briefing.py` (19 new tests): window-start
+resolution (defaults to 7 days on a first run, uses the stored timestamp
+otherwise), closed-position window filtering, realised+unrealised P&L
+arithmetic, account-total parsing (present and absent), the crisis-fired
+and crisis-did-not-fire cases (both explicitly checkable, never silent),
+the dual-key error check, the full forbidden-word tone scan on both the
+text and HTML bodies, the one-colour-regardless-of-sign HTML check, the
+alphabetical (not risk/P&L-ranked) ordering guarantee, and the three
+separate-trigger-path tests described above. `tests/test_scheduler.py`
+(5 new tests) covers job registration (including the genuine
+`Europe/London` timezone on the trigger object itself, not just its cron
+fields), the direct GMT/BST `CronTrigger` resolution check, and the job
+function's call-through/never-raises behaviour.
+
 ### Block pass/fail formula reconciliation (2026-07-31)
 
 Closed the discrepancy flagged immediately above, before anything built on

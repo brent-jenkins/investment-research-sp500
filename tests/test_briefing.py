@@ -1,8 +1,15 @@
-"""Tests for output/briefing.py's _smtp_send() — the sole surviving,
-shared low-level email helper (see the module's own docstring for why
-everything else was removed along with V1).
+"""Tests for output/briefing.py: _smtp_send() (the sole surviving,
+shared low-level email helper -- see the module's own docstring for why
+everything else was removed along with V1) and the weekly summary email
+(_gather_weekly_data() / send_weekly_summary_email()), the one piece of
+the original V1 scope with a genuine V2 equivalent.
 """
-from output.briefing import _smtp_send
+from datetime import datetime, timedelta
+
+import pytest
+
+from data.database import set_metadata
+from output.briefing import _gather_weekly_data, _smtp_send, _weekly_summary_html, _weekly_summary_text, send_weekly_summary_email
 
 
 def _config(enabled=True, to_addresses=None):
@@ -53,3 +60,275 @@ def test_smtp_send_no_recipients_fails_without_connecting(mocker):
 
     assert sent is False
     smtp_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Weekly summary -- content gathering, tone-neutrality, and the separate
+# trigger path (deliberately not entangled with brokers/trading212.py's
+# error-alert cooldown -- see output/briefing.py's own module-level note).
+# ---------------------------------------------------------------------------
+
+def _open_card(ticker, entry_date, sig_on, unreal_pnl_gbp):
+    return {
+        "ticker": ticker, "entry_date": entry_date, "current_sig_on": sig_on,
+        "unreal_pnl_gbp": unreal_pnl_gbp, "status": "ON TRACK", "status_priority": 0,
+    }
+
+
+def _closed_row(ticker, exit_date, exit_reason, pnl_gbp):
+    return {"ticker": ticker, "exit_date": exit_date, "exit_reason": exit_reason, "pnl_gbp": pnl_gbp}
+
+
+def test_gather_weekly_data_defaults_to_7_day_window_with_no_prior_summary(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert abs((data["generated_at"] - data["window_start"]) - timedelta(days=7)) < timedelta(seconds=5)
+
+
+def test_gather_weekly_data_uses_last_summary_timestamp_as_window_start(db_engine, mocker):
+    last_sent = datetime.utcnow() - timedelta(days=3)
+    set_metadata("last_weekly_summary_sent", last_sent.isoformat())
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert abs(data["window_start"] - last_sent) < timedelta(seconds=1)
+
+
+def test_gather_weekly_data_filters_closed_positions_to_the_window(db_engine, mocker):
+    last_sent = datetime.utcnow() - timedelta(days=7)
+    set_metadata("last_weekly_summary_sent", last_sent.isoformat())
+    inside = (datetime.utcnow() - timedelta(days=2)).isoformat()
+    outside = (datetime.utcnow() - timedelta(days=10)).isoformat()
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[
+        _closed_row("AAPL", inside, "STOP_LOSS", -40.0),
+        _closed_row("MSFT", outside, "MAX_HOLDING", 100.0),
+    ])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert [r["ticker"] for r in data["closed_this_week"]] == ["AAPL"]
+    assert data["realized_pnl_gbp"] == -40.0
+
+
+def test_gather_weekly_data_total_pnl_is_realised_plus_unrealised(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[
+        _open_card("VOO", "2024-01-01T00:00:00", True, 25.0),
+        _open_card("XLK", "2024-02-01T00:00:00", False, -10.0),
+    ])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[
+        _closed_row("AAPL", datetime.utcnow().isoformat(), "SIGNAL_OFF", 60.0),
+    ])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert data["unrealized_pnl_gbp"] == pytest.approx(15.0)
+    assert data["realized_pnl_gbp"] == pytest.approx(60.0)
+    assert data["total_pnl_gbp"] == pytest.approx(75.0)
+
+
+def test_gather_weekly_data_account_total_from_snapshot(db_engine, mocker):
+    import json
+    set_metadata("t212_account_snapshot", json.dumps({"totalValue": 54321.99}))
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert data["total_value_gbp"] == pytest.approx(54321.99)
+
+
+def test_gather_weekly_data_no_snapshot_reports_not_available(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert data["total_value_gbp"] is None
+
+
+def test_gather_weekly_data_crisis_fired_this_week_named_plainly(db_engine, mocker):
+    import pandas as pd
+
+    dates = pd.date_range(end=datetime.utcnow().date(), periods=30, freq="D")
+    closes = [100.0] * (len(dates) - 3) + [100.0, 92.0, 93.0]  # a >=7% single-day drop 2 days ago
+    price_df = pd.DataFrame({"date": dates, "close": closes})
+
+    set_metadata("last_weekly_summary_sent", (datetime.utcnow() - timedelta(days=7)).isoformat())
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=price_df)
+
+    data = _gather_weekly_data({})
+
+    assert len(data["crisis_fired_dates"]) == 1
+
+
+def test_gather_weekly_data_crisis_did_not_fire_stated_plainly_not_omitted(db_engine, mocker):
+    """Absence of a crisis this week must still produce an explicit,
+    checkable field -- not silence."""
+    import pandas as pd
+
+    dates = pd.date_range(end=datetime.utcnow().date(), periods=30, freq="D")
+    price_df = pd.DataFrame({"date": dates, "close": [100.0] * len(dates)})
+
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=price_df)
+
+    data = _gather_weekly_data({})
+
+    assert data["crisis_fired_dates"] == []
+    text = _weekly_summary_text(data)
+    assert "did not fire this week" in text
+
+
+def test_gather_weekly_data_unresolved_error_checked_under_both_keys(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    set_metadata("t212_invest_error", "snapshot fetch failed")
+    data = _gather_weekly_data({})
+    assert data["unresolved_error"] == "snapshot fetch failed"
+
+
+# ---------------------------------------------------------------------------
+# Tone -- same standard as the Daily Briefing / Performance page rebuild:
+# no colour-coded urgency, no ranking by risk or performance, no
+# call-to-action language, regardless of whether a position or the week
+# made or lost money.
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_WORDS = ["risk", "danger", "urgent", "warning", "review", "click", "consider"]
+
+
+def _sample_weekly_data(pnl_sign: float) -> dict:
+    return {
+        "generated_at": datetime.utcnow(),
+        "window_start": datetime.utcnow() - timedelta(days=7),
+        "open_positions": [
+            _open_card("VOO", "2024-01-01T00:00:00", True, 250.0 * pnl_sign),
+            _open_card("XLK", "2024-02-01T00:00:00", False, -75.0 * pnl_sign),
+        ],
+        "total_value_gbp": 55000.0,
+        "closed_this_week": [
+            _closed_row("AAPL", datetime.utcnow().isoformat(), "STOP_LOSS", -40.0 * pnl_sign),
+            _closed_row("MSFT", datetime.utcnow().isoformat(), "MAX_HOLDING", 90.0 * pnl_sign),
+        ],
+        "realized_pnl_gbp": 50.0 * pnl_sign,
+        "unrealized_pnl_gbp": 175.0 * pnl_sign,
+        "total_pnl_gbp": 225.0 * pnl_sign,
+        "crisis_fired_dates": [],
+        "last_full_refresh": datetime.utcnow(),
+        "eod_recent": True,
+        "unresolved_error": "",
+    }
+
+
+def test_weekly_summary_text_has_no_forbidden_tone_language():
+    text = _weekly_summary_text(_sample_weekly_data(pnl_sign=1.0)).lower()
+    for word in _FORBIDDEN_WORDS:
+        assert word not in text, f"forbidden word '{word}' found in weekly summary text"
+
+
+def test_weekly_summary_html_has_no_forbidden_tone_language():
+    html = _weekly_summary_html(_sample_weekly_data(pnl_sign=1.0)).lower()
+    for word in _FORBIDDEN_WORDS:
+        assert word not in html, f"forbidden word '{word}' found in weekly summary html"
+
+
+def test_weekly_summary_html_uses_one_colour_regardless_of_pnl_sign():
+    """A losing week/position must render with the exact same styling as a
+    winning one -- no conditional colour based on any figure's own sign."""
+    html_positive = _weekly_summary_html(_sample_weekly_data(pnl_sign=1.0))
+    html_negative = _weekly_summary_html(_sample_weekly_data(pnl_sign=-1.0))
+
+    import re
+    colours_positive = set(re.findall(r"color:(#[0-9a-fA-F]{3,6})", html_positive))
+    colours_negative = set(re.findall(r"color:(#[0-9a-fA-F]{3,6})", html_negative))
+
+    assert len(colours_positive) == 1
+    assert colours_positive == colours_negative
+
+
+def test_gather_weekly_data_open_positions_alphabetical_not_by_risk_or_pnl(db_engine, mocker):
+    """_gather_weekly_data() -- not the render layer -- is what guarantees
+    ordering (mirroring output/performance.py's own get_brief_cards()
+    consumers), so this checks the actual sorted output rather than
+    assuming the text builder re-sorts whatever it's handed."""
+    mocker.patch("output.performance.get_brief_cards", return_value=[
+        _open_card("ZAL", "2024-01-01T00:00:00", True, 999.0),    # best P&L, last alphabetically
+        _open_card("AAA", "2024-01-01T00:00:00", False, -999.0),  # worst P&L, first alphabetically
+    ])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert [c["ticker"] for c in data["open_positions"]] == ["AAA", "ZAL"]
+
+
+# ---------------------------------------------------------------------------
+# Separate trigger path -- must never share state with the T212 error-alert
+# cooldown (brokers/trading212.py's _T212_ERROR_EMAIL_LAST_SENT_KEY /
+# notifications.email.alert_cooldown_hours).
+# ---------------------------------------------------------------------------
+
+def test_send_weekly_summary_sends_even_when_error_alert_cooldown_is_active(db_engine, mocker):
+    """A T212 error-alert cooldown in effect must never suppress the
+    weekly summary -- they are deliberately unrelated trigger paths."""
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())  # error cooldown freshly used
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, detail = send_weekly_summary_email(_config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_send_weekly_summary_does_not_write_the_error_cooldown_key(db_engine, mocker):
+    """A successful weekly send must never touch the T212 error-alert
+    cooldown timestamp -- confirms the two paths share no state at all."""
+    from data.database import get_metadata_str
+
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    send_weekly_summary_email(_config())
+
+    assert get_metadata_str("t212_error_email_last_sent") is None
+    assert get_metadata_str("last_weekly_summary_sent") is not None
+
+
+def test_send_weekly_summary_records_its_own_timestamp_only_on_success(db_engine, mocker):
+    from data.database import get_metadata_str
+
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    # Disabled -- must not send, and must not record a timestamp.
+    sent, _ = send_weekly_summary_email(_config(enabled=False))
+    assert sent is False
+    assert get_metadata_str("last_weekly_summary_sent") is None

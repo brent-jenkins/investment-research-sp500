@@ -1,14 +1,21 @@
 """APScheduler-based scheduled jobs: daily runs with per-exchange holiday awareness.
 
-Run schedule (UTC):
+Run schedule (UTC unless noted):
   07:00  Monday pre-market (Mon only) — cancel stale weekend BUY orders left PLACED
                        from Friday's EOD run, then run the order-logic-only pipeline
                        so Friday's still-open orders are re-evaluated before markets
                        reopen (see _monday_premarket_job())
+  07:00  ETF order submission (weekdays) — submit queued ETF entries during LSE's
+                       own real trading session (see "Exchange-aware order
+                       submission" in CLAUDE.md); ships paused by default
+  13:30  Stock order submission (weekdays) — submit queued stock entries during
+                       NYSE's own regular open
   21:15  Membership refresh — refresh point-in-time index-membership windows
                        15 minutes ahead of the EOD job's own trading decisions
   21:30  End of day  — full data refresh, then place/exit orders (all exchanges)
   00-21,23  Hourly   — T212 order-status poll, exit check, account snapshot refresh
+  09:00  Weekly summary (Sunday, *Europe/London* — not UTC) — send the weekly
+                       summary email (see output/briefing.py:send_weekly_summary_email())
 
 The 07:00 (Tue-Fri) pre-market and 13:30 US-open "analysis only" runs that
 used to sit between Monday's job and the EOD run were removed 2026-07-31 —
@@ -477,6 +484,28 @@ def _membership_refresh_job() -> None:
         logger.warning("Membership refresh job failed: %s", exc)
 
 
+def _weekly_summary_job() -> None:
+    """Sunday 09:00 Europe/London (genuinely UK local time — see
+    start_scheduler()'s own CronTrigger for this job, which passes
+    timezone="Europe/London" directly rather than the scheduler's default
+    UTC, so this fires at 9am regardless of BST/GMT). Sends the weekly
+    summary email — see output/briefing.py:send_weekly_summary_email() for
+    the full content and why this uses its own trigger path, deliberately
+    separate from brokers/trading212.py's error-alert cooldown.
+    """
+    from output.briefing import send_weekly_summary_email  # noqa: PLC0415
+
+    config = _load_config()
+    try:
+        sent, detail = send_weekly_summary_email(config)
+        if sent:
+            logger.info("Weekly summary email sent: %s", detail)
+        else:
+            logger.info("Weekly summary email not sent: %s", detail)
+    except Exception as exc:
+        logger.error("Weekly summary job failed: %s", exc, exc_info=True)
+
+
 def _etf_order_submission_job() -> None:
     """07:00 UTC weekdays (LSE regular open) — submit queued ETF entry
     decisions from pending_orders.
@@ -739,6 +768,27 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     logger.info("Scheduled membership refresh at 21:15 %s weekdays.", tz)
+
+    # Weekly summary — Sunday 09:00 *Europe/London*, not this scheduler's
+    # own default UTC timezone (`tz` above). CronTrigger's own `timezone`
+    # parameter is independent of the scheduler's default and correctly
+    # resolves real IANA DST transitions (verified directly: the same
+    # trigger definition fires at 09:00 UTC in January/GMT and 08:00 UTC in
+    # July/BST) — so this genuinely lands at 9am UK local time year-round,
+    # not a fixed UTC offset that would drift an hour off across the
+    # BST/GMT boundary.
+    _scheduler.add_job(
+        _weekly_summary_job,
+        trigger=CronTrigger(
+            day_of_week="sun",
+            hour=9,
+            minute=0,
+            timezone="Europe/London",
+        ),
+        id="weekly_summary",
+        replace_existing=True,
+    )
+    logger.info("Scheduled weekly summary at 09:00 Europe/London (Sunday).")
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))

@@ -1,20 +1,25 @@
-"""Shared low-level email-sending helper.
-
-The only survivor of this module's original, much larger scope (daily
-narrative, macro context, opportunity building, weekly summary, VIX-spike
-and central-bank alert emails) — all of that was signal/regime-driven
+"""Email sending -- the shared SMTP helper, plus the weekly summary (the
+one piece of the module's original, much larger V1 scope that has a
+genuine V2 equivalent; daily narrative, macro context, opportunity
+building, VIX-spike and central-bank alerts were all signal/regime-driven
 content tied to the six-module confluence system and had no equivalent to
-carry forward. _smtp_send() itself has no such dependency (pure SMTP
-mechanics reading notifications.email from config.yaml) and is still used
-by brokers/trading212.py's order-placement error alert.
+carry forward).
 """
+import json
 import logging
 import os
 import smtplib
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_UK_TZ = ZoneInfo("Europe/London")
+_LAST_WEEKLY_SUMMARY_KEY = "last_weekly_summary_sent"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -59,3 +64,314 @@ def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tu
     except Exception as exc:
         logger.error("SMTP send failed: %s", exc)
         return False, f"Email send failed: {exc}"
+
+
+def _fmt_uk(dt: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Convert a naive-UTC (or UTC-aware) datetime to UK local time and
+    format it, appending 'GMT'/'BST' — the identical rule main.py's own
+    _fmt_uk() applies (never bake a literal 'UTC' into user-facing text).
+    Defined independently here rather than imported from main.py, since
+    main.py can never be imported outside the running app (it starts a
+    real background scheduler at module level — see tests/test_main_ui.py).
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    uk = dt.astimezone(_UK_TZ)
+    abbr = "BST" if uk.dst() else "GMT"
+    return f"{uk.strftime(fmt)} {abbr}"
+
+
+# ---------------------------------------------------------------------------
+# Weekly summary — Sunday 09:00 Europe/London (see data/scheduler.py:
+# _weekly_summary_job()). Own trigger path, deliberately separate from
+# brokers/trading212.py's error-alert cooldown (_T212_ERROR_EMAIL_LAST_SENT_KEY,
+# notifications.email.alert_cooldown_hours) — that cooldown exists to stop a
+# persistent error from flooding inboxes with duplicate alerts, a completely
+# different concern from "send exactly one scheduled email a week". Sharing
+# a gate between them would mean a real error alert could go unsent because
+# the weekly summary "used up" the cooldown window, or vice versa. The only
+# state this path tracks is _LAST_WEEKLY_SUMMARY_KEY, and it is used purely
+# to bound *content* ("what happened since last time"), never to decide
+# whether to send — the schedule alone decides that.
+#
+# Tone (2026-07-31, same standard as the Daily Briefing / Performance page
+# tone-neutral rebuild): no colour-coded urgency, no ranking of positions by
+# risk or performance, no call-to-action language. Every position and every
+# closed trade is a plain factual record regardless of whether it made or
+# lost money — this is a calm status summary, not a prompt to react.
+# ---------------------------------------------------------------------------
+
+def _gather_weekly_data(config: dict) -> dict:
+    """Pure data gathering for the weekly summary — no sending, no HTML/text
+    building. Every figure reuses an existing, already-tested data source
+    (output/performance.py's Daily-Briefing/Performance-page functions)
+    rather than a fresh, parallel computation of the same thing.
+    """
+    from data.database import get_metadata_str
+    from data.ingestion import get_price_df
+    from analysis import crisis
+    from output.performance import get_brief_cards, get_pnl_rows
+
+    now = datetime.utcnow()
+
+    last_sent_str = get_metadata_str(_LAST_WEEKLY_SUMMARY_KEY)
+    window_start = now - timedelta(days=7)
+    if last_sent_str:
+        try:
+            window_start = datetime.fromisoformat(last_sent_str)
+        except Exception:
+            pass  # corrupt/unexpected stored value -- fall back to the 7-day default above
+
+    # Open positions -- same source, same neutral shape, as the Daily
+    # Briefing/Performance page. Alphabetical by ticker, never by status or
+    # P&L -- no ranking by risk or performance (see this section's own
+    # docstring above).
+    open_cards = sorted(get_brief_cards(config), key=lambda c: c["ticker"])
+
+    account_raw = get_metadata_str("t212_account_snapshot")
+    total_value_gbp = None
+    if account_raw:
+        try:
+            total_value_gbp = float(json.loads(account_raw).get("totalValue", 0) or 0)
+        except Exception:
+            total_value_gbp = None
+
+    closed_this_week = []
+    for row in get_pnl_rows():
+        exit_dt = row.get("exit_date")
+        if isinstance(exit_dt, str):
+            try:
+                exit_dt = datetime.fromisoformat(exit_dt)
+            except Exception:
+                continue
+        if exit_dt is not None and exit_dt >= window_start:
+            closed_this_week.append(row)
+    closed_this_week.sort(key=lambda r: r["ticker"])
+
+    realized_pnl_gbp = sum(float(r.get("pnl_gbp") or 0) for r in closed_this_week)
+    unrealized_pnl_gbp = sum(float(c.get("unreal_pnl_gbp") or 0) for c in open_cards)
+
+    crisis_fired_dates: list[str] = []
+    try:
+        gspc_df = get_price_df("^GSPC", days=60)
+        if not gspc_df.empty:
+            gspc_df = gspc_df.set_index("date")
+            gspc_df.index = pd.to_datetime(gspc_df.index)
+            close = gspc_df["close"].astype(float)
+            raw_trigger = crisis.compute_raw_trigger(close)
+            fired = raw_trigger[raw_trigger.index >= pd.Timestamp(window_start)]
+            crisis_fired_dates = [d.date().isoformat() for d in fired[fired].index]
+    except Exception:
+        pass
+
+    last_full_refresh_str = get_metadata_str("last_full_refresh")
+    last_full_refresh_dt: "datetime | None" = None
+    if last_full_refresh_str:
+        try:
+            last_full_refresh_dt = datetime.fromisoformat(last_full_refresh_str)
+        except Exception:
+            pass
+    # 3 days covers a normal Friday-EOD-to-Sunday-morning gap (~1.5 days)
+    # with a comfortable margin, without needing the Monday-specific
+    # weekend exemption the Status page's own OVERDUE badge uses (this
+    # check only ever runs on a Sunday).
+    eod_recent = bool(last_full_refresh_dt) and (now - last_full_refresh_dt) <= timedelta(days=3)
+
+    unresolved_error = (
+        get_metadata_str("invest_error") or get_metadata_str("t212_invest_error") or ""
+    ).strip()
+
+    return {
+        "generated_at": now,
+        "window_start": window_start,
+        "open_positions": open_cards,
+        "total_value_gbp": total_value_gbp,
+        "closed_this_week": closed_this_week,
+        "realized_pnl_gbp": realized_pnl_gbp,
+        "unrealized_pnl_gbp": unrealized_pnl_gbp,
+        "total_pnl_gbp": realized_pnl_gbp + unrealized_pnl_gbp,
+        "crisis_fired_dates": crisis_fired_dates,
+        "last_full_refresh": last_full_refresh_dt,
+        "eod_recent": eod_recent,
+        "unresolved_error": unresolved_error,
+    }
+
+
+def _weekly_summary_text(data: dict) -> str:
+    """Plain-text body -- a calm, factual record. Every line states what
+    happened; none of them are worded differently depending on whether the
+    underlying number is good or bad."""
+    lines = [
+        "SP500INVEST -- Weekly Summary",
+        f"Generated {_fmt_uk(data['generated_at'])}",
+        "Reflects Friday's market close -- markets are shut over the weekend, "
+        "so this is the most recent close available, not stale data.",
+        "",
+        (
+            f"Account total: £{data['total_value_gbp']:,.2f}"
+            if data["total_value_gbp"] is not None
+            else "Account total: not available"
+        ),
+        f"Total P&L this week (realised + unrealised): £{data['total_pnl_gbp']:,.2f}",
+        f"  Realised (positions closed this week): £{data['realized_pnl_gbp']:,.2f}",
+        f"  Unrealised (currently open positions): £{data['unrealized_pnl_gbp']:,.2f}",
+        "",
+        f"Open positions ({len(data['open_positions'])}):",
+    ]
+    if not data["open_positions"]:
+        lines.append("  None.")
+    for c in data["open_positions"]:
+        sig = c.get("current_sig_on")
+        sig_text = "signal on" if sig is True else ("signal off" if sig is False else "signal unknown")
+        entry = (c.get("entry_date") or "")[:10] or "unknown"
+        lines.append(
+            f"  {c['ticker']}: entered {entry}, {sig_text}, "
+            f"unrealised P&L £{c.get('unreal_pnl_gbp', 0):,.2f}"
+        )
+
+    lines.append("")
+    lines.append(f"Closed this week ({len(data['closed_this_week'])}):")
+    if not data["closed_this_week"]:
+        lines.append("  None.")
+    for r in data["closed_this_week"]:
+        exit_date = str(r.get("exit_date") or "")[:10]
+        lines.append(
+            f"  {r['ticker']}: closed {exit_date}, reason {r.get('exit_reason')}, "
+            f"P&L £{r.get('pnl_gbp', 0):,.2f}"
+        )
+
+    lines.append("")
+    if data["crisis_fired_dates"]:
+        lines.append(f"Crisis override: fired on {', '.join(data['crisis_fired_dates'])}.")
+    else:
+        lines.append("Crisis override: did not fire this week.")
+
+    lines.append("")
+    refresh_text = _fmt_uk(data["last_full_refresh"]) if data["last_full_refresh"] else "unknown"
+    status_text = "no unresolved errors" if not data["unresolved_error"] else f"unresolved error recorded: {data['unresolved_error']}"
+    ok_text = "system healthy" if data["eod_recent"] and not data["unresolved_error"] else "system status uncertain"
+    lines.append(f"System health: last data refresh {refresh_text}; {status_text} ({ok_text}).")
+
+    return "\n".join(lines)
+
+
+def _weekly_summary_html(data: dict) -> str:
+    """HTML body -- same content as _weekly_summary_text(), same neutral
+    styling throughout: one plain colour for every row regardless of sign,
+    no conditional styling on any figure's own value."""
+    _NEUTRAL = "#334155"  # one colour, used unconditionally -- see this
+                          # module's own tone note above.
+
+    def esc(s) -> str:
+        return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    account_line = (
+        f"£{data['total_value_gbp']:,.2f}" if data["total_value_gbp"] is not None else "not available"
+    )
+
+    rows_open = ""
+    for c in data["open_positions"]:
+        sig = c.get("current_sig_on")
+        sig_text = "signal on" if sig is True else ("signal off" if sig is False else "signal unknown")
+        entry = (c.get("entry_date") or "")[:10] or "unknown"
+        rows_open += (
+            f'<tr><td style="padding:4px 8px;color:{_NEUTRAL}">{esc(c["ticker"])}</td>'
+            f'<td style="padding:4px 8px;color:{_NEUTRAL}">{esc(entry)}</td>'
+            f'<td style="padding:4px 8px;color:{_NEUTRAL}">{esc(sig_text)}</td>'
+            f'<td style="padding:4px 8px;color:{_NEUTRAL}">£{c.get("unreal_pnl_gbp", 0):,.2f}</td></tr>'
+        )
+    if not data["open_positions"]:
+        rows_open = f'<tr><td colspan="4" style="padding:4px 8px;color:{_NEUTRAL}">None.</td></tr>'
+
+    rows_closed = ""
+    for r in data["closed_this_week"]:
+        exit_date = str(r.get("exit_date") or "")[:10]
+        rows_closed += (
+            f'<tr><td style="padding:4px 8px;color:{_NEUTRAL}">{esc(r["ticker"])}</td>'
+            f'<td style="padding:4px 8px;color:{_NEUTRAL}">{esc(exit_date)}</td>'
+            f'<td style="padding:4px 8px;color:{_NEUTRAL}">{esc(r.get("exit_reason"))}</td>'
+            f'<td style="padding:4px 8px;color:{_NEUTRAL}">£{r.get("pnl_gbp", 0):,.2f}</td></tr>'
+        )
+    if not data["closed_this_week"]:
+        rows_closed = f'<tr><td colspan="4" style="padding:4px 8px;color:{_NEUTRAL}">None.</td></tr>'
+
+    crisis_text = (
+        f"fired on {esc(', '.join(data['crisis_fired_dates']))}"
+        if data["crisis_fired_dates"] else "did not fire this week"
+    )
+    refresh_text = _fmt_uk(data["last_full_refresh"]) if data["last_full_refresh"] else "unknown"
+    status_text = (
+        "no unresolved errors" if not data["unresolved_error"]
+        else f"unresolved error recorded: {esc(data['unresolved_error'])}"
+    )
+    ok_text = "system healthy" if data["eod_recent"] and not data["unresolved_error"] else "system status uncertain"
+
+    return f"""
+    <div style="font-family:Arial,sans-serif;color:{_NEUTRAL};max-width:640px">
+      <h2 style="color:{_NEUTRAL}">SP500INVEST &mdash; Weekly Summary</h2>
+      <p style="color:{_NEUTRAL}">Generated {esc(_fmt_uk(data['generated_at']))}<br>
+      Reflects Friday's market close &mdash; markets are shut over the weekend,
+      so this is the most recent close available, not stale data.</p>
+
+      <p style="color:{_NEUTRAL}">
+        <b>Account total:</b> {account_line}<br>
+        <b>Total P&amp;L this week (realised + unrealised):</b> £{data['total_pnl_gbp']:,.2f}<br>
+        &nbsp;&nbsp;Realised (closed this week): £{data['realized_pnl_gbp']:,.2f}<br>
+        &nbsp;&nbsp;Unrealised (currently open): £{data['unrealized_pnl_gbp']:,.2f}
+      </p>
+
+      <h3 style="color:{_NEUTRAL}">Open Positions ({len(data['open_positions'])})</h3>
+      <table style="border-collapse:collapse;width:100%">
+        <tr style="color:{_NEUTRAL};font-weight:bold">
+          <td style="padding:4px 8px">Ticker</td><td style="padding:4px 8px">Entered</td>
+          <td style="padding:4px 8px">Signal</td><td style="padding:4px 8px">Unrealised P&amp;L</td>
+        </tr>
+        {rows_open}
+      </table>
+
+      <h3 style="color:{_NEUTRAL}">Closed This Week ({len(data['closed_this_week'])})</h3>
+      <table style="border-collapse:collapse;width:100%">
+        <tr style="color:{_NEUTRAL};font-weight:bold">
+          <td style="padding:4px 8px">Ticker</td><td style="padding:4px 8px">Closed</td>
+          <td style="padding:4px 8px">Reason</td><td style="padding:4px 8px">P&amp;L</td>
+        </tr>
+        {rows_closed}
+      </table>
+
+      <p style="color:{_NEUTRAL}"><b>Crisis override:</b> {crisis_text}.</p>
+      <p style="color:{_NEUTRAL}">
+        <b>System health:</b> last data refresh {esc(refresh_text)}; {esc(status_text)} ({esc(ok_text)}).
+      </p>
+    </div>
+    """
+
+
+def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
+    """Gather this week's data, build the email, and send it via
+    _smtp_send() directly -- deliberately not routed through
+    brokers/trading212.py's error-alert cooldown (see this section's own
+    module-level note above for why the two must stay separate). On a
+    genuinely successful send, records when for next time's "since last
+    summary" content window -- this timestamp only ever bounds *content*,
+    never gates *whether* to send; the Sunday 09:00 schedule alone decides
+    that.
+    """
+    from data.database import set_metadata
+
+    try:
+        data = _gather_weekly_data(config)
+    except Exception as exc:
+        logger.error("Weekly summary data gathering failed: %s", exc, exc_info=True)
+        return False, f"Data gathering failed: {exc}"
+
+    subject = f"SP500INVEST Weekly Summary — {data['generated_at'].date().isoformat()}"
+    text_body = _weekly_summary_text(data)
+    html_body = _weekly_summary_html(data)
+
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_LAST_WEEKLY_SUMMARY_KEY, data["generated_at"].isoformat())
+        except Exception as exc:
+            logger.warning("Could not record last_weekly_summary_sent: %s", exc)
+    return sent, detail

@@ -16,7 +16,7 @@ removed" section) — there is no `_pre_market_job()`/`_us_open_job()` left
 to test.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import data.scheduler as scheduler
 
@@ -396,6 +396,79 @@ def test_scheduler_registers_etf_and_stock_submission_jobs(monkeypatch):
         assert field("stock_order_submission", "minute") == "30"
     finally:
         scheduler.stop_scheduler()
+
+
+def test_scheduler_registers_weekly_summary_job_genuinely_uk_timezone(monkeypatch):
+    """start_scheduler() must register weekly_summary at Sunday 09:00 --
+    critically, on a genuine Europe/London CronTrigger, not this
+    scheduler's own default UTC (`tz` in start_scheduler()) -- a fixed UTC
+    hour would silently be wrong by an hour across the BST/GMT boundary."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        job = sched.get_job("weekly_summary")
+        assert job is not None, "weekly_summary was not registered"
+        assert job.func is scheduler._weekly_summary_job
+
+        def field(name: str) -> str:
+            return next(str(f) for f in job.trigger.fields if f.name == name)
+
+        assert field("day_of_week") == "sun"
+        assert field("hour") == "9"
+        assert field("minute") == "0"
+        # The trigger's own timezone, not the scheduler's default -- this is
+        # what actually makes the job fire at 9am UK local time year-round.
+        assert str(job.trigger.timezone) == "Europe/London"
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_weekly_summary_cron_trigger_correctly_resolves_gmt_and_bst():
+    """Confirmed directly, not assumed: a Europe/London CronTrigger fires
+    at 09:00 UTC in GMT (winter) and 08:00 UTC in BST (summer) -- the same
+    UK wall-clock time, different UTC offsets. This is what "genuinely UK
+    local time" means in practice, and is checked against APScheduler's
+    real CronTrigger rather than trusted from documentation alone."""
+    from apscheduler.triggers.cron import CronTrigger
+
+    trigger = CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")
+
+    # 2026-01-04 is a Sunday, deep in GMT (UTC+0).
+    gmt_prev = datetime(2026, 1, 3, tzinfo=timezone.utc)
+    gmt_fire = trigger.get_next_fire_time(None, gmt_prev)
+    assert gmt_fire.astimezone(timezone.utc).strftime("%H:%M") == "09:00"
+
+    # 2026-07-05 is a Sunday, deep in BST (UTC+1) -- 09:00 local is 08:00 UTC.
+    bst_prev = datetime(2026, 7, 4, tzinfo=timezone.utc)
+    bst_fire = trigger.get_next_fire_time(None, bst_prev)
+    assert bst_fire.astimezone(timezone.utc).strftime("%H:%M") == "08:00"
+
+
+def test_weekly_summary_job_calls_send_weekly_summary_email(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_send = mocker.patch("output.briefing.send_weekly_summary_email", return_value=(True, "Sent to 1 recipient(s)"))
+
+    scheduler._weekly_summary_job()
+
+    mock_send.assert_called_once_with({"k": "v"})
+
+
+def test_weekly_summary_job_never_raises_on_failure(mocker):
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mocker.patch("output.briefing.send_weekly_summary_email", side_effect=RuntimeError("SMTP is down"))
+
+    scheduler._weekly_summary_job()  # must not raise
 
 
 def test_etf_order_submission_job_calls_submit_pending_etf_orders(mocker):
