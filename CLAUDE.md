@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Research reproducibility standard (2026-07-31)
+
+**Before a research clone backing a significant finding is deleted, the exact formula must be captured in this file — literal code or precise pseudocode with exact thresholds and operators — not a prose description.** This is a hard requirement for any future task that deletes a research clone after shipping a finding, not a suggestion.
+
+**Why this exists.** "Block pass/fail formula reconciliation (2026-07-31)" (below, under the V2 architecture sections) found that this file's only record of the 16-block validation criteria was a prose paraphrase — "no crisis-adjacent block materially loses money" — that turned out not to mean what it said. The real gate was `PF > 1.0`, a hard number that was never written down as such anywhere. A second stated criterion ("CAGR ≥ S&P's own") was never actually part of the real per-block formula at all. The disposable research clone that implemented and ran the real check had already been deleted (this project's own standing practice for exploratory code) by the time anyone needed to check the paraphrase against it — so the mismatch went undetected for as long as nothing forced an exact reproduction, and reproducing the incident's 14/16 headline result at the aggregate level alone was not enough to catch it: the two *specific* failing blocks silently didn't match until the formula itself was rebuilt and checked block-by-block.
+
+**The rule.** Prose is for *why* a threshold was chosen, not for *what* the threshold is. Any write-up that reports a pass/fail outcome, an adopt/reject decision, or a validated result must state the exact rule that produced it — inequality, operator, and number — inline or in a code block, before the backing implementation is removed. "Materially," "meaningfully," "roughly," "significantly," "close to," and similar words are acceptable around a stated number (e.g. "materially worse (42.9% vs. 41.2%)") but must never stand in *for* the number or the comparison operator itself.
+
 ## Running the app
 
 ```powershell
