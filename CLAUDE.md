@@ -1656,6 +1656,31 @@ same tolerance this file's own prior reproducibility check accepted as
 ordinary live-database drift (more incremental EOD data accumulated since),
 not a regression.
 
+**Every figure above (including walk-forward) is a live, date-dependent
+snapshot, not a fixed constant — expect it to drift by small amounts
+day to day.** `run_full_validation()`'s `end` parameter defaults to
+`datetime.date.today()` when the caller doesn't pin one, and neither the
+Backtest page nor the DD report generator ever does — so any two runs on
+different calendar days include a different amount of live-database EOD
+data, even a single extra day's worth. Confirmed directly (2026-07-31):
+pinning `end=2026-07-30` reproduces this section's own 82.1% (183/223)
+exactly, alongside its other stats (12,046 trades, TRAIN 13.23%, TEST
+22.39%, 14/16 blocks); the very same call with `end=2026-07-31` (one
+calendar day later — the date a freshly-generated DD report used the
+same day) gives **83.0% (185/223)**, with TEST CAGR nudging from 22.39%
+to 22.41%. Both are correct, verified outputs of the identical, unchanged
+`walk_forward_pf()` methodology (6-month rolling windows, stepped
+monthly, ≥3 trades per window, `profit_factor > 1.0` pass bar) — the gap
+is not a bug or an unexplained discrepancy, it's two of 223 windows near
+the very end of the data (the thinnest-sample, least-mature ones, where a
+handful of trades' PF sits closest to the 1.0 threshold) flipping from
+fail to pass once one more day of price history landed. **Whichever
+figure a fresh run produces on the day it's generated is the correct
+one for that day** — there is no single "true" walk-forward percentage
+to reconcile toward; a DD report or investor explainer should always
+carry whatever `run_full_validation()` returns when it's actually
+generated, not a number copied from a previous day's run.
+
 **Honest discrepancy, reported rather than smoothed over.** The aggregate
 14/16 count matches exactly, but the *specific two failing blocks* do not:
 this reproduction failed **Block 0** (2007-01-01–2008-03-22) and **Block 2**
