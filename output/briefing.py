@@ -18,8 +18,20 @@ logger = logging.getLogger(__name__)
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
-    """Build and send a multipart plain+HTML email via SMTP."""
-    notif     = config.get("notifications", {}).get("email", {})
+    """Build and send a multipart plain+HTML email via SMTP.
+
+    Respects notifications.email.enabled (2026-07-31) — checked here, the
+    single low-level chokepoint every caller goes through (currently just
+    brokers/trading212.py's T212 error alert, but any future caller gets
+    this for free too), rather than in each individual caller, where a new
+    call site could easily forget it. When disabled, returns immediately
+    without ever touching the network — no SMTP connection attempt at all.
+    """
+    notif = config.get("notifications", {}).get("email", {})
+    if not notif.get("enabled", False):
+        logger.debug("Email disabled (notifications.email.enabled=false) — not sending: %s", subject)
+        return False, "Email disabled (notifications.email.enabled=false)"
+
     smtp_host = notif.get("smtp_host",     "smtp-relay.brevo.com")
     smtp_port = int(notif.get("smtp_port", 587))
     smtp_user = notif.get("smtp_user",     "")

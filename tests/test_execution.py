@@ -1016,3 +1016,96 @@ def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_m
     v2_mocks.place_market_order.assert_called_once()
     args, _ = v2_mocks.place_market_order.call_args
     assert args[0] == "AAPL_US_EQ"
+
+
+# ---------------------------------------------------------------------------
+# _send_t212_error_email — enabled gate + cooldown -- 2026-07-31
+#
+# notifications.email.enabled and alert_cooldown_hours were both fully
+# configured and documented but never actually read anywhere -- found
+# during the config-consolidation task. _send_t212_error_email() is the
+# single function all four call sites (BUY-loop setup error, failed BUY,
+# EXIT-loop setup error, failed SELL) funnel through, so it's gated once,
+# here, rather than at each of the four sites individually.
+# ---------------------------------------------------------------------------
+
+def _email_config(enabled=True, cooldown_hours=8):
+    return {
+        "notifications": {
+            "email": {
+                "enabled": enabled,
+                "alert_cooldown_hours": cooldown_hours,
+                "smtp_host": "smtp.example.com", "smtp_port": 587,
+                "smtp_user": "user@example.com", "smtp_password": "secret",
+                "from_address": "hello@example.com",
+                "to_addresses": ["alerts@example.com"],
+            },
+        },
+    }
+
+
+def test_t212_error_email_disabled_skips_cleanly_without_error(db_engine, mocker):
+    """enabled=false must be a clean, silent skip -- no exception, no SMTP
+    connection attempt -- not just an eventually-swallowed failure."""
+    from brokers.trading212 import _send_t212_error_email
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    _send_t212_error_email("boom", _email_config(enabled=False))
+
+    smtp_cls.assert_not_called()
+
+
+def test_t212_error_email_sends_on_first_occurrence(db_engine, mocker):
+    """No prior send recorded -- must send immediately, cooldown or not."""
+    from brokers.trading212 import _send_t212_error_email
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    _send_t212_error_email("boom", _email_config())
+
+    mock_server.sendmail.assert_called_once()
+
+
+def test_t212_error_email_second_error_within_cooldown_is_skipped(db_engine, mocker):
+    from brokers.trading212 import _send_t212_error_email
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _email_config(cooldown_hours=8)
+    _send_t212_error_email("first error", cfg)
+    mock_server.sendmail.reset_mock()
+
+    _send_t212_error_email("second error, 1h later", cfg)
+
+    mock_server.sendmail.assert_not_called()
+
+
+def test_t212_error_email_sends_again_once_cooldown_has_elapsed(db_engine, mocker):
+    from data.database import set_metadata
+    from brokers.trading212 import _send_t212_error_email, _T212_ERROR_EMAIL_LAST_SENT_KEY
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    stale_last_sent = (datetime.utcnow() - timedelta(hours=9)).isoformat()
+    set_metadata(_T212_ERROR_EMAIL_LAST_SENT_KEY, stale_last_sent)
+
+    _send_t212_error_email("error after cooldown window", _email_config(cooldown_hours=8))
+
+    mock_server.sendmail.assert_called_once()
+
+
+def test_t212_error_email_disabled_does_not_consume_the_cooldown(db_engine, mocker):
+    """A disabled config must never touch the cooldown timestamp -- a
+    genuine error while disabled must not suppress the first real alert
+    once notifications are turned back on."""
+    from data.database import get_metadata_str
+    from brokers.trading212 import _send_t212_error_email, _T212_ERROR_EMAIL_LAST_SENT_KEY
+    mocker.patch("output.briefing.smtplib.SMTP")
+
+    _send_t212_error_email("error while disabled", _email_config(enabled=False))
+
+    assert get_metadata_str(_T212_ERROR_EMAIL_LAST_SENT_KEY) is None

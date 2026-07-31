@@ -1990,6 +1990,9 @@ unilaterally alongside an unrelated config consolidation. The
 crisis-override-trigger idea mentioned in this task's own framing was not
 built either, for the same reason.
 
+**Resolved 2026-07-31 — see "notifications.email enabled + cooldown wired
+up" below.** Both flags are now actually read and enforced.
+
 ### Pre-market/US-open scheduled runs removed (2026-07-31)
 
 Two of the three daily scheduled runs — 07:00 UTC pre-market (Tue-Fri) and
@@ -2096,6 +2099,56 @@ key present at all, and confirms `scheduled_pre_market`/`scheduled_us_open`
 are never registered under any job id) plus the existing Monday
 stale-order-cancellation and membership-refresh registration tests, all of
 which pass unchanged against the simplified config.
+
+### notifications.email enabled + cooldown wired up (2026-07-31)
+
+`_send_t212_error_email()` (`brokers/trading212.py`) sends unconditionally
+on four call sites — a BUY-loop setup API error, a failed BUY order, an
+EXIT-loop setup API error, a failed SELL order — via `output/briefing.py:
+_smtp_send()`. `notifications.email.enabled` and `alert_cooldown_hours`
+were both fully configured and documented (found during the config-
+consolidation task above) but neither was ever actually read anywhere,
+meaning a persistent error (e.g. a rate limit exceeding the retry budget
+on every scheduled run) could email once per occurrence indefinitely, and
+`enabled: false` did nothing.
+
+**`enabled` is gated inside `_smtp_send()` itself**, not in
+`_send_t212_error_email()` — the single low-level chokepoint every caller
+goes through (today just the T212 error alert, but any future caller gets
+this for free automatically, with no chance of a new call site forgetting
+the check). When disabled, `_smtp_send()` returns `(False, "...")`
+immediately, before ever opening an SMTP connection — confirmed via a
+mocked `smtplib.SMTP` that asserts it's never even called.
+
+**The cooldown is deliberately GLOBAL, not per-call-site or
+per-error-message** — tracked via a single `system_metadata` key
+(`t212_error_email_last_sent`), checked and updated inside
+`_send_t212_error_email()`. A persistent underlying issue (a rate limit,
+an auth failure) is one real problem, not four independent ones, and is
+exactly the kind of thing likely to surface through more than one of the
+four call sites in the same run — a per-call-site cooldown would still
+let each site send its own email every cycle, doing nothing to stop the
+flood the cooldown exists to prevent. `notifications.email.alert_cooldown_hours`
+(default 8, matching the existing config.yaml value) gates it; skipped
+sends log at `INFO` ("T212 error email skipped — within Xh cooldown...")
+rather than being silently dropped.
+
+**The last-sent timestamp is only updated on a genuinely successful
+send** — `_smtp_send()` returning `False` (disabled, no recipients
+configured, or a real SMTP failure) never touches it. This matters
+specifically for the disabled case: an error occurring while
+`enabled: false` must not suppress the first real alert once
+notifications are turned back on — confirmed by a test that sends while
+disabled and then asserts the cooldown key was never written at all.
+
+Covered by `tests/test_briefing.py` (new — `_smtp_send()`'s disabled-skip,
+enabled-send, and no-recipients cases, each confirmed via a mocked
+`smtplib.SMTP` that is/isn't called) and new cases in
+`tests/test_execution.py`: disabled config skips cleanly with no SMTP
+attempt, a first-ever error sends regardless of cooldown, a second error
+within the cooldown window is skipped, an error after the cooldown has
+elapsed sends again, and a disabled-config error never consumes the
+cooldown timestamp.
 
 ### Broker integration — Trading212 Invest
 

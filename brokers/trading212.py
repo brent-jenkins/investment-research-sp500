@@ -635,8 +635,48 @@ def _clear_t212_error() -> None:
         pass
 
 
+_T212_ERROR_EMAIL_LAST_SENT_KEY = "t212_error_email_last_sent"
+
+
 def _send_t212_error_email(error_msg: str, config: dict) -> None:
+    """Send a T212 order-placement/API error alert.
+
+    Gated two ways (2026-07-31): notifications.email.enabled (checked
+    inside _smtp_send() itself, so this and every other current/future
+    caller gets it automatically), and a cooldown
+    (notifications.email.alert_cooldown_hours, default 8h) tracked here.
+
+    The cooldown is deliberately GLOBAL across all four call sites in this
+    module (a setup-time API error in the BUY loop, a failed BUY order, a
+    setup-time API error in the EXIT loop, a failed SELL order) rather than
+    per-call-site or per-error-message. A persistent underlying issue (a
+    rate limit exceeding the retry budget, an auth failure) is one real
+    problem, not four independent ones, and is exactly the kind of thing
+    likely to surface through more than one of these call sites in the
+    same run — a per-call-site cooldown would still let each site send its
+    own email every cycle, which does nothing to stop the flood this
+    cooldown exists to prevent. The timestamp is only updated on a
+    genuinely successful send — a disabled config or a transient SMTP
+    failure never "uses up" the cooldown window, so a real alert can still
+    go out once email is re-enabled or the SMTP issue clears.
+    """
     try:
+        from data.database import get_metadata_str, set_metadata
+
+        cooldown_hours = float(config.get("notifications", {}).get("email", {}).get("alert_cooldown_hours", 8))
+        last_sent_str = get_metadata_str(_T212_ERROR_EMAIL_LAST_SENT_KEY)
+        if last_sent_str:
+            try:
+                hours_since = (datetime.utcnow() - datetime.fromisoformat(last_sent_str)).total_seconds() / 3600
+                if hours_since < cooldown_hours:
+                    logger.info(
+                        "T212 error email skipped — within %.1fh cooldown (last sent %.1fh ago): %s",
+                        cooldown_hours, hours_since, error_msg,
+                    )
+                    return
+            except ValueError:
+                pass  # corrupt/unexpected stored value -- treat as no prior send
+
         from output.briefing import _smtp_send
         subject   = "T212 Invest: Order Placement Error"
         text_body = f"Order placement failed:\n\n{error_msg}"
@@ -644,7 +684,9 @@ def _send_t212_error_email(error_msg: str, config: dict) -> None:
             '<p style="color:#dc2626;font-weight:bold">Order placement failed</p>'
             f'<pre style="background:#f1f5f9;padding:12px;border-radius:4px">{error_msg}</pre>'
         )
-        _smtp_send(subject, text_body, html_body, config)
+        sent, _detail = _smtp_send(subject, text_body, html_body, config)
+        if sent:
+            set_metadata(_T212_ERROR_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
     except Exception as exc:
         logger.warning("Failed to send T212 error email: %s", exc)
 
