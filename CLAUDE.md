@@ -1382,12 +1382,14 @@ against live T212 metadata (name, ISIN, currencyCode), 2026-07-31.**
   position and no cache entry, it is — correctly, per Bug 1's fix —
   untradeable by the automated pipeline until a deliberate seed trade
   establishes a real reference price.
-- **`XLK` flagged, not remapped.** `XDWTl_EQ` is "Xtrackers MSCI World
-  Information Technology" — global technology exposure, not the US-only
-  Technology Select Sector Index `XLK` represents. A real scope mismatch,
-  materially less severe than XLF's (still genuinely the technology sector,
-  just broader geography than intended) — left in place pending a decision
-  on whether to remap, flagged inline in `config.yaml`.
+- **`XLK` flagged, not remapped** at the time this audit was written —
+  `XDWTl_EQ` is "Xtrackers MSCI World Information Technology" — global
+  technology exposure, not the US-only Technology Select Sector Index `XLK`
+  represents. A real scope mismatch, materially less severe than XLF's
+  (still genuinely the technology sector, just broader geography than
+  intended) — left in place pending a decision on whether to remap.
+  **Resolved 2026-07-31** — see "XLK mapping resolution and ETF pricing
+  lockout audit" below for the remap and the closed position.
 - **12 of the 33 ETF mappings had a wrong declared `currency` in
   config.yaml** relative to the instrument's real, live `currencyCode`
   (`VOO`, `TLT`, `HYG`, `SLV`, `SOXX`, `EWJ`, `EEM`, `EWZ`, `INDA`, `FXI`,
@@ -1561,6 +1563,107 @@ cases for `get_crisis_status()` (calm day, active trigger day, mid-cooldown).
 No changes to any order-placement path (`brokers/trading212.py`,
 `data/scheduler.py`) — this task is read-only against price/signal data and
 UI-only in main.py.
+
+### XLK mapping resolution and ETF pricing lockout audit (2026-07-31)
+
+The three-tier pricing fix (live quote if held → cached price → research-ticker
+fallback, stocks only — see "Live pricing bug, exception isolation, and ETF
+mapping audit" above) correctly closed the XLF mis-sizing risk, but has a
+side effect worth stating plainly: **any ETF with no current holding and no
+cached price now has no automated path to ever being priced for a first-time
+entry** — `get_instrument_price_gbp()` returns `0.0` and the caller's
+existing `if quantity <= 0: continue` guard silently skips it. XLF and XLK
+were both already held at the time that fix shipped, so neither was
+immediately affected — but every other ETF mapping was exposed to the same
+risk without anyone having checked how many.
+
+**XLK — same treatment as XLF.** `XDWTl_EQ` ("Xtrackers MSCI World
+Information Technology") was flagged but left unremapped in the original
+audit — global tech exposure, not the US-only Technology Select Sector Index
+`XLK`'s momentum signal is computed against. The same sibling-pattern check
+that found `SXLFl_EQ` for XLF found the equivalent for XLK live:
+**`SXLKl_EQ`** — "State Street SPDR S&P U.S. Technology Select Sector
+(Acc)", ISIN `IE00BWBXM948`, USD — same SPDR/State Street Select Sector
+family as every other `XL*` mapping. The old `XDWTl_EQ` position (15 shares,
+entered 2026-07-31 13:06 UTC at $136.79) was closed via a real market SELL
+order, logged with `exit_reason = MAPPING_CORRECTION` (`invest_orders` row
+id 15) — identical convention to XLF's fix. `instrument_mapping.XLK` now
+points at `SXLKl_EQ`. As with XLF, this is a brand-new-to-us instrument with
+no live position and no cache entry, so it is correctly untradeable by the
+automated pipeline until a deliberate seed trade or a future real fill
+establishes a reference price.
+
+**Part B — no seed mechanism existed.** Checked directly (not assumed):
+grepped the whole codebase for `seed`/price-bootstrap logic, the Status page
+for any admin control, and a `scripts/` directory. The only reference to a
+"seed" price bootstrap anywhere was a sentence in
+`get_instrument_price_gbp()`'s own docstring stating that one would be
+needed — no code implementing it existed. (`analysis/universe.py`'s
+`seed_baseline_membership()` is an unrelated concept — S&P 500 membership
+windows, not prices.)
+
+**Part C — `brokers/trading212.py:seed_instrument_price_gbp(t212_ticker,
+price, currency)`.** Takes an operator-supplied price in the instrument's
+own native currency (exactly as T212 displays it — matching
+`instrument_mapping`'s own `currency` field), converts to GBP via the same
+`Trading212Client._to_gbp()` every other price in this module uses, and
+writes it into the identical `last_known_price_gbp:{t212_ticker}` cache key
+`get_instrument_price_gbp()`'s cache tier already reads — with an added
+`"source": "manual_seed"` field (the existing cache schema had no
+provenance field at all; adding one doesn't break `_get_cached_price_gbp()`,
+which only ever reads `price_gbp`/`as_of`). This means a freshly-seeded ETF
+is priced through the *existing* cache tier with zero special-casing
+anywhere else in the pricing chain, and the moment it's actually bought and
+held, the next live-position read (tier 1) overwrites the seed exactly as it
+would overwrite any other cached value — a seed is a one-time bootstrap,
+never a standing override. Raises `ValueError` on a non-positive price or an
+unconvertible currency, deliberately loud since a seed is a rare,
+operator-initiated action. **The seed price must come from directly reading
+T212's own displayed price — never from `get_price_df()` or any other
+automated proxy**, which is exactly the mechanism that caused the XLF
+mis-sizing incident in the first place; the function takes no research-ticker
+parameter at all, so there is no way to accidentally wire it to that proxy.
+
+A companion read-only function, `audit_etf_pricing_paths(config, client=None)`,
+classifies every ETF in `instrument_mapping` as held / cached (unheld) /
+locked out, reusing `get_cached_price_entry()` (a new sibling of
+`_get_cached_price_gbp()` that also returns the `source` field, for
+audit/display purposes — `_get_cached_price_gbp()` itself is unchanged).
+
+**UI.** The Status page's T212 Invest Account section gained an "ETF pricing-path
+audit" expander (held/cached/locked-out counts + a per-ticker table) and a
+"Seed a manual price" form directly below it (ticker dropdown scoped to ETF
+entries only, price + currency inputs, a mandatory "I have personally
+verified this price on T212's own platform right now" confirmation checkbox
+gating the submit button) — deliberately requiring an explicit human
+confirmation step before the button is even clickable, not just a warning
+caption, given what this mechanism exists to prevent.
+
+**Part D — the audit, run live against production** (post-fix mapping,
+before any seeding): **11 held, 0 cached-but-unheld, 22 locked out**, of 33
+total ETF mappings.
+
+Held (11): VOO, GLD, SLV, XLE, XLV, SOXX, EWJ, EWG, EEM, EWZ, VGK.
+
+Locked out (22): TLT, IEF, HYG, LQD, **XLK**, **XLF**, INDA, FXI, SKYY, XLI,
+XLY, XLP, XLU, XLB, KBE, PDBC, EMB, TIP, AMLP, MUB, IBB, IWM.
+
+XLK and XLF both correctly show as locked out — both are brand-new-to-us
+instruments with the position/cache history of their *old*, wrong mapping
+now superseded, exactly the expected post-remap state described above.
+**No ETF was seeded as part of this task** beyond the mechanism's own test
+coverage (synthetic/mocked instruments in `tests/test_execution.py`, never
+run against the real 22) — whether to seed all 22 now, or only
+opportunistically when a real signal actually wants to trade one, is an
+open decision, not made here.
+
+Covered by new tests in `tests/test_execution.py`: cache population and
+currency conversion (USD/GBP/GBX), `source` field correctness, rejection of
+a non-positive price and an unconvertible currency, a seeded price
+correctly pricing an unheld ETF through the existing cache tier, a
+subsequent live-position quote correctly superseding a manual seed, and
+`audit_etf_pricing_paths()`'s held/cached/locked-out classification
+(including graceful handling of a live-position-fetch failure).
 
 ### Broker integration — Trading212 Invest
 

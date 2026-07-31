@@ -127,6 +127,104 @@ def _get_cached_price_gbp(t212_ticker: str) -> Optional[float]:
         return None
 
 
+def get_cached_price_entry(t212_ticker: str) -> Optional[dict]:
+    """Return the raw cache entry for t212_ticker (price_gbp, as_of, source),
+    or None if absent/expired/corrupt — used by the pricing-path audit
+    (which ETFs have no live position and no viable cache entry) and by the
+    Status page to show a seeded price's provenance. Deliberately separate
+    from _get_cached_price_gbp(), which only ever returns the bare float
+    get_instrument_price_gbp() needs — callers that want the "source" field
+    (e.g. to distinguish a manual seed from a price cached off a real fill)
+    need the full entry, not just the number."""
+    try:
+        from data.database import get_metadata_str
+        import json as _json
+        raw = get_metadata_str(f"last_known_price_gbp:{t212_ticker}")
+        if not raw:
+            return None
+        data = _json.loads(raw)
+        as_of = datetime.fromisoformat(data["as_of"])
+        age_days = (datetime.utcnow() - as_of).total_seconds() / 86400
+        if age_days > _LAST_PRICE_CACHE_MAX_AGE_DAYS:
+            return None
+        if not (float(data.get("price_gbp") or 0) > 0):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def seed_instrument_price_gbp(
+    t212_ticker: str, price: float, currency: str,
+) -> float:
+    """Manually bootstrap the last-known-price cache for a T212 instrument
+    that has no live position and no existing cache entry, from a price the
+    operator has read directly off T212's own displayed price for that
+    instrument — never from get_price_df() or any other automated proxy.
+
+    This exists because get_instrument_price_gbp()'s three-tier pricing
+    (live position -> cache -> research-ticker fallback for stocks only)
+    correctly refuses to price an unheld ETF off the research-ticker
+    fallback (that fallback assumes the T212 wrapper and the US-listed
+    research ticker trade at comparable per-share prices, which is false
+    for a UCITS/ETF wrapper — see get_instrument_price_gbp()'s own
+    docstring, and the XLF mis-sizing incident that fallback originally
+    caused). The one-time cost of that correctness is that a brand-new ETF
+    mapping with no live position and no cache entry has NO automated path
+    to a first price at all — T212's API has no quote endpoint for an
+    unheld instrument (confirmed directly; see get_instrument_price_gbp()).
+    A deliberate, manually-verified seed is the only way to bootstrap it.
+
+    *price* is in *currency* — the instrument's own native currency exactly
+    as T212 displays it (matching instrument_mapping's own `currency`
+    field) — converted to GBP here via the same Trading212Client._to_gbp()
+    every other price in this module uses, then written into the identical
+    last_known_price_gbp:{t212_ticker} cache key get_instrument_price_gbp()'s
+    cache tier already reads. This means a freshly-seeded ETF is priced
+    exactly like any other cached ETF with no special-casing anywhere else
+    in the pricing chain — and the moment it's actually bought and held,
+    the next live-position price read (tier 1, inside
+    get_instrument_price_gbp()) overwrites this entry the same way it would
+    overwrite any other cached value. A manual seed is a one-time
+    bootstrap, never a standing override.
+
+    Raises ValueError for a non-positive price or a currency _to_gbp()
+    can't convert — a seed is a rare, manual, operator-initiated action, so
+    failing loudly on bad input is preferable to silently caching a wrong
+    value that would then look exactly as trustworthy as a genuine one.
+    """
+    if price is None or price <= 0:
+        raise ValueError(f"seed price must be positive, got {price!r}")
+
+    gbpusd, eurusd = Trading212Client._fx_rates()
+    price_gbp = Trading212Client._to_gbp(price, currency, gbpusd, eurusd)
+    if not price_gbp or price_gbp <= 0:
+        raise ValueError(
+            f"could not convert seed price {price} {currency} to GBP for {t212_ticker} "
+            f"(unrecognised currency code?)"
+        )
+
+    now_iso = datetime.utcnow().isoformat()
+    from data.database import set_metadata
+    import json as _json
+    set_metadata(
+        f"last_known_price_gbp:{t212_ticker}",
+        _json.dumps({
+            "price_gbp": price_gbp,
+            "as_of": now_iso,
+            "source": "manual_seed",
+        }),
+    )
+
+    logger.warning(
+        "MANUAL PRICE SEED: %s seeded at %.4f %s (= £%.4f GBP) at %s — "
+        "operator-verified against T212's own displayed price, not derived "
+        "from any automated source.",
+        t212_ticker, price, currency, price_gbp, now_iso,
+    )
+    return price_gbp
+
+
 # ---------------------------------------------------------------------------
 # Trading212Client
 # ---------------------------------------------------------------------------
@@ -462,6 +560,56 @@ class Trading212Client:
             quantity, quantity * price_gbp,
         )
         return quantity
+
+
+# ---------------------------------------------------------------------------
+# ETF pricing-path audit
+# ---------------------------------------------------------------------------
+
+def audit_etf_pricing_paths(config: dict, client: Optional["Trading212Client"] = None) -> list[dict]:
+    """Report, per ETF in trading212_invest.instrument_mapping, whether it
+    currently has a viable pricing path: held (live position -> tier 1),
+    cached (a prior live-position read or a manual seed still within
+    _LAST_PRICE_CACHE_MAX_AGE_DAYS -> tier 2), or neither -> "locked out"
+    (get_instrument_price_gbp() would return 0.0 and refuse to size a new
+    entry, per that method's is_etf=True refusal — see its docstring).
+
+    Read-only — never places an order, never writes anything. *client* lets
+    a caller reuse an already-constructed Trading212Client (e.g. the Status
+    page, which already has one); a fresh one is created if omitted.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    mapping = t212_cfg.get("instrument_mapping", {})
+    etf_entries = {
+        rt: raw for rt, raw in mapping.items()
+        if isinstance(raw, dict) and raw.get("is_etf")
+    }
+
+    if client is None:
+        client = Trading212Client(live=t212_cfg.get("live", False))
+
+    try:
+        positions = client.get_positions() or []
+    except Exception as exc:
+        logger.warning("audit_etf_pricing_paths: could not fetch live positions: %s", exc)
+        positions = []
+    held_t212_tickers = {p.get("ticker") for p in positions}
+
+    results = []
+    for rt, raw in etf_entries.items():
+        t212_ticker = raw.get("ticker")
+        held = t212_ticker in held_t212_tickers
+        cache_entry = None if held else get_cached_price_entry(t212_ticker)
+        locked_out = not held and cache_entry is None
+        results.append({
+            "ticker": rt,
+            "t212_ticker": t212_ticker,
+            "held": held,
+            "cached": cache_entry is not None,
+            "cache_source": (cache_entry or {}).get("source") if cache_entry else None,
+            "locked_out": locked_out,
+        })
+    return results
 
 
 # ---------------------------------------------------------------------------

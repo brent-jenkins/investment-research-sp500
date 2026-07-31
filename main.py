@@ -1317,6 +1317,95 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                     ]
                     st.dataframe(pd.DataFrame(map_rows), width="stretch", hide_index=True)
 
+            # --- ETF pricing-path audit + manual seed control -------------
+            from brokers.trading212 import audit_etf_pricing_paths, seed_instrument_price_gbp
+
+            with st.expander("ETF pricing-path audit"):
+                st.caption(
+                    "get_instrument_price_gbp()'s 3-tier pricing (live position → cached "
+                    "price → refusal) means an ETF with no current holding and no cached "
+                    "price has no automated path to a first price — a new BUY signal for it "
+                    "sizes to 0 and is silently skipped. Locked-out ETFs need a manually "
+                    "verified seed price before they can ever be newly entered."
+                )
+                try:
+                    audit_rows = audit_etf_pricing_paths(config)
+                except Exception as exc:
+                    audit_rows = []
+                    st.warning(f"Audit failed: {exc}")
+
+                if audit_rows:
+                    n_held = sum(1 for r in audit_rows if r["held"])
+                    n_cached = sum(1 for r in audit_rows if r["cached"])
+                    n_locked = sum(1 for r in audit_rows if r["locked_out"])
+                    ac1, ac2, ac3 = st.columns(3)
+                    ac1.metric("Held", n_held)
+                    ac2.metric("Cached (unheld)", n_cached)
+                    ac3.metric("Locked out", n_locked)
+
+                    audit_df = pd.DataFrame(audit_rows)
+                    audit_df["Status"] = audit_df.apply(
+                        lambda r: "Held" if r["held"] else (
+                            f"Cached ({r['cache_source'] or 'live-derived'})" if r["cached"]
+                            else "LOCKED OUT"
+                        ), axis=1,
+                    )
+                    audit_df = audit_df[["ticker", "t212_ticker", "Status"]]
+                    audit_df.columns = ["Ticker", "T212 Instrument", "Status"]
+                    st.dataframe(
+                        audit_df.style.map(
+                            lambda v: "color:#dc2626;font-weight:700" if v == "LOCKED OUT"
+                            else ("color:#16a34a" if v == "Held" else "color:#8899AA"),
+                            subset=["Status"],
+                        ),
+                        width="stretch", hide_index=True,
+                    )
+
+                st.markdown("#### Seed a manual price")
+                st.caption(
+                    "The price must come from directly reading T212's own displayed price "
+                    "for the instrument — never from a research-ticker proxy (that proxy is "
+                    "exactly what caused the XLF mis-sizing incident). Only use this for a "
+                    "genuinely locked-out ETF you have personally verified on T212."
+                )
+                etf_tickers = sorted(
+                    rt for rt, raw in mapping_full.items()
+                    if isinstance(raw, dict) and raw.get("is_etf")
+                )
+                sc1, sc2, sc3 = st.columns([2, 2, 1])
+                with sc1:
+                    seed_rt = st.selectbox("Ticker", options=etf_tickers, key="seed_price_ticker")
+                seed_currency_default = (
+                    mapping_full.get(seed_rt, {}).get("currency", "USD")
+                    if seed_rt else "USD"
+                )
+                with sc2:
+                    seed_price = st.number_input(
+                        "Price (instrument's own currency, as shown on T212)",
+                        min_value=0.0, step=0.01, format="%.4f", key="seed_price_value",
+                    )
+                with sc3:
+                    seed_currency = st.text_input(
+                        "Currency", value=seed_currency_default, key="seed_price_currency",
+                    )
+                seed_confirm = st.checkbox(
+                    "I have personally verified this price on T212's own platform right now.",
+                    key="seed_price_confirm",
+                )
+                if st.button("Seed Price", key="seed_price_btn", disabled=not seed_confirm):
+                    t212_ticker = mapping_full.get(seed_rt, {}).get("ticker") if seed_rt else None
+                    if not t212_ticker or seed_price <= 0:
+                        st.error("Select a ticker and enter a positive price.")
+                    else:
+                        try:
+                            price_gbp = seed_instrument_price_gbp(t212_ticker, seed_price, seed_currency)
+                            st.success(
+                                f"Seeded {seed_rt} ({t212_ticker}) at {seed_price:.4f} "
+                                f"{seed_currency} (= £{price_gbp:.4f} GBP)."
+                            )
+                        except Exception as exc:
+                            st.error(f"Seed failed: {exc}")
+
     # ── Scheduler Health ──────────────────────────────────────────────────
     st.divider()
     st.markdown("### Scheduler Health")

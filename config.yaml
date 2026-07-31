@@ -219,14 +219,17 @@ trading212_invest:
     LQD:  {ticker: VDCPl_EQ,  currency: USD, is_etf: true}
     GLD:  {ticker: WGLDl_EQ,  currency: USD, is_etf: true}
     SLV:  {ticker: PHAGa_EQ,  currency: EUR, is_etf: true}
-    # XLK flagged (not remapped) 2026-07-31 -- XDWTl_EQ tracks "Xtrackers MSCI
-    # World Information Technology", i.e. GLOBAL tech, not the US-only
-    # Technology Select Sector Index the XLK momentum signal is computed
-    # against. A real scope mismatch, less severe than XLF's (still
-    # genuinely "technology sector", just broader geography) -- left as-is
-    # pending a decision on whether to remap; see CLAUDE.md's ETF mapping
-    # audit section.
-    XLK:  {ticker: XDWTl_EQ,  currency: USD, is_etf: true}
+    # XLK remapped 2026-07-31 -- XDWTl_EQ ("Xtrackers MSCI World Information
+    # Technology") was a wrong-scope mapping (GLOBAL tech, not US-only) --
+    # flagged the same day as XLF's fix but left unremapped pending a
+    # decision; resolved by the same live-metadata check that found XLF's
+    # replacement. SXLKl_EQ ("State Street SPDR S&P U.S. Technology Select
+    # Sector (Acc)", ISIN IE00BWBXM948, USD) is the genuinely correct
+    # instrument -- same SPDR/State Street Select Sector family as every
+    # sibling XL* mapping (XLE/XLF/XLI/XLY/XLP/XLU/XLB), verified live. The
+    # old XDWTl_EQ position was closed (see CLAUDE.md's "XLK mapping
+    # resolution" section).
+    XLK:  {ticker: SXLKl_EQ,  currency: USD, is_etf: true}
     # XLF remapped 2026-07-31 -- STZXs_EQ ("SPDR MSCI Europe Financials") was
     # a wrong-underlying mapping (European financials, not US) inherited
     # verbatim from V1 and never caught until a real live position exposed

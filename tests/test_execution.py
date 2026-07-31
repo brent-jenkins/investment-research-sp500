@@ -723,6 +723,190 @@ def test_live_position_price_refreshes_the_cache(db_engine, monkeypatch, mocker)
 
 
 # ---------------------------------------------------------------------------
+# Manual price seed mechanism -- 2026-07-31
+#
+# get_instrument_price_gbp()'s refusal to price an unheld ETF with no cache
+# entry (see test_price_refuses_unheld_etf_with_no_cache above) is correct,
+# but has a side effect: a brand-new ETF mapping has NO automated path to a
+# first price at all, ever -- T212's API has no quote endpoint for an
+# instrument not currently held. seed_instrument_price_gbp() is the one
+# sanctioned way to bootstrap that cache, from an operator-supplied price
+# that must have been read directly off T212's own displayed price -- never
+# from get_price_df() or any other automated proxy (that proxy is exactly
+# what caused the XLF mis-sizing incident this whole 3-tier system exists to
+# prevent).
+# ---------------------------------------------------------------------------
+
+def test_seed_instrument_price_gbp_populates_the_cache(db_engine, mocker):
+    from brokers.trading212 import Trading212Client, seed_instrument_price_gbp, _get_cached_price_gbp
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    price_gbp = seed_instrument_price_gbp("SXLKl_EQ", 45.00, "USD")
+
+    assert price_gbp == pytest.approx(45.00 / 1.27)
+    assert _get_cached_price_gbp("SXLKl_EQ") == pytest.approx(45.00 / 1.27)
+
+
+def test_seed_instrument_price_gbp_records_manual_seed_source(db_engine, mocker):
+    from brokers.trading212 import Trading212Client, seed_instrument_price_gbp, get_cached_price_entry
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    seed_instrument_price_gbp("SXLKl_EQ", 45.00, "USD")
+    entry = get_cached_price_entry("SXLKl_EQ")
+
+    assert entry is not None
+    assert entry["source"] == "manual_seed"
+    assert entry["price_gbp"] == pytest.approx(45.00 / 1.27)
+
+
+def test_seed_instrument_price_gbp_handles_gbp_and_gbx_directly(db_engine, mocker):
+    from brokers.trading212 import Trading212Client, seed_instrument_price_gbp
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    assert seed_instrument_price_gbp("FOO_EQ", 6.30, "GBP") == pytest.approx(6.30)
+    assert seed_instrument_price_gbp("BAR_EQ", 630.0, "GBX") == pytest.approx(6.30)
+
+
+def test_seed_instrument_price_gbp_rejects_non_positive_price(db_engine, mocker):
+    from brokers.trading212 import Trading212Client, seed_instrument_price_gbp
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    with pytest.raises(ValueError):
+        seed_instrument_price_gbp("SXLKl_EQ", 0.0, "USD")
+    with pytest.raises(ValueError):
+        seed_instrument_price_gbp("SXLKl_EQ", -5.0, "USD")
+
+
+def test_seed_instrument_price_gbp_rejects_unconvertible_currency(db_engine, mocker):
+    from brokers.trading212 import Trading212Client, seed_instrument_price_gbp
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    with pytest.raises(ValueError):
+        seed_instrument_price_gbp("SXLKl_EQ", 45.00, "CHF")  # unrecognised by _to_gbp()
+
+
+def test_seeded_price_prices_an_unheld_etf_via_the_normal_cache_tier(db_engine, monkeypatch, mocker):
+    """A seeded ETF must become priceable through get_instrument_price_gbp()'s
+    existing cache tier -- no special-casing anywhere else in the pricing
+    chain for a manually-seeded value vs. one cached from a real fill."""
+    from brokers.trading212 import Trading212Client, seed_instrument_price_gbp
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(Trading212Client, "get_positions", lambda self: [])
+    mocker.patch.object(Trading212Client, "get_instruments", lambda self: [])
+
+    seed_instrument_price_gbp("SXLKl_EQ", 45.00, "USD")
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("SXLKl_EQ", research_ticker="XLK", is_etf=True)
+
+    assert price_gbp == pytest.approx(45.00 / 1.27)
+
+
+def test_held_position_live_quote_supersedes_a_manual_seed(db_engine, monkeypatch, mocker):
+    """Once a seeded ETF is actually bought and held, the next live-position
+    read must overwrite the manual-seed cache entry -- a seed is a one-time
+    bootstrap, never a standing override."""
+    from brokers.trading212 import (
+        Trading212Client, seed_instrument_price_gbp, get_cached_price_entry,
+    )
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    seed_instrument_price_gbp("SXLKl_EQ", 45.00, "USD")
+    assert get_cached_price_entry("SXLKl_EQ")["source"] == "manual_seed"
+
+    # Now the instrument is actually held, with a genuinely different price.
+    mocker.patch.object(
+        Trading212Client, "get_positions",
+        lambda self: [{"ticker": "SXLKl_EQ", "currentPrice": 47.50, "quantity": 10.0}],
+    )
+    mocker.patch.object(
+        Trading212Client, "get_instruments",
+        lambda self: [{"ticker": "SXLKl_EQ", "currencyCode": "USD"}],
+    )
+
+    client = Trading212Client(live=False)
+    price_gbp = client.get_instrument_price_gbp("SXLKl_EQ", research_ticker="XLK", is_etf=True)
+
+    assert price_gbp == pytest.approx(47.50 / 1.27)
+    refreshed = get_cached_price_entry("SXLKl_EQ")
+    assert refreshed["price_gbp"] == pytest.approx(47.50 / 1.27)
+    assert refreshed.get("source") != "manual_seed"
+
+
+# ---------------------------------------------------------------------------
+# ETF pricing-path audit -- 2026-07-31
+# ---------------------------------------------------------------------------
+
+def _etf_mapping():
+    return {
+        "trading212_invest": {
+            "live": False,
+            "instrument_mapping": {
+                "XLK": {"ticker": "SXLKl_EQ", "currency": "USD", "is_etf": True},
+                "XLF": {"ticker": "SXLFl_EQ", "currency": "USD", "is_etf": True},
+                "VOO": {"ticker": "I50Dl_EQ", "currency": "GBP", "is_etf": True},
+                "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+            },
+        },
+    }
+
+
+def test_audit_etf_pricing_paths_classifies_held_cached_and_locked_out(db_engine, monkeypatch, mocker):
+    from brokers.trading212 import Trading212Client, audit_etf_pricing_paths, seed_instrument_price_gbp
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(
+        Trading212Client, "get_positions",
+        lambda self: [{"ticker": "I50Dl_EQ", "currentPrice": 6.26, "quantity": 4.0}],
+    )
+    seed_instrument_price_gbp("SXLFl_EQ", 40.0, "USD")
+
+    results = audit_etf_pricing_paths(_etf_mapping(), client=Trading212Client(live=False))
+    by_ticker = {r["ticker"]: r for r in results}
+
+    assert set(by_ticker.keys()) == {"XLK", "XLF", "VOO"}  # AAPL excluded (not an ETF)
+    assert by_ticker["VOO"]["held"] is True
+    assert by_ticker["VOO"]["locked_out"] is False
+    assert by_ticker["XLF"]["held"] is False
+    assert by_ticker["XLF"]["cached"] is True
+    assert by_ticker["XLF"]["cache_source"] == "manual_seed"
+    assert by_ticker["XLF"]["locked_out"] is False
+    assert by_ticker["XLK"]["held"] is False
+    assert by_ticker["XLK"]["cached"] is False
+    assert by_ticker["XLK"]["locked_out"] is True
+
+
+def test_audit_etf_pricing_paths_handles_live_position_fetch_failure(db_engine, monkeypatch, mocker):
+    from brokers.trading212 import Trading212Client, audit_etf_pricing_paths
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch.object(
+        Trading212Client, "get_positions",
+        side_effect=RuntimeError("boom"),
+    )
+
+    results = audit_etf_pricing_paths(_etf_mapping(), client=Trading212Client(live=False))
+    # Must not raise -- everything falls through to "not held" and is
+    # correctly reported as locked out (no cache in this test either).
+    assert all(r["held"] is False for r in results)
+    assert all(r["locked_out"] is True for r in results)
+
+
+# ---------------------------------------------------------------------------
 # Per-ticker/per-position exception isolation -- 2026-07-31
 #
 # Confirmed live: a real cycle placed 13 BUY orders through position 19/73 in
