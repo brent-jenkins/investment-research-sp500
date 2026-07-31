@@ -5,90 +5,118 @@
 # "V1 removal" sections for the history behind this shape.
 watchlist:
   # Trimmed 2026-07-31 to exactly what the momentum + crisis-override system
-  # needs: its own 73-ticker universe (see analysis/universe.py:ALL_TICKERS),
-  # ^GSPC (crisis-override reference index), and GBPUSD=X/EURUSD=X (FX
-  # conversion for non-GBP positions). The six-module confluence system this
-  # watchlist used to serve (112 assets across 21 groups -- correlation pairs,
-  # macro-context tickers, crypto, analysis-only ETFs) has been removed; nothing
-  # reads those tickers anymore.
+  # needs: its own 73-ticker universe (see `instruments:` below and
+  # analysis/universe.py:ALL_TICKERS), ^GSPC (crisis-override reference
+  # index), and GBPUSD=X/EURUSD=X (FX conversion for non-GBP positions).
+  # core is monitoring-only and deliberately stays separate from
+  # `instruments:` below -- none of these three ever has (or ever will have)
+  # an execution mapping; see CLAUDE.md's "Unified instrument structure"
+  # section. The six-module confluence system this watchlist used to serve
+  # (112 assets across 21 groups) has been removed; nothing reads those
+  # tickers anymore.
   core:
     - {ticker: "^GSPC", name: "S&P 500", exchange: "NYSE"}
     - {ticker: "GBPUSD=X", name: "GBP/USD", exchange: "FX"}
     - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
-  trading:
-    - {ticker: "AAPL", name: "Apple", exchange: "NYSE"}
-    - {ticker: "ADBE", name: "Adobe", exchange: "NYSE"}
-    - {ticker: "AMD", name: "Advanced Micro Devices", exchange: "NYSE"}
-    - {ticker: "AMLP", name: "Alerian MLP ETF", exchange: "NYSE"}
-    - {ticker: "AMZN", name: "Amazon", exchange: "NYSE"}
-    - {ticker: "AVGO", name: "Broadcom", exchange: "NYSE"}
-    - {ticker: "BAC", name: "Bank of America", exchange: "NYSE"}
-    - {ticker: "CAT", name: "Caterpillar", exchange: "NYSE"}
-    - {ticker: "COST", name: "Costco", exchange: "NYSE"}
-    - {ticker: "CRM", name: "Salesforce", exchange: "NYSE"}
-    - {ticker: "CVX", name: "Chevron", exchange: "NYSE"}
-    - {ticker: "DIS", name: "Walt Disney Company", exchange: "NYSE"}
-    - {ticker: "EEM", name: "iShares MSCI Emerging Markets ETF", exchange: "NYSE"}
-    - {ticker: "EMB", name: "iShares JP Morgan EM Bond ETF", exchange: "NYSE"}
-    - {ticker: "EWG", name: "iShares MSCI Germany ETF", exchange: "NYSE"}
-    - {ticker: "EWJ", name: "iShares MSCI Japan ETF", exchange: "NYSE"}
-    - {ticker: "EWZ", name: "iShares MSCI Brazil ETF", exchange: "NYSE"}
-    - {ticker: "FXI", name: "iShares China Large-Cap ETF", exchange: "NYSE"}
-    - {ticker: "GE", name: "GE Aerospace", exchange: "NYSE"}
-    - {ticker: "GLD", name: "SPDR Gold Shares", exchange: "NYSE"}
-    - {ticker: "GOLD", name: "Barrick Gold", exchange: "NYSE"}
-    - {ticker: "GOOGL", name: "Alphabet (Class A)", exchange: "NYSE"}
-    - {ticker: "GS", name: "Goldman Sachs", exchange: "NYSE"}
-    - {ticker: "HD", name: "Home Depot", exchange: "NYSE"}
-    - {ticker: "HYG", name: "iShares iBoxx High Yield Corporate Bond", exchange: "NYSE"}
-    - {ticker: "IBB", name: "iShares Biotechnology ETF", exchange: "NYSE"}
-    - {ticker: "IEF", name: "iShares 7-10 Year Treasury Bond", exchange: "NYSE"}
-    - {ticker: "INDA", name: "iShares MSCI India ETF", exchange: "NYSE"}
-    - {ticker: "ISRG", name: "Intuitive Surgical", exchange: "NYSE"}
-    - {ticker: "IWM", name: "iShares Russell 2000 ETF", exchange: "NYSE"}
-    - {ticker: "JNJ", name: "Johnson & Johnson", exchange: "NYSE"}
-    - {ticker: "JPM", name: "JP Morgan Chase", exchange: "NYSE"}
-    - {ticker: "KBE", name: "SPDR S&P Bank ETF", exchange: "NYSE"}
-    - {ticker: "LIN", name: "Linde plc", exchange: "NYSE"}
-    - {ticker: "LLY", name: "Eli Lilly", exchange: "NYSE"}
-    - {ticker: "LQD", name: "iShares Investment Grade Corporate Bond", exchange: "NYSE"}
-    - {ticker: "MA", name: "Mastercard", exchange: "NYSE"}
-    - {ticker: "META", name: "Meta Platforms", exchange: "NYSE"}
-    - {ticker: "MRK", name: "Merck", exchange: "NYSE"}
-    - {ticker: "MSFT", name: "Microsoft", exchange: "NYSE"}
-    - {ticker: "MUB", name: "iShares National Muni Bond ETF", exchange: "NYSE"}
-    - {ticker: "NEM", name: "Newmont Corporation", exchange: "NYSE"}
-    - {ticker: "NFLX", name: "Netflix", exchange: "NYSE"}
-    - {ticker: "NVDA", name: "NVIDIA", exchange: "NYSE"}
-    - {ticker: "ORCL", name: "Oracle Corporation", exchange: "NYSE"}
-    - {ticker: "PDBC", name: "Invesco Optimum Yield Diversified Commodity Strategy", exchange: "NYSE"}
-    - {ticker: "PFE", name: "Pfizer", exchange: "NYSE"}
-    - {ticker: "PG", name: "Procter & Gamble", exchange: "NYSE"}
-    - {ticker: "QCOM", name: "Qualcomm", exchange: "NYSE"}
-    - {ticker: "RTX", name: "RTX Corporation", exchange: "NYSE"}
-    - {ticker: "SKYY", name: "First Trust Cloud Computing ETF", exchange: "NYSE"}
-    - {ticker: "SLV", name: "iShares Silver Trust", exchange: "NYSE"}
-    - {ticker: "SOXX", name: "iShares Semiconductor ETF", exchange: "NYSE"}
-    - {ticker: "SPGI", name: "S&P Global", exchange: "NYSE"}
-    - {ticker: "TIP", name: "iShares TIPS Bond ETF", exchange: "NYSE"}
-    - {ticker: "TLT", name: "iShares 20+ Year Treasury Bond", exchange: "NYSE"}
-    - {ticker: "TMO", name: "Thermo Fisher Scientific", exchange: "NYSE"}
-    - {ticker: "TSLA", name: "Tesla", exchange: "NYSE"}
-    - {ticker: "UNH", name: "UnitedHealth Group", exchange: "NYSE"}
-    - {ticker: "V", name: "Visa", exchange: "NYSE"}
-    - {ticker: "VGK", name: "Vanguard FTSE Europe ETF", exchange: "NYSE"}
-    - {ticker: "VOO", name: "Vanguard S&P 500 ETF", exchange: "NYSE"}
-    - {ticker: "WMT", name: "Walmart", exchange: "NYSE"}
-    - {ticker: "XLB", name: "Materials Select Sector", exchange: "NYSE"}
-    - {ticker: "XLE", name: "Energy Select Sector", exchange: "NYSE"}
-    - {ticker: "XLF", name: "Financial Select Sector", exchange: "NYSE"}
-    - {ticker: "XLI", name: "Industrial Select Sector", exchange: "NYSE"}
-    - {ticker: "XLK", name: "Technology Select Sector", exchange: "NYSE"}
-    - {ticker: "XLP", name: "Consumer Staples Select Sector", exchange: "NYSE"}
-    - {ticker: "XLU", name: "Utilities Select Sector", exchange: "NYSE"}
-    - {ticker: "XLV", name: "Health Care Select Sector", exchange: "NYSE"}
-    - {ticker: "XLY", name: "Consumer Discretionary Select Sector", exchange: "NYSE"}
-    - {ticker: "XOM", name: "ExxonMobil", exchange: "NYSE"}
+
+# One record per tradeable instrument -- consolidated 2026-07-31 from what
+# used to be two separately-maintained structures (watchlist.trading's
+# ticker/name/exchange, and trading212_invest.instrument_mapping's nested
+# ticker/currency/is_etf) into a single source of truth per instrument. The
+# duplication meant nothing structurally enforced the two staying in sync;
+# XLF's and XLK's wrong T212 mappings were only ever found by accident,
+# during an unrelated investigation, and could just as easily have been a
+# ticker present in one structure but silently missing from the other. See
+# CLAUDE.md's "Unified instrument structure" section for the full
+# consolidation and tests/test_config.py for the structural validation that
+# now makes an incomplete entry impossible to miss.
+#
+# The nested `ticker` field from the old instrument_mapping was renamed to
+# `t212_instrument_id` -- the old name collided confusingly with the
+# watchlist's own top-level `ticker` key (the research ticker), one meaning
+# "our symbol for this instrument" and the other meaning "T212's own
+# internal instrument ID for it".
+#
+# currency values are the T212 instrument's OWN live currencyCode, verified
+# 2026-07-31 against get_instruments() (see CLAUDE.md's ETF mapping audit)
+# -- get_instrument_price_gbp()'s live-position pricing path reads
+# currencyCode from the API directly so an incorrect value here never
+# corrupted live pricing, but _log_order()'s currency_code falls back to
+# this field when the live API lookup fails, so it's worth keeping accurate.
+instruments:
+  AAPL:  {name: "Apple", exchange: "NYSE", is_etf: false, t212_instrument_id: AAPL_US_EQ, currency: USD}
+  ADBE:  {name: "Adobe", exchange: "NYSE", is_etf: false, t212_instrument_id: ADBE_US_EQ, currency: USD}
+  AMD:   {name: "Advanced Micro Devices", exchange: "NYSE", is_etf: false, t212_instrument_id: AMD_US_EQ, currency: USD}
+  AMLP:  {name: "Alerian MLP ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SMLPd_EQ, currency: EUR}
+  AMZN:  {name: "Amazon", exchange: "NYSE", is_etf: false, t212_instrument_id: AMZN_US_EQ, currency: USD}
+  AVGO:  {name: "Broadcom", exchange: "NYSE", is_etf: false, t212_instrument_id: AVGO_US_EQ, currency: USD}
+  BAC:   {name: "Bank of America", exchange: "NYSE", is_etf: false, t212_instrument_id: BAC_US_EQ, currency: USD}
+  CAT:   {name: "Caterpillar", exchange: "NYSE", is_etf: false, t212_instrument_id: CAT_US_EQ, currency: USD}
+  COST:  {name: "Costco", exchange: "NYSE", is_etf: false, t212_instrument_id: COST_US_EQ, currency: USD}
+  CRM:   {name: "Salesforce", exchange: "NYSE", is_etf: false, t212_instrument_id: CRM_US_EQ, currency: USD}
+  CVX:   {name: "Chevron", exchange: "NYSE", is_etf: false, t212_instrument_id: CVX_US_EQ, currency: USD}
+  DIS:   {name: "Walt Disney Company", exchange: "NYSE", is_etf: false, t212_instrument_id: DIS_US_EQ, currency: USD}
+  EEM:   {name: "iShares MSCI Emerging Markets ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: JEEMd_EQ, currency: EUR}
+  EMB:   {name: "iShares JP Morgan EM Bond ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IEMBl_EQ, currency: USD}
+  EWG:   {name: "iShares MSCI Germany ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: VGERd_EQ, currency: EUR}
+  EWJ:   {name: "iShares MSCI Japan ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SGJPl_EQ, currency: GBP}
+  EWZ:   {name: "iShares MSCI Brazil ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IBZLa_EQ, currency: EUR}
+  FXI:   {name: "iShares China Large-Cap ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: LCCGl_EQ, currency: GBP}
+  GE:    {name: "GE Aerospace", exchange: "NYSE", is_etf: false, t212_instrument_id: GE_US_EQ, currency: USD}
+  GLD:   {name: "SPDR Gold Shares", exchange: "NYSE", is_etf: true, t212_instrument_id: WGLDl_EQ, currency: USD}
+  GOLD:  {name: "Barrick Gold", exchange: "NYSE", is_etf: false, t212_instrument_id: GOLD_US_EQ, currency: USD}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/universe.py docstring)
+  GOOGL: {name: "Alphabet (Class A)", exchange: "NYSE", is_etf: false, t212_instrument_id: GOOGL_US_EQ, currency: USD}
+  GS:    {name: "Goldman Sachs", exchange: "NYSE", is_etf: false, t212_instrument_id: GS_US_EQ, currency: USD}
+  HD:    {name: "Home Depot", exchange: "NYSE", is_etf: false, t212_instrument_id: HD_US_EQ, currency: USD}
+  HYG:   {name: "iShares iBoxx High Yield Corporate Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: XUHEd_EQ, currency: EUR}
+  IBB:   {name: "iShares Biotechnology ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: FBTUl_EQ, currency: USD}
+  IEF:   {name: "iShares 7-10 Year Treasury Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: TREXl_EQ, currency: USD}
+  INDA:  {name: "iShares MSCI India ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IINDl_EQ, currency: GBP}
+  ISRG:  {name: "Intuitive Surgical", exchange: "NYSE", is_etf: false, t212_instrument_id: ISRG_US_EQ, currency: USD}
+  IWM:   {name: "iShares Russell 2000 ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: RU2Kl_EQ, currency: GBP}
+  JNJ:   {name: "Johnson & Johnson", exchange: "NYSE", is_etf: false, t212_instrument_id: JNJ_US_EQ, currency: USD}
+  JPM:   {name: "JP Morgan Chase", exchange: "NYSE", is_etf: false, t212_instrument_id: JPM_US_EQ, currency: USD}
+  KBE:   {name: "SPDR S&P Bank ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: BNKTa_EQ, currency: USD}
+  LIN:   {name: "Linde plc", exchange: "NYSE", is_etf: false, t212_instrument_id: LIN_US_EQ, currency: USD}
+  LLY:   {name: "Eli Lilly", exchange: "NYSE", is_etf: false, t212_instrument_id: LLY_US_EQ, currency: USD}
+  LQD:   {name: "iShares Investment Grade Corporate Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: VDCPl_EQ, currency: USD}
+  MA:    {name: "Mastercard", exchange: "NYSE", is_etf: false, t212_instrument_id: MA_US_EQ, currency: USD}
+  META:  {name: "Meta Platforms", exchange: "NYSE", is_etf: false, t212_instrument_id: FB_US_EQ, currency: USD}  # T212 never renamed this instrument's own ticker after Facebook->Meta; shortName/name confirm it's the right instrument (name: "Meta Platforms")
+  MRK:   {name: "Merck", exchange: "NYSE", is_etf: false, t212_instrument_id: MRK_US_EQ, currency: USD}
+  MSFT:  {name: "Microsoft", exchange: "NYSE", is_etf: false, t212_instrument_id: MSFT_US_EQ, currency: USD}
+  MUB:   {name: "iShares National Muni Bond ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: MUNIl_EQ, currency: USD}
+  NEM:   {name: "Newmont Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: NEM_US_EQ, currency: USD}
+  NFLX:  {name: "Netflix", exchange: "NYSE", is_etf: false, t212_instrument_id: NFLX_US_EQ, currency: USD}
+  NVDA:  {name: "NVIDIA", exchange: "NYSE", is_etf: false, t212_instrument_id: NVDA_US_EQ, currency: USD}
+  ORCL:  {name: "Oracle Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: ORCL_US_EQ, currency: USD}
+  PDBC:  {name: "Invesco Optimum Yield Diversified Commodity Strategy", exchange: "NYSE", is_etf: true, t212_instrument_id: XCMCd_EQ, currency: EUR}
+  PFE:   {name: "Pfizer", exchange: "NYSE", is_etf: false, t212_instrument_id: PFE_US_EQ, currency: USD}
+  PG:    {name: "Procter & Gamble", exchange: "NYSE", is_etf: false, t212_instrument_id: PG_US_EQ, currency: USD}
+  QCOM:  {name: "Qualcomm", exchange: "NYSE", is_etf: false, t212_instrument_id: QCOM_US_EQ, currency: USD}
+  RTX:   {name: "RTX Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: UTX_US_EQ, currency: USD}  # T212 retains the pre-merger "UTX" (United Technologies) instrument ticker; shortName/name confirm it (shortName: "RTX", name: "RTX")
+  SKYY:  {name: "First Trust Cloud Computing ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SKYEa_EQ, currency: EUR}
+  SLV:   {name: "iShares Silver Trust", exchange: "NYSE", is_etf: true, t212_instrument_id: PHAGa_EQ, currency: EUR}
+  SOXX:  {name: "iShares Semiconductor ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SEMGl_EQ, currency: GBX}
+  SPGI:  {name: "S&P Global", exchange: "NYSE", is_etf: false, t212_instrument_id: SPGI_US_EQ, currency: USD}
+  TIP:   {name: "iShares TIPS Bond ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IBC5d_EQ, currency: EUR}
+  TLT:   {name: "iShares 20+ Year Treasury Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: IDGAl_EQ, currency: GBP}
+  TMO:   {name: "Thermo Fisher Scientific", exchange: "NYSE", is_etf: false, t212_instrument_id: TMO_US_EQ, currency: USD}
+  TSLA:  {name: "Tesla", exchange: "NYSE", is_etf: false, t212_instrument_id: TSLA_US_EQ, currency: USD}
+  UNH:   {name: "UnitedHealth Group", exchange: "NYSE", is_etf: false, t212_instrument_id: UNH_US_EQ, currency: USD}
+  V:     {name: "Visa", exchange: "NYSE", is_etf: false, t212_instrument_id: V_US_EQ, currency: USD}
+  VGK:   {name: "Vanguard FTSE Europe ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: H4ZEd_EQ, currency: EUR}
+  VOO:   {name: "Vanguard S&P 500 ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: I50Dl_EQ, currency: GBP}
+  WMT:   {name: "Walmart", exchange: "NYSE", is_etf: false, t212_instrument_id: WMT_US_EQ, currency: USD}
+  XLB:   {name: "Materials Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLBl_EQ, currency: USD}
+  XLE:   {name: "Energy Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLEl_EQ, currency: USD}
+  XLF:   {name: "Financial Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLFl_EQ, currency: USD}  # remapped 2026-07-31 -- STZXs_EQ ("SPDR MSCI Europe Financials") was a wrong-underlying mapping (European, not US) inherited verbatim from V1 and never caught until a real live position exposed it. SXLFl_EQ ("SPDR S&P U.S. Financials Select Sector (Acc)", ISIN IE00BWBXM500, USD) is the genuinely correct instrument, verified live -- see CLAUDE.md's "V2 live execution" ETF mapping audit section.
+  XLI:   {name: "Industrial Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLIl_EQ, currency: USD}
+  XLK:   {name: "Technology Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLKl_EQ, currency: USD}  # remapped 2026-07-31 -- XDWTl_EQ ("Xtrackers MSCI World Information Technology") was a wrong-scope mapping (GLOBAL tech, not US-only). SXLKl_EQ ("State Street SPDR S&P U.S. Technology Select Sector (Acc)", ISIN IE00BWBXM948, USD) is the genuinely correct instrument, same Select Sector family as every sibling XL* mapping -- see CLAUDE.md's "XLK mapping resolution" section.
+  XLP:   {name: "Consumer Staples Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLPl_EQ, currency: USD}
+  XLU:   {name: "Utilities Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLUl_EQ, currency: USD}
+  XLV:   {name: "Health Care Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: IUHCl_EQ, currency: USD}
+  XLY:   {name: "Consumer Discretionary Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLYl_EQ, currency: USD}
+  XOM:   {name: "ExxonMobil", exchange: "NYSE", is_etf: false, t212_instrument_id: XOM_US_EQ, currency: USD}
 
 data:
   # How many calendar days of history to fetch on initial load for any asset
@@ -195,112 +223,10 @@ trading212_invest:
   max_risk_pct: 0.01
   min_position_gbp: 50
   # Max holding days -- analysis/universe.py:get_max_holding_days() dispatches
-  # on each ticker's own instrument_mapping is_etf flag below: ETFs get the
-  # longer 90d backstop, individual stocks get the tighter 30d backstop
-  # (higher idiosyncratic risk than a diversified ETF). A ticker with no
-  # mapping entry falls back to backtest.max_holding_days.
+  # on each ticker's own `instruments:` is_etf flag (top-level section,
+  # below `watchlist:`): ETFs get the longer 90d backstop, individual
+  # stocks get the tighter 30d backstop (higher idiosyncratic risk than a
+  # diversified ETF). A ticker with no `instruments:` entry falls back to
+  # backtest.max_holding_days.
   max_holding_days: 90
   stock_max_holding_days: 30
-
-  instrument_mapping:
-    # --- ETFs (33) ---
-    # currency values below are the T212 instrument's OWN live currencyCode,
-    # verified 2026-07-31 against get_instruments() (see CLAUDE.md's ETF
-    # mapping audit) -- 12 entries had a wrong declared currency here before
-    # that audit (mostly assumed USD without checking); get_instrument_price_gbp()'s
-    # live-position pricing path reads currencyCode from the API directly so
-    # those didn't corrupt live pricing, but _log_order()'s currency_code
-    # falls back to this field when the live API lookup fails, so it's worth
-    # keeping accurate.
-    VOO:  {ticker: I50Dl_EQ,  currency: GBP, is_etf: true}
-    TLT:  {ticker: IDGAl_EQ,  currency: GBP, is_etf: true}
-    IEF:  {ticker: TREXl_EQ,  currency: USD, is_etf: true}
-    HYG:  {ticker: XUHEd_EQ,  currency: EUR, is_etf: true}
-    LQD:  {ticker: VDCPl_EQ,  currency: USD, is_etf: true}
-    GLD:  {ticker: WGLDl_EQ,  currency: USD, is_etf: true}
-    SLV:  {ticker: PHAGa_EQ,  currency: EUR, is_etf: true}
-    # XLK remapped 2026-07-31 -- XDWTl_EQ ("Xtrackers MSCI World Information
-    # Technology") was a wrong-scope mapping (GLOBAL tech, not US-only) --
-    # flagged the same day as XLF's fix but left unremapped pending a
-    # decision; resolved by the same live-metadata check that found XLF's
-    # replacement. SXLKl_EQ ("State Street SPDR S&P U.S. Technology Select
-    # Sector (Acc)", ISIN IE00BWBXM948, USD) is the genuinely correct
-    # instrument -- same SPDR/State Street Select Sector family as every
-    # sibling XL* mapping (XLE/XLF/XLI/XLY/XLP/XLU/XLB), verified live. The
-    # old XDWTl_EQ position was closed (see CLAUDE.md's "XLK mapping
-    # resolution" section).
-    XLK:  {ticker: SXLKl_EQ,  currency: USD, is_etf: true}
-    # XLF remapped 2026-07-31 -- STZXs_EQ ("SPDR MSCI Europe Financials") was
-    # a wrong-underlying mapping (European financials, not US) inherited
-    # verbatim from V1 and never caught until a real live position exposed
-    # it. SXLFl_EQ ("SPDR S&P U.S. Financials Select Sector (Acc)",
-    # ISIN IE00BWBXM500, USD) is the genuinely correct instrument -- same
-    # SPDR/State Street Select Sector family as every sibling XL* mapping
-    # below, verified live. The old STZXs_EQ position was closed
-    # (see CLAUDE.md's "V2 live execution" ETF mapping audit section).
-    XLF:  {ticker: SXLFl_EQ,  currency: USD, is_etf: true}
-    XLE:  {ticker: SXLEl_EQ,  currency: USD, is_etf: true}
-    XLV:  {ticker: IUHCl_EQ,  currency: USD, is_etf: true}
-    SOXX: {ticker: SEMGl_EQ,  currency: GBX, is_etf: true}
-    EWJ:  {ticker: SGJPl_EQ,  currency: GBP, is_etf: true}
-    EWG:  {ticker: VGERd_EQ,  currency: EUR, is_etf: true}
-    EEM:  {ticker: JEEMd_EQ,  currency: EUR, is_etf: true}
-    EWZ:  {ticker: IBZLa_EQ,  currency: EUR, is_etf: true}
-    INDA: {ticker: IINDl_EQ,  currency: GBP, is_etf: true}
-    FXI:  {ticker: LCCGl_EQ,  currency: GBP, is_etf: true}
-    VGK:  {ticker: H4ZEd_EQ,  currency: EUR, is_etf: true}
-    SKYY: {ticker: SKYEa_EQ,  currency: EUR, is_etf: true}
-    XLI:  {ticker: SXLIl_EQ,  currency: USD, is_etf: true}
-    XLY:  {ticker: SXLYl_EQ,  currency: USD, is_etf: true}
-    XLP:  {ticker: SXLPl_EQ,  currency: USD, is_etf: true}
-    XLU:  {ticker: SXLUl_EQ,  currency: USD, is_etf: true}
-    XLB:  {ticker: SXLBl_EQ,  currency: USD, is_etf: true}
-    KBE:  {ticker: BNKTa_EQ,  currency: USD, is_etf: true}
-    PDBC: {ticker: XCMCd_EQ,  currency: EUR, is_etf: true}
-    EMB:  {ticker: IEMBl_EQ,  currency: USD, is_etf: true}
-    TIP:  {ticker: IBC5d_EQ,  currency: EUR, is_etf: true}
-    AMLP: {ticker: SMLPd_EQ,  currency: EUR, is_etf: true}
-    MUB:  {ticker: MUNIl_EQ,  currency: USD, is_etf: true}
-    IBB:  {ticker: FBTUl_EQ,  currency: USD, is_etf: true}
-    IWM:  {ticker: RU2Kl_EQ,  currency: GBP, is_etf: true}
-    # --- Stocks (40) — {TICKER}_US_EQ convention, verified live; two exceptions noted ---
-    AAPL:  {ticker: AAPL_US_EQ,  currency: USD, is_etf: false}
-    ADBE:  {ticker: ADBE_US_EQ,  currency: USD, is_etf: false}
-    AMD:   {ticker: AMD_US_EQ,   currency: USD, is_etf: false}
-    AMZN:  {ticker: AMZN_US_EQ,  currency: USD, is_etf: false}
-    AVGO:  {ticker: AVGO_US_EQ,  currency: USD, is_etf: false}
-    BAC:   {ticker: BAC_US_EQ,   currency: USD, is_etf: false}
-    CAT:   {ticker: CAT_US_EQ,   currency: USD, is_etf: false}
-    COST:  {ticker: COST_US_EQ,  currency: USD, is_etf: false}
-    CRM:   {ticker: CRM_US_EQ,   currency: USD, is_etf: false}
-    CVX:   {ticker: CVX_US_EQ,   currency: USD, is_etf: false}
-    DIS:   {ticker: DIS_US_EQ,   currency: USD, is_etf: false}
-    GE:    {ticker: GE_US_EQ,    currency: USD, is_etf: false}
-    GOLD:  {ticker: GOLD_US_EQ,  currency: USD, is_etf: false}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/universe.py docstring)
-    GOOGL: {ticker: GOOGL_US_EQ, currency: USD, is_etf: false}
-    GS:    {ticker: GS_US_EQ,    currency: USD, is_etf: false}
-    HD:    {ticker: HD_US_EQ,    currency: USD, is_etf: false}
-    ISRG:  {ticker: ISRG_US_EQ,  currency: USD, is_etf: false}
-    JNJ:   {ticker: JNJ_US_EQ,   currency: USD, is_etf: false}
-    JPM:   {ticker: JPM_US_EQ,   currency: USD, is_etf: false}
-    LIN:   {ticker: LIN_US_EQ,   currency: USD, is_etf: false}
-    LLY:   {ticker: LLY_US_EQ,   currency: USD, is_etf: false}
-    MA:    {ticker: MA_US_EQ,    currency: USD, is_etf: false}
-    MRK:   {ticker: MRK_US_EQ,   currency: USD, is_etf: false}
-    MSFT:  {ticker: MSFT_US_EQ,  currency: USD, is_etf: false}
-    NEM:   {ticker: NEM_US_EQ,   currency: USD, is_etf: false}
-    NFLX:  {ticker: NFLX_US_EQ,  currency: USD, is_etf: false}
-    NVDA:  {ticker: NVDA_US_EQ,  currency: USD, is_etf: false}
-    ORCL:  {ticker: ORCL_US_EQ,  currency: USD, is_etf: false}
-    PFE:   {ticker: PFE_US_EQ,   currency: USD, is_etf: false}
-    PG:    {ticker: PG_US_EQ,    currency: USD, is_etf: false}
-    QCOM:  {ticker: QCOM_US_EQ,  currency: USD, is_etf: false}
-    SPGI:  {ticker: SPGI_US_EQ,  currency: USD, is_etf: false}
-    TMO:   {ticker: TMO_US_EQ,   currency: USD, is_etf: false}
-    TSLA:  {ticker: TSLA_US_EQ,  currency: USD, is_etf: false}
-    UNH:   {ticker: UNH_US_EQ,   currency: USD, is_etf: false}
-    V:     {ticker: V_US_EQ,     currency: USD, is_etf: false}
-    WMT:   {ticker: WMT_US_EQ,   currency: USD, is_etf: false}
-    XOM:   {ticker: XOM_US_EQ,   currency: USD, is_etf: false}
-    META:  {ticker: FB_US_EQ,    currency: USD, is_etf: false}  # T212 never renamed this instrument's own ticker after Facebook->Meta; shortName/name confirm it's the right instrument (name: "Meta Platforms")
-    RTX:   {ticker: UTX_US_EQ,   currency: USD, is_etf: false}  # T212 retains the pre-merger "UTX" (United Technologies) instrument ticker; shortName/name confirm it (shortName: "RTX", name: "RTX")

@@ -361,7 +361,7 @@ def _purge_unlisted_tickers(engine) -> None:
     # under a config key name (from any past mis-parse) are silently skipped
     # rather than being logged as purge targets on every startup.
     _CONFIG_SECTIONS: frozenset[str] = frozenset({
-        "watchlist", "data", "database", "scheduler",
+        "watchlist", "instruments", "data", "database", "scheduler",
         "signals", "notifications", "backtest", "trading212_invest",
     })
 
@@ -378,6 +378,12 @@ def _purge_unlisted_tickers(engine) -> None:
         for entry in assets:
             if isinstance(entry, dict) and "ticker" in entry:
                 allowed.add(entry["ticker"])
+    # Top-level `instruments:` section (consolidated 2026-07-31 from
+    # watchlist.trading + trading212_invest.instrument_mapping — see
+    # CLAUDE.md's "Unified instrument structure" section) — dict keyed by
+    # ticker rather than a list, so the key itself is the ticker symbol.
+    for ticker in config.get("instruments", {}):
+        allowed.add(ticker)
 
     # The tracked stock/ETF universe (analysis/universe.py) is deliberately
     # kept out of config.yaml's watchlist proper — deferred import so a

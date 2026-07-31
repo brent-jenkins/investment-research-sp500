@@ -27,8 +27,8 @@ Two concerns live here:
 Safety invariants (both order-placement functions):
   - live: false is the hard default. Live trading is explicitly blocked:
     place_market_order() raises RuntimeError if self.live is True.
-  - Only tickers listed in trading212_invest.instrument_mapping are
-    eligible for new orders.
+  - Only tickers listed in the top-level `instruments:` config.yaml
+    section are eligible for new orders.
   - Every order attempt (success or failure) is written to invest_orders.
   - Duplicate positions are prevented by checking the DB and the live T212
     portfolio before placing.
@@ -176,8 +176,8 @@ def seed_instrument_price_gbp(
     A deliberate, manually-verified seed is the only way to bootstrap it.
 
     *price* is in *currency* — the instrument's own native currency exactly
-    as T212 displays it (matching instrument_mapping's own `currency`
-    field) — converted to GBP here via the same Trading212Client._to_gbp()
+    as T212 displays it (matching the top-level `instruments:` section's
+    own `currency` field) — converted to GBP here via the same Trading212Client._to_gbp()
     every other price in this module uses, then written into the identical
     last_known_price_gbp:{t212_ticker} cache key get_instrument_price_gbp()'s
     cache tier already reads. This means a freshly-seeded ETF is priced
@@ -567,19 +567,22 @@ class Trading212Client:
 # ---------------------------------------------------------------------------
 
 def audit_etf_pricing_paths(config: dict, client: Optional["Trading212Client"] = None) -> list[dict]:
-    """Report, per ETF in trading212_invest.instrument_mapping, whether it
-    currently has a viable pricing path: held (live position -> tier 1),
-    cached (a prior live-position read or a manual seed still within
-    _LAST_PRICE_CACHE_MAX_AGE_DAYS -> tier 2), or neither -> "locked out"
-    (get_instrument_price_gbp() would return 0.0 and refuse to size a new
-    entry, per that method's is_etf=True refusal — see its docstring).
+    """Report, per ETF in the top-level `instruments:` section (config.yaml,
+    consolidated 2026-07-31 from watchlist.trading + trading212_invest.
+    instrument_mapping — see CLAUDE.md's "Unified instrument structure"
+    section), whether it currently has a viable pricing path: held (live
+    position -> tier 1), cached (a prior live-position read or a manual
+    seed still within _LAST_PRICE_CACHE_MAX_AGE_DAYS -> tier 2), or neither
+    -> "locked out" (get_instrument_price_gbp() would return 0.0 and refuse
+    to size a new entry, per that method's is_etf=True refusal — see its
+    docstring).
 
     Read-only — never places an order, never writes anything. *client* lets
     a caller reuse an already-constructed Trading212Client (e.g. the Status
     page, which already has one); a fresh one is created if omitted.
     """
     t212_cfg = config.get("trading212_invest", {})
-    mapping = t212_cfg.get("instrument_mapping", {})
+    mapping = config.get("instruments", {})
     etf_entries = {
         rt: raw for rt, raw in mapping.items()
         if isinstance(raw, dict) and raw.get("is_etf")
@@ -597,7 +600,7 @@ def audit_etf_pricing_paths(config: dict, client: Optional["Trading212Client"] =
 
     results = []
     for rt, raw in etf_entries.items():
-        t212_ticker = raw.get("ticker")
+        t212_ticker = raw.get("t212_instrument_id")
         held = t212_ticker in held_t212_tickers
         cache_entry = None if held else get_cached_price_entry(t212_ticker)
         locked_out = not held and cache_entry is None
@@ -1150,14 +1153,14 @@ def maybe_exit_positions(config: dict) -> None:
 
     _reconstruct_pnl(config)
 
-    mapping: dict = t212_cfg.get("instrument_mapping", {})
+    mapping: dict = config.get("instruments", {})
     if not mapping:
         return
 
     reverse_map: dict[str, str] = {}
     ccy_map: dict[str, str] = {}
     for rt, raw in mapping.items():
-        t212_id = raw.get("ticker") if isinstance(raw, dict) else raw
+        t212_id = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
         reverse_map[t212_id] = rt
         ccy_map[t212_id] = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
 
@@ -1309,9 +1312,9 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
         return
 
-    mapping: dict = t212_cfg.get("instrument_mapping", {})
+    mapping: dict = config.get("instruments", {})
     if not mapping:
-        logger.info("No instrument_mapping in config — nothing to do.")
+        logger.info("No instruments configured — nothing to do.")
         return
 
     live = t212_cfg.get("live", False)
@@ -1387,7 +1390,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                         (invested / total_val) * 100, max_deployed_pct * 100)
             break
 
-        t212_ticker = raw.get("ticker") if isinstance(raw, dict) else raw
+        t212_ticker = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
         instrument_currency = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
 
         # Per-ticker exception isolation (2026-07-31) — everything from here

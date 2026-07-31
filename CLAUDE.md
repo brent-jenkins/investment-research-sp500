@@ -1858,6 +1858,138 @@ fix — see "Live pricing bug, exception isolation, and ETF mapping audit"
 above), and asserts the exact warning text names both tickers, confirms
 the signal was positive, and names the seed mechanism.
 
+### Unified instrument structure (2026-07-31)
+
+`watchlist.trading` (ticker/name/exchange — signal/eligibility) and
+`trading212_invest.instrument_mapping` (nested ticker/currency/is_etf —
+execution) were two separately-maintained config.yaml structures
+describing the same 73 instruments, with nothing structurally enforcing
+they stayed in sync. XLF's and XLK's wrong T212 mappings (see "XLK mapping
+resolution and ETF pricing lockout audit" above) were only ever found by
+accident, during an unrelated investigation — a ticker present in one
+structure but silently missing from the other would have been the exact
+same class of bug, just harder to spot. Consolidated into one `instruments:`
+section, one record per tradeable instrument.
+
+**Step 1 — investigation first.**
+- Every call site reading either structure was checked directly (grep
+  across the whole codebase, not assumed): `data/database.py`,
+  `data/ingestion.py`, `data/scheduler.py`, `main.py`, `analysis/universe.py`,
+  `brokers/trading212.py`, and `output/performance.py`. Most read only
+  `watchlist` (price-pulling, Status page coverage/display, Charts landing
+  grouping) or only `instrument_mapping` (`get_max_holding_days()`, the BUY/
+  EXIT loops, the ETF pricing audit, `get_ticker_status()`/`get_brief_cards()`)
+  — no call site read both together, which is exactly how the two could
+  drift apart unnoticed.
+- **Checked directly whether the two were already out of sync**: as of
+  this task, they were not — 73/73 tickers matched exactly both ways, and
+  `watchlist.core` had zero `instrument_mapping` entries (confirmed
+  programmatically, not assumed). The *risk* the duplication created was
+  real even though no live mismatch existed yet.
+- `watchlist.core` (`^GSPC`, `GBPUSD=X`, `EURUSD=X`) confirmed to have no
+  execution mapping today and is intentionally kept entirely separate
+  going forward — see the design decision below.
+- **config.yaml vs. `universe_membership` (DB-backed)**: judged config.yaml
+  the correct home. `universe_membership` exists because S&P 500 index
+  membership is *genuinely time-varying* data with an external source and
+  a periodic refresh job (`refresh_membership_from_source()`) — a
+  fundamentally different shape of data from an instrument's name,
+  exchange, T212 ID, and currency, none of which change on any schedule;
+  they change only when a human corrects a mapping error (exactly what
+  happened with XLF/XLK). config.yaml is git-tracked specifically so a
+  mapping change shows up in `git diff`/code review — moving this to the
+  DB would lose that review surface for no benefit, since nothing about
+  this data is dynamic.
+
+**Step 2 — design.** One record per tradeable instrument, keyed by research
+ticker, combining `name`/`exchange` (from the old `watchlist.trading`) with
+`is_etf`/`t212_instrument_id`/`currency` (from the old `instrument_mapping`).
+The nested `ticker` field was renamed to **`t212_instrument_id`** — the old
+name collided confusingly with the watchlist's own top-level `ticker` key,
+one meaning "our research symbol" and the other meaning "T212's own
+internal instrument ID," a distinction that mattered every time someone
+had to read the mapping carefully (as the XLF/XLK investigations did).
+**GOLD's pattern is preserved exactly**: still present, still `is_etf: false`,
+still carrying its explanatory comment ("Barrick Mining — verified live but
+permanently zero-eligible... never a genuine S&P 500 constituent") inline
+in `config.yaml` — real institutional memory, not something the migration
+was allowed to silently drop. `XLK`'s and `XLF`'s remap comments (dated
+2026-07-31, explaining exactly what was wrong and what replaced it) are
+preserved the same way. `watchlist.core` stays a separate, plain list —
+it never has and never will have execution fields, by design, not by
+omission; `tests/test_config.py` asserts this structurally.
+
+**Validation**: `tests/test_config.py` loads the real `config.yaml` (not a
+synthetic fixture) and asserts every `instruments` entry has all five
+required fields with sane types/values, that no two tickers share a
+`t212_instrument_id`, that `watchlist.trading`/`instrument_mapping` haven't
+reappeared, that `watchlist.core` never gains execution fields, and that
+GOLD's specific preserved values are still there. Chose test-level
+validation over a runtime load-time check because config loading itself is
+already duplicated informally across five different `_load_config()`
+functions (`main.py`, `data/ingestion.py`, `data/database.py`,
+`brokers/trading212.py`, `analysis/universe.py` all define their own) — a
+loudly-failing test that blocks the pre-push hook (see "Git hooks" below)
+achieves the "structurally impossible to miss" goal without adding a sixth
+validation call site.
+
+**Step 3 — migration.** `data/ingestion.py` gained
+`get_all_watchlist_entries(config)` — merges `watchlist.core` (list) with
+the new `instruments:` (dict, ticker injected from the key) into one
+uniform list of dicts; `get_all_tickers()` is now a thin wrapper over it.
+`_build_watchlist()`, `_price_coverage()`, and `_render_charts_landing()`
+(`main.py`) all use this instead of re-deriving the merge themselves.
+`_render_charts_landing()`'s two-group display (`_GROUP_LABELS`) now reads
+`"core"` from `watchlist` and `"instruments"` from the new section
+(converted to the same list-of-dicts shape inline) — the grouping/rendering
+loop body itself needed no change. Every other call site
+(`analysis/universe.py:get_max_holding_days()`, `brokers/trading212.py`'s
+`audit_etf_pricing_paths()`/`maybe_exit_positions()`/`maybe_place_orders()`,
+`output/performance.py`'s `get_ticker_status()`/`get_brief_cards()`,
+`main.py`'s `_asset_type_map()` and the Status page's mapping
+table/ETF-audit expander/seed form) now reads `config.get("instruments", {})`
+directly and `raw.get("t212_instrument_id")` in place of the old
+`raw.get("ticker")`. `data/database.py:_purge_unlisted_tickers()` combines
+both sources for its stale-ticker allow-list.
+
+**Step 4 — reproducibility check.** Ran `get_ticker_status()` (momentum
+signal, index membership, crisis state per ticker) and
+`get_max_holding_days()` for all 73 tickers against production data, once
+on the pre-consolidation deployed commit (`c45d04e`) and once again after
+deploying this consolidation — byte-identical results both times, as
+expected: this is a pure config-structure refactor, no signal/eligibility/
+holding-limit/pricing logic changed at all, only which config key each
+value is read from. No difference found; nothing to stop and report.
+
+### Step 5 — `notifications.email`: actively used, not dormant
+
+Checked directly (not assumed): `output/briefing.py:_smtp_send()` — the
+sole survivor of that module's original much larger scope — is called by
+`brokers/trading212.py:_send_t212_error_email()`, itself called from four
+sites: an API error during the BUY-loop's account-state setup, a failed
+BUY order, an API error during the EXIT-loop's account-state setup, and a
+failed... (the same function, four call sites covering both the entry and
+exit paths' failure modes). **This is fully wired, working infrastructure,
+not dormant configuration** — a genuine T212 API error or failed order
+does send an email today.
+
+**A related, distinct gap found in the same check, reported rather than
+fixed**: `notifications.email.enabled` and `alert_cooldown_hours` (both
+fully present in config.yaml, both documented as real knobs) are **not
+read anywhere in the codebase** — grepped for both and found zero call
+sites. `_send_t212_error_email()`/`_smtp_send()` fire unconditionally on
+every qualifying error, with no cooldown and no way to disable them
+short of removing SMTP credentials entirely. This means a persistent T212
+API error (e.g. a rate-limit exceeding the retry budget on every scheduled
+run) would send one email per occurrence indefinitely, and setting
+`enabled: false` would not stop it. Not fixed here — this task's scope was
+"check whether it's used," and gating behaviour is a design decision
+(what cooldown, what constitutes "enabled" for an error-alert path that
+was never built with a toggle) worth bringing back rather than making
+unilaterally alongside an unrelated config consolidation. The
+crisis-override-trigger idea mentioned in this task's own framing was not
+built either, for the same reason.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

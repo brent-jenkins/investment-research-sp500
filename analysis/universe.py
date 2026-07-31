@@ -205,13 +205,15 @@ def is_member(ticker: str, check_date: date) -> bool:
 def get_max_holding_days(ticker: str, config: dict) -> int:
     """Return the max holding days for *ticker*, matching live automation limits.
 
-    Dispatches on the ticker's is_etf flag in trading212_invest's own
-    instrument_mapping — ETFs get trading212_invest.max_holding_days (e.g.
-    90 — no leverage/swap costs, held longer), stocks get
+    Dispatches on the ticker's is_etf flag in the top-level `instruments:`
+    section (config.yaml, consolidated 2026-07-31 from watchlist.trading +
+    trading212_invest.instrument_mapping — see CLAUDE.md's "Unified
+    instrument structure" section) — ETFs get trading212_invest.max_holding_days
+    (e.g. 90 — no leverage/swap costs, held longer), stocks get
     trading212_invest.stock_max_holding_days (e.g. 30 — higher idiosyncratic
-    risk than an ETF). A ticker not found in the mapping at all (shouldn't
+    risk than an ETF). A ticker not found in `instruments:` at all (shouldn't
     happen in practice — this is only ever called for tickers in that
-    mapping) falls back to backtest.max_holding_days.
+    section) falls back to backtest.max_holding_days.
 
     This is the single source of truth for per-asset holding limits, used
     by simulate_trades() (analysis/backtest.py) and the live exit checks /
@@ -221,7 +223,7 @@ def get_max_holding_days(ticker: str, config: dict) -> int:
     t212_cfg = config.get("trading212_invest", {})
     default = int(config.get("backtest", {}).get("max_holding_days", 30))
 
-    mapping = t212_cfg.get("instrument_mapping") or {}
+    mapping = config.get("instruments") or {}
     entry = mapping.get(ticker)
     if entry is None:
         return default

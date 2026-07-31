@@ -48,16 +48,16 @@ def _bullish_with_crisis_today() -> pd.DataFrame:
 def _config(mapping=None, enabled=True) -> dict:
     if mapping is None:
         mapping = {
-            "VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True},
-            "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+            "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
+            "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
         }
     return {
+        "instruments": mapping,
         "trading212_invest": {
             "enabled": enabled,
             "live": False,
             "max_total_deployed": 0.5,
             "max_open_positions": 20,
-            "instrument_mapping": mapping,
             "max_position_gbp": 500,
             "var_confidence": 0.95,
             "var_lookback_days": 252,
@@ -157,7 +157,7 @@ def test_entry_fires_when_all_three_conditions_hold(db_engine, v2_mocks, mocker)
     _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_called_once()
@@ -170,7 +170,7 @@ def test_entry_blocked_when_momentum_negative(db_engine, v2_mocks, mocker):
     from brokers.trading212 import maybe_place_orders
 
     _mock_price_data(mocker, {"VOO": _bearish_frame()})
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -182,7 +182,7 @@ def test_entry_blocked_when_stock_not_index_member(db_engine, v2_mocks, mocker):
     _mock_price_data(mocker, {"AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=False)
 
-    cfg = _config(mapping={"AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False}})
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}})
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -198,7 +198,7 @@ def test_entry_blocked_during_crisis_cooldown_window(db_engine, v2_mocks, mocker
     mocker.patch("analysis.crisis.is_entry_blocked", return_value=True)
     mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
 
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -212,7 +212,7 @@ def test_etf_always_eligible_regardless_of_membership_check(db_engine, v2_mocks,
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
     spy = mocker.patch("analysis.universe.is_member", return_value=False)
 
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_called_once()
@@ -253,7 +253,7 @@ def _run_exit(db_engine, v2_mocks, mocker, *, ticker, t212_ticker, frame, stop_p
     _seed_open_position(db_engine, ticker=ticker, t212_ticker=t212_ticker,
                         stop_price=stop_price, days_ago=days_ago, is_etf=is_etf)
 
-    cfg = _config(mapping={ticker: {"ticker": t212_ticker, "currency": "USD", "is_etf": is_etf}})
+    cfg = _config(mapping={ticker: {"t212_instrument_id": t212_ticker, "currency": "USD", "is_etf": is_etf}})
     maybe_exit_positions(cfg)
 
 
@@ -377,7 +377,7 @@ def test_exit_skips_duplicate_when_placed_sell_order_exists(db_engine, v2_mocks,
             VALUES ('VOO', 'I50Dl_EQ', 'SELL', 'PLACED', :now, :now)
         """), {"now": datetime.utcnow().isoformat()})
 
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_exit_positions(cfg)
 
     v2_mocks.place_market_order.assert_not_called()
@@ -395,7 +395,7 @@ def test_max_open_positions_blocks_new_entries(db_engine, v2_mocks, mocker):
     ]
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
 
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     cfg["trading212_invest"]["max_open_positions"] = 2
     maybe_place_orders(cfg, run_type="full")
 
@@ -412,7 +412,7 @@ def test_max_total_deployed_blocks_new_entries(db_engine, v2_mocks, mocker):
     }
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
 
-    cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -428,7 +428,7 @@ def test_max_total_deployed_blocks_new_entries(db_engine, v2_mocks, mocker):
 
 def _n_ticker_mapping(n: int) -> dict:
     return {
-        f"T{i}": {"ticker": f"T{i}_EQ", "currency": "USD", "is_etf": True}
+        f"T{i}": {"t212_instrument_id": f"T{i}_EQ", "currency": "USD", "is_etf": True}
         for i in range(n)
     }
 
@@ -744,8 +744,8 @@ def test_locked_out_etf_with_positive_signal_is_a_clean_logged_skip_not_a_silent
     v2_mocks.get_quantity_for_gbp.side_effect = _qty_side_effect
 
     cfg = _config(mapping={
-        "XLK": {"ticker": "SXLKl_EQ", "currency": "USD", "is_etf": True},
-        "VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True},
+        "XLK": {"t212_instrument_id": "SXLKl_EQ", "currency": "USD", "is_etf": True},
+        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
     })
 
     with caplog.at_level(logging.WARNING, logger="brokers.trading212"):
@@ -895,14 +895,14 @@ def test_held_position_live_quote_supersedes_a_manual_seed(db_engine, monkeypatc
 
 def _etf_mapping():
     return {
+        "instruments": {
+            "XLK": {"t212_instrument_id": "SXLKl_EQ", "currency": "USD", "is_etf": True},
+            "XLF": {"t212_instrument_id": "SXLFl_EQ", "currency": "USD", "is_etf": True},
+            "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "GBP", "is_etf": True},
+            "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+        },
         "trading212_invest": {
             "live": False,
-            "instrument_mapping": {
-                "XLK": {"ticker": "SXLKl_EQ", "currency": "USD", "is_etf": True},
-                "XLF": {"ticker": "SXLFl_EQ", "currency": "USD", "is_etf": True},
-                "VOO": {"ticker": "I50Dl_EQ", "currency": "GBP", "is_etf": True},
-                "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-            },
         },
     }
 
@@ -975,8 +975,8 @@ def test_buy_loop_one_ticker_exception_does_not_stop_the_rest(db_engine, v2_mock
     mocker.patch("analysis.universe.is_member", return_value=True)
 
     cfg = _config(mapping={
-        "VOO":  {"ticker": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
-        "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+        "VOO":  {"t212_instrument_id": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
     })
     maybe_place_orders(cfg, run_type="full")
 
@@ -1007,8 +1007,8 @@ def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_m
     mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
 
     cfg = _config(mapping={
-        "VOO":  {"ticker": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
-        "AAPL": {"ticker": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+        "VOO":  {"t212_instrument_id": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
     })
     maybe_exit_positions(cfg)
 

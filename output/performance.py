@@ -21,16 +21,18 @@ def get_ticker_status(config: dict) -> list[dict]:
     (long/flat), current index-membership eligibility, and whether today is
     a raw crisis day / inside the crisis entry-block window.
 
-    Recomputes momentum from full price history for every ticker in
-    trading212_invest.instrument_mapping — the same per-ticker cost
-    brokers/trading212.py's own _ticker_state() pays once per scheduled
-    run. Callers on a page render should cache this (see
+    Recomputes momentum from full price history for every ticker in the
+    top-level `instruments:` section (config.yaml, consolidated 2026-07-31
+    from watchlist.trading + trading212_invest.instrument_mapping — see
+    CLAUDE.md's "Unified instrument structure" section) — the same
+    per-ticker cost brokers/trading212.py's own _ticker_state() pays once
+    per scheduled run. Callers on a page render should cache this (see
     main.py:_get_ticker_status()'s st.cache_data wrapper).
     """
     from analysis import crisis, signals, universe
     from data.ingestion import get_price_df
 
-    mapping = config.get("trading212_invest", {}).get("instrument_mapping", {})
+    mapping = config.get("instruments", {})
     if not mapping:
         return []
 
@@ -92,10 +94,13 @@ def get_brief_cards(
     """Return enriched trade-card dicts for open positions.
 
     Reads the scheduler-maintained t212_positions_snapshot (one shared T212
-    account) filtered to trading212_invest.instrument_mapping, plus entry
-    context (momentum_pct, stop_price) from invest_orders. Status mirrors
-    brokers/trading212.py's own exit precedence exactly: crisis >
-    index-removal > stop-loss > signal-off > max-holding.
+    account) filtered to the top-level `instruments:` section (config.yaml,
+    consolidated 2026-07-31 from watchlist.trading + trading212_invest.
+    instrument_mapping — see CLAUDE.md's "Unified instrument structure"
+    section), plus entry context (momentum_pct, stop_price) from
+    invest_orders. Status mirrors brokers/trading212.py's own exit
+    precedence exactly: crisis > index-removal > stop-loss > signal-off >
+    max-holding.
 
     ticker_status_rows lets a caller pass in an already-computed
     get_ticker_status() result (e.g. main.py's cached version) instead of
@@ -110,13 +115,13 @@ def get_brief_cards(
         return []
 
     t212_cfg = config.get("trading212_invest", {})
-    mapping = t212_cfg.get("instrument_mapping", {})
+    mapping = config.get("instruments", {})
     if not mapping:
         return []
 
     reverse_map: dict[str, tuple[str, bool]] = {}
     for rt, raw in mapping.items():
-        t212_ticker = raw.get("ticker") if isinstance(raw, dict) else raw
+        t212_ticker = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
         is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
         reverse_map[t212_ticker] = (rt, is_etf)
 

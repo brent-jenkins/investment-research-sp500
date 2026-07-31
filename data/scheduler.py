@@ -250,7 +250,8 @@ def _run_analysis_pipeline(
     six-module pipeline (which needed a ticker list to analyse), but the
     momentum signal, index membership, and crisis check are all computed
     per-ticker on demand inside maybe_place_orders()/_ticker_state() from
-    trading212_invest.instrument_mapping — this parameter is unused here.
+    the top-level `instruments:` config.yaml section — this parameter is
+    unused here.
     """
     try:
         set_metadata("last_run_type", run_type)

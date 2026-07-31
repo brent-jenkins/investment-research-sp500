@@ -28,18 +28,44 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def get_all_tickers(config: Optional[dict] = None) -> list[str]:
-    """Return a flat list of every ticker symbol in the watchlist."""
+def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
+    """Return one dict per tracked asset, uniform shape, from both
+    monitoring-only and tradeable sources:
+
+    - `watchlist.core` (^GSPC, GBPUSD=X, EURUSD=X) -- ticker/name/exchange
+      only; these never have an execution mapping and never will (see
+      config.yaml's own comment on `watchlist:`).
+    - top-level `instruments:` -- ticker/name/exchange plus the execution
+      fields (is_etf, t212_instrument_id, currency).
+
+    Consolidated 2026-07-31 from what used to be two separately-maintained
+    structures (watchlist.trading + trading212_invest.instrument_mapping)
+    -- see CLAUDE.md's "Unified instrument structure" section. Callers that
+    only need the ticker symbols should use get_all_tickers() below;
+    callers that need name/exchange/execution fields should use this
+    directly rather than re-deriving the merge themselves.
+    """
     if config is None:
         config = _load_config()
-    tickers: list[str] = []
+
+    entries: list[dict] = []
     for assets in config.get("watchlist", {}).values():
         if not isinstance(assets, list):
             continue
         for asset in assets:
             if isinstance(asset, dict) and "ticker" in asset:
-                tickers.append(asset["ticker"])
-    return tickers
+                entries.append(dict(asset))
+
+    for ticker, raw in config.get("instruments", {}).items():
+        if isinstance(raw, dict):
+            entries.append({"ticker": ticker, **raw})
+
+    return entries
+
+
+def get_all_tickers(config: Optional[dict] = None) -> list[str]:
+    """Return a flat list of every ticker symbol in the watchlist + instruments."""
+    return [e["ticker"] for e in get_all_watchlist_entries(config)]
 
 
 def _ticker_unavailable_key(ticker: str) -> str:

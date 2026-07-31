@@ -31,7 +31,7 @@ import yaml
 
 from analysis.backtest import compute_metrics, equity_curve_gbp
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
-from data.ingestion import get_all_tickers, get_price_df, pull_incremental
+from data.ingestion import get_all_tickers, get_all_watchlist_entries, get_price_df, pull_incremental
 from data.scheduler import start_scheduler
 from output.performance import get_brief_cards, get_crisis_status, get_pnl_rows, get_ticker_status, pnl_metrics_df
 
@@ -122,15 +122,9 @@ def _load_config() -> dict:
 
 
 def _build_watchlist(config: dict) -> dict[str, str]:
-    """Return an ordered dict of {ticker: display_name} for all watchlist assets."""
-    items: dict[str, str] = {}
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for entry in assets:
-            if isinstance(entry, dict) and "ticker" in entry:
-                items[entry["ticker"]] = entry.get("name", entry["ticker"])
-    return items
+    """Return an ordered dict of {ticker: display_name} for all watchlist assets
+    (watchlist.core + the top-level instruments: section)."""
+    return {e["ticker"]: e.get("name", e["ticker"]) for e in get_all_watchlist_entries(config)}
 
 
 def _hex_rgba(hx: str, alpha: float) -> str:
@@ -281,13 +275,9 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
     """
     import pandas_market_calendars as mcal
 
-    ticker_exchange: dict[str, str] = {}
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for entry in assets:
-            if isinstance(entry, dict) and "ticker" in entry:
-                ticker_exchange[entry["ticker"]] = entry.get("exchange", "NYSE")
+    ticker_exchange: dict[str, str] = {
+        e["ticker"]: e.get("exchange", "NYSE") for e in get_all_watchlist_entries(config)
+    }
 
     try:
         from sqlalchemy import text as sa_text
@@ -682,8 +672,8 @@ def _initialise() -> None:
 # ---------------------------------------------------------------------------
 
 _GROUP_LABELS = {
-    "core":    "Core (index / FX reference)",
-    "trading": "Tracked Universe",
+    "core":        "Core (index / FX reference)",
+    "instruments": "Tracked Universe",
 }
 
 
@@ -695,13 +685,7 @@ def _render_charts_landing(config: dict) -> None:
     st.markdown("## Charts")
     st.caption("Select an asset to view its price chart.")
 
-    _all_tickers_cl = [
-        e["ticker"]
-        for g in config.get("watchlist", {}).values()
-        if isinstance(g, list)
-        for e in g
-        if isinstance(e, dict) and "ticker" in e
-    ]
+    _all_tickers_cl = [e["ticker"] for e in get_all_watchlist_entries(config)]
 
     # Fetch last two closes per ticker in one query for 1-day change
     _chg_map_cl: dict[str, float] = {}
@@ -728,8 +712,18 @@ def _render_charts_landing(config: dict) -> None:
     except Exception:
         pass
 
+    # `instruments:` is a dict keyed by ticker (execution fields included),
+    # not a watchlist-shaped list -- converted to the same list-of-dicts
+    # shape as watchlist.core here so this grouping/rendering loop below
+    # can treat both groups identically.
+    _groups_cl: dict[str, list] = dict(config.get("watchlist", {}))
+    _groups_cl["instruments"] = [
+        {**raw, "ticker": t} for t, raw in config.get("instruments", {}).items()
+        if isinstance(raw, dict)
+    ]
+
     for group_key, group_label in _GROUP_LABELS.items():
-        group = config["watchlist"].get(group_key, [])
+        group = _groups_cl.get(group_key, [])
         if not group:
             continue
         st.markdown(f"#### {group_label}")
@@ -1144,7 +1138,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         )
     else:
         t212_live = t212_cfg.get("live", False)
-        mapping   = t212_cfg.get("instrument_mapping", {})
+        mapping   = config.get("instruments", {})
         st.markdown(
             f'<span style="background:{"#f97316" if t212_live else "#6366f1"};color:#fff;'
             f'padding:2px 8px;border-radius:4px;font-size:0.78rem;font-weight:600">'
@@ -1303,13 +1297,13 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
             else:
                 st.caption("No orders recorded yet.")
 
-            mapping_full = t212_cfg.get("instrument_mapping", {})
+            mapping_full = config.get("instruments", {})
             if mapping_full:
                 with st.expander(f"Instrument mapping ({len(mapping_full)} tickers)"):
                     map_rows = [
                         {
                             "Ticker": rt,
-                            "T212 Instrument": (raw.get("ticker") if isinstance(raw, dict) else raw),
+                            "T212 Instrument": (raw.get("t212_instrument_id") if isinstance(raw, dict) else raw),
                             "Currency": (raw.get("currency", "USD") if isinstance(raw, dict) else "USD"),
                             "Type": "ETF" if (isinstance(raw, dict) and raw.get("is_etf")) else "STOCK",
                         }
@@ -1393,7 +1387,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                     key="seed_price_confirm",
                 )
                 if st.button("Seed Price", key="seed_price_btn", disabled=not seed_confirm):
-                    t212_ticker = mapping_full.get(seed_rt, {}).get("ticker") if seed_rt else None
+                    t212_ticker = mapping_full.get(seed_rt, {}).get("t212_instrument_id") if seed_rt else None
                     if not t212_ticker or seed_price <= 0:
                         st.error("Select a ticker and enter a positive price.")
                     else:
@@ -1741,9 +1735,9 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 def _asset_type_map(config: dict) -> dict[str, str]:
-    """Map research ticker -> 'ETF' or 'STOCK' via trading212_invest.instrument_mapping."""
+    """Map research ticker -> 'ETF' or 'STOCK' via the top-level instruments: section."""
     asset_types: dict[str, str] = {}
-    for rt, raw in config.get("trading212_invest", {}).get("instrument_mapping", {}).items():
+    for rt, raw in config.get("instruments", {}).items():
         is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
         asset_types[rt] = "ETF" if is_etf else "STOCK"
     return asset_types
