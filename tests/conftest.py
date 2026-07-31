@@ -36,6 +36,7 @@ _GET_ENGINE_BINDINGS = (
     "analysis.macro.get_engine",
     "analysis.regime_history.get_engine",
     "analysis.v2.universe.get_engine",
+    "output.v2_performance.get_engine",
 )
 
 

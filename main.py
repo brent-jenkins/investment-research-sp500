@@ -43,6 +43,7 @@ from analysis.regime import (
     REGIME_WEIGHTS,
     Regime,
     detect_regime,
+    get_max_holding_days,
     is_entry_allowed,
     resolve_entry_signal,
 )
@@ -1163,7 +1164,29 @@ def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set:
             + " · see Macro Dashboard for detail</span></div>"
         )
 
-    intel_strips = overlay_strips + catch_up_strips + macro_regional_strip
+    # ── V2 live status strip — same visual pattern as the overlay/catch-up
+    # strips above; the ranked table below remains V1's own confluence-score
+    # analysis (still real, still valid), this strip is purely about what's
+    # actually live-trading the account right now.
+    v2_strip = ""
+    _v2_cfg_sig = config.get("trading212_v2", {})
+    if _v2_cfg_sig.get("enabled", False):
+        _v2_sig_rows = [r for r in _get_v2_ticker_status() if not r.get("insufficient_history")]
+        _v2_sig_long = sum(1 for r in _v2_sig_rows if r.get("sig_on") is True)
+        _v2_sig_crisis = any(r.get("crisis_now") for r in _v2_sig_rows)
+        _v2c = "#991b1b" if _v2_sig_crisis else "#16a34a"
+        v2_strip = (
+            f"<div style='border-left:3px solid {_v2c};padding:3px 10px;"
+            f"background:{_hex_rgba(_v2c, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
+            f"<span style='background:{_v2c};color:#fff;padding:0 5px;"
+            f"border-radius:2px;font-size:0.64rem;font-weight:800'>V2 LIVE</span>"
+            f"<strong style='color:{_v2c};font-size:0.8rem'> "
+            f"{'Crisis override active' if _v2_sig_crisis else 'No crisis override'}</strong>"
+            f"<span style='color:#8899AA;font-size:0.78rem'> — {_v2_sig_long} of "
+            f"{len(_v2_sig_rows)} tickers currently long on momentum</span></div>"
+        )
+
+    intel_strips = overlay_strips + catch_up_strips + macro_regional_strip + v2_strip
 
     dist_pills = "".join(
         f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
@@ -2077,12 +2100,28 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
     _t212_live    = _t212_cfg.get("live", False)
     _t212_error   = get_metadata_str("t212_invest_error")
     _t212_has_key = bool(os.environ.get("T212_API_KEY", "")) and bool(os.environ.get("T212_API_SECRET", ""))
+    _v2_cfg_status = config.get("trading212_v2", {})
+    _v2_enabled_status = _v2_cfg_status.get("enabled", False)
+
+    st.markdown(
+        '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
+        'font-size:0.78rem;font-weight:700">🔴 V1 (T212 Invest / T212 Stocks) — RETIRED</span>',
+        unsafe_allow_html=True,
+    )
 
     if not _t212_enabled:
         st.info(
-            "T212 Invest integration is **disabled**. "
-            "Set `trading212_invest.enabled: true` in config.yaml (on the server) to activate. "
-            "Add `T212_API_KEY` and `T212_API_SECRET` to the systemd service environment first."
+            (
+                "**Retired 2026-07-31** — superseded by V2 (momentum + crisis override; "
+                "see the V2 section below). `trading212_invest.enabled: false` is a deliberate "
+                "shutdown, not a not-yet-configured state: the code is kept intact for reference "
+                "and possible rollback, but every call site (`maybe_place_t212_orders()`, "
+                "`maybe_exit_t212_positions()`) now early-returns without acting. "
+                if _v2_enabled_status else
+                "T212 Invest integration is **disabled**. "
+                "Set `trading212_invest.enabled: true` in config.yaml (on the server) to activate. "
+                "Add `T212_API_KEY` and `T212_API_SECRET` to the systemd service environment first."
+            )
         )
     else:
         _env_label  = "DEMO" if not _t212_live else "LIVE"
@@ -2506,6 +2545,155 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
                     )
                 else:
                     st.caption("No UCITS mapping configured.")
+
+    # ── T212 V2 Account ──────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### T212 V2 Account")
+    st.markdown(
+        (
+            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">🟢 V2 — LIVE (DEMO)</span>'
+            if _v2_enabled_status else
+            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">V2 — NOT ENABLED</span>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if not _v2_enabled_status:
+        st.info(
+            "V2 (momentum + crisis override) integration is disabled. "
+            "Set `trading212_v2.enabled: true` in config.yaml to activate."
+        )
+    else:
+        _v2_live = _v2_cfg_status.get("live", False)
+        _v2_mapping = _v2_cfg_status.get("instrument_mapping", {})
+        st.markdown(
+            f'<span style="background:{"#f97316" if _v2_live else "#6366f1"};color:#fff;'
+            f'padding:2px 8px;border-radius:4px;font-size:0.78rem;font-weight:600">'
+            f'{"LIVE" if _v2_live else "DEMO"}</span> '
+            f'{len(_v2_mapping)} tickers · '
+            f'max {int(float(_v2_cfg_status.get("max_total_deployed", 0.5)) * 100)}% deployed · '
+            f'max {_v2_cfg_status.get("max_open_positions", 999)} open positions',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Entry: 12-month momentum > 0, current index membership, not in the "
+            "crisis entry-block window. Position sizing reuses trading212_invest's "
+            "VaR configuration verbatim (see CLAUDE.md's \"V2 live execution and cutover\" section)."
+        )
+
+        if not _t212_has_key:
+            st.error(
+                "API credentials not found. Set `T212_API_KEY` and `T212_API_SECRET` "
+                "in the systemd service file and restart the service."
+            )
+        else:
+            # Shares the exact same live account/positions snapshot V1's section
+            # above reads — one physical T212 demo account, not a second one.
+            import json as _json_v2  # noqa: PLC0415
+            _v2_snap_raw     = get_metadata_str("t212_account_snapshot")
+            _v2_pos_raw      = get_metadata_str("t212_positions_snapshot")
+            _v2_snap_fetched = get_metadata_str("t212_snapshot_fetched_at")
+
+            if _v2_snap_raw:
+                try:
+                    _v2_sum = _json_v2.loads(_v2_snap_raw)
+                    _v2_positions_all = _json_v2.loads(_v2_pos_raw) if _v2_pos_raw else []
+                    _v2_cash_obj = _v2_sum.get("cash", {}) if isinstance(_v2_sum.get("cash"), dict) else {}
+                    _v2_inv_obj  = _v2_sum.get("investments", {}) if isinstance(_v2_sum.get("investments"), dict) else {}
+                    _v2_total    = float(_v2_sum.get("totalValue", 0) or 0)
+                    _v2_free     = float(_v2_cash_obj.get("availableToTrade", 0) or 0)
+                    _v2_invested = float(_v2_inv_obj.get("currentValue", 0) or 0)
+                    _v2_deployed = (_v2_invested / _v2_total * 100) if _v2_total else 0.0
+                    _v2_pos_count = len(_v2_positions_all) if isinstance(_v2_positions_all, list) else 0
+
+                    _v2a1, _v2a2, _v2a3, _v2a4 = st.columns(4)
+                    _v2a1.metric("Account Value", f"£{_v2_total:,.2f}")
+                    _v2a2.metric("Available Cash", f"£{_v2_free:,.2f}")
+                    _v2a3.metric("Invested", f"£{_v2_invested:,.2f}", delta=f"{_v2_deployed:.0f}% deployed")
+                    _v2a4.metric("Open Positions (account-wide)", str(_v2_pos_count))
+                    st.caption(
+                        "Account Value/Cash/Invested reflect the whole shared T212 account "
+                        "(V1 no longer contributes to it). Open V2 positions specifically are "
+                        "shown on the **Performance** page."
+                    )
+                    if _v2_snap_fetched:
+                        try:
+                            _v2_fetched_disp = _fmt_uk(datetime.fromisoformat(_v2_snap_fetched))
+                        except (ValueError, TypeError):
+                            _v2_fetched_disp = _v2_snap_fetched[:16].replace("T", " ")
+                        st.caption(f"Updated {_v2_fetched_disp}")
+                except Exception:
+                    st.caption("No account data yet — click Refresh Account above to fetch.")
+            else:
+                st.caption("No account data yet — click Refresh Account above to fetch.")
+
+            try:
+                from sqlalchemy import text as _sa_v2ord
+                with get_engine().connect() as _v2_conn:
+                    _v2_ord_rows = _v2_conn.execute(_sa_v2ord("""
+                        SELECT ticker, t212_ticker, direction, quantity,
+                               estimated_value_gbp, var_pct, status, is_etf,
+                               momentum_pct, account_type, error_message, placed_at
+                        FROM v2_invest_orders
+                        ORDER BY placed_at DESC
+                        LIMIT 10
+                    """)).mappings().all()
+                _v2_ord_data = [dict(r) for r in _v2_ord_rows]
+            except Exception:
+                _v2_ord_data = []
+
+            st.markdown("#### Recent V2 Orders")
+            if _v2_ord_data:
+                _v2_ord_df = pd.DataFrame(_v2_ord_data)
+                _v2_ord_df["Type"] = _v2_ord_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+                _v2_ord_df["var_pct"] = _v2_ord_df["var_pct"].map(
+                    lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
+                )
+                _v2_ord_df["momentum_pct"] = _v2_ord_df["momentum_pct"].map(
+                    lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
+                )
+                _v2_ord_df = _v2_ord_df[[
+                    "ticker", "t212_ticker", "Type", "direction", "quantity",
+                    "estimated_value_gbp", "var_pct", "momentum_pct", "status",
+                    "account_type", "error_message", "placed_at",
+                ]]
+                _v2_ord_df.columns = [
+                    "Ticker", "T212 Ticker", "Type", "Dir", "Qty",
+                    "Est. Value (£)", "VaR at Entry", "Momentum at Entry", "Status",
+                    "Account", "Error", "Placed At",
+                ]
+                st.dataframe(
+                    _v2_ord_df.style.map(
+                        lambda v: "color:#16a34a" if v == "FILLED"
+                        else ("color:#d97706" if v == "PLACED"
+                        else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
+                        subset=["Status"],
+                    ).map(
+                        lambda v: "color:#16a34a" if v == "BUY"
+                        else ("color:#dc2626" if v == "SELL" else ""),
+                        subset=["Dir"],
+                    ),
+                    width="stretch", hide_index=True,
+                )
+            else:
+                st.caption("No V2 orders recorded yet.")
+
+            _v2_mapping_full = _v2_cfg_status.get("instrument_mapping", {})
+            if _v2_mapping_full:
+                with st.expander(f"V2 instrument mapping ({len(_v2_mapping_full)} tickers)"):
+                    _v2_map_rows = [
+                        {
+                            "Ticker": rt,
+                            "T212 Instrument": (raw.get("ticker") if isinstance(raw, dict) else raw),
+                            "Currency": (raw.get("currency", "USD") if isinstance(raw, dict) else "USD"),
+                            "Type": "ETF" if (isinstance(raw, dict) and raw.get("is_etf")) else "STOCK",
+                        }
+                        for rt, raw in _v2_mapping_full.items()
+                    ]
+                    st.dataframe(pd.DataFrame(_v2_map_rows), width="stretch", hide_index=True)
+
     # ── Scheduler Health ──────────────────────────────────────────────────
     st.divider()
     st.markdown("### Scheduler Health")
@@ -2540,6 +2728,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
         "fomc_reaction":        ("FOMC Reaction", f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)"),
         "boj_reaction":         ("BoJ Reaction",  f"{_uk_sched_time(3, 30)} · Mon–Fri (BoJ days only)"),
         "ecb_reaction":         ("ECB Reaction",  f"{_uk_sched_time(12, 30)} · Mon–Fri (ECB days only)"),
+        "v2_membership_refresh": ("V2 Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri"),
         "job_dispatcher":       ("job_dispatcher","—"),
     }
 
@@ -2651,6 +2840,7 @@ def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
             ("fomc_reaction",     "FOMC Reaction",     f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)", _CronTrigger(hour=19, minute=5, day_of_week="mon-fri", timezone=_tz_s)),
             ("boj_reaction",      "BoJ Reaction",      f"{_uk_sched_time(3, 30)} · Mon–Fri (BoJ days only)",  _CronTrigger(hour=3, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
             ("ecb_reaction",      "ECB Reaction",      f"{_uk_sched_time(12, 30)} · Mon–Fri (ECB days only)", _CronTrigger(hour=12, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
+            ("v2_membership_refresh", "V2 Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri", _CronTrigger(hour=21, minute=15, day_of_week="mon-fri", timezone=_tz_s)),
         ]
         _static_jobs.extend(_extra_static)
 
@@ -3599,6 +3789,87 @@ def _render_trade_card_compact(e: dict) -> None:
     )
 
 
+# V2 has its own five exit reasons (see brokers/trading212_v2.py's exit
+# precedence) — deliberately a separate dict from output/briefing.py's
+# STATUS_COLOURS/STATUS_ICONS (V1's four alert states, still used by V1's
+# email-alert code), not merged into it, matching this whole task's
+# principle of keeping V1 and V2 concepts distinguishable rather than
+# reusing one enum for two different models.
+_V2_STATUS_COLOURS: dict[str, str] = {
+    "ON TRACK":      "#16a34a",
+    "SIGNAL OFF":    "#d97706",
+    "MAX HOLDING":   "#ea580c",
+    "STOP LOSS":     "#dc2626",
+    "INDEX REMOVAL": "#dc2626",
+    "CRISIS EXIT":   "#991b1b",
+}
+_V2_STATUS_ICONS: dict[str, str] = {
+    "ON TRACK":      "✅",
+    "SIGNAL OFF":    "⚠️",
+    "MAX HOLDING":   "⏱️",
+    "STOP LOSS":     "🛑",
+    "INDEX REMOVAL": "🚫",
+    "CRISIS EXIT":   "🔴",
+}
+
+
+def _render_v2_trade_card(e: dict) -> None:
+    """Render one open analysis/v2 position as a styled HTML status card —
+    V2's counterpart to _render_trade_card(), showing momentum/membership/
+    crisis context instead of V1's signal/confluence-score fields."""
+    status = e.get("status", "ON TRACK")
+    colour = _V2_STATUS_COLOURS.get(status, "#8899AA")
+    icon   = _V2_STATUS_ICONS.get(status, "")
+    bg     = _hex_rgba(colour, 0.08)
+
+    ticker      = html.escape(str(e.get("ticker", "")))
+    asset_type  = html.escape(str(e.get("asset_type", "")))
+    days_held   = int(e.get("days_held") or 0)
+    max_hold    = e.get("max_holding_days")
+
+    unreal_pnl_gbp = e.get("unreal_pnl_gbp")
+    unreal_pct     = e.get("unreal_pct")
+    if unreal_pnl_gbp is not None and unreal_pct is not None:
+        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
+        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
+    else:
+        pnl_html = "—"
+        pnl_col  = "#8899AA"
+
+    mom_entry = e.get("momentum_pct_at_entry")
+    sig_now   = e.get("current_sig_on")
+    detail_parts = []
+    if mom_entry is not None:
+        detail_parts.append(html.escape(f"Momentum at entry: {mom_entry * 100:+.1f}%"))
+    detail_parts.append(f"Momentum now: <strong>{'long' if sig_now else 'flat' if sig_now is False else '—'}</strong>")
+    if e.get("current_is_member") is False:
+        detail_parts.append("<span style='color:#dc2626'>No longer index-eligible</span>")
+    if e.get("crisis_now"):
+        detail_parts.append("<span style='color:#991b1b;font-weight:700'>Crisis override active today</span>")
+    stop_price = e.get("stop_price")
+    if stop_price is not None:
+        detail_parts.append(html.escape(f"Stop: {stop_price:,.4f}"))
+
+    st.markdown(
+        f"<div style='border-left:4px solid {colour};padding:10px 16px;"
+        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:8px'>"
+        f"<div style='display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px'>"
+        f"<span style='background:{colour};color:#fff;padding:2px 9px;"
+        f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
+        f"{icon} {status}</span>"
+        f"<strong style='font-size:1rem'>{ticker}</strong>"
+        f"<span style='color:#8899AA;font-size:0.85rem'>{asset_type} · "
+        f"{'Day ' + str(days_held) + '/' + str(max_hold) if max_hold is not None else 'Day ' + str(days_held)}</span>"
+        f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
+        f"</div>"
+        f"<div style='font-size:0.82rem;color:#8899AA'>"
+        f"{' · '.join(detail_parts)}"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _expected_last_eod(now: datetime) -> datetime:
     """Return the UTC datetime of the most recent EOD run that should have fired by now.
 
@@ -3853,6 +4124,42 @@ def _get_drawdown_status(config: dict) -> "dict | None":
             config.get("trading212_invest", {}).get("drawdown_scaling", {}).get("enabled", False)
         ),
     }
+
+
+@st.cache_data(ttl=300)
+def _get_v2_ticker_status() -> list[dict]:
+    """Per-ticker live status for every analysis/v2 ticker (momentum, index
+    membership, crisis flags). Thin cached wrapper — the actual data-shaping
+    logic lives in output/v2_performance.py, which is directly unit-tested
+    (main.py itself is not importable in tests — see that module's docstring).
+    Reads config fresh via _load_config() since unhashable dicts can't be
+    Streamlit cache keys.
+    """
+    from output.v2_performance import get_v2_ticker_status
+    return get_v2_ticker_status(_load_config())
+
+
+def _get_v2_brief_cards(config: dict) -> list[dict]:
+    """Enriched trade-card dicts for open analysis/v2 positions — thin
+    wrapper around output/v2_performance.py:get_v2_brief_cards(), passing in
+    this page's already-cached _get_v2_ticker_status() so the momentum/
+    membership/crisis computation isn't repeated."""
+    from output.v2_performance import get_v2_brief_cards
+    return get_v2_brief_cards(config, ticker_status_rows=_get_v2_ticker_status())
+
+
+def _get_v2_pnl_rows() -> list[dict]:
+    """All reconstructed closed analysis/v2 positions — thin wrapper around
+    output/v2_performance.py:get_v2_pnl_rows()."""
+    from output.v2_performance import get_v2_pnl_rows
+    return get_v2_pnl_rows()
+
+
+def _v2_pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
+    """Adapt v2_pnl rows for analysis/backtest_metrics.py — thin wrapper
+    around output/v2_performance.py:v2_pnl_metrics_df()."""
+    from output.v2_performance import v2_pnl_metrics_df
+    return v2_pnl_metrics_df(pnl_rows)
 
 
 def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
@@ -4175,6 +4482,11 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
     # global default — see analysis/regime.py:resolve_entry_signal()). A regime
     # not in allowed_entry_regimes blocks entries entirely, ahead of the
     # threshold check — see analysis/regime.py:is_entry_allowed().
+    #
+    # trading212_invest/trading212_stocks are both retired as of 2026-07-31 —
+    # this block only ever produces output for a re-enabled V1, which is why
+    # it no longer drives the page's primary "what is live trading right now"
+    # framing (that's the V2 status block below it instead).
     def _automation_bit(cfg: dict, section: str, label: str) -> None:
         allowed = cfg.get("allowed_entry_regimes")
         note = f" ({'/'.join(allowed)} only)" if allowed else ""
@@ -4199,6 +4511,48 @@ def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set
         st.caption(f"Automation entry: {' · '.join(_auto_bits)}")
     if _blocked_paths:
         st.caption(f"⛔ Entries blocked — {regime.replace('_', ' ')} regime ({', '.join(_blocked_paths)})")
+
+    if not _auto_bits:
+        st.caption(
+            "The regime/confluence analysis above is still live, real market analysis — "
+            "it just no longer drives order placement. V1 (T212 ETF/Stocks) is retired; "
+            "see the V2 status below for what's actually trading this account."
+        )
+
+    # ── V2 live status — momentum, membership, crisis override ─────────────
+    _v2_cfg_brief = config.get("trading212_v2", {})
+    if _v2_cfg_brief.get("enabled", False):
+        _v2_status_rows = _get_v2_ticker_status()
+        _v2_valid_rows = [r for r in _v2_status_rows if not r.get("insufficient_history")]
+        _v2_long_count = sum(1 for r in _v2_valid_rows if r.get("sig_on") is True)
+        _v2_flat_count = sum(1 for r in _v2_valid_rows if r.get("sig_on") is False)
+        _v2_crisis_active = any(r.get("crisis_now") for r in _v2_valid_rows)
+        _v2_entry_blocked = any(r.get("entry_blocked") for r in _v2_valid_rows)
+
+        _v2_badge_colour = "#991b1b" if _v2_crisis_active else "#16a34a"
+        _v2_badge_text = "🔴 CRISIS OVERRIDE ACTIVE" if _v2_crisis_active else "🟢 V2 — LIVE (DEMO)"
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
+            f'border:1px solid {_v2_badge_colour}44;border-radius:8px;padding:6px 12px;margin-top:4px">'
+            f'<span style="background:{_v2_badge_colour};color:#fff;font-weight:700;'
+            f'padding:2px 9px;border-radius:12px;font-size:0.78rem">{_v2_badge_text}</span>'
+            f'<span style="color:#8899AA;font-size:0.8rem">'
+            f'{_v2_long_count} long · {_v2_flat_count} flat of {len(_v2_valid_rows)} tickers'
+            + (' · new entries blocked (crisis cooldown)' if _v2_entry_blocked else '')
+            + '</span></div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander(f"V2 per-ticker status ({len(_v2_valid_rows)} tickers)"):
+            _v2_status_df = pd.DataFrame(_v2_valid_rows)
+            _v2_status_df["Type"] = _v2_status_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+            _v2_status_df["sig_on"] = _v2_status_df["sig_on"].map(lambda b: "Long" if b else "Flat")
+            _v2_status_df["is_member"] = _v2_status_df["is_member"].map(lambda b: "Yes" if b else "No")
+            _v2_status_df["momentum_pct"] = _v2_status_df["momentum_pct"].map(
+                lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
+            )
+            _v2_status_df = _v2_status_df[["ticker", "Type", "sig_on", "momentum_pct", "is_member", "entry_blocked"]]
+            _v2_status_df.columns = ["Ticker", "Type", "Momentum", "12m Return", "Index Eligible", "Entry Blocked"]
+            st.dataframe(_v2_status_df, width="stretch", hide_index=True)
 
     # ── Portfolio risk row (drawdown-based position scaling) ────────────────
     # Mechanical, non-predictive risk control — see analysis/risk.py. Shown
@@ -5758,15 +6112,168 @@ def _t212_pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
 
 
 def _render_performance_page(config: dict) -> None:
-    """T212 Invest execution performance — open positions, closed positions,
-    aggregate metrics (once enough history exists), and feedback-learning status.
+    """Execution performance for both the live V2 system and V1's retired
+    (but permanently retained) historical record.
 
     All P&L here is derived from actual T212 order fills (see "T212 P&L
-    reconstruction" in CLAUDE.md), not simulated/paper trades — there is no
-    other trade source left in the app.
+    reconstruction" in CLAUDE.md), not simulated/paper trades. V1's
+    t212_invest_orders/t212_pnl and V2's v2_invest_orders/v2_pnl are
+    genuinely separate tables (see data/database.py:V2InvestOrder's
+    docstring) — this page never blends a row from one into a table meant
+    for the other; V2 is shown first as the current live system, V1 below
+    it as a clearly labelled, still-fully-visible historical record.
     """
     _render_page_wordmark("Performance")
     st.title("Performance")
+
+    _v2_enabled_perf = config.get("trading212_v2", {}).get("enabled", False)
+    _v1_enabled_perf = (
+        config.get("trading212_invest", {}).get("enabled", False)
+        or config.get("trading212_stocks", {}).get("enabled", False)
+    )
+    st.markdown(
+        (
+            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700;margin-right:8px">🟢 V2 — LIVE (DEMO)</span>'
+            if _v2_enabled_perf else
+            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700;margin-right:8px">V2 — NOT ENABLED</span>'
+        ) + (
+            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">🔴 V1 — RETIRED 2026-07-31</span>'
+            if not _v1_enabled_perf else
+            '<span style="background:#f59e0b;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">⚠ V1 — RE-ENABLED</span>'
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "V2 (momentum + crisis override) is the current live automated system. "
+        "V1's historical record below remains the full, unmodified account of "
+        "everything it did before being retired — nothing here is deleted or merged."
+    )
+
+    # ════════════════════════════════════════════════════════════════════
+    # V2 — LIVE SYSTEM
+    # ════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown("## 🟢 V2 — Live System")
+
+    st.markdown("### Open Positions")
+    v2_open_cards = _get_v2_brief_cards(config)
+    if not v2_open_cards:
+        st.info("No open V2 positions.")
+    else:
+        v2_all_cards = sorted(v2_open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
+        for e in v2_all_cards:
+            _render_v2_trade_card(e)
+
+    st.divider()
+    st.markdown("### Closed Positions")
+    v2_pnl_rows = _get_v2_pnl_rows()
+
+    if not v2_pnl_rows:
+        st.info("No closed V2 positions yet — data will appear as V2 positions close.")
+    else:
+        v2_show_df = pd.DataFrame(v2_pnl_rows)
+        v2_show_df["Type"] = v2_show_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        v2_show_df["entry_date"] = pd.to_datetime(v2_show_df["entry_date"]).dt.strftime("%Y-%m-%d")
+        v2_show_df["exit_date"]  = pd.to_datetime(v2_show_df["exit_date"]).dt.strftime("%Y-%m-%d")
+        v2_show_df["pnl_pct"]    = (v2_show_df["pnl_pct"] * 100).round(2)
+        v2_show_df["pnl_gbp"]    = v2_show_df["pnl_gbp"].round(2)
+        v2_show_df["momentum_pct_at_entry"] = (v2_show_df["momentum_pct_at_entry"] * 100).round(1)
+
+        v2_show_df = v2_show_df[[
+            "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
+            "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
+            "momentum_pct_at_entry", "exit_reason",
+        ]]
+        v2_show_df.columns = [
+            "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
+            "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
+            "Momentum at Entry %", "Exit Reason",
+        ]
+        st.dataframe(
+            v2_show_df.style
+                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
+                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
+            width="stretch", hide_index=True,
+        )
+
+    st.divider()
+    st.markdown("### Performance Metrics")
+    n_v2_closed = len(v2_pnl_rows)
+
+    if n_v2_closed < 5:
+        st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_v2_closed}/5).")
+        if n_v2_closed:
+            v2_wins = sum(1 for r in v2_pnl_rows if (r.get("pnl_gbp") or 0) > 0)
+            v2_losses = n_v2_closed - v2_wins
+            v2_total_pnl = sum(r.get("pnl_gbp") or 0 for r in v2_pnl_rows)
+            st.caption(
+                f"So far: {v2_wins} win{'s' if v2_wins != 1 else ''} / "
+                f"{v2_losses} loss{'es' if v2_losses != 1 else ''} · "
+                f"total realised P&L £{v2_total_pnl:+,.2f}."
+            )
+    else:
+        v2_mdf  = _v2_pnl_metrics_df(v2_pnl_rows)
+        v2_mets = compute_metrics(v2_mdf)
+
+        vc1, vc2, vc3, vc4, vc5, vc6 = st.columns(6)
+        vc1.metric("Closed Positions", v2_mets.get("total_trades", 0))
+        v2_wr_pct = round((v2_mets.get("win_rate") or 0) * 100, 1)
+        vc2.metric("Win Rate", f"{v2_wr_pct}%")
+        vc3.metric("Avg Return", f"{v2_mets.get('avg_return_pct', 0):+.2f}%")
+        vc4.metric("Total Return", f"{v2_mets.get('total_return_pct', 0):+.1f}%")
+        vc5.metric("Profit Factor", f"{v2_mets.get('profit_factor', 0):.2f}")
+        vc6.metric("Max Drawdown", f"{v2_mets.get('max_drawdown_pct', 0):.1f}%")
+
+        v2_total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in v2_pnl_rows)
+        st.caption(
+            f"Total realised P&L: £{v2_total_pnl_gbp:+,.2f} across {n_v2_closed} closed positions · "
+            f"avg hold {v2_mets.get('avg_holding_days', 0):.0f} days."
+        )
+
+        v2_ec = bt_equity_curve(v2_mdf)
+        if not v2_ec.empty:
+            v2_fig = go.Figure()
+            v2_fig.add_trace(go.Scatter(
+                x=v2_ec["date"], y=v2_ec["equity"],
+                mode="lines", name="Portfolio (normalised to 1.0)",
+                line=dict(color="#3b82f6", width=2, shape="linear"),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                hovertemplate="%{x|%Y-%m-%d}<br>Equity: %{y:.4f}<extra></extra>",
+            ))
+            v2_fig.update_layout(
+                title="Equity Curve (daily, normalised to 1.0)",
+                xaxis_title="Date", yaxis_title="Portfolio Value",
+                height=320, margin=dict(l=0, r=0, t=40, b=0),
+                yaxis=dict(tickformat=".2f"),
+                xaxis=dict(type="date"),
+            )
+            _apply_dark_theme(v2_fig)
+            st.plotly_chart(v2_fig, width="stretch")
+
+        # No "Performance by Regime at Entry" here — V2 has no regime
+        # classifier, so regime_performance() (a V1 concept) is never called
+        # against V2 data; see this function's own docstring.
+        v2_erb = exit_reason_breakdown(v2_mdf)
+        if not v2_erb.empty:
+            st.markdown("#### Performance by Exit Reason")
+            v2_erb_show = v2_erb.copy()
+            v2_erb_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
+            st.dataframe(v2_erb_show, width="stretch")
+
+    # ════════════════════════════════════════════════════════════════════
+    # V1 — HISTORICAL RECORD (RETIRED)
+    # ════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown("## 🔴 V1 — Historical Record (Retired 2026-07-31)")
+    st.caption(
+        "The six-module confluence/regime system that traded this account until "
+        "2026-07-31. No longer placing orders — kept in full below as the record "
+        "the V2 rebuild rests on."
+    )
 
     # ── Section 1: Open Positions ───────────────────────────────────────────
     st.markdown("### Open Positions")
@@ -5915,6 +6422,10 @@ def _render_performance_page(config: dict) -> None:
 
     # ── Section 4: Learning System ──────────────────────────────────────────
     st.markdown("### Learning System")
+    st.caption(
+        "V1-specific — recalculates REGIME_WEIGHTS, a concept V2 has no "
+        "equivalent of (no regime classifier, no per-module weighting)."
+    )
 
     learning_cfg = config.get("learning", {})
     min_trades   = learning_cfg.get("min_trades_before_adjustment", 20)
