@@ -747,7 +747,25 @@ def maybe_place_v2_orders(config: dict, run_type: str = "full") -> None:
 
     orders_placed = 0
 
+    # current_open/invested are running totals updated after every FILLED-
+    # bound BUY placed below — the checks immediately above only gate entry
+    # into this loop from the account's state *before* the loop started.
+    # Without also re-checking per-iteration, a cold start (0 pre-existing
+    # positions/deployment) can walk through every qualifying ticker in one
+    # pass before either cap ever has a chance to bind — this is exactly
+    # what happened on 2026-07-31's first live cycle (32 orders placed,
+    # ~74% deployed, both caps blown through) — see CLAUDE.md's "V2 first-
+    # cycle deployment cap overshoot" section for the incident this fixes.
     for ticker, raw in mapping.items():
+        if current_open >= max_open:
+            logger.info("V2: %d/%d positions open — max_open_positions reached mid-run, stopping.",
+                        current_open, max_open)
+            break
+        if total_val > 0 and (invested / total_val) >= max_deployed_pct:
+            logger.info("V2: %.0f%% deployed (limit %.0f%%) — stopping mid-run.",
+                        (invested / total_val) * 100, max_deployed_pct * 100)
+            break
+
         t212_ticker = raw.get("ticker") if isinstance(raw, dict) else raw
         instrument_currency = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
 
@@ -833,6 +851,8 @@ def maybe_place_v2_orders(config: dict, run_type: str = "full") -> None:
             order_id = str(response.get("id", ""))
             status = "PLACED"
             free_cash -= position_gbp
+            invested += est_value_gbp
+            current_open += 1
             orders_placed += 1
             logger.info("V2: BUY %s (%s) qty=%s approx £%.0f id=%s",
                         ticker, t212_ticker, quantity, position_gbp, order_id)

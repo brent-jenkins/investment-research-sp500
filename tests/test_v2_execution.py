@@ -403,6 +403,77 @@ def test_max_total_deployed_blocks_new_entries(db_engine, v2_mocks, mocker):
 
 
 # ---------------------------------------------------------------------------
+# Per-iteration cap enforcement — the 2026-07-31 first-cycle overshoot fix.
+# The pre-loop checks above only ever gate entry into the loop from the
+# account's state *before* the run started; a cold start (0 positions, 0%
+# deployed) must still stop mid-run once either cap is crossed by orders
+# placed earlier in the *same* run, not walk through every qualifier.
+# ---------------------------------------------------------------------------
+
+def _n_ticker_mapping(n: int) -> dict:
+    return {
+        f"T{i}": {"ticker": f"T{i}_EQ", "currency": "USD", "is_etf": True}
+        for i in range(n)
+    }
+
+
+def test_max_open_positions_stops_mid_run_from_cold_start(db_engine, v2_mocks, mocker):
+    """5 simultaneously-qualifying tickers, cold start (0 open positions),
+    max_open_positions=2 -- must place exactly 2 orders, not 5."""
+    from brokers.trading212_v2 import maybe_place_v2_orders
+
+    v2_mocks.get_positions.return_value = []  # cold start
+    frames = {f"T{i}": _bullish_frame() for i in range(5)}
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.v2.universe.is_member", return_value=True)
+
+    cfg = _config(mapping=_n_ticker_mapping(5))
+    cfg["trading212_v2"]["max_open_positions"] = 2
+    cfg["trading212_v2"]["max_total_deployed"] = 1.0  # deployed cap not the limiting factor here
+    maybe_place_v2_orders(cfg, run_type="full")
+
+    assert v2_mocks.place_market_order.call_count == 2
+
+
+def test_max_total_deployed_stops_mid_run_from_cold_start(db_engine, v2_mocks, mocker):
+    """5 simultaneously-qualifying tickers, cold start (0% deployed),
+    max_total_deployed=0.15 with each order sizing to a fixed £500 (10 qty x
+    £50 mocked price) against a £10,000 account (5% each) -- must stop after
+    the 3rd order (15% reached), not place all 5."""
+    from brokers.trading212_v2 import maybe_place_v2_orders
+
+    v2_mocks.get_positions.return_value = []
+    frames = {f"T{i}": _bullish_frame() for i in range(5)}
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.v2.universe.is_member", return_value=True)
+
+    cfg = _config(mapping=_n_ticker_mapping(5))
+    cfg["trading212_v2"]["max_open_positions"] = 999  # position count not the limiting factor here
+    cfg["trading212_v2"]["max_total_deployed"] = 0.15
+    maybe_place_v2_orders(cfg, run_type="full")
+
+    assert v2_mocks.place_market_order.call_count == 3
+
+
+def test_uncapped_run_still_places_every_qualifier(db_engine, v2_mocks, mocker):
+    """Sanity check the fix doesn't over-suppress: with both caps generous,
+    all 5 qualifying tickers from a cold start still get an order."""
+    from brokers.trading212_v2 import maybe_place_v2_orders
+
+    v2_mocks.get_positions.return_value = []
+    frames = {f"T{i}": _bullish_frame() for i in range(5)}
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.v2.universe.is_member", return_value=True)
+
+    cfg = _config(mapping=_n_ticker_mapping(5))
+    cfg["trading212_v2"]["max_open_positions"] = 999
+    cfg["trading212_v2"]["max_total_deployed"] = 1.0
+    maybe_place_v2_orders(cfg, run_type="full")
+
+    assert v2_mocks.place_market_order.call_count == 5
+
+
+# ---------------------------------------------------------------------------
 # Never-raises contract
 # ---------------------------------------------------------------------------
 

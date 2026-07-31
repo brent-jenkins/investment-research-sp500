@@ -1243,16 +1243,27 @@ either cap had any effect.
 
 **Status as of this writing:** the T212 demo account was manually reset to
 a clean £50,000 (confirmed live via the T212 API — `totalValue: 50000.0`,
-`investments.currentValue: 0`, 0 open positions). **The cap-enforcement
-code fix itself had not yet been applied** at the point this section was
-written — checked directly against both the local repository and the
-deployed server (`brokers/trading212_v2.py`'s `max_total_deployed`/
-`max_open_positions` checks were still the original pre-loop-only version
-in both places). Do not trigger a fresh V2 cycle, and do not clear
-`v2_invest_orders`/`v2_pnl` as a "fresh start," until this fix is
-confirmed actually deployed and active — otherwise a fresh cycle against
-the newly-reset £50,000 account will very likely reproduce the identical
-overshoot immediately.
+`investments.currentValue: 0`, 0 open positions). The cap-enforcement code
+fix itself had not yet been applied when this section was first written —
+checked directly against both the local repository and the deployed server
+(`brokers/trading212_v2.py`'s `max_total_deployed`/`max_open_positions`
+checks were still the original pre-loop-only version in both places).
+
+**Fix.** `maybe_place_v2_orders()`'s BUY-phase loop now re-checks both caps
+on every iteration, using running `current_open`/`invested` totals updated
+after each successful BUY (`current_open += 1`, `invested += est_value_gbp`)
+— the exact same running-total pattern the loop already used for
+`free_cash -= position_gbp`. The pre-loop checks are unchanged and still
+run first (a fast path that avoids entering the loop at all when the cap
+is already blown from the account's state before this run started); the
+per-iteration checks are what actually close the gap, breaking the loop
+the moment either cap is crossed by an order placed earlier in the *same*
+run. Verified with three new tests in `tests/test_v2_execution.py`: a
+5-simultaneous-qualifier cold start correctly stops at exactly 2 orders
+under `max_open_positions: 2`, correctly stops at exactly 3 orders under
+`max_total_deployed: 0.15` (each mocked order sizing to 5% of account
+value), and a generous-caps control case confirms the fix doesn't
+over-suppress — all 5 qualifiers still get an order when neither cap binds.
 
 ### Broker integration — Trading212 Invest
 
