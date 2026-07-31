@@ -1,11 +1,12 @@
-"""V2 universe management — point-in-time S&P 500 stock membership plus a
-fixed ETF sleeve. No discretionary exclusions: a ticker is eligible on any
-date it was a genuine index constituent, nothing else.
+"""Universe management — point-in-time S&P 500 stock membership plus a fixed
+ETF sleeve, and the per-ticker max-holding-days classification used by both
+the backtest engine and live order placement. No discretionary exclusions: a
+stock is eligible on any date it was a genuine index constituent, nothing
+else.
 
 Two tiers:
   - ETF_TICKERS: 33 broad sector/index/bond/commodity ETFs. These have no
-    "membership" concept — always eligible (see analysis/v2/backtest.py's
-    is_member() default).
+    "membership" concept — always eligible (see is_member()'s default).
   - STOCK_MEMBERSHIP: 40 US large-cap stocks (39 with at least one real,
     non-empty membership window; GOLD has none — see below), each gated to
     the exact date range(s) it was actually an S&P 500 constituent.
@@ -21,13 +22,13 @@ being trusted: V added 2009-12-21 (public record: Visa added to the S&P
 2020-12-21 (widely publicised) — all four matched exactly.
 
 TSLA, META, and GOOGL are included from their genuine membership dates —
-the original v1-era exclusion of these names (plus TSM) for "socio-
-political/geopolitical risk" was a subjective, present-day judgment call,
-not an S&P 500 eligibility question, and is deliberately NOT reproduced
-here. TSM is not included at all: it has no membership window in the
-source data at any date, because Taiwan Semiconductor is a foreign
+an earlier design excluded these names (plus TSM) for "socio-political/
+geopolitical risk," a subjective, present-day judgment call rather than an
+S&P 500 eligibility question, and that exclusion is deliberately not
+reproduced here. TSM is not included at all: it has no membership window
+in the source data at any date, because Taiwan Semiconductor is a foreign
 private issuer and foreign companies are structurally ineligible for
-S&P 500 inclusion — an objective reason, unlike the original exclusion.
+S&P 500 inclusion — an objective reason, unlike the earlier exclusion.
 GOLD (Barrick Gold) is likewise absent from every row of the source
 data — Barrick is Canadian-domiciled, never a genuine S&P 500 member —
 so it is listed here with an empty window (kept as a fixed candidate for
@@ -47,7 +48,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import V2UniverseMembership, get_engine
+from data.database import UniverseMembership, get_engine
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,8 @@ ETF_TICKERS: tuple[str, ...] = (
 )
 
 # Baseline membership windows, as verified 2026-07-31 (see module docstring).
-# This is the seed loaded into v2_universe_membership on first use — the
-# live source of truth after that is the DB table, kept current by
+# This is the seed loaded into universe_membership on first use — the live
+# source of truth after that is the DB table, kept current by
 # refresh_membership_from_source() below, not this dict.
 STOCK_MEMBERSHIP: dict[str, list[tuple[str, str]]] = {
     "AAPL": [("1996-01-02", "2026-12-31")], "ADBE": [("1997-05-06", "2026-12-31")],
@@ -100,7 +101,7 @@ STOCK_MEMBERSHIP: dict[str, list[tuple[str, str]]] = {
 # appears. Add an entry here whenever a candidate's listed symbol changes.
 _KNOWN_TICKER_RENAMES: dict[str, str] = {"FB": "META"}
 
-ALL_V2_TICKERS: tuple[str, ...] = tuple(sorted(set(ETF_TICKERS) | set(STOCK_MEMBERSHIP.keys())))
+ALL_TICKERS: tuple[str, ...] = tuple(sorted(set(ETF_TICKERS) | set(STOCK_MEMBERSHIP.keys())))
 
 
 def _parse_date(s: str) -> date:
@@ -108,7 +109,7 @@ def _parse_date(s: str) -> date:
 
 
 def seed_baseline_membership() -> int:
-    """Upsert STOCK_MEMBERSHIP's baseline windows into v2_universe_membership.
+    """Upsert STOCK_MEMBERSHIP's baseline windows into universe_membership.
 
     Idempotent — safe to call on every startup. Does nothing to a ticker
     that already has rows from a later refresh_membership_from_source()
@@ -120,7 +121,7 @@ def seed_baseline_membership() -> int:
     with engine.begin() as conn:
         for ticker, windows in STOCK_MEMBERSHIP.items():
             for start_s, end_s in windows:
-                stmt = sqlite_insert(V2UniverseMembership).values(
+                stmt = sqlite_insert(UniverseMembership).values(
                     ticker=ticker,
                     start_date=_parse_date(start_s),
                     end_date=_parse_date(end_s),
@@ -168,7 +169,7 @@ def get_membership_windows(ticker: str) -> list[tuple[date, date]]:
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT start_date, end_date FROM v2_universe_membership "
+                "SELECT start_date, end_date FROM universe_membership "
                 "WHERE ticker = :t ORDER BY start_date"
             ),
             {"t": ticker},
@@ -201,11 +202,41 @@ def is_member(ticker: str, check_date: date) -> bool:
     return any(start <= check_date <= end for start, end in windows)
 
 
+def get_max_holding_days(ticker: str, config: dict) -> int:
+    """Return the max holding days for *ticker*, matching live automation limits.
+
+    Dispatches on the ticker's is_etf flag in trading212_invest's own
+    instrument_mapping — ETFs get trading212_invest.max_holding_days (e.g.
+    90 — no leverage/swap costs, held longer), stocks get
+    trading212_invest.stock_max_holding_days (e.g. 30 — higher idiosyncratic
+    risk than an ETF). A ticker not found in the mapping at all (shouldn't
+    happen in practice — this is only ever called for tickers in that
+    mapping) falls back to backtest.max_holding_days.
+
+    This is the single source of truth for per-asset holding limits, used
+    by simulate_trades() (analysis/backtest.py) and the live exit checks /
+    trade-alert job (data/scheduler.py) so backtested and live holding
+    limits always agree for the same ticker.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    default = int(config.get("backtest", {}).get("max_holding_days", 30))
+
+    mapping = t212_cfg.get("instrument_mapping") or {}
+    entry = mapping.get(ticker)
+    if entry is None:
+        return default
+
+    is_etf = bool(entry.get("is_etf", False)) if isinstance(entry, dict) else False
+    if is_etf:
+        return int(t212_cfg.get("max_holding_days", default))
+    return int(t212_cfg.get("stock_max_holding_days", default))
+
+
 # ---------------------------------------------------------------------------
 # Ongoing refresh — the mechanism that keeps this from being a static,
 # decaying snapshot. The baseline above was current through the source's
 # 2026-06-30 data; every future addition/removal needs this to actually run
-# periodically (see data/scheduler.py's v2_universe_refresh job) for live
+# periodically (see data/scheduler.py's membership_refresh job) for live
 # eligibility to stay correct.
 # ---------------------------------------------------------------------------
 
@@ -297,20 +328,20 @@ def refresh_membership_from_source(config: Optional[dict] = None) -> dict:
 
         with engine.begin() as conn:
             conn.execute(
-                text("DELETE FROM v2_universe_membership WHERE ticker = :t"),
+                text("DELETE FROM universe_membership WHERE ticker = :t"),
                 {"t": ticker},
             )
             for start_d, end_d in new_windows:
                 conn.execute(
                     text(
-                        "INSERT INTO v2_universe_membership "
+                        "INSERT INTO universe_membership "
                         "(ticker, start_date, end_date, source, fetched_at) "
                         "VALUES (:t, :s, :e, :src, :fa)"
                     ),
                     {"t": ticker, "s": start_d.isoformat(), "e": end_d.isoformat(),
                      "src": _SOURCE_NAME, "fa": fetched_at.isoformat()},
                 )
-        logger.info("V2 universe membership changed for %s: %s -> %s", ticker, existing, new_windows)
+        logger.info("Universe membership changed for %s: %s -> %s", ticker, existing, new_windows)
         summary["changed"].append({"ticker": ticker, "old": existing, "new": new_windows})
 
     clear_membership_cache()  # always -- simplest way to guarantee no stale entries survive a refresh

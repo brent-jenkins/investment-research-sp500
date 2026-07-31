@@ -1,12 +1,12 @@
-"""V2 crisis override — a rare-firing, externally-grounded circuit
-breaker, independent of the per-ticker momentum signal and capable of
-overriding it. S&P 500 single-day decline >= 7% matches the real NYSE
-Level 1 market-wide circuit breaker level — chosen over the VIX-spike
-variant tested in the same phase (VIX >= 45): the price-gap trigger fired
-on only 7 days across the full 2007-2026 backtest window and cost zero
-measured edge in any block it didn't touch, while the VIX variant fired
-~15x more often and caused a real regression in one block for one signal
-variant. See CLAUDE.md's Phase 3 findings for the full comparison.
+"""Crisis override — a rare-firing, externally-grounded circuit breaker,
+independent of the per-ticker momentum signal and capable of overriding it.
+S&P 500 single-day decline >= 7% matches the real NYSE Level 1 market-wide
+circuit breaker level — chosen over a VIX-spike variant tested in the same
+research phase (VIX >= 45): the price-gap trigger fired on only 7 days
+across the full 2007-2026 backtest window and cost zero measured edge in
+any block it didn't touch, while the VIX variant fired ~15x more often and
+caused a real regression in one block for one signal variant. See
+CLAUDE.md's Phase 3 findings for the full comparison.
 
 On trigger: every open position is force-exited that day (CRISIS_EXIT),
 and no new entries are permitted for the trigger's duration plus a 5

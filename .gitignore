@@ -35,6 +35,7 @@ env/
 database/*.db
 database/*.db-shm
 database/*.db-wal
+database/prod_backups/
 
 # Streamlit — config.toml is generated on the server by setup.sh (server-specific
 # settings: port, address, domain). The example template is tracked instead.

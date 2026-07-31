@@ -27,16 +27,9 @@ from data.database import Base  # noqa: E402
 # needs a DB just depends on the db_engine fixture instead of repeating this.
 _GET_ENGINE_BINDINGS = (
     "data.database.get_engine",
-    "analysis.regime.get_engine",
-    "analysis.confluence.get_engine",
-    "analysis.backtest.get_engine",
-    "analysis.robustness.get_engine",
     "data.ingestion.get_engine",
     "output.performance.get_engine",
-    "analysis.macro.get_engine",
-    "analysis.regime_history.get_engine",
-    "analysis.v2.universe.get_engine",
-    "output.v2_performance.get_engine",
+    "analysis.universe.get_engine",
 )
 
 

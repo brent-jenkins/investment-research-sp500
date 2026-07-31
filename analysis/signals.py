@@ -1,8 +1,8 @@
-"""V2 signal — trailing 12-month total return, per ticker, no blended
+"""Momentum signal — trailing 12-month total return, per ticker, no blended
 score and no separate regime classifier. Long when positive, flat
 otherwise. Validated across the phased rebuild (Phase 1) as the stronger
 of two externally-grounded candidates tested (12-month momentum vs.
-200-day SMA); adopted as V2's sole entry/exit signal.
+200-day SMA); adopted as the system's sole entry/exit signal.
 """
 import pandas as pd
 

@@ -1,4 +1,4 @@
-"""Tests for analysis/v2/universe.py — point-in-time membership gating and
+"""Tests for analysis/universe.py — point-in-time membership gating and
 the ongoing refresh mechanism that keeps it from becoming a static,
 decaying snapshot.
 """
@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from analysis.v2 import universe as v2u
+from analysis import universe as v2u
 
 
 @pytest.fixture(autouse=True)

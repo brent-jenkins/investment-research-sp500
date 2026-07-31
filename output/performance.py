@@ -1,136 +1,270 @@
-"""Live price/signal lookups and closed-position queries.
+"""Pure data-shaping logic for the Performance/Status/Daily-Briefing UI —
+extracted out of main.py so it's actually testable.
 
-Manual CFD trade logging (log_trade, close_trade, update_trade_plan,
-get_open_trades, get_all_trades) and macro-theme classification
-(classify_trade_theme) were removed along with the Trade Log page — see
-"Removed: manual CFD trade logging" in CLAUDE.md. get_t212_closed_positions()
-is kept because the weekly summary email reads closed T212 Invest positions
-(from t212_pnl) for accuracy stats.
+main.py cannot be imported directly in tests: it runs _start_scheduler_at_startup()
+(an @st.cache_resource call) at module level, which would start a real
+scheduler process — including live T212 API calls — as a side effect of
+merely importing the module. Every function here is a plain, side-effect-free
+(besides DB reads) data-shaping function; main.py's own thin wrappers just
+call into this module and add Streamlit caching/rendering on top.
 """
-
-import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
-import yfinance as yf
-import yaml
-from sqlalchemy import text
+import pandas as pd
 
-from data.database import get_engine
-
-logger = logging.getLogger(__name__)
-
-# Quote currency for forex CFD instruments.
-# "JPY" pairs need a two-step P&L conversion: price move → JPY → USD → GBP.
-# All other entries have USD as quote currency: move → USD → GBP.
-#
-# Retained as a defensive fallback in main.py:_quote_ccy_sym(), used only by
-# _render_trade_card()'s non-GBP P&L branch. T212 Invest cards always set
-# unreal_pnl_gbp directly (see _get_t212_invest_brief_cards()), and T212
-# Invest never trades forex instruments in the first place — see "Forex
-# exclusion" in CLAUDE.md — so this branch is theoretically unreachable for
-# T212-only data. Kept rather than deleted in case a future card source ever
-# needs the fallback.
-FOREX_QUOTE_CCY: dict[str, str] = {
-    "GBPUSD=X": "USD",
-    "EURUSD=X": "USD",
-    "AUDUSD=X": "USD",
-    "USDJPY=X": "JPY",
-    "USDCHF=X": "CHF",
-    "USDCAD=X": "CAD",
-    "EURGBP=X": "GBP",
-}
+from data.database import get_engine, get_metadata_str
 
 
-def _load_config() -> dict:
-    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+def get_ticker_status(config: dict) -> list[dict]:
+    """Per-ticker live status for every tracked ticker: momentum signal
+    (long/flat), current index-membership eligibility, and whether today is
+    a raw crisis day / inside the crisis entry-block window.
 
-
-# ---------------------------------------------------------------------------
-# Live prices
-# ---------------------------------------------------------------------------
-
-def get_latest_price(ticker: str) -> Optional[float]:
-    """Fetch the most recent close price from yfinance (live, uncached).
-
-    Caller should wrap with st.cache_data(ttl=300) in the UI layer.
+    Recomputes momentum from full price history for every ticker in
+    trading212_invest.instrument_mapping — the same per-ticker cost
+    brokers/trading212.py's own _ticker_state() pays once per scheduled
+    run. Callers on a page render should cache this (see
+    main.py:_get_ticker_status()'s st.cache_data wrapper).
     """
-    import math
+    from analysis import crisis, signals, universe
+    from data.ingestion import get_price_df
+
+    mapping = config.get("trading212_invest", {}).get("instrument_mapping", {})
+    if not mapping:
+        return []
+
     try:
-        data = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
-        if data.empty:
-            return None
-        if hasattr(data.columns, "levels"):
-            data.columns = [col[0] for col in data.columns]
-        price = float(data["Close"].iloc[-1])
-        return None if math.isnan(price) else price
-    except Exception as exc:
-        logger.warning("Live price fetch failed for %s: %s", ticker, exc)
-        return None
+        gspc_df = get_price_df("^GSPC", days=8000)
+        if gspc_df.empty:
+            return []
+        gspc_df = gspc_df.set_index("date")
+        gspc_df.index = pd.to_datetime(gspc_df.index)
+        gspc_close = gspc_df["close"].astype(float)
+    except Exception:
+        return []
+
+    rows: list[dict] = []
+    for ticker, raw in mapping.items():
+        is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
+        try:
+            df = get_price_df(ticker, days=8000)
+            if df.empty or len(df) < 300:
+                rows.append({
+                    "ticker": ticker, "is_etf": is_etf, "sig_on": None,
+                    "is_member": None, "crisis_now": None, "entry_blocked": None,
+                    "momentum_pct": None, "insufficient_history": True,
+                })
+                continue
+            df = df.set_index("date")
+            df.index = pd.to_datetime(df.index)
+            close = df["close"].astype(float)
+            latest_dt = close.index[-1]
+
+            sig_series = signals.compute_signal_series(close)
+            mom_series = signals.compute_momentum_series(close)
+            sig_on = bool(sig_series.iloc[-1])
+            mom_pct = float(mom_series.iloc[-1]) if pd.notna(mom_series.iloc[-1]) else None
+            is_member = is_etf or universe.is_member(ticker, latest_dt.date())
+            crisis_now = crisis.is_crisis_day(gspc_close, latest_dt)
+            entry_blocked = crisis.is_entry_blocked(gspc_close, latest_dt)
+
+            rows.append({
+                "ticker": ticker, "is_etf": is_etf, "sig_on": sig_on,
+                "is_member": is_member, "crisis_now": crisis_now,
+                "entry_blocked": entry_blocked, "momentum_pct": mom_pct,
+                "insufficient_history": False,
+            })
+        except Exception:
+            rows.append({
+                "ticker": ticker, "is_etf": is_etf, "sig_on": None,
+                "is_member": None, "crisis_now": None, "entry_blocked": None,
+                "momentum_pct": None, "insufficient_history": True,
+            })
+
+    return rows
 
 
-# ---------------------------------------------------------------------------
-# Signal lookup
-# ---------------------------------------------------------------------------
-
-def get_current_signal(ticker: str) -> dict:
-    """Return the most recent signal row for *ticker* from the signals table."""
-    engine = get_engine()
-    with engine.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT signal, confluence_score, notes AS regime, "
-                "trend_score, mean_reversion_score, volatility_score, "
-                "volume_score, macro_score "
-                "FROM signals WHERE ticker = :t ORDER BY date DESC LIMIT 1"
-            ),
-            {"t": ticker},
-        ).mappings().first()
-    return dict(row) if row else {}
-
-
-# ---------------------------------------------------------------------------
-# Queries
-# ---------------------------------------------------------------------------
-
-def get_t212_closed_positions(
-    from_date: Optional[datetime] = None,
-    to_date: Optional[datetime] = None,
+def get_brief_cards(
+    config: dict,
+    ticker_status_rows: Optional[list[dict]] = None,
 ) -> list[dict]:
-    """Return closed T212 Invest positions, optionally filtered by exit date range.
+    """Return enriched trade-card dicts for open positions.
 
-    Reads t212_pnl — reconstructed realised P&L for closed T212 Invest positions
-    (see brokers/t212_learning.py:_reconstruct_t212_pnl()) — the only closed-trade
-    data source left in the app now that virtual trading and manual CFD trade
-    logging have both been removed (see CLAUDE.md). Every row here is a real T212
-    order fill, so callers no longer need an account_type filter to exclude
-    synthetic/paper data the way the old VIRTUAL rows required.
+    Reads the scheduler-maintained t212_positions_snapshot (one shared T212
+    account) filtered to trading212_invest.instrument_mapping, plus entry
+    context (momentum_pct, stop_price) from invest_orders. Status mirrors
+    brokers/trading212.py's own exit precedence exactly: crisis >
+    index-removal > stop-loss > signal-off > max-holding.
 
-    T212 Invest is a long-only cash account, so every row is implicitly a LONG
-    position — a synthetic "direction": "LONG" key is added to each dict for
-    callers that display trade direction.
+    ticker_status_rows lets a caller pass in an already-computed
+    get_ticker_status() result (e.g. main.py's cached version) instead of
+    recomputing it here; defaults to a fresh call when omitted.
     """
-    engine = get_engine()
-    sql    = "SELECT * FROM t212_pnl WHERE 1=1"
-    params: dict = {}
-    if from_date:
-        sql += " AND exit_date >= :from_date"
-        params["from_date"] = from_date
-    if to_date:
-        sql += " AND exit_date <= :to_date"
-        params["to_date"] = to_date
-    sql += " ORDER BY exit_date ASC"
-    with engine.connect() as conn:
-        rows = conn.execute(text(sql), params).mappings().all()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["pnl"] = d.get("pnl_gbp")
-        d["direction"] = "LONG"
-        result.append(d)
-    return result
+    import json
+    import os
+
+    from analysis.universe import get_max_holding_days
+
+    if not (os.environ.get("T212_API_KEY", "") and os.environ.get("T212_API_SECRET", "")):
+        return []
+
+    t212_cfg = config.get("trading212_invest", {})
+    mapping = t212_cfg.get("instrument_mapping", {})
+    if not mapping:
+        return []
+
+    reverse_map: dict[str, tuple[str, bool]] = {}
+    for rt, raw in mapping.items():
+        t212_ticker = raw.get("ticker") if isinstance(raw, dict) else raw
+        is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
+        reverse_map[t212_ticker] = (rt, is_etf)
+
+    pos_raw = get_metadata_str("t212_positions_snapshot")
+    positions: Optional[list] = None
+    if pos_raw:
+        try:
+            positions = json.loads(pos_raw) or []
+        except Exception:
+            pass
+    if positions is None:
+        return []
+
+    pos_by_t212 = {p.get("ticker", ""): p for p in (positions or [])}
+
+    try:
+        from sqlalchemy import text as sa_text
+        with get_engine().connect() as conn:
+            entry_rows = conn.execute(sa_text("""
+                SELECT t212_ticker, momentum_pct, stop_price, filled_at, currency_code
+                FROM invest_orders
+                WHERE direction = 'BUY' AND status = 'FILLED'
+                ORDER BY filled_at ASC
+            """)).mappings().all()
+        entry_by_t212: dict[str, dict] = {}
+        for r in entry_rows:
+            u = r["t212_ticker"]
+            if u not in entry_by_t212:
+                entry_by_t212[u] = dict(r)
+    except Exception:
+        entry_by_t212 = {}
+
+    if ticker_status_rows is None:
+        ticker_status_rows = get_ticker_status(config)
+    status_by_ticker = {r["ticker"]: r for r in ticker_status_rows}
+
+    # Reuse the exact same GBP conversion brokers/trading212.py itself uses
+    # to compute estimated_value_gbp/pnl_gbp at order time — reads straight
+    # from price_data (GBPUSD=X/EURUSD=X), no live yfinance call, no session
+    # state.
+    from brokers.trading212 import Trading212Client
+
+    def _t212_ccy_to_gbp(amount: float, currency: str) -> float:
+        gbpusd, eurusd = Trading212Client._fx_rates()
+        return Trading212Client._to_gbp(amount, currency, gbpusd, eurusd) or amount
+
+    cards: list[dict] = []
+    for t212_ticker, (research_ticker, is_etf) in reverse_map.items():
+        pos = pos_by_t212.get(t212_ticker)
+        if not pos:
+            continue
+
+        avg_price     = float(pos.get("averagePrice") or 0)
+        qty           = float(pos.get("quantity")     or 0)
+        current_price = float(pos.get("currentPrice") or 0)
+        ppl           = float(pos.get("ppl")          or 0)
+        if qty <= 0 or avg_price <= 0:
+            continue
+
+        unreal_pct = round((current_price - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0.0
+
+        entry_info   = entry_by_t212.get(t212_ticker, {})
+        stop_price   = entry_info.get("stop_price")
+        momentum_pct = entry_info.get("momentum_pct")
+        currency     = entry_info.get("currency_code") or "USD"
+
+        filled_at_str = entry_info.get("filled_at")
+        entry_dt: Optional[datetime] = None
+        if filled_at_str:
+            try:
+                entry_dt = datetime.fromisoformat(str(filled_at_str))
+            except Exception:
+                pass
+        days_held = max(0, (datetime.utcnow() - entry_dt).days) if entry_dt else 0
+
+        max_hold = get_max_holding_days(research_ticker, config)
+        live_status = status_by_ticker.get(research_ticker, {})
+        sig_on = live_status.get("sig_on")
+        is_member = live_status.get("is_member")
+        crisis_now = live_status.get("crisis_now")
+
+        # Exit precedence -- must exactly match brokers/trading212.py's
+        # maybe_exit_positions(), which itself mirrors
+        # analysis/backtest.py:simulate_trades() exactly.
+        if crisis_now:
+            status = "CRISIS EXIT"
+        elif not is_etf and is_member is False:
+            status = "INDEX REMOVAL"
+        elif stop_price is not None and current_price > 0 and current_price <= stop_price:
+            status = "STOP LOSS"
+        elif sig_on is False:
+            status = "SIGNAL OFF"
+        elif days_held >= max_hold:
+            status = "MAX HOLDING"
+        else:
+            status = "ON TRACK"
+
+        status_priority = {
+            "CRISIS EXIT": 4, "INDEX REMOVAL": 3, "STOP LOSS": 3,
+            "SIGNAL OFF": 2, "MAX HOLDING": 1, "ON TRACK": 0,
+        }[status]
+
+        current_value_gbp = round(_t212_ccy_to_gbp(qty * current_price, currency), 2)
+        pnl_gbp = round(_t212_ccy_to_gbp(ppl, currency), 2)
+
+        cards.append({
+            "ticker": research_ticker, "t212_ticker": t212_ticker,
+            "asset_type": "ETF" if is_etf else "STOCK",
+            "entry_price": avg_price, "quantity": qty,
+            "entry_date": entry_dt.isoformat() if entry_dt else None,
+            "days_held": days_held, "max_holding_days": max_hold,
+            "live_price": current_price, "currency": currency,
+            "current_value_gbp": current_value_gbp,
+            "unreal_pnl_gbp": pnl_gbp, "unreal_pct": unreal_pct,
+            "momentum_pct_at_entry": momentum_pct, "stop_price": stop_price,
+            "current_sig_on": sig_on, "current_is_member": is_member,
+            "crisis_now": crisis_now, "status": status,
+            "status_priority": status_priority,
+        })
+
+    return cards
 
 
+def get_pnl_rows() -> list[dict]:
+    """All reconstructed closed positions, most recent first.
+
+    Reads brokers/trading212.py:_reconstruct_pnl()'s output table directly.
+    """
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                sa_text("SELECT * FROM pnl ORDER BY exit_date DESC")
+            ).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
+    """Adapt pnl rows to the column shape analysis/backtest.py's
+    compute_metrics()/equity_curve_gbp() expect."""
+    if not pnl_rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(pnl_rows)
+    df["entry_date"] = pd.to_datetime(df["entry_date"])
+    df["exit_date"]  = pd.to_datetime(df["exit_date"])
+    df["pnl_pct"]    = df["pnl_pct"].astype(float)
+    df["is_win"]     = df["pnl_gbp"] > 0
+    df["direction"]  = "LONG"
+    return df

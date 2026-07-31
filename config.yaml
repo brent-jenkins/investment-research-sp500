@@ -1,428 +1,94 @@
-# 112 assets across 21 groups (70 tradeable — eligible for automated T212 Invest orders)
+# Trimmed 2026-07-31 -- this file now configures exactly one system: a
+# 12-month-momentum long/flat signal with a rare-firing crisis circuit
+# breaker (analysis/signals.py, analysis/crisis.py, analysis/universe.py,
+# analysis/backtest.py). See CLAUDE.md's "V2 architecture" and
+# "V1 removal" sections for the history behind this shape.
 watchlist:
-  indices:
-    - ticker: "^GSPC"
-      name: "S&P 500"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "^IXIC"
-      name: "NASDAQ Composite"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "^FTSE"
-      name: "FTSE 100"
-      exchange: "LSE"
-      tradeable: false
-    - ticker: "^GDAXI"
-      name: "DAX"
-      exchange: "XETR"
-      tradeable: false
-    - ticker: "VOO"
-      name: "Vanguard S&P 500 ETF"
-      exchange: "NYSE"
-      tradeable: true
-      trading212_instrument: "VOO"
-    - ticker: "IWM"
-      name: "iShares Russell 2000 ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  sector_etfs:
-    - ticker: "XLE"
-      name: "Energy Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLF"
-      name: "Financial Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLK"
-      name: "Technology Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLV"
-      name: "Health Care Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLI"
-      name: "Industrial Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLP"
-      name: "Consumer Staples Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLY"
-      name: "Consumer Discretionary Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLU"
-      name: "Utilities Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "XLRE"
-      name: "Real Estate Select Sector"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "XLB"
-      name: "Materials Select Sector"
-      exchange: "NYSE"
-      tradeable: true
-
-  energy:
-    - ticker: "USO"
-      name: "United States Oil Fund"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "BNO"
-      name: "United States Brent Oil Fund"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "XOP"
-      name: "SPDR S&P Oil & Gas Exploration ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "UNG"
-      name: "United States Natural Gas Fund"
-      exchange: "NYSE"
-      tradeable: false
-
-  commodities:
-    - ticker: "GLD"
-      name: "SPDR Gold Shares"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "GDX"
-      name: "VanEck Gold Miners ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "SLV"
-      name: "iShares Silver Trust"
-      exchange: "NYSE"
-      tradeable: true
-      trading212_instrument: "XAG/USD"
-    - ticker: "CORN"
-      name: "Teucrium Corn Fund"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "CPER"
-      name: "United States Copper Index Fund"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "COPX"
-      name: "Global X Copper Miners ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "PDBC"
-      name: "Invesco Optimum Yield Diversified Commodity Strategy"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "DBA"
-      name: "Invesco DB Agriculture Fund"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "WEAT"
-      name: "Teucrium Wheat Fund"
-      exchange: "NYSE"
-      tradeable: false
-
-  bonds:
-    - ticker: "TLT"
-      name: "iShares 20+ Year Treasury Bond"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "IEF"
-      name: "iShares 7-10 Year Treasury Bond"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "SHY"
-      name: "iShares 1-3 Year Treasury Bond"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "TIP"
-      name: "iShares TIPS Bond ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "HYG"
-      name: "iShares iBoxx High Yield Corporate Bond"
-      exchange: "NYSE"
-      tradeable: true
-
-  volatility:
-    - ticker: "^VIX"
-      name: "CBOE Volatility Index"
-      exchange: "NYSE"
-      tradeable: false
-
-  international:
-    - ticker: "^N225"
-      name: "Nikkei 225"
-      exchange: "JPX"
-      tradeable: false
-    - ticker: "^STOXX50E"
-      name: "Euro Stoxx 50"
-      exchange: "EUREX"
-      tradeable: false
-    - ticker: "^HSI"
-      name: "Hang Seng Index"
-      exchange: "HKEX"
-      tradeable: false
-    - ticker: "EEM"
-      name: "iShares MSCI Emerging Markets ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  forex:
-    - ticker: "UUP"
-      name: "Invesco DB US Dollar Index Bullish Fund"
-      exchange: "NYSE"
-      tradeable: false
-    # Forex pairs (=X suffix) are CFD-only instruments — they cannot be held in
-    # a T212 Invest cash account. trading212_instrument here is for CFD trade
-    # logging only; maybe_place_t212_orders() explicitly skips any ticker ending
-    # in =X even if it appears in ucits_mapping.
-    - ticker: "EURUSD=X"
-      name: "EUR/USD"
-      exchange: "FX"
-      tradeable: false
-      trading212_instrument: "EUR/USD"
-    - ticker: "GBPUSD=X"
-      name: "GBP/USD"
-      exchange: "FX"
-      tradeable: false
-      trading212_instrument: "GBP/USD"
-    - ticker: "USDJPY=X"
-      name: "USD/JPY"
-      exchange: "FX"
-      tradeable: false
-      trading212_instrument: "USD/JPY"
-    - ticker: "AUDUSD=X"
-      name: "AUD/USD"
-      exchange: "FX"
-      tradeable: false
-      trading212_instrument: "AUD/USD"
-
-  crypto:
-    - ticker: "BTC-USD"
-      name: "Bitcoin"
-      exchange: "Crypto"
-      tradeable: false
-      trading212_instrument: "BTC/USD"
-    - ticker: "ETH-USD"
-      name: "Ethereum"
-      exchange: "Crypto"
-      tradeable: false
-      trading212_instrument: "ETH/USD"
-
-  volatility_complex:
-    - ticker: "^VIX3M"
-      name: "3-Month VIX"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "VIXY"
-      name: "ProShares VIX Short-Term Futures"
-      exchange: "NYSE"
-      tradeable: false
-      trading212_instrument: "VXX"  # VXX (iPath S&P 500 VIX Short-Term Futures ETN) is the T212-available proxy for VIXY — VIXY is not directly tradeable on T212. Both track the same VIX short-term futures index; VXX has larger AUM and tighter liquidity but is otherwise a close substitute.
-    - ticker: "^VVIX"
-      name: "CBOE VVIX Index"
-      exchange: "NYSE"
-      tradeable: false
-
-  tech_subsectors:
-    - ticker: "SOXX"
-      name: "iShares Semiconductor ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "IGV"
-      name: "iShares Expanded Tech-Software ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "SKYY"
-      name: "First Trust Cloud Computing ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  financial_subsectors:
-    - ticker: "KRE"
-      name: "SPDR S&P Regional Banking ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "KBE"
-      name: "SPDR S&P Bank ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  healthcare_subsectors:
-    - ticker: "IBB"
-      name: "iShares Biotechnology ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  factor_etfs:
-    - ticker: "SPMO"
-      name: "Invesco S&P 500 Momentum ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "MTUM"
-      name: "iShares MSCI USA Momentum Factor ETF"
-      exchange: "NYSE"
-      tradeable: false
-
-  international_expanded:
-    - ticker: "FXI"
-      name: "iShares China Large-Cap ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "EWJ"
-      name: "iShares MSCI Japan ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "EWG"
-      name: "iShares MSCI Germany ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "INDA"
-      name: "iShares MSCI India ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "EWZ"
-      name: "iShares MSCI Brazil ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "USDCNY=X"
-      name: "USD/Chinese Yuan"
-      exchange: "FX"
-      tradeable: false
-    - ticker: "USDINR=X"
-      name: "USD/Indian Rupee"
-      exchange: "FX"
-      tradeable: false
-    - ticker: "USDBRL=X"
-      name: "USD/Brazilian Real"
-      exchange: "FX"
-      tradeable: false
-    - ticker: "VGK"
-      name: "Vanguard FTSE Europe ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  real_assets:
-    - ticker: "VNQ"
-      name: "Vanguard Real Estate ETF"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "AMLP"
-      name: "Alerian MLP ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "ITB"
-      name: "iShares U.S. Home Construction ETF"
-      exchange: "NYSE"
-      tradeable: false
-
-  fixed_income_expanded:
-    - ticker: "LQD"
-      name: "iShares Investment Grade Corporate Bond"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "JNK"
-      name: "SPDR Bloomberg High Yield Bond"
-      exchange: "NYSE"
-      tradeable: false
-    - ticker: "EMB"
-      name: "iShares JP Morgan EM Bond ETF"
-      exchange: "NYSE"
-      tradeable: true
-    - ticker: "MUB"
-      name: "iShares National Muni Bond ETF"
-      exchange: "NYSE"
-      tradeable: true
-
-  # PALL, PPLT, WOOD, and UGA were removed — all four were delisted or
-  # suspended from yfinance data delivery and returned no OHLCV history.
-  commodities_expanded: []
-
-  crypto_expanded:
-    - ticker: "SOL-USD"
-      name: "Solana"
-      exchange: "Crypto"
-      tradeable: false
-    - ticker: "BNB-USD"
-      name: "Binance Coin"
-      exchange: "Crypto"
-      tradeable: false
-
-  uk_etfs: []
-
-  # Curated US large-cap stocks for the trading212_stocks automation path (see that
-  # config section below). S&P 500 large-caps chosen for liquidity and for having a
-  # corresponding sector ETF already in the watchlist for correlation context:
-  # Technology (AAPL/MSFT/NVDA/AMZN/ADBE/CRM/ORCL) -> XLK/SKYY, AMZN also XLY;
-  # Communication Services (NFLX/DIS) -> XLY/XLC; Financials (JPM/GS/BAC/V/MA) ->
-  # XLF/KBE; Healthcare (LLY/UNH/JNJ/PFE/MRK/ISRG) -> XLV; Semiconductors
-  # (AMD/AVGO/QCOM) -> SOXX; Consumer Staples (COST/WMT) -> XLP; Energy (XOM/CVX)
-  # -> XLE; Industrials (CAT/RTX/GE) -> XLI; Materials (LIN) -> XLB; Gold Miners
-  # (NEM/GOLD) -> GLD (gold miners track, but don't perfectly correlate with, the
-  # metal itself).
-  # Tickers with significant systematic risk are deliberately excluded despite
-  # otherwise fitting the liquidity/correlation criteria — see "Adding assets to
-  # the watchlist" -> us_large_cap exclusions in CLAUDE.md for the full rationale
-  # per ticker: TSLA (key-person personality risk), META and GOOGL (regulatory
-  # existential risk — antitrust), TSM (geopolitical existential risk — Taiwan).
-  # DIS was previously excluded here for content-strategy underperformance; it was
-  # re-added 2026-07-11 once streaming turned profitable and box office recovered
-  # — see CLAUDE.md for detail.
-  us_large_cap:
-    # Technology
-    - {ticker: "AAPL",  name: "Apple",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "MSFT",  name: "Microsoft",                 exchange: "NYSE", tradeable: true}
-    - {ticker: "NVDA",  name: "NVIDIA",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "AMZN",  name: "Amazon",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "ADBE",  name: "Adobe",                     exchange: "NYSE", tradeable: true}
-    - {ticker: "CRM",   name: "Salesforce",                exchange: "NYSE", tradeable: true}
-    - {ticker: "ORCL",  name: "Oracle Corporation",        exchange: "NYSE", tradeable: true}
-    # Communication Services
-    - {ticker: "NFLX",  name: "Netflix",                   exchange: "NYSE", tradeable: true}
-    - {ticker: "DIS",   name: "Walt Disney Company",       exchange: "NYSE", tradeable: true}
-    # Financials
-    - {ticker: "JPM",   name: "JP Morgan Chase",           exchange: "NYSE", tradeable: true}
-    - {ticker: "GS",    name: "Goldman Sachs",             exchange: "NYSE", tradeable: true}
-    - {ticker: "BAC",   name: "Bank of America",           exchange: "NYSE", tradeable: true}
-    - {ticker: "V",     name: "Visa",                      exchange: "NYSE", tradeable: true}
-    - {ticker: "MA",    name: "Mastercard",                exchange: "NYSE", tradeable: true}
-    - {ticker: "SPGI",  name: "S&P Global",                exchange: "NYSE", tradeable: true}
-    # Healthcare
-    - {ticker: "LLY",   name: "Eli Lilly",                 exchange: "NYSE", tradeable: true}
-    - {ticker: "UNH",   name: "UnitedHealth Group",        exchange: "NYSE", tradeable: true}
-    - {ticker: "JNJ",   name: "Johnson & Johnson",         exchange: "NYSE", tradeable: true}
-    - {ticker: "PFE",   name: "Pfizer",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "MRK",   name: "Merck",                     exchange: "NYSE", tradeable: true}
-    - {ticker: "TMO",   name: "Thermo Fisher Scientific",  exchange: "NYSE", tradeable: true}
-    # Semiconductors
-    - {ticker: "AMD",   name: "Advanced Micro Devices",    exchange: "NYSE", tradeable: true}
-    - {ticker: "AVGO",  name: "Broadcom",                  exchange: "NYSE", tradeable: true}
-    - {ticker: "QCOM",  name: "Qualcomm",                  exchange: "NYSE", tradeable: true}
-    # Consumer Staples
-    - {ticker: "COST",  name: "Costco",                    exchange: "NYSE", tradeable: true}
-    - {ticker: "WMT",   name: "Walmart",                   exchange: "NYSE", tradeable: true}
-    - {ticker: "PG",    name: "Procter & Gamble",          exchange: "NYSE", tradeable: true}
-    # Consumer Discretionary
-    - {ticker: "HD",    name: "Home Depot",                exchange: "NYSE", tradeable: true}
-    # Energy
-    - {ticker: "XOM",   name: "ExxonMobil",                exchange: "NYSE", tradeable: true}
-    - {ticker: "CVX",   name: "Chevron",                   exchange: "NYSE", tradeable: true}
-    # Industrials
-    - {ticker: "CAT",   name: "Caterpillar",               exchange: "NYSE", tradeable: true}
-    - {ticker: "RTX",   name: "RTX Corporation",           exchange: "NYSE", tradeable: true}
-    - {ticker: "GE",    name: "GE Aerospace",              exchange: "NYSE", tradeable: true}
-    # Materials
-    - {ticker: "LIN",   name: "Linde plc",                 exchange: "NYSE", tradeable: true}
-    # Healthcare — Medical Devices
-    - {ticker: "ISRG",  name: "Intuitive Surgical",        exchange: "NYSE", tradeable: true}
-    # Gold Miners
-    - {ticker: "NEM",   name: "Newmont Corporation",       exchange: "NYSE", tradeable: true}
-    - {ticker: "GOLD",  name: "Barrick Gold",              exchange: "NYSE", tradeable: true}
+  # Trimmed 2026-07-31 to exactly what the momentum + crisis-override system
+  # needs: its own 73-ticker universe (see analysis/universe.py:ALL_TICKERS),
+  # ^GSPC (crisis-override reference index), and GBPUSD=X/EURUSD=X (FX
+  # conversion for non-GBP positions). The six-module confluence system this
+  # watchlist used to serve (112 assets across 21 groups -- correlation pairs,
+  # macro-context tickers, crypto, analysis-only ETFs) has been removed; nothing
+  # reads those tickers anymore.
+  core:
+    - {ticker: "^GSPC", name: "S&P 500", exchange: "NYSE"}
+    - {ticker: "GBPUSD=X", name: "GBP/USD", exchange: "FX"}
+    - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
+  trading:
+    - {ticker: "AAPL", name: "Apple", exchange: "NYSE"}
+    - {ticker: "ADBE", name: "Adobe", exchange: "NYSE"}
+    - {ticker: "AMD", name: "Advanced Micro Devices", exchange: "NYSE"}
+    - {ticker: "AMLP", name: "Alerian MLP ETF", exchange: "NYSE"}
+    - {ticker: "AMZN", name: "Amazon", exchange: "NYSE"}
+    - {ticker: "AVGO", name: "Broadcom", exchange: "NYSE"}
+    - {ticker: "BAC", name: "Bank of America", exchange: "NYSE"}
+    - {ticker: "CAT", name: "Caterpillar", exchange: "NYSE"}
+    - {ticker: "COST", name: "Costco", exchange: "NYSE"}
+    - {ticker: "CRM", name: "Salesforce", exchange: "NYSE"}
+    - {ticker: "CVX", name: "Chevron", exchange: "NYSE"}
+    - {ticker: "DIS", name: "Walt Disney Company", exchange: "NYSE"}
+    - {ticker: "EEM", name: "iShares MSCI Emerging Markets ETF", exchange: "NYSE"}
+    - {ticker: "EMB", name: "iShares JP Morgan EM Bond ETF", exchange: "NYSE"}
+    - {ticker: "EWG", name: "iShares MSCI Germany ETF", exchange: "NYSE"}
+    - {ticker: "EWJ", name: "iShares MSCI Japan ETF", exchange: "NYSE"}
+    - {ticker: "EWZ", name: "iShares MSCI Brazil ETF", exchange: "NYSE"}
+    - {ticker: "FXI", name: "iShares China Large-Cap ETF", exchange: "NYSE"}
+    - {ticker: "GE", name: "GE Aerospace", exchange: "NYSE"}
+    - {ticker: "GLD", name: "SPDR Gold Shares", exchange: "NYSE"}
+    - {ticker: "GOLD", name: "Barrick Gold", exchange: "NYSE"}
+    - {ticker: "GOOGL", name: "Alphabet (Class A)", exchange: "NYSE"}
+    - {ticker: "GS", name: "Goldman Sachs", exchange: "NYSE"}
+    - {ticker: "HD", name: "Home Depot", exchange: "NYSE"}
+    - {ticker: "HYG", name: "iShares iBoxx High Yield Corporate Bond", exchange: "NYSE"}
+    - {ticker: "IBB", name: "iShares Biotechnology ETF", exchange: "NYSE"}
+    - {ticker: "IEF", name: "iShares 7-10 Year Treasury Bond", exchange: "NYSE"}
+    - {ticker: "INDA", name: "iShares MSCI India ETF", exchange: "NYSE"}
+    - {ticker: "ISRG", name: "Intuitive Surgical", exchange: "NYSE"}
+    - {ticker: "IWM", name: "iShares Russell 2000 ETF", exchange: "NYSE"}
+    - {ticker: "JNJ", name: "Johnson & Johnson", exchange: "NYSE"}
+    - {ticker: "JPM", name: "JP Morgan Chase", exchange: "NYSE"}
+    - {ticker: "KBE", name: "SPDR S&P Bank ETF", exchange: "NYSE"}
+    - {ticker: "LIN", name: "Linde plc", exchange: "NYSE"}
+    - {ticker: "LLY", name: "Eli Lilly", exchange: "NYSE"}
+    - {ticker: "LQD", name: "iShares Investment Grade Corporate Bond", exchange: "NYSE"}
+    - {ticker: "MA", name: "Mastercard", exchange: "NYSE"}
+    - {ticker: "META", name: "Meta Platforms", exchange: "NYSE"}
+    - {ticker: "MRK", name: "Merck", exchange: "NYSE"}
+    - {ticker: "MSFT", name: "Microsoft", exchange: "NYSE"}
+    - {ticker: "MUB", name: "iShares National Muni Bond ETF", exchange: "NYSE"}
+    - {ticker: "NEM", name: "Newmont Corporation", exchange: "NYSE"}
+    - {ticker: "NFLX", name: "Netflix", exchange: "NYSE"}
+    - {ticker: "NVDA", name: "NVIDIA", exchange: "NYSE"}
+    - {ticker: "ORCL", name: "Oracle Corporation", exchange: "NYSE"}
+    - {ticker: "PDBC", name: "Invesco Optimum Yield Diversified Commodity Strategy", exchange: "NYSE"}
+    - {ticker: "PFE", name: "Pfizer", exchange: "NYSE"}
+    - {ticker: "PG", name: "Procter & Gamble", exchange: "NYSE"}
+    - {ticker: "QCOM", name: "Qualcomm", exchange: "NYSE"}
+    - {ticker: "RTX", name: "RTX Corporation", exchange: "NYSE"}
+    - {ticker: "SKYY", name: "First Trust Cloud Computing ETF", exchange: "NYSE"}
+    - {ticker: "SLV", name: "iShares Silver Trust", exchange: "NYSE"}
+    - {ticker: "SOXX", name: "iShares Semiconductor ETF", exchange: "NYSE"}
+    - {ticker: "SPGI", name: "S&P Global", exchange: "NYSE"}
+    - {ticker: "TIP", name: "iShares TIPS Bond ETF", exchange: "NYSE"}
+    - {ticker: "TLT", name: "iShares 20+ Year Treasury Bond", exchange: "NYSE"}
+    - {ticker: "TMO", name: "Thermo Fisher Scientific", exchange: "NYSE"}
+    - {ticker: "TSLA", name: "Tesla", exchange: "NYSE"}
+    - {ticker: "UNH", name: "UnitedHealth Group", exchange: "NYSE"}
+    - {ticker: "V", name: "Visa", exchange: "NYSE"}
+    - {ticker: "VGK", name: "Vanguard FTSE Europe ETF", exchange: "NYSE"}
+    - {ticker: "VOO", name: "Vanguard S&P 500 ETF", exchange: "NYSE"}
+    - {ticker: "WMT", name: "Walmart", exchange: "NYSE"}
+    - {ticker: "XLB", name: "Materials Select Sector", exchange: "NYSE"}
+    - {ticker: "XLE", name: "Energy Select Sector", exchange: "NYSE"}
+    - {ticker: "XLF", name: "Financial Select Sector", exchange: "NYSE"}
+    - {ticker: "XLI", name: "Industrial Select Sector", exchange: "NYSE"}
+    - {ticker: "XLK", name: "Technology Select Sector", exchange: "NYSE"}
+    - {ticker: "XLP", name: "Consumer Staples Select Sector", exchange: "NYSE"}
+    - {ticker: "XLU", name: "Utilities Select Sector", exchange: "NYSE"}
+    - {ticker: "XLV", name: "Health Care Select Sector", exchange: "NYSE"}
+    - {ticker: "XLY", name: "Consumer Discretionary Select Sector", exchange: "NYSE"}
+    - {ticker: "XOM", name: "ExxonMobil", exchange: "NYSE"}
 
 data:
   # How many calendar days of history to fetch on initial load for any asset
@@ -464,270 +130,11 @@ scheduler:
       label: "End of Day"
       type: "full"
 
-# Central bank decision-day reaction jobs — see data/scheduler.py's
-# _boj_reaction_job()/_ecb_reaction_job() and analysis/central_bank.py.
-# Mirrors the FOMC reaction job (data/scheduler.py:_fomc_reaction_job()): a
-# fixed-time weekday cron fires every weekday and internally no-ops unless
-# today matches one of the dates below. Unlike FOMC (whose dates are
-# hardcoded in analysis/fomc.py and updated in code), BoJ/ECB dates are kept
-# here in config.yaml so they can be corrected without a deploy — both
-# calendars are published well in advance and rarely move.
-# IMPORTANT: update all three `dates:` lists every January with that year's
-# published meeting calendar (BoJ: boj.or.jp, ECB: ecb.europa.eu).
-central_bank_events:
-  fomc:
-    # Placeholder for structural parity only — NOT currently read by any code.
-    # FOMC decision/minutes dates remain hardcoded in analysis/fomc.py
-    # (_FOMC_DECISION_DATES / _FOMC_MINUTES_DATES) and are updated there, not
-    # here. Left empty rather than removed so this section documents all
-    # three central banks the scheduler watches in one place.
-    reaction_time_utc: "19:05"  # 20:05 BST — see data/scheduler.py:_fomc_reaction_job()
-    dates: []
-
-  boj:
-    label: "Bank of Japan Policy Decision"
-    reaction_time_utc: "03:30"  # 04:30 BST — BoJ decisions land ~02:00-05:00 BST;
-                                 # this catches the post-decision market reaction
-    # BoJ 2026 remaining meeting dates (UTC date of decision day)
-    dates:
-      - "2026-07-31"
-      - "2026-09-19"
-      - "2026-10-29"
-      - "2026-12-19"
-
-  ecb:
-    label: "ECB Monetary Policy Decision"
-    reaction_time_utc: "12:30"  # 13:30 BST — 15 min after the 12:15 BST announcement
-    # ECB 2026 remaining meeting dates
-    dates:
-      - "2026-09-11"
-      - "2026-10-30"
-      - "2026-12-17"
-
-macro:
-  # Get a free FRED API key at https://fred.stlouisfed.org/docs/api/api_key.html
-  # Set via FRED_API_KEY env var (preferred) or leave blank to skip yield-curve scoring.
-  fred_api_key: ""
-
-  # FRED series pulled on each EOD scheduler run and stored in macro_indicators table.
-  # Each entry: label (display name), category (groups the UI), region (which
-  # regional group it feeds into — see signals.macro_regional_weights below and
-  # CLAUDE.md's "Macro module — regional grouping" section), and optional
-  # thresholds. Remove or comment-out a series to stop pulling it; add a new
-  # series_id key to include it. A series with no region field defaults to "us"
-  # (backward compatible with config predating regional grouping).
-  fred_series:
-    DFII10:
-      label: "10Y Real Yield (TIPS)"
-      category: "real_yields"
-      region: "us"
-    T10YIE:
-      label: "10Y Breakeven Inflation"
-      category: "real_yields"
-      region: "us"
-    BAMLH0A0HYM2:
-      label: "High Yield OAS"
-      category: "credit_spreads"
-      region: "us"
-      # Values in % (1.0 = 100 bps). Stress flags fire if current value exceeds threshold
-      # or rises more than the jump threshold within 30 days.
-      stress_threshold_pct: 5.0    # 500 bps
-      stress_30d_jump_pct:  1.0    # 100 bps
-    BAMLC0A0CM:
-      label: "Investment Grade OAS"
-      category: "credit_spreads"
-      region: "us"
-    M2SL:
-      label: "M2 Money Supply"
-      category: "liquidity"
-      region: "us"
-    DPCREDIT:
-      label: "Fed Discount Window"
-      category: "liquidity"
-      region: "us"
-    T10Y2Y:
-      label: "10Y-2Y Yield Spread"
-      category: "yield_curve"
-      region: "us"
-    T10Y3M:
-      label: "10Y-3M Yield Spread"
-      category: "yield_curve"
-      region: "us"
-    # USALOLITONOSTSAM and USSLIND were removed — both discontinued by their
-    # publishers. Replaced with CFNAI (Chicago Fed National Activity Index),
-    # a composite of 85 monthly economic indicators.
-    CFNAI:
-      label: "Chicago Fed National Activity Index"
-      category: "leading_indicators"
-      region: "us"
-    PERMIT:
-      label: "Housing Permits (Total)"
-      category: "leading_indicators"
-      region: "us"
-    DTWEXBGS:
-      label: "Trade Weighted Dollar (Broad)"
-      category: "dollar"
-      region: "us"
-    BOGMBASE:
-      label: "Monetary Base"
-      category: "liquidity"
-      region: "us"
-    DFEDTARU:
-      label: "Fed Funds Rate (Upper Bound)"
-      category: "monetary_policy"
-      region: "us"
-
-    # ── International series (2026-07-07) ────────────────────────────────
-    # Scored in analysis/macro.py:_score_fred_series() same as every US series
-    # above; grouped by region and blended via signals.macro_regional_weights
-    # below instead of counting equally in one flat average. See CLAUDE.md's
-    # "Macro module — regional grouping" section for the full rationale.
-    ECBDFR:
-      label: "ECB Deposit Facility Rate"
-      category: "monetary_policy"
-      region: "europe"
-      # Higher rate = tighter Eurozone conditions = bearish (same "cut is
-      # bullish / hike is bearish" logic as DFEDTARU, applied to the ECB).
-    IRLTLT01DEM156N:
-      label: "Germany 10Y Bund Yield"
-      category: "real_yields"
-      region: "europe"
-      # Not a real yield like DFII10 — no natural "good" level, so this is
-      # scored purely off its own 2-year z-score (context-dependent).
-    IRSTCI01JPM156N:
-      label: "Japan Interbank Overnight Rate (BoJ Proxy)"
-      category: "monetary_policy"
-      region: "asia"
-      # Substituted 2026-07-10 for IRSTCB01JPM156N ("Central Bank Rates:
-      # Total for Japan"), which stopped updating Dec 2023 — replaced with
-      # this interbank rate series. IRSTCI01JPM156N ("Interest Rates:
-      # Immediate Rates: Call Money/Interbank Rate: Total for Japan",
-      # OECD-sourced) is updated monthly and tracks BoJ policy rate
-      # decisions accurately (unlike the stale series, which was still
-      # showing 0.30% against an actual BoJ rate of 1.0%). This is the
-      # actual market call-money rate, not the BoJ's announced target, so
-      # expect it to read slightly below the announced target (e.g. ~0.7%
-      # vs. an announced 1.0% as of 2026-07) rather than match it exactly —
-      # that gap is normal and arguably more representative of real
-      # borrowing costs/carry-trade dynamics than the headline figure. A
-      # BoJ hike raises carry-trade-unwind risk for global risk assets (see
-      # e.g. August 2024); a cut eases it — bearish_high, same direction as
-      # ECBDFR/DFEDTARU. (IRSTCB01JPM156N was itself a substitute for the
-      # originally-proposed "MOPJPY", never a real FRED series ID.)
-    CHNGDPRAPSMEI:
-      label: "China Real GDP Growth (Annual)"
-      category: "leading_indicators"
-      region: "asia"
-      # Substituted 2026-07-10 for CHNGDPNQDSMEI (China nominal GDP,
-      # quarterly), which stopped updating Jul 2023 — replaced with this
-      # OECD annual real-GDP-growth series. CHNGDPRAPSMEI ("National
-      # Accounts: GDP by Expenditure: Constant Prices: GDP: Total for
-      # China") is annual, last updated March 2026 (5.0% growth for 2025).
-      # Scored off year-over-year growth (same "level series, score the
-      # trend" pattern as M2SL/BOGMBASE) — higher growth = bullish for
-      # commodities and EM exposure (FXI, EEM). FRED dates each annual
-      # observation at the *start* of the year it covers (e.g. the "2025"
-      # value is dated 2025-01-01), not its publish date, and OECD's own
-      # publish lag runs ~14-15 months on top of that — so a freshly
-      # published, fully up-to-date observation can display as 500+ days
-      # "old" by simple date arithmetic, confirmed in production 2026-07-10
-      # (the 2025 observation, published ~March 2026, showed as 555 days
-      # old). The per-series staleness override in
-      # analysis/macro.py:_STALE_THRESHOLD_DAYS_SERIES_OVERRIDE is set to
-      # 800 (not the original 400) to comfortably cover a full normal
-      # publish cycle without false-flagging — see that constant's own
-      # comment for the full arithmetic. See
-      # fetch_and_store_macro_indicators() for the fetch-lookback handling.
-
-confluence:
-  # Minimum number of signals that must agree for a BUY/SELL call
-  min_signals_required: 3
-  # Total number of signal modules (regime, trend, mean_reversion, volatility, volume, macro, correlation)
-  total_signal_modules: 7
-  # Per-regime STRONG_BUY / STRONG_SELL boundaries.
-  # BUY / SELL midpoint is fixed at ±0.30 and not regime-dependent.
-  regime_thresholds:
-    TRENDING_BULL:
-      buy_threshold: 0.55      # trend confirmed, standard threshold
-      sell_threshold: 0.70     # harder to go short in bull market
-    TRENDING_BEAR:
-      buy_threshold: 0.70      # harder to go long in bear market
-      sell_threshold: 0.55     # trend confirmed, standard threshold
-    MIXED:
-      buy_threshold: 0.60      # require stronger conviction in uncertain market
-      sell_threshold: 0.60
-    HIGH_VOLATILITY:
-      buy_threshold: 0.70      # require very strong signal in volatile market
-      sell_threshold: 0.70
-    RANGING_LOW_VOL:
-      buy_threshold: 0.55      # mean-reversion regime — standard threshold
-      sell_threshold: 0.55
-
 signals:
-  # Lookback periods (trading days) used across analysis modules
-  short_window: 20
-  medium_window: 50
-  long_window: 200
-  rsi_period: 14
+  # The only key read anywhere in the surviving momentum/crisis-override
+  # system -- analysis/backtest.py:precompute_ticker() and
+  # brokers/trading212.py both read this for ATR-based stop-loss sizing.
   atr_period: 14
-  bollinger_period: 20
-  bollinger_std: 2.0
-  macd_fast: 12
-  macd_slow: 26
-  macd_signal: 9
-  adx_period: 14
-  adx_trend_threshold: 25
-  volume_avg_period: 20
-  # SMA50/SMA200 cross vote: lookback (trading days) used to read the SMA50
-  # slope, and how close (as a % of SMA200) the two lines must be before a
-  # cross moving against its own slope is treated as an imminent flip.
-  ma_cross_slope_window: 10
-  ma_cross_near_pct: 0.02
-  # In TRENDING_BULL suppress SELL/STRONG_SELL; in TRENDING_BEAR suppress BUY/STRONG_BUY
-  regime_direction_filter: true
-  # Require a reversal signal to persist for this many analysis runs (~3 h each)
-  # before EXIT_SIGNAL is confirmed and a T212 position is closed on reversal.
-  # Set to 0 to disable (close immediately on first reversal signal).
-  reversal_confirmation_runs: 2
-  # An HMM regime confidence layer (validating, never replacing, the
-  # rule-based ADX/VIX/SMA200 regime call above) was implemented and fully
-  # backtested — both a downgrade-only gate and a downgrade+upgrade
-  # combination deteriorated every risk-adjusted metric versus the
-  # rule-based-only baseline, likely due to label-switching instability
-  # between two nearly-identical fitted states. Removed entirely; see
-  # CLAUDE.md's "HMM confidence gate — why it's disabled" section for the
-  # full investigation and numbers.
-  # Change point detection (analysis/volatility.py:detect_change_points()) —
-  # identifies structural breaks in a ticker's return-variance regime.
-  cpd_lookback_days: 504    # ~2 trading years of history for change point detection
-  cpd_threshold: 3.0        # critical value for the standardised ICSS statistic (see detect_change_points())
-  cpd_recent_window: 90     # days — a change point within this window is flagged as "recent"
-  # ATR-based stop loss bounds (analysis/volatility.py:_atr_fallback_stop()).
-  # A GARCH(1,1)-based dynamic stop was implemented and backtested at two
-  # calibrations (a flat multiplier, then per-holding-period bucket
-  # multipliers) and underperformed this ATR stop on every risk-adjusted
-  # metric both times — see CLAUDE.md's "GARCH stop loss" section. Removed
-  # entirely; the ATR stop below is what remains in production.
-  min_stop_pct: 1.0             # floor: stop never tighter than 1% of entry price
-  max_stop_pct: 25.0            # ceiling: stop never wider than 25% of entry price
-
-  # Regional weighting for the macro module's composite score (2026-07-07).
-  # analysis/macro.py groups every scored FRED series (+ VIX, always "us") by
-  # its macro.fred_series.<id>.region field, averages each region, then blends
-  # the regional averages using these weights — proportional to actual
-  # portfolio exposure (predominantly US, with VGK/EWG-style European exposure
-  # and FXI/EEM/commodity-linked Asian exposure) rather than every series
-  # counting equally regardless of region. Must sum to 1.0. A region with no
-  # available data (e.g. FRED unreachable for international series) is
-  # dropped and its weight redistributed proportionally across the remaining
-  # regions — see analysis/macro.py:_regional_macro_score(). Applies to both
-  # compute_macro()'s per-ticker score (feeds the confluence macro module —
-  # no new confluence weight needed, the macro module's total weight is
-  # unchanged) and get_macro_dashboard()'s composite health score.
-  macro_regional_weights:
-    us: 0.60
-    europe: 0.25
-    asia: 0.15
 
 notifications:
   email:
@@ -741,294 +148,53 @@ notifications:
       - "you@example.com"
     alert_cooldown_hours: 8  # Minimum hours between auto-sent alert emails
 
-  weekly_summary:
-    enabled: true           # set false to disable without touching email.enabled
-
 backtest:
   # Notional account size VaR position sizing uses inside simulate_trades().
   # simulate_trades() runs one ticker at a time with no shared, compounding
-  # cross-ticker portfolio balance (see CLAUDE.md's "VaR position sizing"
-  # section), so this stays constant for every entry across a whole run
-  # rather than growing/shrinking the way a real account would.
+  # cross-ticker portfolio balance, so this stays constant for every entry
+  # across a whole run rather than growing/shrinking the way a real account
+  # would.
   starting_capital_gbp: 50000
-  # Exit conditions for trade simulation
-  max_holding_days: 30           # default max hold — equities, ETFs, commodities
-  max_holding_days_forex: 5      # FX pairs (ticker ends with =X) — swap costs make long holds expensive
-  max_holding_days_crypto: 14    # crypto (ticker ends with -USD) — high volatility, shorter cycles
-  max_holding_days_bonds: 45     # bond ETFs (TLT, IEF, etc.) — slow-moving, longer trend duration
-  atr_stop_multiplier: 2.0       # stop loss = entry ± N × ATR (matches live system)
+  atr_stop_multiplier: 2.0       # stop loss = entry +/- N x ATR (matches live system)
+  # Fallback max holding days -- analysis/universe.py:get_max_holding_days()
+  # uses this only for a ticker with no trading212_invest.instrument_mapping
+  # entry (e.g. a ticker only ever exercised inside a backtest, not currently
+  # live-traded).
+  max_holding_days: 30
 
-  # Walk-forward validation window settings
-  walk_forward_months: 6         # training window size in months
-  walk_forward_step: 1           # step between windows in months
-
-  # Entry gating for analysis/backtest.py:simulate_trades(). Kept separate from
-  # trading212_invest/trading212_stocks because simulated backtest trades can go
-  # LONG or SHORT, unlike those two long-only cash-account automation paths.
-  # These keys previously lived under a virtual_trading: section that also drove
-  # live automated paper trading; that live automation was removed, but
-  # simulate_trades() still needs its own entry-gating config, so these values
-  # moved here rather than being deleted — see analysis/backtest.py for the
-  # read site and CLAUDE.md's "Backtesting engine" section for detail.
-  entry_signal: "STRONG_BUY"     # global default — STRONG_BUY = strict; BUY = looser entry
-  # Per-regime override of entry_signal, keyed by the Regime enum name (see analysis/regime.py).
-  # All five regimes are STRONG_BUY. TRENDING_BULL/TRENDING_BEAR were originally set to the
-  # looser BUY threshold (backtesting on a short sample showed genuine edge there: PF 0.631 /
-  # PF 0.202 respectively, vs MIXED's PF 0.123). A full 10-year backtest after that change
-  # showed why that was wrong: simulate_trades()'s signal-reversal exit has always accepted
-  # plain SELL/BUY (not just STRONG_SELL/STRONG_BUY), so pairing a loosened BUY entry with that
-  # already-loose exit created high-churn whipsaw trading in trending regimes — TRENDING_BULL
-  # and TRENDING_BEAR are only 25% of all regime-days but produced 90% of all simulated trades
-  # (2,899 of 3,231), dragging win rate to 42.9%, profit factor to 1.18, and max drawdown to
-  # -99.3% (vs 757 trades / 41.2% / PF 1.35 / -85.4% under STRONG_BUY-only everywhere). Reverting
-  # to uniform STRONG_BUY (current state) reproduced that exact 757/41.2%/1.35/-85.4% baseline
-  # on a full-history production backtest, confirming this config is a no-op vs. pre-feature.
-  # A regime with no entry here falls back to entry_signal above.
-  entry_signal_overrides:
-    MIXED: STRONG_BUY
-    RANGING_LOW_VOL: STRONG_BUY
-    HIGH_VOLATILITY: STRONG_BUY
-    TRENDING_BULL: STRONG_BUY
-    TRENDING_BEAR: STRONG_BUY
-  # Regime entry gate — checked before entry_signal_overrides, not instead of it.
-  # Only TRENDING_BULL is allowed; every other regime is blocked because none of
-  # them has demonstrated edge in a full 10-year backtest (2019-present, tradeable
-  # assets, 404 trades under the pre-gate TRENDING_BULL/TRENDING_BEAR/HIGH_VOLATILITY
-  # config — re-verified on production after this gate shipped):
-  #   - TRENDING_BULL: profit factor 1.78, +1.14% avg return, -35.1% max drawdown —
-  #     the standout regime by a wide margin on every metric. The only one allowed.
-  #   - TRENDING_BEAR: profit factor 1.09, +0.19% avg return (barely above
-  #     breakeven), -46.9% max drawdown — no meaningful edge next to TRENDING_BULL,
-  #     so bear-regime entries are blocked by design.
-  #   - MIXED: 56.8% of all regime-days over 10 years but only a 37.5% win rate
-  #     and -91.26% max drawdown — no demonstrable edge.
-  #   - RANGING_LOW_VOL: only 1-2 trades of backtest data — too little to trust
-  #     either way, treated as unknown rather than "safe by omission".
-  #   - HIGH_VOLATILITY: excluded on the same "not proven" basis — no evidence of
-  #     edge, and TRENDING_BULL is the only regime that has actually shown one.
-  # (Earlier notes here cited profit factor 0.613/0.10 for TRENDING_BULL/BEAR —
-  # those numbers were wrong; the 1.78/1.09 figures above are the verified ones
-  # from re-running run_backtest() against production data.)
-  # A regime not in this list is blocked; if allowed_entry_regimes is absent
-  # entirely, all regimes are allowed (matches pre-this-feature behaviour). The
-  # exit phase is never affected by this gate — open positions always continue
-  # to be monitored and closed normally.
-  allowed_entry_regimes:
-    - TRENDING_BULL
-
+# Live execution config for the momentum + crisis-override system -- see
+# CLAUDE.md's "V2 architecture -- phased rebuild" section for the full
+# validation history behind this design (a single 12-month-momentum signal,
+# long/flat, no regime classifier, plus a rare-firing single-day >=7% crisis
+# circuit breaker).
 trading212_invest:
-  enabled: false           # RETIRED 2026-07-31 -- superseded by trading212_v2 below.
-                           # Code kept intact (not deleted) but disabled at every call
-                           # site (maybe_place_t212_orders() / maybe_exit_t212_positions()
-                           # both early-return on this flag) -- confirmed zero open
-                           # positions at cutover time. Do not re-enable alongside
-                           # trading212_v2.enabled: true -- see that section's own
-                           # comment for the mutual-exclusion invariant this maintains.
-  live: false              # NEVER set true until demo-validated — place_market_order() blocks it
-  long_only: true          # T212 Invest is a cash account — no shorting allowed
-  max_position_gbp: 2500   # Hard ceiling GBP limit per order — unchanged; VaR sizing never exceeds this
-  max_total_deployed: 0.5  # Never deploy more than 50% of account value
-  max_open_positions: 10    # Maximum simultaneous ETF positions — prevents over-concentration regardless of deployment cap
-  # Position sizing — "var" scales position size inversely with the ticker's own
-  # historical volatility so the expected holding-period loss at var_confidence
-  # stays within max_risk_pct of account value; "fixed" uses max_position_gbp
-  # flat for every ticker (the pre-VaR behaviour) — useful for testing and as a
-  # safety fallback. See analysis/volatility.py:compute_var_position_size().
-  position_sizing: var
-  var_confidence: 0.95      # Historical VaR confidence level
-  var_lookback_days: 252    # Trading days of price history used for the VaR estimate (~1 year)
-  max_risk_pct: 0.01        # Max % of account value the expected holding-period loss may reach
-  min_position_gbp: 50      # Floor — VaR sizing never sizes below this regardless of volatility
-  entry_signal: STRONG_BUY # global default — always overridden by entry_signal_overrides below in practice, but STRONG_BUY reflects actual behaviour; BUY = enter on BUY or STRONG_BUY, STRONG_BUY = STRONG_BUY only
-  # Per-regime override of entry_signal — same rationale and Regime-enum keys as
-  # backtest.entry_signal_overrides above, kept in sync so both automation
-  # paths apply the same conviction threshold per regime. See that block's comment
-  # for why TRENDING_BULL/TRENDING_BEAR are STRONG_BUY rather than the looser BUY.
-  entry_signal_overrides:
-    MIXED: STRONG_BUY
-    RANGING_LOW_VOL: STRONG_BUY
-    HIGH_VOLATILITY: STRONG_BUY
-    TRENDING_BULL: STRONG_BUY
-    TRENDING_BEAR: STRONG_BUY
-  # Regime entry gate — same rationale and keys as backtest.allowed_entry_regimes
-  # above, kept in sync (only TRENDING_BULL — TRENDING_BEAR's profit factor of 1.09 has
-  # no meaningful edge next to TRENDING_BULL's 1.78). Checked before entry_signal_overrides;
-  # the exit phase is never affected — existing T212 positions continue to exit normally
-  # in any regime.
-  allowed_entry_regimes:
-    - TRENDING_BULL
-  # Mechanical, non-predictive risk control: scale new BUY position sizes down while
-  # the account is in drawdown from its own high water mark, independent of regime or
-  # signal strength. Three graduated tiers rather than a single cliff-edge threshold —
-  # position size steps down progressively as drawdown deepens. See
-  # analysis/risk.py:compute_drawdown_scale_factor() for the mechanism and
-  # CLAUDE.md's "Drawdown-based position scaling" section for the rationale and
-  # backtest validation.
-  drawdown_scaling:
-    enabled: true
-    lookback_days: 90           # peak portfolio value lookback window (see analysis/risk.py docstring for the current monotonic-HWM implementation note)
-    threshold_1: 0.05           # 5% drawdown from peak -> scale to 75% of normal size
-    scale_factor_1: 0.75
-    threshold_2: 0.10           # 10% drawdown from peak -> scale to 50% of normal size
-    scale_factor_2: 0.50
-    threshold_3: 0.15           # 15% drawdown from peak -> scale to 25% of normal size
-    scale_factor_3: 0.25
-    recovery_buffer: 0.02       # must recover past a tier's own boundary by this much before scaling steps back down (hysteresis — prevents oscillation right at a threshold)
-  exit_signal: SELL        # SELL = exit on SELL or STRONG_SELL; STRONG_SELL = STRONG_SELL only
-  max_holding_days: 90     # Backstop time limit (3× CFD limit — no leverage/swap costs)
-  exit_on_signal: true     # Primary exit = signal drops to NEUTRAL for 2 consecutive runs
-  time_limit_as_backstop: true  # Time limit is a backstop only, not the primary exit
-  # UCITS ETF equivalents for EU-regulated T212 Invest accounts.
-  # Key = internal research ticker; value = {ticker: T212 instrument ID, currency: ISO 4217}.
-  # Only tickers listed here are eligible for automated T212 Invest orders.
-  # currency is used for GBP conversion in the dashboard; it is overridden by the
-  # currencyCode field from the T212 instruments API when a new order is placed.
-  ucits_mapping:
-    VOO:  {ticker: I50Dl_EQ,  currency: USD}  # Vanguard S&P 500 UCITS ETF
-    TLT:  {ticker: IDGAl_EQ,  currency: USD}  # iShares $ Treasury Bond 20+yr UCITS ETF
-    IEF:  {ticker: TREXl_EQ,  currency: USD}  # iShares $ Treasury Bond 7-10yr UCITS ETF
-    HYG:  {ticker: XUHEd_EQ,  currency: USD}  # iShares $ High Yield Corp Bond UCITS ETF
-    LQD:  {ticker: VDCPl_EQ,  currency: USD}  # Vanguard USD Corporate Bond UCITS ETF
-    GLD:  {ticker: WGLDl_EQ,  currency: USD}  # Invesco Physical Gold ETC
-    SLV:  {ticker: PHAGa_EQ,  currency: USD}  # iShares Physical Silver ETC
-    XLK:  {ticker: XDWTl_EQ,  currency: USD}  # Xtrackers MSCI World IT UCITS ETF
-    XLF:  {ticker: STZXs_EQ,  currency: USD}  # SPDR S&P US Financials Select Sector UCITS ETF
-    XLE:  {ticker: SXLEl_EQ,  currency: USD}  # SPDR S&P US Energy Select Sector UCITS ETF
-    XLV:  {ticker: IUHCl_EQ,  currency: USD}  # iShares S&P 500 Health Care Sector UCITS ETF
-    SOXX: {ticker: SEMGl_EQ,  currency: USD}  # iShares MSCI Global Semiconductors UCITS ETF
-    EWJ:  {ticker: SGJPl_EQ,  currency: USD}  # SPDR MSCI Japan UCITS ETF
-    EWG:  {ticker: VGERd_EQ,  currency: EUR}  # Vanguard FTSE Developed Europe UCITS ETF
-    EEM:  {ticker: JEEMd_EQ,  currency: USD}  # JPMorgan BetaBuilders EM Equity UCITS ETF
-    EWZ:  {ticker: IBZLa_EQ,  currency: USD}  # iShares MSCI Brazil UCITS ETF
-    INDA: {ticker: IINDl_EQ,  currency: USD}  # iShares MSCI India UCITS ETF
-    FXI:  {ticker: LCCGl_EQ,  currency: EUR}  # Lyxor China Enterprise (HSCEI) UCITS ETF
-    VGK:  {ticker: H4ZEd_EQ,  currency: EUR}  # HSBC MSCI Europe UCITS ETF
-    SKYY: {ticker: SKYEa_EQ,  currency: USD}  # First Trust Cloud Computing UCITS ETF (Acc)
-    XLI:  {ticker: SXLIl_EQ,  currency: USD}  # SPDR S&P U.S. Industrials Select Sector UCITS ETF (Acc)
-    XLY:  {ticker: SXLYl_EQ,  currency: USD}  # SPDR S&P U.S. Consumer Disc Select Sector UCITS ETF (Acc)
-    XLP:  {ticker: SXLPl_EQ,  currency: USD}  # SPDR S&P U.S. Consumer Staples Select Sector UCITS ETF (Acc)
-    XLU:  {ticker: SXLUl_EQ,  currency: USD}  # SPDR S&P U.S. Utilities Select Sector UCITS ETF (Acc)
-    XLB:  {ticker: SXLBl_EQ,  currency: USD}  # SPDR S&P U.S. Materials Select Sector UCITS ETF (Acc)
-    KBE:  {ticker: BNKTa_EQ,  currency: USD}  # iShares S&P US Banks UCITS ETF (Dist)
-    PDBC: {ticker: XCMCd_EQ,  currency: EUR}  # Xtrackers Bloomberg Commodity Swap (Acc)
-    EMB:  {ticker: IEMBl_EQ,  currency: USD}  # iShares J.P. Morgan USD EM Bond (Dist)
-    TIP:  {ticker: IBC5d_EQ,  currency: EUR}  # iShares USD TIPS (Acc)
-    AMLP: {ticker: SMLPd_EQ,  currency: EUR}  # Invesco Morningstar US Energy Infrastructure MLP (Acc)
-    MUB:  {ticker: MUNIl_EQ,  currency: USD}  # Invesco US Municipal Bond (Dist)
-    IBB:  {ticker: FBTUl_EQ,  currency: USD}  # First Trust NYSE Arca Biotechnology (Acc)
-    IWM:  {ticker: RU2Kl_EQ,  currency: GBP}  # iShares Russell 2000 UCITS ETF (Swap, Acc)
-
-# Separate automation path for direct US stock trading (watchlist.us_large_cap), alongside
-# the UCITS ETF automation above. Kept as its own config block — not folded into
-# trading212_invest — because stocks carry materially higher idiosyncratic risk than
-# diversified ETFs (single-company earnings/news risk vs a basket), so they get smaller
-# positions, a tighter deployment cap, a shorter holding window, and a stricter regime gate.
-# See brokers/trading212.py:maybe_place_stock_orders().
-#
-# EARNINGS GAP RISK: the system does not check earnings calendars. A stop loss can be
-# gapped through overnight on an earnings announcement — the fill will be at the next
-# available price, not the stop price. This is a materially larger risk for individual
-# stocks than for ETFs (a single company's earnings miss moves the stock far more than
-# any one constituent moves a diversified ETF) and is not currently mitigated in code.
-trading212_stocks:
-  enabled: false                 # RETIRED 2026-07-31 -- superseded by trading212_v2 below.
-                                  # Same rationale as trading212_invest.enabled above:
-                                  # code kept intact, disabled at every call site, zero
-                                  # open positions confirmed at cutover time.
-  live: false                    # NEVER set true until demo-validated — place_market_order() blocks it
-  long_only: true
-  max_position_gbp: 1000         # smaller than ETFs (2500) — higher individual stock volatility; hard ceiling, VaR sizing never exceeds this
-  max_total_deployed: 0.3        # tighter cap than ETFs (0.5)
-  max_open_positions: 10          # Maximum simultaneous stock positions — keeps portfolio manageable during demo validation
-  # Position sizing — identical mechanism to trading212_invest above, sized
-  # independently here since individual stocks (e.g. NVDA) can be materially
-  # more volatile than diversified ETFs, or than each other (e.g. NVDA vs WMT)
-  # — VaR sizing scales each stock's position down/up to match its own risk
-  # rather than giving every stock the same flat max_position_gbp allocation.
-  position_sizing: var
+  enabled: true
+  live: false               # NEVER set true -- place_market_order() blocks it in code regardless
+  max_total_deployed: 0.5
+  max_open_positions: 20
+  # Hard ceiling GBP limit per order -- VaR sizing never exceeds this,
+  # regardless of ticker (unlike max_holding_days, position sizing does not
+  # distinguish ETF vs stock -- one flat ceiling for the whole universe).
+  max_position_gbp: 2500
+  # Position sizing -- Historical VaR, scaled to each ticker's own holding
+  # period via the square-root-of-time rule
+  # (analysis/volatility.py:_var_position_size_core()) -- position size
+  # scales inversely with a ticker's own volatility rather than giving every
+  # ticker the same flat allocation.
   var_confidence: 0.95
   var_lookback_days: 252
   max_risk_pct: 0.01
   min_position_gbp: 50
-  entry_signal: STRONG_BUY       # higher bar given idiosyncratic stock risk (no BUY-threshold looser option)
-  exit_signal: SELL
-  max_holding_days: 30           # more active than ETFs (90d) but not forex-short
-  exit_on_signal: true
-  time_limit_as_backstop: true
-  # Regime entry gate — same TRENDING_BULL-only rationale as trading212_invest and
-  # backtest above (see backtest.allowed_entry_regimes for the full
-  # per-regime backtest breakdown); all three sections are aligned on this.
-  allowed_entry_regimes:
-    - TRENDING_BULL
-  entry_signal_overrides:
-    TRENDING_BULL: STRONG_BUY
-  # Mechanical drawdown-based position scaling — identical mechanism and shape as
-  # trading212_invest.drawdown_scaling above, sized independently here in case stock
-  # risk tolerance ever needs to diverge from the ETF path (both currently ship with
-  # identical values, matching the existing VaR-sizing precedent in this section).
-  drawdown_scaling:
-    enabled: true
-    lookback_days: 90
-    threshold_1: 0.05
-    scale_factor_1: 0.75
-    threshold_2: 0.10
-    scale_factor_2: 0.50
-    threshold_3: 0.15
-    scale_factor_3: 0.25
-    recovery_buffer: 0.02
-  # Fractional share support — if the T212 instruments API reports maxQuantityPrecision > 0
-  # for a ticker, orders are sized as a decimal quantity (position_gbp converted to USD via
-  # the live GBPUSD rate, divided by price, rounded to that precision) instead of being
-  # floored to a whole share. Falls back to the whole-share floor/minTradeQuantity guard
-  # (the same pattern trading212_invest uses for UCITS ETFs) when precision is 0 or absent.
-  fractional_shares: true
-  # No ucits_mapping needed — stock tickers map directly to T212 instrument names (e.g.
-  # "AAPL" -> "AAPL"). Set trading212_instrument on a watchlist entry only where the T212
-  # instrument name differs from the research ticker.
+  # Max holding days -- analysis/universe.py:get_max_holding_days() dispatches
+  # on each ticker's own instrument_mapping is_etf flag below: ETFs get the
+  # longer 90d backstop, individual stocks get the tighter 30d backstop
+  # (higher idiosyncratic risk than a diversified ETF). A ticker with no
+  # mapping entry falls back to backtest.max_holding_days.
+  max_holding_days: 90
+  stock_max_holding_days: 30
 
-# analysis/v2's execution path — a single momentum signal (12-month trailing
-# return, long/flat, no regime classifier) plus a rare-firing crisis circuit
-# breaker, replacing trading212_invest/trading212_stocks above (V1 — retired
-# 2026-07-31, code kept intact but enabled: false, not deleted). See CLAUDE.md's
-# "V2 architecture — phased rebuild" section for the full validation history.
-#
-# VaR position sizing is deliberately NOT duplicated here — brokers/trading212_v2.py
-# reuses trading212_invest's var_confidence/var_lookback_days/max_risk_pct/
-# min_position_gbp/max_position_gbp verbatim (section="trading212_invest"), because
-# that is what analysis/v2/backtest.py:simulate_trades() itself reads
-# (var_cfg = config.get("trading212_invest", {})) — matching this exactly, for both
-# the ETF and stock legs of V2's universe alike, is what "exactly mirrors the
-# validated backtest" means for position sizing. get_max_holding_days() is reused
-# unmodified too, for the same reason (see that function's per-ticker precedence
-# in analysis/regime.py — V2's 33 ETFs and 37 of its 40 stocks already match a
-# trading212_invest.ucits_mapping / watchlist.us_large_cap entry from V1, so they
-# get the exact same ETF/stock-specific holding limit; TSLA/META/GOOGL (deliberately
-# NOT added to V1's watchlist — see CLAUDE.md's V2 Stage 1 section) fall through to
-# the generic backtest.max_holding_days default, exactly as they did inside the
-# validated backtest run itself).
-trading212_v2:
-  enabled: true             # LIVE (demo) as of 2026-07-31 cutover -- Steps 1-4 (instrument
-                            # mapping verified live, tables built, module built and tested,
-                            # dry-run reproducibility check passed 365/365 + 52/52) all
-                            # passed cleanly first. trading212_invest/trading212_stocks
-                            # above are both disabled in lockstep -- the two systems must
-                            # never both be able to place orders at the same time, since
-                            # they share one T212 demo account and several overlapping
-                            # instrument IDs (e.g. VOO's I50Dl_EQ). This flag pairing is
-                            # the entire mutual-exclusion mechanism; there is no additional
-                            # code-level lock beyond each path's own `enabled` early-return.
-  live: false               # NEVER set true — same hard block as trading212_invest/trading212_stocks
-  max_total_deployed: 0.5   # V2 has no ETF/stock split — one universe, one cap
-  max_open_positions: 20    # broader universe than either V1 path (73 tickers vs 33/37) — a higher ceiling than V1's 10, still far below "unlimited"
-  # T212 instrument mapping for all 73 analysis/v2 tickers, verified directly against
-  # the live GET /equity/metadata/instruments endpoint on 2026-07-31 (not just trusted
-  # from this file) — see CLAUDE.md's V2 live-execution section for the verification
-  # method and the two identity-mapping exceptions found (META, RTX).
-  #
-  # ETF legs (33) reuse trading212_invest.ucits_mapping's own verified T212 IDs
-  # verbatim — same instrument, same UCITS wrapper, no reason to re-derive them.
   instrument_mapping:
-    # --- ETFs (33) — identical to trading212_invest.ucits_mapping above ---
+    # --- ETFs (33) ---
     VOO:  {ticker: I50Dl_EQ,  currency: USD, is_etf: true}
     TLT:  {ticker: IDGAl_EQ,  currency: USD, is_etf: true}
     IEF:  {ticker: TREXl_EQ,  currency: USD, is_etf: true}
@@ -1075,7 +241,7 @@ trading212_v2:
     CVX:   {ticker: CVX_US_EQ,   currency: USD, is_etf: false}
     DIS:   {ticker: DIS_US_EQ,   currency: USD, is_etf: false}
     GE:    {ticker: GE_US_EQ,    currency: USD, is_etf: false}
-    GOLD:  {ticker: GOLD_US_EQ,  currency: USD, is_etf: false}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/v2/universe.py docstring)
+    GOLD:  {ticker: GOLD_US_EQ,  currency: USD, is_etf: false}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/universe.py docstring)
     GOOGL: {ticker: GOOGL_US_EQ, currency: USD, is_etf: false}
     GS:    {ticker: GS_US_EQ,    currency: USD, is_etf: false}
     HD:    {ticker: HD_US_EQ,    currency: USD, is_etf: false}
@@ -1103,13 +269,3 @@ trading212_v2:
     XOM:   {ticker: XOM_US_EQ,   currency: USD, is_etf: false}
     META:  {ticker: FB_US_EQ,    currency: USD, is_etf: false}  # T212 never renamed this instrument's own ticker after Facebook->Meta; shortName/name confirm it's the right instrument (name: "Meta Platforms")
     RTX:   {ticker: UTX_US_EQ,   currency: USD, is_etf: false}  # T212 retains the pre-merger "UTX" (United Technologies) instrument ticker; shortName/name confirm it (shortName: "RTX", name: "RTX")
-
-learning:
-  enabled: true
-  # Minimum closed trades required before weights are adjusted for the first time
-  min_trades_before_adjustment: 20
-  # Recalculate weights every N closed trades after the minimum is reached
-  weight_update_frequency: 10
-  # Clamp per-indicator weight to this range after learning adjustment
-  max_single_weight: 0.30
-  min_single_weight: 0.05

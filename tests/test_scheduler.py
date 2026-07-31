@@ -1,13 +1,13 @@
-"""Tests for the missed-EOD catch-up check in data/scheduler.py.
+"""Tests for data/scheduler.py.
 
-_check_missed_eod_run() is a startup-time safety net: if the real 21:30 UTC
-EOD job didn't fire (e.g. the service was mid-deploy/restart), and we're
-still within the short post-EOD window, it triggers the analysis pipeline
-once in a background thread so signals/orders aren't left on stale state
-until the next scheduled job fires naturally. All external calls (metadata
-store, ticker list, threading) are mocked so no real DB, network call, or
-background thread is touched — the pipeline call is captured synchronously
-via a fake Thread that runs its target immediately.
+Covers the missed-EOD catch-up check, the Monday pre-market stale-order
+cancellation job, job registration (Monday-only vs Tue-Fri pre-market,
+membership refresh), and the simplified _run_analysis_pipeline() /
+_trade_alert_job() bodies -- both of which now just delegate straight to
+brokers/trading212.py's maybe_place_orders()/poll_placed_orders()/
+maybe_exit_positions(), since there is no separate "analysis pipeline" step
+in the momentum + crisis-override system (see data/scheduler.py's module
+docstring).
 """
 
 from datetime import datetime, timedelta
@@ -142,24 +142,24 @@ def test_no_missed_eod_on_fresh_install(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Monday pre-market job — stale weekend order cancellation + fresh analysis.
+# Monday pre-market job — stale weekend order cancellation + fresh order run.
 #
-# _monday_premarket_job() cancels any PLACED BUY order in t212_invest_orders
-# older than scheduler._STALE_ORDER_HOURS (30h — comfortably covers a Friday
-# 21:30 UTC order, ~33.5h old by Monday 07:00) before re-running the analysis
-# pipeline. All DB reads/writes go through the db_engine fixture's in-memory
-# SQLite database (tests/conftest.py); the Trading212 HTTP client is mocked
-# entirely via pytest-mock so no real API call is ever made.
+# _monday_premarket_job() cancels any PLACED BUY order in invest_orders older
+# than scheduler._STALE_ORDER_HOURS (30h — comfortably covers a Friday 21:30
+# UTC order, ~33.5h old by Monday 07:00) before re-running the order pipeline.
+# All DB reads/writes go through the db_engine fixture's in-memory SQLite
+# database (tests/conftest.py); the Trading212 HTTP client is mocked entirely
+# via pytest-mock so no real API call is ever made.
 # ---------------------------------------------------------------------------
 
 from sqlalchemy.orm import Session  # noqa: E402
 
-from data.database import T212InvestOrder  # noqa: E402
+from data.database import InvestOrder  # noqa: E402
 
 
 def _seed_order(engine, *, hours_old: float, order_id="t212-order-1", ticker="AAPL", status="PLACED"):
     with Session(engine) as session:
-        session.add(T212InvestOrder(
+        session.add(InvestOrder(
             order_id=order_id,
             ticker=ticker,
             t212_ticker=ticker,
@@ -203,7 +203,7 @@ def test_monday_premarket_cancels_stale_order(db_engine, monkeypatch, mocker):
 
     mock_client.cancel_order.assert_called_once_with("stale-order")
     with Session(db_engine) as session:
-        order = session.query(T212InvestOrder).filter_by(order_id="stale-order").one()
+        order = session.query(InvestOrder).filter_by(order_id="stale-order").one()
     assert order.status == "CANCELLED"
     assert order.cancelled_at is not None
 
@@ -218,7 +218,7 @@ def test_monday_premarket_does_not_cancel_recent_order(db_engine, monkeypatch, m
 
     mock_client.cancel_order.assert_not_called()
     with Session(db_engine) as session:
-        order = session.query(T212InvestOrder).filter_by(order_id="recent-order").one()
+        order = session.query(InvestOrder).filter_by(order_id="recent-order").one()
     assert order.status == "PLACED"
 
 
@@ -240,7 +240,7 @@ def test_monday_premarket_cutoff_comparison_correct_when_dates_match(db_engine, 
     monkeypatch.setattr(scheduler, "datetime", _frozen_utcnow(datetime(2026, 7, 6, 7, 0, 0)))
 
     with Session(db_engine) as session:
-        session.add(T212InvestOrder(
+        session.add(InvestOrder(
             order_id="same-day-not-stale",
             ticker="AAPL", t212_ticker="AAPL", direction="BUY", quantity=5.0,
             status="PLACED", account_type="DEMO",
@@ -252,13 +252,13 @@ def test_monday_premarket_cutoff_comparison_correct_when_dates_match(db_engine, 
 
     mock_client.cancel_order.assert_not_called()
     with Session(db_engine) as session:
-        order = session.query(T212InvestOrder).filter_by(order_id="same-day-not-stale").one()
+        order = session.query(InvestOrder).filter_by(order_id="same-day-not-stale").one()
     assert order.status == "PLACED"
 
 
-def test_monday_premarket_calls_analysis_pipeline_after_cancellation(db_engine, monkeypatch, mocker):
-    """After stale-order cancellation, the analysis-only pipeline runs so
-    signals/orders are re-evaluated fresh against Friday's closing prices."""
+def test_monday_premarket_calls_order_pipeline_after_cancellation(db_engine, monkeypatch, mocker):
+    """After stale-order cancellation, the order-logic-only pipeline runs so
+    entries/exits are re-evaluated fresh against Friday's closing prices."""
     _, pipeline_calls = _monday_mocks(monkeypatch, mocker)
     _seed_order(db_engine, hours_old=33.5)
 
@@ -271,7 +271,7 @@ def test_monday_premarket_calls_analysis_pipeline_after_cancellation(db_engine, 
 
 
 def test_monday_premarket_runs_pipeline_even_with_no_stale_orders(db_engine, monkeypatch, mocker):
-    """No PLACED orders at all -> cancellation is a no-op, but the analysis
+    """No PLACED orders at all -> cancellation is a no-op, but the order
     pipeline still runs (Monday morning re-evaluation isn't conditional on
     there being anything to cancel)."""
     mock_client, pipeline_calls = _monday_mocks(monkeypatch, mocker)
@@ -314,8 +314,8 @@ def test_scheduler_registers_monday_job_mon_only_and_premarket_tue_fri(monkeypat
         scheduler.stop_scheduler()
 
 
-def test_scheduler_registers_v2_membership_refresh_job(monkeypatch):
-    """start_scheduler() must actually register v2_membership_refresh on the
+def test_scheduler_registers_membership_refresh_job(monkeypatch):
+    """start_scheduler() must actually register membership_refresh on the
     schedule -- not just leave refresh_membership_from_source() callable in
     isolation. Fires 15 minutes ahead of the 21:30 EOD job, weekdays only."""
     fake_config = {
@@ -334,9 +334,9 @@ def test_scheduler_registers_v2_membership_refresh_job(monkeypatch):
 
     sched = scheduler.start_scheduler()
     try:
-        job = sched.get_job("v2_membership_refresh")
-        assert job is not None, "v2_membership_refresh was not registered"
-        assert job.func is scheduler._v2_membership_refresh_job
+        job = sched.get_job("membership_refresh")
+        assert job is not None, "membership_refresh was not registered"
+        assert job.func is scheduler._membership_refresh_job
 
         def field(name: str) -> str:
             return next(str(f) for f in job.trigger.fields if f.name == name)
@@ -348,79 +348,72 @@ def test_scheduler_registers_v2_membership_refresh_job(monkeypatch):
         scheduler.stop_scheduler()
 
 
-def test_v2_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
+def test_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
     mock_refresh = mocker.patch(
-        "analysis.v2.universe.refresh_membership_from_source",
+        "analysis.universe.refresh_membership_from_source",
         return_value={"checked": 40, "changed": [{"ticker": "XYZ", "old": [], "new": [("2026-01-01", "2026-12-31")]}], "errors": []},
     )
     with caplog.at_level("INFO"):
-        scheduler._v2_membership_refresh_job()
+        scheduler._membership_refresh_job()
     mock_refresh.assert_called_once()
     assert any("XYZ" in r.message for r in caplog.records)
 
 
-def test_v2_membership_refresh_job_never_raises_on_failure(mocker):
+def test_membership_refresh_job_never_raises_on_failure(mocker):
     mocker.patch(
-        "analysis.v2.universe.refresh_membership_from_source",
+        "analysis.universe.refresh_membership_from_source",
         side_effect=RuntimeError("network down"),
     )
-    scheduler._v2_membership_refresh_job()  # must not raise
+    scheduler._membership_refresh_job()  # must not raise
 
 
-def test_run_analysis_pipeline_calls_v2_order_placement(mocker):
-    """_run_analysis_pipeline() must call V2's order placement alongside V1's
-    two paths on every scheduled analysis run -- not just leave
-    maybe_place_v2_orders() callable in isolation."""
-    mocker.patch("data.scheduler.run_analysis")
-    mocker.patch("data.scheduler.generate_signals")
+# ---------------------------------------------------------------------------
+# _run_analysis_pipeline() — now just stamps last_run_type and delegates to
+# brokers.trading212.maybe_place_orders(). There is no separate signal-
+# generation step to mock: momentum/crisis/membership are all computed on
+# demand inside maybe_place_orders() itself.
+# ---------------------------------------------------------------------------
+
+def test_run_analysis_pipeline_calls_order_placement(mocker):
     mocker.patch("data.scheduler.set_metadata")
-    mocker.patch("brokers.trading212.maybe_place_t212_orders")
-    mocker.patch("brokers.trading212.maybe_place_stock_orders")
-    mock_v2 = mocker.patch("brokers.trading212_v2.maybe_place_v2_orders")
+    mock_orders = mocker.patch("brokers.trading212.maybe_place_orders")
 
     scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")
 
-    mock_v2.assert_called_once_with({"k": "v"}, "full")
+    mock_orders.assert_called_once_with({"k": "v"}, "full")
 
 
-def test_run_analysis_pipeline_v2_failure_does_not_block_pipeline(mocker):
-    mocker.patch("data.scheduler.run_analysis")
-    mocker.patch("data.scheduler.generate_signals")
+def test_run_analysis_pipeline_order_failure_does_not_raise(mocker):
     mocker.patch("data.scheduler.set_metadata")
-    mocker.patch("brokers.trading212.maybe_place_t212_orders")
-    mocker.patch("brokers.trading212.maybe_place_stock_orders")
-    mocker.patch("brokers.trading212_v2.maybe_place_v2_orders", side_effect=RuntimeError("boom"))
+    mocker.patch("brokers.trading212.maybe_place_orders", side_effect=RuntimeError("boom"))
 
     scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")  # must not raise
 
 
-def test_trade_alert_job_calls_v2_exit_check_and_poll(mocker):
-    """The hourly job must call V2's poller and exit check alongside V1's --
-    not just leave them callable in isolation."""
+# ---------------------------------------------------------------------------
+# _trade_alert_job() — hourly poll + exit check + snapshot refresh only (no
+# VIX-spike branch, no CFD alerting -- both removed along with V1).
+# ---------------------------------------------------------------------------
+
+def test_trade_alert_job_calls_poll_and_exit_check(mocker):
     mocker.patch("data.scheduler._load_config", return_value={})
-    # Skip the VIX-spike branch cheaply (empty df => len < 2 => branch never runs).
-    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
-    mocker.patch("brokers.trading212.poll_placed_orders")
-    mocker.patch("brokers.trading212.maybe_exit_t212_positions")
-    mocker.patch("brokers.trading212.maybe_exit_stock_positions")
-    mock_poll_v2 = mocker.patch("brokers.trading212_v2.poll_v2_placed_orders")
-    mock_exit_v2 = mocker.patch("brokers.trading212_v2.maybe_exit_v2_positions")
-    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
 
     scheduler._trade_alert_job()
 
-    mock_poll_v2.assert_called_once()
-    mock_exit_v2.assert_called_once()
+    mock_poll.assert_called_once()
+    mock_exit.assert_called_once()
+    mock_snap.assert_called_once()
 
 
-def test_trade_alert_job_v2_failure_does_not_block_job(mocker):
+def test_trade_alert_job_failure_does_not_block_job(mocker):
     mocker.patch("data.scheduler._load_config", return_value={})
-    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
-    mocker.patch("brokers.trading212.poll_placed_orders")
-    mocker.patch("brokers.trading212.maybe_exit_t212_positions")
-    mocker.patch("brokers.trading212.maybe_exit_stock_positions")
-    mocker.patch("brokers.trading212_v2.poll_v2_placed_orders", side_effect=RuntimeError("boom"))
-    mocker.patch("brokers.trading212_v2.maybe_exit_v2_positions", side_effect=RuntimeError("boom"))
-    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.poll_placed_orders", side_effect=RuntimeError("boom"))
+    mocker.patch("brokers.trading212.maybe_exit_positions", side_effect=RuntimeError("boom"))
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
 
     scheduler._trade_alert_job()  # must not raise
+
+    mock_snap.assert_called_once()

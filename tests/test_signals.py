@@ -1,8 +1,8 @@
-"""Tests for analysis/v2/signals.py -- pure functions, no DB needed."""
+"""Tests for analysis/signals.py -- pure functions, no DB needed."""
 import numpy as np
 import pandas as pd
 
-from analysis.v2 import signals as v2s
+from analysis import signals as v2s
 
 
 def _close_series(n=400, start=100.0, daily_drift=0.0):

@@ -1,4 +1,12 @@
-"""Investment Research Dashboard — Streamlit entry point."""
+"""Investment Research Dashboard — Streamlit entry point.
+
+The live system is a single momentum + crisis-override strategy (see
+analysis/signals.py, analysis/crisis.py, analysis/universe.py,
+analysis/backtest.py, brokers/trading212.py) — no regime classifier, no
+six-module confluence score, no separate "analysis pipeline". Momentum
+signal, index membership, and the crisis circuit breaker are all computed
+on demand straight from price_data.
+"""
 
 import os
 import sys
@@ -21,101 +29,11 @@ import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
-from analysis.confluence import (
-    generate_signals,
-    get_last_signal_timestamp,
-    get_latest_signals,
-    get_learned_weights,
-    get_regime_thresholds,
-    get_weight_history,
-)
-from analysis.correlations import (
-    build_correlation_matrix,
-    compute_all_pairs,
-    get_active_opportunity_flags,
-    get_stored_correlations,
-)
-from analysis.regime import OVERLAY_DESCRIPTIONS
-from analysis.engine import run_analysis
-from analysis.regime import (
-    REGIME_COLOURS,
-    REGIME_DESCRIPTIONS,
-    REGIME_WEIGHTS,
-    Regime,
-    detect_regime,
-    get_max_holding_days,
-    is_entry_allowed,
-    resolve_entry_signal,
-)
+from analysis.backtest import compute_metrics, equity_curve_gbp
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
-from data.ingestion import (
-    get_all_tickers,
-    get_price_df,
-    pull_incremental,
-)
+from data.ingestion import get_all_tickers, get_price_df, pull_incremental
 from data.scheduler import start_scheduler
-from output.performance import (
-    FOREX_QUOTE_CCY,
-    get_current_signal,
-    get_latest_price,
-)
-from analysis.macro import (
-    backfill_macro_indicators,
-    fetch_and_store_macro_indicators,
-    get_macro_dashboard,
-    refresh_release_calendars,
-    SIGNALS_ACTIVE,
-)
-from analysis.risk import compute_drawdown_scale_factor
-from analysis.regime_history import (
-    backfill_regime_metrics_history,
-    get_regime_metrics_history,
-    summarise_resolution,
-)
-from analysis.backtest import (
-    delete_run,
-    get_all_runs,
-    get_run,
-    get_run_trades,
-    run_backtest,
-)
-from analysis.backtest_metrics import (
-    ANALYSIS_PERIODS,
-    MODULE_LABELS,
-    compute_metrics,
-    equity_curve as bt_equity_curve,
-    exit_reason_breakdown,
-    forex_holding_sensitivity,
-    module_attribution,
-    period_breakdown,
-    regime_performance,
-    signal_decay,
-    walk_forward,
-)
-from analysis.robustness import (
-    BACKTEST_START_DATE,
-    PARAMETER_FREEZE_DATE,
-    compute_annual_returns,
-    compute_attribution,
-    compute_calmar_ratios,
-    compute_drawdown_metrics,
-    compute_edge_quality,
-    compute_monthly_heatmap,
-    compute_out_of_sample_stats,
-    compute_regime_filter_contribution,
-    compute_rolling_metrics,
-    generate_robustness_pdf,
-)
-from output.briefing import (
-    STATUS_COLOURS as _BRIEF_STATUS_COLOURS,
-    STATUS_ICONS   as _BRIEF_STATUS_ICONS,
-    _generate_daily_narrative,
-    build_opportunities,
-    get_current_atr,
-    get_macro_context,
-    send_test_email,
-    send_weekly_summary_email,
-)
+from output.performance import get_brief_cards, get_pnl_rows, get_ticker_status, pnl_metrics_df
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -163,10 +81,6 @@ def _start_scheduler_at_startup() -> None:
     fresh (< 90 seconds old), the daemon owns scheduling and we skip the in-process
     scheduler to avoid double-firing jobs. If no fresh heartbeat exists (local dev,
     or daemon not installed), we start the in-process scheduler as a fallback.
-
-    Note: st.cache_resource is process-wide but is only invoked when the Streamlit
-    script first runs (i.e. on first page visit). This function therefore serves as
-    a fallback for environments where the standalone daemon is not running.
     """
     try:
         heartbeat_str = get_metadata_str("scheduler_heartbeat")
@@ -202,8 +116,6 @@ def _load_config() -> dict:
     config_path = _ROOT / "config.yaml"
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
-    if key := os.environ.get("FRED_API_KEY"):
-        cfg.setdefault("macro", {})["fred_api_key"] = key
     if pw := os.environ.get("SMTP_PASSWORD"):
         cfg.setdefault("notifications", {}).setdefault("email", {})["smtp_password"] = pw
     return cfg
@@ -221,218 +133,6 @@ def _build_watchlist(config: dict) -> dict[str, str]:
     return items
 
 
-def _build_tradeable_set(config: dict) -> set[str]:
-    """Return the set of tickers marked tradeable: true in config (default true if absent)."""
-    result: set[str] = set()
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for entry in assets:
-            if isinstance(entry, dict) and "ticker" in entry and entry.get("tradeable", True):
-                result.add(entry["ticker"])
-    return result
-
-
-def _build_t212_names(config: dict) -> dict[str, str]:
-    """Return {ticker: trading212_instrument} for assets where the T212 name differs."""
-    result: dict[str, str] = {}
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for entry in assets:
-            if isinstance(entry, dict) and "ticker" in entry and "trading212_instrument" in entry:
-                result[entry["ticker"]] = entry["trading212_instrument"]
-    return result
-
-
-@st.cache_data(ttl=300)
-def _cached_latest_price(ticker: str) -> float | None:
-    """Live price from yfinance, cached for 5 minutes to limit API calls."""
-    return get_latest_price(ticker)
-
-
-# Maps (instrument_ccy, account_ccy) → (yfinance_ticker, invert).
-# "invert" means the stored fx_rate = 1/close rather than close.
-# All entries use well-known pairs that yfinance reliably serves.
-# Convention: fx_rate = "1 account_ccy = fx_rate instrument_ccy"
-# so P&L conversion is always: pnl_account = pnl_instrument / fx_rate.
-_CCY_PAIR_LOOKUP: "dict[tuple[str, str], tuple[str, bool]]" = {
-    ("USD", "GBP"): ("GBPUSD=X", False),   # 1 GBP = 1.34 USD; pnl_gbp = pnl_usd / 1.34
-    ("EUR", "GBP"): ("GBPEUR=X", False),   # 1 GBP = 1.18 EUR; pnl_gbp = pnl_eur / 1.18
-    ("GBP", "USD"): ("GBPUSD=X", True),    # fx_rate = 1/GBPUSD ≈ 0.746; pnl_usd = pnl_gbp / 0.746
-    ("GBP", "EUR"): ("EURGBP=X", False),   # 1 EUR = 0.86 GBP; pnl_eur = pnl_gbp / 0.86
-    ("USD", "EUR"): ("EURUSD=X", False),   # 1 EUR = 1.08 USD; pnl_eur = pnl_usd / 1.08
-    ("EUR", "USD"): ("EURUSD=X", True),    # fx_rate = 1/EURUSD ≈ 0.926; pnl_usd = pnl_eur / 0.926
-}
-
-_CCY_SYM: dict[str, str] = {"GBP": "£", "USD": "$", "JPY": "¥", "EUR": "€"}
-
-
-def _quote_ccy_sym(ticker: str) -> str:
-    """Return the currency symbol for the QUOTE currency of *ticker*'s price.
-
-    The raw P&L from a price move is always in the quote currency:
-      GBPUSD=X  → USD ($)   USDJPY=X → JPY (¥)   EURGBP=X → GBP (£)
-      US ETFs   → USD ($)   LSE .L   → GBP (£)
-    """
-    # FOREX_QUOTE_CCY has explicit mappings for all tracked pairs (covers EURGBP=X → GBP, etc.)
-    if ticker in FOREX_QUOTE_CCY:
-        return _CCY_SYM.get(FOREX_QUOTE_CCY[ticker], "$")
-    # Pattern fallbacks for anything not in the explicit dict
-    if ticker.endswith("JPY=X"): return "¥"
-    if ticker.endswith("=X"):    return "$"   # most forex pairs quoted in USD
-    if ticker.endswith(".L"):    return "£"
-    return "$"                                # default: US-listed instruments
-
-
-def _fx_pair_label(instrument_ccy: str, account_ccy: str) -> str:
-    """Return the canonical pair name for a currency combo, e.g. 'GBPUSD'."""
-    if instrument_ccy == account_ccy:
-        return ""
-    pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
-    return pair_info[0].replace("=X", "") if pair_info else ""
-
-
-def _fetch_fx_live(yf_ticker: str) -> "float | None":
-    """Try four methods to get a live close price for *yf_ticker*. Returns None if all fail."""
-    import yfinance as yf
-    # Method 1: fast_info — fastest, single HTTP call, no DataFrame
-    try:
-        price = yf.Ticker(yf_ticker).fast_info["last_price"]
-        if price and float(price) > 0:
-            return float(price)
-    except Exception:
-        pass
-
-    # Method 2: yf.download 1d (classic API)
-    try:
-        data = yf.download(yf_ticker, period="1d", progress=False, auto_adjust=True)
-        if not data.empty:
-            if hasattr(data.columns, "levels"):
-                data.columns = [col[0] for col in data.columns]
-            val = float(data["Close"].iloc[-1])
-            if val > 0:
-                return val
-    except Exception:
-        pass
-
-    # Method 3: Ticker.history 1d
-    try:
-        hist = yf.Ticker(yf_ticker).history(period="1d")
-        if not hist.empty:
-            val = float(hist["Close"].iloc[-1])
-            if val > 0:
-                return val
-    except Exception:
-        pass
-
-    # Method 4: Ticker.history 5d — picks up weekends/holidays
-    try:
-        hist = yf.Ticker(yf_ticker).history(period="5d")
-        if not hist.empty:
-            val = float(hist["Close"].iloc[-1])
-            if val > 0:
-                return val
-    except Exception:
-        pass
-
-    return None
-
-
-def _get_fx_db_fallback(pair_key: str) -> "tuple[float | None, str | None]":
-    """Read the last persisted rate from system_metadata. Returns (rate, timestamp_str)."""
-    from sqlalchemy import text as sa_text
-    try:
-        with get_engine().connect() as conn:
-            row = conn.execute(
-                sa_text("SELECT value, updated_at FROM system_metadata WHERE key = :k"),
-                {"k": f"last_{pair_key}_rate"},
-            ).fetchone()
-        if row and row[0]:
-            ts = str(row[1])[:16].replace("T", " ") if row[1] else None
-            return float(row[0]), ts
-    except Exception:
-        pass
-    return None, None
-
-
-def _prefetch_fx_rates() -> None:
-    """Fetch and store common FX rates to DB on startup so the DB fallback always has data.
-
-    Called once per session during _initialise(). Stores the raw yfinance close price
-    under the same key that _get_fx_db_fallback() reads (last_{pair_key}_rate), ensuring
-    the Level-3 DB fallback in _get_fx_rate() returns a usable rate even if the first
-    live fetch in a user session fails.
-    """
-    import yfinance as yf
-    _pairs = [
-        ("GBPUSD=X", "gbpusd"),
-        ("EURUSD=X", "eurusd"),
-        ("USDJPY=X", "usdjpy"),
-        ("AUDUSD=X", "audusd"),
-    ]
-    for _ticker, _key in _pairs:
-        try:
-            _rate = yf.Ticker(_ticker).fast_info["last_price"]
-            if _rate and float(_rate) > 0:
-                set_metadata(f"last_{_key}_rate", str(float(_rate)))
-        except Exception:
-            pass
-
-
-_FX_SESSION_TTL = 300  # seconds before session-state cache is considered stale
-
-
-def _get_fx_rate(instrument_ccy: str, account_ccy: str) -> "tuple[float | None, str]":
-    """Multi-level FX rate fetch. Returns (rate, source).
-
-    source values:
-      'session'       — in-memory session cache, still fresh (< 5 min)
-      'live'          — freshly fetched from yfinance and cached
-      'db:TIMESTAMP'  — DB fallback used because live fetch failed
-      'unavailable'   — all sources (live + DB) failed
-    """
-    if instrument_ccy == account_ccy:
-        return 1.0, "same_currency"
-
-    pair_info = _CCY_PAIR_LOOKUP.get((instrument_ccy, account_ccy))
-    if pair_info is None:
-        return None, "unsupported"
-
-    yf_ticker, invert = pair_info
-    pair_key   = yf_ticker.replace("=X", "").lower()   # e.g. "gbpusd"
-    sess_key   = f"_fx_{pair_key}"
-    sess_ts    = f"_fx_{pair_key}_ts"
-
-    # ── Level 1: session-state cache ──────────────────────────────────────
-    if sess_key in st.session_state:
-        age = (datetime.utcnow() - st.session_state[sess_ts]).total_seconds()
-        if age < _FX_SESSION_TTL:
-            return st.session_state[sess_key], "session"
-
-    # ── Level 2: live fetch (primary ticker) ──────────────────────────────
-    close = _fetch_fx_live(yf_ticker)
-
-    # ── Level 2b: alternative ticker (GBP=X instead of GBPUSD=X) ─────────
-    if close is None and yf_ticker.endswith("USD=X"):
-        alt_ticker = yf_ticker[:-len("USD=X")] + "=X"   # e.g. "GBP=X"
-        close = _fetch_fx_live(alt_ticker)
-
-    if close is not None and close > 0:
-        rate = (1.0 / close) if invert else close
-        st.session_state[sess_key] = rate
-        st.session_state[sess_ts]  = datetime.utcnow()
-        set_metadata(f"last_{pair_key}_rate", str(rate))
-        return rate, "live"
-
-    # ── Level 3: DB fallback ───────────────────────────────────────────────
-    db_rate, db_ts = _get_fx_db_fallback(pair_key)
-    if db_rate is not None:
-        return db_rate, f"db:{db_ts or 'unknown time'}"
-
-    return None, "unavailable"
-
-
 def _hex_rgba(hx: str, alpha: float) -> str:
     """Convert a 6-digit hex colour string to a CSS rgba() value."""
     h = hx.lstrip("#")
@@ -442,7 +142,6 @@ def _hex_rgba(hx: str, alpha: float) -> str:
 def _has_price_data() -> bool:
     """Return True if the price_data table contains at least one row."""
     from sqlalchemy import text as sa_text
-    from data.database import get_engine
     try:
         with get_engine().connect() as conn:
             row = conn.execute(sa_text("SELECT 1 FROM price_data LIMIT 1")).fetchone()
@@ -452,7 +151,7 @@ def _has_price_data() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# System status helpers (used by _render_home_page)
+# System status helpers (used by _render_status_page)
 # ---------------------------------------------------------------------------
 
 _LEVEL_COLOUR = {
@@ -496,11 +195,7 @@ def _age_level(ts: datetime | None, warn_hours: float = 48.0, error_hours: float
 
 
 def _age_display(ts: datetime | None) -> tuple[str, str]:
-    """Return (primary_value, sub_caption) strings for a stored timestamp.
-
-    Primary is the human-readable timestamp; sub is the relative age so the
-    user sees both the exact time and how long ago it was at a glance.
-    """
+    """Return (primary_value, sub_caption) strings for a stored timestamp."""
     if ts is None:
         return "Never", "no data recorded"
     _ts = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
@@ -583,15 +278,9 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
     Fresh   = data within 3 trading days on the ticker's home exchange.
     Stale   = data present but older than 3 trading days.
     Missing = no rows at all in price_data for that ticker.
-    max_stale_trading_days = trading sessions since last data for the worst stale ticker
-                             (0 when the stale list is empty).
-
-    Uses pandas_market_calendars so that weekends and public holidays on the
-    ticker's home exchange are not counted as missed trading days.
     """
-    import pandas_market_calendars as mcal  # already a dependency via data/scheduler.py
+    import pandas_market_calendars as mcal
 
-    # Build ticker → exchange mapping from config watchlist groups.
     ticker_exchange: dict[str, str] = {}
     for assets in config.get("watchlist", {}).values():
         if not isinstance(assets, list):
@@ -600,7 +289,6 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
             if isinstance(entry, dict) and "ticker" in entry:
                 ticker_exchange[entry["ticker"]] = entry.get("exchange", "NYSE")
 
-    # Query latest stored date per ticker.
     try:
         from sqlalchemy import text as sa_text
         with get_engine().connect() as conn:
@@ -611,18 +299,17 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
     except Exception:
         latest_by_ticker = {}
 
-    # Map config exchange names → pandas_market_calendars calendar names.
     _MCAL_MAP: dict[str, str] = {
         "NYSE": "NYSE", "NASDAQ": "NASDAQ", "CBOE": "NYSE",
         "LSE": "LSE",
-        "TSE": "JPX", "JPX": "JPX",       # config uses "TSE"; mcal uses "JPX"
-        "XETR": "NYSE",                    # XETRA not universally available; NYSE as proxy
+        "TSE": "JPX", "JPX": "JPX",
+        "XETR": "NYSE",
         "HKEX": "HKEX", "FX": "NYSE", "Crypto": "NYSE",
     }
 
     today = datetime.utcnow().date()
     _lookback = (datetime.utcnow() - timedelta(days=30)).date()
-    _cal_sessions: dict[str, list] = {}  # cal_name → sorted list of session dates
+    _cal_sessions: dict[str, list] = {}
 
     def _get_sessions(cal_name: str) -> list:
         if cal_name not in _cal_sessions:
@@ -634,7 +321,6 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
                 )
                 _cal_sessions[cal_name] = [pd.Timestamp(d).date() for d in sched.index]
             except Exception:
-                # Unrecognised or unavailable calendar — fall back to NYSE.
                 if cal_name != "NYSE" and "NYSE" not in _cal_sessions:
                     try:
                         cal = mcal.get_calendar("NYSE")
@@ -649,13 +335,12 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
         return _cal_sessions[cal_name]
 
     def _trading_days_since(last_dt: datetime, exchange: str) -> int:
-        """Count trading sessions strictly after last_dt on the given exchange."""
         cal_name = _MCAL_MAP.get(exchange, "NYSE")
         sessions = _get_sessions(cal_name)
         last_date = last_dt.date() if hasattr(last_dt, "date") else last_dt
         return sum(1 for d in sessions if d > last_date)
 
-    _FRESH_TD = 3  # ≤ 3 trading days = fresh
+    _FRESH_TD = 3
 
     fresh, stale, missing = [], [], []
     max_stale_trading_days = 0
@@ -665,7 +350,6 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
         if raw is None:
             missing.append(ticker)
             continue
-        # SQLite returns dates as strings or datetime objects depending on driver.
         if isinstance(raw, str):
             try:
                 dt = datetime.fromisoformat(raw)
@@ -687,19 +371,14 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
 
 
 def _parse_journal_line(raw: str) -> "dict | None":
-    """Parse one journalctl short-iso line into a dict with ts, level, message, raw.
-
-    Handles the format:
-      2024-06-22T10:30:45+0000 hostname investment-research[pid]: LEVEL:module:msg
-    Returns None for lines that don't match (e.g. header lines from older sessions).
-    """
-    import re as _re  # noqa: PLC0415
+    """Parse one journalctl short-iso line into a dict with ts, level, message, raw."""
+    import re as _re
     _PAT = _re.compile(
-        r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'   # ISO timestamp (no tz)
-        r'[^\s]*\s+'                                    # timezone suffix + space
-        r'\S+\s+'                                       # hostname
-        r'[^\[]+\[\d+\]:\s*'                            # service[pid]:
-        r'(.*)$'                                         # message
+        r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'
+        r'[^\s]*\s+'
+        r'\S+\s+'
+        r'[^\[]+\[\d+\]:\s*'
+        r'(.*)$'
     )
     _m = _PAT.match(raw)
     if not _m:
@@ -709,9 +388,7 @@ def _parse_journal_line(raw: str) -> "dict | None":
 
     _lvl_m = _re.match(r'^(DEBUG|INFO|WARNING|ERROR|CRITICAL):', msg)
     level = _lvl_m.group(1) if _lvl_m else "INFO"
-    # Strip "LEVEL:module:" prefix from the displayed message
     if _lvl_m:
-        # e.g. "INFO:data.scheduler:text" → "text"
         _rest = msg[_lvl_m.end():]
         if ":" in _rest:
             _colon = _rest.index(":")
@@ -722,22 +399,13 @@ def _parse_journal_line(raw: str) -> "dict | None":
     return {"ts": ts, "level": level, "message": msg, "raw": raw}
 
 
+# ---------------------------------------------------------------------------
+# Chart helpers
+# ---------------------------------------------------------------------------
+
 def _apply_dark_theme(fig: go.Figure) -> go.Figure:
     """Apply the SP500Invest dark-navy theme to a Plotly figure in place, and
-    return it for chaining.
-
-    Every chart in the app should route through this rather than setting
-    `template="plotly_dark"` (or nothing) directly. Deliberately does NOT
-    set `paper_bgcolor`/`plot_bgcolor` — leaving those unset lets Plotly
-    inherit the surrounding background from the Streamlit theme
-    (`.streamlit/config.toml`'s `[theme]` section) automatically, so a
-    chart's background always matches the page it's embedded in rather
-    than being pinned to a hardcoded colour that only happens to match
-    today's navy palette. A future palette change in config.toml is then
-    a zero-line-edit change for charts. Safe to call on any figure
-    regardless of trace types (candlestick, bar, heatmap, scatter, ...)
-    since it only touches layout, never trace data.
-    """
+    return it for chaining."""
     fig.update_layout(
         template="plotly_dark",
         font=dict(color="#CCDDEE"),
@@ -748,7 +416,7 @@ def _apply_dark_theme(fig: go.Figure) -> go.Figure:
 
 
 def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
-    """Build a Plotly candlestick + volume chart for a ticker."""
+    """Build a Plotly candlestick chart for a ticker, with 20/50-day SMA overlays."""
     fig = go.Figure()
 
     fig.add_trace(
@@ -764,8 +432,6 @@ def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
         )
     )
 
-    # Overlay 20- and 50-day SMAs — compute on valid rows only so a single
-    # NaN/zero close (e.g. an incomplete intraday bar) does not break the line.
     df_valid = df[df["close"].notna() & (df["close"] > 0)]
     for window, colour in ((20, "#f59e0b"), (50, "#6366f1")):
         if len(df_valid) >= window:
@@ -792,80 +458,6 @@ def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
     return _apply_dark_theme(fig)
 
 
-def _regime_trend_chart(df: pd.DataFrame) -> go.Figure:
-    """Dual-axis ADX/VIX/S&P-vs-SMA200 trend chart with regime-gate shading.
-
-    Left axis carries ADX and VIX together — both are roughly-0-100
-    unitless/index oscillators, so the ADX=25 and VIX=20 regime-gate
-    threshold lines sit naturally against both on one shared scale. Right
-    axis carries S&P % vs SMA200 alone — a genuinely different unit (a
-    percentage that swings roughly ±20%), so sharing the left axis would
-    either flatten it to a sliver or blow out the ADX/VIX scale.
-
-    Shading marks "entries blocked" bands only (see
-    analysis.regime_history.compute_shading_bands) — the default,
-    unshaded background already reads as "normal", so only the
-    exceptional "capital sitting in cash" state needs calling out,
-    mirroring the DD report's PDF equity-curve convention of shading only
-    the periods worth a second look, not the whole timeline.
-
-    A vertical marker separates backfilled history (one point per calendar
-    day; entries_allowed there is inferred from today's config, not ground
-    truth — see analysis.regime_history.summarise_resolution()) from live,
-    per-run data (up to 3 points/day; entries_allowed captured at the time)
-    — without it, the density jump and the shading-confidence change at
-    that point could read as an unexplained data artifact rather than what
-    it actually is.
-    """
-    from analysis.regime_history import compute_shading_bands, summarise_resolution
-
-    fig = go.Figure()
-
-    for band in compute_shading_bands(df):
-        if band["allowed"]:
-            continue
-        end = band["end"]
-        if end == band["start"]:
-            end = end + pd.Timedelta(hours=12)  # keep a single-run band visible
-        fig.add_vrect(x0=band["start"], x1=end, fillcolor="#8899AA", opacity=0.16, line_width=0)
-
-    _res = summarise_resolution(df)
-    if _res["boundary_timestamp"] is not None:
-        fig.add_vline(
-            x=_res["boundary_timestamp"], line_dash="dash", line_color="#8899AA", line_width=1.5,
-            annotation_text="← backfilled (1pt/day, inferred shading)  |  live (per-run, recorded) →",
-            annotation_position="top", annotation_font_color="#8899AA", annotation_font_size=10,
-        )
-
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["adx"], mode="lines",
-        name="ADX", line=dict(color="#00C2FF", width=1.6),
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["vix"], mode="lines",
-        name="VIX", line=dict(color="#f59e0b", width=1.6),
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["sp500_pct_vs_sma200"], mode="lines",
-        name="S&P % vs SMA200", line=dict(color="#26a69a", width=1.6),
-        yaxis="y2",
-    ))
-
-    fig.add_hline(y=25, line_dash="dot", line_color="#00C2FF",
-                  annotation_text="ADX 25 (trend threshold)", annotation_font_color="#00C2FF")
-    fig.add_hline(y=20, line_dash="dot", line_color="#f59e0b",
-                  annotation_text="VIX 20 (fear threshold)", annotation_font_color="#f59e0b")
-
-    fig.update_layout(
-        height=420,
-        margin=dict(l=40, r=50, t=20, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
-        yaxis=dict(title="ADX / VIX"),
-        yaxis2=dict(title="S&P % vs SMA200", overlaying="y", side="right", ticksuffix="%"),
-    )
-    return _apply_dark_theme(fig)
-
-
 def _volume_bar_chart(df: pd.DataFrame) -> go.Figure:
     """Build a volume bar chart coloured by daily direction."""
     colours = [
@@ -884,2918 +476,11 @@ def _volume_bar_chart(df: pd.DataFrame) -> go.Figure:
     return _apply_dark_theme(fig)
 
 
-def _render_indicator_panel(ticker: str) -> None:
-    """Fetch stored indicator values via raw SQL and render them as metric tiles.
-
-    Using a raw SQL query (rather than ORM) avoids any SQLAlchemy column-mapping
-    issues that can silently return None when the schema has evolved since the
-    session mapper was compiled.
-
-    Reads the most recent row from the indicators table for *ticker*. If no
-    analysis has been run yet, shows a prompt to run it instead.
-    """
-    from sqlalchemy import text as sa_text
-    from data.database import get_engine
-
-    row = None
-    try:
-        with get_engine().connect() as conn:
-            row = conn.execute(
-                sa_text(
-                    "SELECT * FROM indicators "
-                    "WHERE ticker = :ticker "
-                    "ORDER BY date DESC LIMIT 1"
-                ),
-                {"ticker": ticker},
-            ).mappings().first()
-    except Exception as exc:
-        st.error(f"Could not read indicator data: {exc}")
-        return
-
-    def _v(key: str, fmt: str = "{:,.2f}", suffix: str = "") -> str:
-        """Format a value from the result row, returning '—' for NULL / NaN."""
-        val = row.get(key) if row else None
-        if val is None:
-            return "—"
-        try:
-            return fmt.format(float(val)) + suffix
-        except Exception:
-            return str(val) if val else "—"
-
-    with st.expander("Technical Indicators", expanded=True):
-        if row is None:
-            st.info("Price data loaded — indicators will be calculated at the next analysis run.")
-            return
-
-        date_str = row.get("date")
-        if date_str:
-            try:
-                st.caption(f"As of {pd.Timestamp(date_str).strftime('%Y-%m-%d')}")
-            except Exception:
-                st.caption(f"As of {date_str}")
-
-        # Trend
-        st.markdown("**Trend**")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("SMA 50",  _v("sma_50"))
-        c2.metric("SMA 200", _v("sma_200"))
-        c3.metric("MACD",    _v("macd", "{:,.3f}"))
-        c4.metric("ADX",     _v("adx",  "{:,.1f}"))
-        raw_cross = row.get("golden_cross")
-        cross_int = int(float(raw_cross)) if raw_cross is not None else 0
-        cross_label = {1: "Golden ✓", -1: "Death ✗", 0: "—"}.get(cross_int, "—")
-        c5.metric("MA Cross", cross_label)
-        raw_ma_score = row.get("ma_cross_score")
-        ma_score_int = int(float(raw_ma_score)) if raw_ma_score is not None else cross_int
-        if cross_int != 0 and ma_score_int != cross_int:
-            slope_dir = "declining" if cross_int == 1 else "rising"
-            if ma_score_int == 0:
-                note = f"SMA50 {slope_dir} — cross weakening"
-            else:
-                flip = "death" if cross_int == 1 else "golden"
-                note = f"SMA50 converging — {flip} cross imminent"
-            c5.caption(f"⚠ {note}")
-
-        # Mean Reversion
-        st.markdown("**Mean Reversion**")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("RSI (14)",    _v("rsi",         "{:,.1f}"))
-        c2.metric("BB %B",       _v("bb_pct_b",    "{:,.2f}"))
-        c3.metric("BB Width",    _v("bb_width",    "{:,.2f}"))
-        c4.metric("Z-Score 52w", _v("z_score_52w", "{:+.2f}"))
-
-        # Volatility
-        st.markdown("**Volatility**")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("ATR (14)",    _v("atr",         "{:,.3f}"))
-        c2.metric("ATR %",       _v("atr_pct",     "{:.2%}"))
-        c3.metric("Hist Vol 20", _v("hist_vol_20", "{:.1%}"))
-        vix_val   = row.get("vix_level")
-        vix_reg   = row.get("vix_regime") or ""
-        c4.metric("VIX", f"{float(vix_val):,.1f} ({vix_reg})" if vix_val is not None else "—")
-
-        vol_regime = (row.get("vol_regime") or "NORMAL").upper()
-        _vol_regime_colours = {
-            "LOW": "#26a69a", "NORMAL": "#8899AA", "HIGH": "#f59e0b", "ELEVATED": "#ef5350",
-        }
-        _vr_colour = _vol_regime_colours.get(vol_regime, "#8899AA")
-        c5.markdown(
-            f"<div style='font-size:0.78rem;color:#8899AA'>Vol Regime</div>"
-            f"<div style='font-size:1.15rem;font-weight:600;color:{_vr_colour}'>{html.escape(vol_regime)}</div>",
-            unsafe_allow_html=True,
-        )
-
-        if row.get("structural_break"):
-            _days_since = row.get("days_since_change_point")
-            _days_str = str(int(_days_since)) if _days_since is not None else "an unknown number of"
-            st.markdown(
-                f"<div style='color:#f59e0b;font-size:0.78rem;margin-top:2px'>"
-                f"⚠ Regime shift detected {html.escape(_days_str)} days ago</div>",
-                unsafe_allow_html=True,
-            )
-
-        # Volume
-        st.markdown("**Volume**")
-        c1, c2 = st.columns(2)
-        c1.metric("Vol Ratio", _v("volume_ratio", "{:,.2f}", "x"))
-        c2.metric("OBV Trend", _v("obv_trend",    "{:,.0f}"))
-
-        # Macro (only shown when at least one value is present)
-        yc_spread = row.get("yield_curve_spread")
-        yc_regime = row.get("yield_curve_regime")
-        if yc_spread is not None or vix_reg:
-            st.markdown("**Macro**")
-            c1, c2 = st.columns(2)
-            c1.metric(
-                "Yield Curve (10Y-2Y)",
-                f"{float(yc_spread):+.2f}% ({yc_regime})" if yc_spread is not None else "—",
-            )
-            c2.metric(
-                "VIX Regime",
-                vix_reg.capitalize() if vix_reg else "—",
-            )
-
-
 # ---------------------------------------------------------------------------
-# Signals page
+# Trade card / cached wrappers
 # ---------------------------------------------------------------------------
 
-# CSS applied to the Signal column cells via Pandas Styler (space-separated labels)
-_SIGNAL_CSS: dict[str, str] = {
-    "STRONG BUY":  "background-color:#1a5c38;color:white;font-weight:600",
-    "BUY":         "background-color:#26a69a;color:white;font-weight:600",
-    "NEUTRAL":     "font-weight:600",
-    "SELL":        "background-color:#f59e0b;color:white;font-weight:600",
-    "STRONG SELL": "background-color:#ef5350;color:white;font-weight:600",
-}
-
-_SCORE_SYMBOL: dict[int, str] = {1: "▲", 0: "●", -1: "▼"}
-
-
-def _render_signals_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str]) -> None:
-    """Render the Signals page: regime card, generate button, ranked table."""
-
-    _render_page_wordmark("Signals")
-    st.markdown("## Market Signals")
-
-    # ---- Opportunity flags & regime overlays (top of page) ----------------
-    catch_up_flags  = get_active_opportunity_flags()
-    overlay_raw     = get_metadata_str("active_overlays") or ""
-    active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
-
-    # ---- Regime data -------------------------------------------------------
-    regime_result = detect_regime()
-    regime  = regime_result["regime"]
-    colour  = regime_result["colour"]
-    details = regime_result["details"]
-
-    price   = details.get("price")
-    sma_200 = details.get("sma_200")
-    adx     = details.get("adx")
-    vix     = details.get("vix")
-
-    price_pct = f"{(price / sma_200 - 1) * 100:+.1f}% vs SMA200" if (price and sma_200) else "—"
-    adx_str   = f"ADX {adx:.1f}" if adx else "—"
-    vix_str   = f"VIX {vix:.1f}" if vix else "—"
-
-    _REGIME_NOTES: dict[str, str] = {
-        "TRENDING_BULL":   "Trend signals carry the most weight. Favour momentum and breakout plays — mean reversion signals are less reliable in a strong uptrend.",
-        "TRENDING_BEAR":   "Trend signals carry the most weight. Favour short positions and breakdown plays — avoid buying dips unless confirmed by multiple modules.",
-        "HIGH_VOLATILITY": "Volatility signals are most informative. Prioritise defensive positions and tight risk management — directional signals are less reliable when VIX is elevated.",
-        "RANGING_LOW_VOL": "Mean reversion signals carry the most weight. Look for oversold bounces and range-bound plays — trend-following signals are less reliable in a sideways market.",
-        "MIXED":           "Regime is unclear — signals are weighted equally across all modules. Treat all calls with extra caution.",
-    }
-    note = _REGIME_NOTES.get(regime, "")
-
-    # ---- Signal rows & counts ----------------------------------------------
-    rows = get_latest_signals(list(watchlist.keys()))
-
-    if not rows:
-        st.info("No signals yet — signals are generated automatically after each data refresh.")
-        _render_footer()
-        return
-
-    _DIST_CFG = [
-        ("STRONG BUY",  "#16a34a"),
-        ("BUY",         "#26a69a"),
-        ("NEUTRAL",     "#8899AA"),
-        ("SELL",        "#f59e0b"),
-        ("STRONG SELL", "#ef5350"),
-    ]
-    counts   = {lbl: 0 for lbl, _ in _DIST_CFG}
-    t_counts = {lbl: 0 for lbl, _ in _DIST_CFG}
-    for r in rows:
-        lbl = (r.get("signal") or "NEUTRAL").replace("_", " ")
-        if lbl in counts:
-            counts[lbl] += 1
-            if r.get("ticker") in tradeable_set:
-                t_counts[lbl] += 1
-
-    # ---- Build compact header block ----------------------------------------
-    overlay_strips = ""
-    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
-        if overlay_key not in active_overlays:
-            continue
-        meta   = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-        _oc    = meta.get("colour", "#8899AA")
-        _label = html.escape(meta.get("label", overlay_key.replace("_", " ")))
-        _body  = html.escape(meta.get("text", ""))
-        overlay_strips += (
-            f"<div style='border-left:3px solid {_oc};padding:3px 10px;"
-            f"background:{_hex_rgba(_oc, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
-            f"<span style='background:{_oc};color:#fff;padding:0 5px;"
-            f"border-radius:2px;font-size:0.64rem;font-weight:800'>REGIME OVERLAY</span>"
-            f"<strong style='color:{_oc};font-size:0.8rem'> {_label}</strong>"
-            f"<span style='color:#8899AA;font-size:0.78rem'> — {_body}</span></div>"
-        )
-
-    _cu_colour = "#d97706"
-    catch_up_strips = ""
-    for flag in catch_up_flags:
-        _td  = html.escape(flag.get("ticker", ""))
-        _sd  = html.escape(flag.get("flag_source", ""))
-        _dd  = html.escape(flag.get("description", ""))
-        _z   = flag.get("z_score")
-        _zs  = f"z={_z:.2f}" if _z is not None else ""
-        _cr  = flag.get("pair_corr_30d")
-        _cs  = f" | 30d corr {_cr:+.3f}" if _cr is not None else ""
-        catch_up_strips += (
-            f"<div style='border-left:3px solid {_cu_colour};padding:3px 10px;"
-            f"background:{_hex_rgba(_cu_colour, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
-            f"<span style='background:{_cu_colour};color:#fff;padding:0 5px;"
-            f"border-radius:2px;font-size:0.64rem;font-weight:800'>CATCH-UP</span>"
-            f"<strong style='color:#fbbf24;font-size:0.8rem'> {_td}</strong>"
-            f"<span style='color:#8899AA;font-size:0.78rem'> {_sd} {_zs}{_cs}</span>"
-            f"<span style='color:#8899AA;font-size:0.78rem'> — {_dd}</span></div>"
-        )
-
-    macro_regional_strip = ""
-    try:
-        _macro_region_dash = get_macro_dashboard(config)
-    except Exception:
-        _macro_region_dash = {}
-    _region_scores_sig = (
-        _macro_region_dash.get("region_scores", {}) if _macro_region_dash.get("has_data") else {}
-    )
-    if _region_scores_sig:
-        _REGION_COLOUR_SIG = {"us": "#16a34a", "europe": "#6366f1", "asia": "#f59e0b"}
-        _REGION_LABEL_SIG   = {"us": "US", "europe": "EUROPE", "asia": "ASIA"}
-        _region_pills = "".join(
-            f"<span style='background:{_REGION_COLOUR_SIG.get(r, '#8899AA')}18;"
-            f"border:1px solid {_REGION_COLOUR_SIG.get(r, '#8899AA')}55;"
-            f"color:{_REGION_COLOUR_SIG.get(r, '#8899AA')};padding:1px 7px;"
-            f"border-radius:3px;font-size:0.72rem;font-weight:700;white-space:nowrap;margin-right:4px'>"
-            f"{_REGION_LABEL_SIG.get(r, r.upper())} {((v + 1) / 2):.0%}</span>"
-            for r, v in _region_scores_sig.items()
-        )
-        _region_weights_cfg_sig = _macro_region_dash.get("region_weights_config", {}) or {}
-        _weight_bits_sig = " · ".join(
-            f"{_REGION_LABEL_SIG.get(r, r.upper()).title()} {w:.0%}"
-            for r, w in _region_weights_cfg_sig.items()
-        )
-        macro_regional_strip = (
-            "<div style='border-left:3px solid #0ea5e9;padding:3px 10px;"
-            f"background:{_hex_rgba('#0ea5e9', 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
-            "<span style='background:#0ea5e9;color:#fff;padding:0 5px;"
-            "border-radius:2px;font-size:0.64rem;font-weight:800'>MACRO REGIONS</span> "
-            f"{_region_pills}"
-            "<span style='color:#8899AA;font-size:0.78rem'>regional bullishness"
-            + (f" — {_weight_bits_sig} portfolio weights" if _weight_bits_sig else "")
-            + " · see Macro Dashboard for detail</span></div>"
-        )
-
-    # ── V2 live status strip — same visual pattern as the overlay/catch-up
-    # strips above; the ranked table below remains V1's own confluence-score
-    # analysis (still real, still valid), this strip is purely about what's
-    # actually live-trading the account right now.
-    v2_strip = ""
-    _v2_cfg_sig = config.get("trading212_v2", {})
-    if _v2_cfg_sig.get("enabled", False):
-        _v2_sig_rows = [r for r in _get_v2_ticker_status() if not r.get("insufficient_history")]
-        _v2_sig_long = sum(1 for r in _v2_sig_rows if r.get("sig_on") is True)
-        _v2_sig_crisis = any(r.get("crisis_now") for r in _v2_sig_rows)
-        _v2c = "#991b1b" if _v2_sig_crisis else "#16a34a"
-        v2_strip = (
-            f"<div style='border-left:3px solid {_v2c};padding:3px 10px;"
-            f"background:{_hex_rgba(_v2c, 0.10)};border-radius:0 3px 3px 0;margin-bottom:3px'>"
-            f"<span style='background:{_v2c};color:#fff;padding:0 5px;"
-            f"border-radius:2px;font-size:0.64rem;font-weight:800'>V2 LIVE</span>"
-            f"<strong style='color:{_v2c};font-size:0.8rem'> "
-            f"{'Crisis override active' if _v2_sig_crisis else 'No crisis override'}</strong>"
-            f"<span style='color:#8899AA;font-size:0.78rem'> — {_v2_sig_long} of "
-            f"{len(_v2_sig_rows)} tickers currently long on momentum</span></div>"
-        )
-
-    intel_strips = overlay_strips + catch_up_strips + macro_regional_strip + v2_strip
-
-    dist_pills = "".join(
-        f"<div style='text-align:center;padding:5px 8px;border-radius:6px;"
-        f"background:{fg}22;border:1px solid {fg}55;flex:1;min-width:72px'>"
-        f"<div style='color:{fg};font-weight:700;font-size:1.3rem'>{counts[lbl]}</div>"
-        f"<div style='color:#8899AA;font-size:0.62rem;font-weight:600'>{t_counts[lbl]} tradeable</div>"
-        f"<div style='color:#8899AA;font-size:0.68rem;margin-top:1px'>{lbl}</div>"
-        f"</div>"
-        for lbl, fg in _DIST_CFG
-    )
-
-    last_ts = get_metadata("last_analysis_run") or get_last_signal_timestamp()
-    ts_str  = _fmt_uk(last_ts, "%Y-%m-%d %H:%M") if last_ts else "not yet generated"
-
-    st.markdown(
-        f"<div style='border:1px solid #334155;border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
-        + (f"<div style='margin-bottom:5px'>{intel_strips}</div>" if intel_strips else "")
-        + f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px'>"
-        + f"<span style='background:{colour};color:#fff;padding:2px 10px;border-radius:12px;"
-        + f"font-size:0.82rem;font-weight:700'>{regime.replace('_', ' ')}</span>"
-        + f"<span style='color:#8899AA;font-size:0.79rem'>^GSPC {html.escape(price_pct)}</span>"
-        + f"<span style='color:#8899AA;font-size:0.79rem'>{adx_str}</span>"
-        + f"<span style='color:#8899AA;font-size:0.79rem'>{vix_str}</span>"
-        + f"</div>"
-        + (f"<div style='font-size:0.82rem;color:#8899AA;line-height:1.4;margin-bottom:6px'>"
-           f"{html.escape(note)}</div>" if note else "")
-        + f"<div style='display:flex;gap:5px;margin-bottom:5px'>{dist_pills}</div>"
-        + f"<div style='font-size:0.71rem;color:#8899AA'>Signals: {html.escape(ts_str)}"
-        + f" · updates at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} &amp; {_uk_sched_time(21,30)}</div>"
-        + f"</div>",
-        unsafe_allow_html=True,
-    )
-    if _region_scores_sig:
-        st.caption(
-            "Regional bullishness reflects the percentage of indicators in each group "
-            "scoring positively. Europe 0% = both tracked European series (ECB Deposit Rate, "
-            "Germany 10Y Bund) are currently bearish — mathematically correct, not a display error."
-        )
-
-    # ---- Generate Signals button (top of page, right of header) -----------
-    _gs_col, _ = st.columns([2, 5])
-    with _gs_col:
-        if st.button("Generate Signals", key="signals_gen_btn", width="stretch"):
-            with st.spinner("Regenerating signals…"):
-                try:
-                    _tickers = get_all_tickers(config)
-                    run_analysis(tickers=_tickers, config=config)
-                    generate_signals(tickers=_tickers, config=config)
-                    st.cache_data.clear()
-                    st.toast("Signals updated.", icon="✅")
-                    st.rerun()
-                except Exception as _exc:
-                    st.error(f"Signal generation failed: {_exc}")
-
-    # ---- Market intelligence -----------------------------------------------
-    bullish_n   = counts["STRONG BUY"] + counts["BUY"]
-    bearish_n   = counts["SELL"] + counts["STRONG SELL"]
-    total_n     = sum(counts.values())
-    t_bullish_n = t_counts["STRONG BUY"] + t_counts["BUY"]
-    t_bearish_n = t_counts["SELL"] + t_counts["STRONG SELL"]
-    t_total_n   = sum(t_counts.values())
-    _intel: list[str] = []
-
-    if total_n > 0:
-        bull_pct = bullish_n / total_n
-        bear_pct = bearish_n / total_n
-        if bull_pct >= 0.6:
-            _intel.append(
-                f"{bullish_n} of {total_n} assets show buy signals ({t_bullish_n} tradeable) — "
-                f"broad bullish breadth supports adding long exposure on short-term pullbacks."
-            )
-        elif bear_pct >= 0.6:
-            _intel.append(
-                f"{bearish_n} of {total_n} assets show sell signals ({t_bearish_n} tradeable) — "
-                f"broad bearish breadth suggests reducing longs and favouring cash or short positions."
-            )
-        elif bull_pct > bear_pct:
-            _intel.append(
-                f"Signals lean bullish ({bullish_n} buys vs {bearish_n} sells across {total_n} assets, "
-                f"{t_bullish_n} tradeable opportunities) "
-                f"— selective long exposure is favoured, though broad momentum is not overwhelming."
-            )
-        elif bear_pct > bull_pct:
-            _intel.append(
-                f"Signals lean bearish ({bearish_n} sells vs {bullish_n} buys from {total_n} assets, "
-                f"{t_bearish_n} tradeable) "
-                f"— consider lightening longs and waiting for clearer confirmation before new entries."
-            )
-        else:
-            _intel.append(
-                f"Signals are evenly split ({bullish_n} buys, {bearish_n} sells across {total_n} assets, "
-                f"{t_bullish_n} tradeable buys) "
-                f"— the market lacks a clear directional bias; patience or range-bound strategies are preferred."
-            )
-
-    if vix:
-        if vix >= 30:
-            _intel.append(
-                f"VIX at {vix:.1f} signals elevated fear. Historically, spikes above 30 mark "
-                f"panic-driven selling — contrarian long opportunities may emerge, but strict "
-                f"position sizing is critical."
-            )
-        elif vix >= 20:
-            _intel.append(
-                f"VIX at {vix:.1f} indicates above-average uncertainty — options premiums are "
-                f"elevated, so factor heightened risk into position sizing."
-            )
-        elif vix < 15:
-            _intel.append(
-                f"VIX at {vix:.1f} signals complacency. Low-volatility regimes can persist, but "
-                f"historically precede sharper corrections — avoid overleveraging."
-            )
-
-    if regime == "TRENDING_BULL" and adx:
-        if adx >= 35:
-            _intel.append(
-                f"ADX at {adx:.1f} confirms a very strong trend — entries on short-term pullbacks "
-                f"to the 20-day moving average typically offer better risk/reward than chasing new highs."
-            )
-        elif adx >= 25:
-            _intel.append(
-                f"ADX at {adx:.1f} confirms a sustained trend — look for pullback entries "
-                f"rather than buying extended moves."
-            )
-    elif regime == "TRENDING_BEAR":
-        _intel.append(
-            "In a confirmed downtrend, rallies toward the 20-day moving average tend to be "
-            "selling opportunities rather than dip-buying entry points."
-        )
-    elif regime == "RANGING_LOW_VOL":
-        _intel.append(
-            "Low-volatility ranging conditions favour mean reversion: buy near support, "
-            "sell near resistance, and use tighter profit targets than in trending markets."
-        )
-    elif regime == "HIGH_VOLATILITY":
-        _intel.append(
-            "In high-volatility regimes, reduce standard position sizes by 30–50% to account "
-            "for wider price swings, and prioritise assets with the strongest multi-module agreement."
-        )
-
-    if _intel:
-        st.info(" ".join(_intel[:2]))
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # ---- Top picks ----------------------------------------------------------
-    _MODULE_KEYS = [
-        "trend_score", "mean_reversion_score", "volatility_score",
-        "volume_score", "macro_score",
-    ]
-
-    # Require score ≥ 0.5 in the correct direction AND at least 3/5 modules
-    # agreeing — ensures top picks represent genuine multi-module conviction,
-    # not a single high-weight module carrying a weak or borderline signal.
-    def _qualifies(r, direction: int) -> bool:
-        score = r.get("confluence_score") or 0.0
-        if direction == 1 and score < 0.5:
-            return False
-        if direction == -1 and score > -0.5:
-            return False
-        agreeing = sum(1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction)
-        return agreeing >= 3
-
-    long_picks  = [r for r in rows           if _qualifies(r,  1) and r.get("ticker") in tradeable_set][:3]
-    short_picks = [r for r in reversed(rows) if _qualifies(r, -1) and r.get("ticker") in tradeable_set][:3]
-
-    lc, sc = st.columns(2)
-
-    # Per-module plain-English tips: {score: (long_trade_tip, short_trade_tip)}
-    # The long_tip is used when direction==1; short_tip when direction==-1.
-    # Supporting tip = module agrees with trade direction; caution tip = module disagrees.
-    _MTIPS: dict[str, dict[int, tuple[str, str]]] = {
-        "trend_score": {
-            1:  ("price is above key moving averages with confirmed momentum (ADX)",
-                 "price is above moving averages — trend is working against this short"),
-            -1: ("price is below key moving averages — trend is working against this long",
-                 "price is below key moving averages with confirmed downside momentum"),
-        },
-        "mean_reversion_score": {
-            1:  ("RSI and Bollinger Bands indicate oversold conditions — pullback entry opportunity",
-                 "RSI/Bollinger Bands show oversold — short squeeze risk, exercise caution"),
-            -1: ("RSI/Bollinger Bands indicate overbought — elevated pullback risk",
-                 "RSI and Bollinger Bands indicate overbought conditions — mean reversion expected"),
-        },
-        "volatility_score": {
-            1:  ("low and stable volatility — favourable entry conditions",
-                 "low volatility — short positions carry more risk of sudden reversals"),
-            -1: ("elevated volatility — widen stops and reduce position size",
-                 "elevated volatility — can amplify downside moves, but also reversals"),
-        },
-        "volume_score": {
-            1:  ("above-average volume is confirming the price move",
-                 "above-average volume on the downside adds conviction to this short"),
-            -1: ("below-average volume — the move lacks broad participation",
-                 "low volume — limited downside participation, watch for a reversal"),
-        },
-        "macro_score": {
-            1:  ("macro backdrop is supportive — favourable yield curve and VIX readings",
-                 "macro backdrop is supportive, which may create headwinds for this short"),
-            -1: ("macro headwinds present — monitor yield curve shape and VIX trend",
-                 "macro headwinds are reinforcing the bearish case"),
-        },
-    }
-
-    def _pick_card(container, picks, heading, card_fg):
-        container.markdown(f"**{heading}**")
-        if not picks:
-            container.caption("No qualifying signals.")
-            return
-        for r in picks:
-            ticker    = html.escape(r.get("ticker", ""))
-            name      = html.escape(watchlist.get(r.get("ticker", ""), r.get("ticker", "")))
-            if len(name) > 35:
-                name = name[:33] + "…"
-            score     = r.get("confluence_score") or 0.0
-            signal    = (r.get("signal") or "NEUTRAL").replace("_", " ")
-            direction = 1 if score > 0 else -1
-            agreeing  = sum(1 for k in _MODULE_KEYS if (r.get(k) or 0) == direction)
-            pct       = min(int(abs(score) * 100), 100)
-
-            support_tips: list[str] = []
-            caution_tips: list[str] = []
-            for mk in _MODULE_KEYS:
-                ms = r.get(mk) or 0
-                if ms == 0:
-                    continue
-                tip_pair = _MTIPS.get(mk, {}).get(ms)
-                if tip_pair is None:
-                    continue
-                long_tip, short_tip = tip_pair
-                tip = long_tip if direction == 1 else short_tip
-                if ms == direction:
-                    support_tips.append(tip)
-                else:
-                    caution_tips.append(tip)
-
-            support_html = (
-                f'<div style="color:#8899AA;font-size:0.72rem;margin-top:5px">'
-                f'✓ {" · ".join(support_tips[:2])}</div>'
-            ) if support_tips else ""
-            caution_html = (
-                f'<div style="color:#f59e0b;font-size:0.72rem;margin-top:2px">'
-                f'⚠ {" · ".join(caution_tips[:2])}</div>'
-            ) if caution_tips else ""
-
-            container.markdown(
-                f'<div style="background:{card_fg}18;border-left:3px solid {card_fg};'
-                f'padding:8px 12px;border-radius:4px;margin-bottom:8px">'
-                f'<span style="font-weight:700;color:{card_fg}">{ticker}</span>'
-                f'<span style="color:#8899AA;font-size:0.8rem;margin-left:8px">{name}</span><br>'
-                f'<span style="color:{card_fg};font-size:0.85rem">{signal}</span>'
-                f'<span style="float:right;font-weight:700;color:{card_fg}">{score:+.0%}</span>'
-                f'<div style="background:#374151;border-radius:2px;height:3px;margin-top:6px">'
-                f'<div style="background:{card_fg};width:{pct}%;height:3px;border-radius:2px"></div>'
-                f'</div>'
-                f'<span style="color:#8899AA;font-size:0.7rem">{agreeing}/5 modules agree</span>'
-                f'{support_html}'
-                f'{caution_html}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-    _pick_card(lc, long_picks,  "Top Long Opportunities",  "#16a34a")
-    _pick_card(sc, short_picks, "Top Short Opportunities", "#ef5350")
-
-    st.divider()
-
-    # ---- Full rankings table -----------------------------------------------
-    st.markdown("### Asset Rankings")
-
-    _col_cap, _col_tog = st.columns([3, 2])
-    _col_cap.caption("▲ bullish  ●  neutral  ▼ bearish")
-    _sig_filter = _col_tog.radio(
-        "Show",
-        ["Tradeable Only", "Show All"],
-        horizontal=True,
-        key="signals_filter",
-        index=0,
-        label_visibility="collapsed",
-    )
-    _show_all_assets = _sig_filter == "Show All"
-
-    with st.expander("Module key — what each column means"):
-        st.markdown(
-            "| Column | What it measures | ▲ Bullish | ▼ Bearish |\n"
-            "|---|---|---|---|\n"
-            "| **Trend** | Moving averages (SMA 20/50/200) + ADX | Price above SMAs with confirmed momentum | Price below SMAs, downtrend confirmed |\n"
-            "| **Mean Rev** | RSI (14) + Bollinger Bands | Oversold — bounce expected | Overbought — pullback expected |\n"
-            "| **Volatility** | ATR + VIX levels | Low/stable volatility — favourable entry conditions | Elevated volatility — widen stops, reduce size |\n"
-            "| **Volume** | Volume vs 20-day average | Above-average volume confirms the price move | Below-average — the move lacks conviction |\n"
-            "| **Macro** | FRED series (yield curve, credit spreads, VIX) | Macro backdrop supportive | Macro headwinds present |\n\n"
-            "**Score** = regime-weighted average of all modules (−1 to +1). "
-            "In a trending market, Trend carries more weight; in a ranging market, Mean Rev carries more weight. "
-            "STRONG BUY/SELL thresholds are regime-aware (0.55–0.70); see Daily Briefing for the current value. "
-            "BUY ≥ 0.30 · SELL ≤ −0.30."
-        )
-
-    def _sym(val) -> str:
-        return _SCORE_SYMBOL.get(int(val) if val is not None else 0, "●")
-
-    n_tradeable_rows = sum(1 for r in rows if r.get("ticker") in tradeable_set)
-    n_analysis_rows  = len(rows) - n_tradeable_rows
-
-    records = []
-    for r in rows:
-        ticker = r.get("ticker", "")
-        if not _show_all_assets and ticker not in tradeable_set:
-            continue
-        records.append({
-            "Ticker":     ticker,
-            "Name":       watchlist.get(ticker, ticker),
-            "Signal":     (r.get("signal") or "NEUTRAL").replace("_", " "),
-            "Score":      r.get("confluence_score") or 0.0,
-            "Trend":      _sym(r.get("trend_score")),
-            "Mean Rev":   _sym(r.get("mean_reversion_score")),
-            "Volatility": _sym(r.get("volatility_score")),
-            "Volume":     _sym(r.get("volume_score")),
-            "Macro":      _sym(r.get("macro_score")),
-            "Type":       "Tradeable" if ticker in tradeable_set else "Analysis only",
-        })
-
-    table_df = pd.DataFrame(records)
-
-    def _style_signal(val: str) -> str:
-        return _SIGNAL_CSS.get(val, "")
-
-    def _style_score(val: float) -> str:
-        if val > 0.1:  return "color:#16a34a;font-weight:bold"
-        if val < -0.1: return "color:#dc2626;font-weight:bold"
-        return ""
-
-    def _style_module(val: str) -> str:
-        if val == "▲": return "color:#16a34a;font-weight:bold"
-        if val == "▼": return "color:#dc2626;font-weight:bold"
-        return ""
-
-    module_cols = ["Trend", "Mean Rev", "Volatility", "Volume", "Macro"]
-    styler = (
-        table_df.style
-        .map(_style_signal, subset=["Signal"])
-        .map(_style_score,  subset=["Score"])
-        .map(_style_module, subset=module_cols)
-        .map(lambda v: (
-            "color:#16a34a;font-size:0.75rem;font-weight:600" if v == "Tradeable"
-            else "color:#8899AA;font-size:0.75rem" if v == "Analysis only"
-            else ""
-        ), subset=["Type"])
-        .format({"Score": "{:+.3f}"})
-    )
-    row_height_px = 35
-    header_px     = 38
-    st.dataframe(
-        styler,
-        width="stretch",
-        hide_index=True,
-        height=header_px + row_height_px * len(records),
-    )
-    if _show_all_assets:
-        st.caption(f"Showing all {len(rows)} assets ({n_analysis_rows} analysis-only)")
-    else:
-        st.caption(
-            f"Showing {n_tradeable_rows} tradeable assets"
-            + (f" · {n_analysis_rows} analysis-only hidden" if n_analysis_rows else "")
-        )
-
-    _render_footer()
-
-
-# ---------------------------------------------------------------------------
-# Status page (also shown on Charts landing when no asset is selected)
-# ---------------------------------------------------------------------------
-
-def _pipeline_row(
-    label: str,
-    ts: "datetime | None",
-    warn_h: float,
-    error_h: float,
-    desc: str,
-    never_badge: str = "PENDING",
-) -> str:
-    """Return an HTML flex row for one pipeline step."""
-    _COLOURS = {"ok": "#16a34a", "warn": "#f59e0b", "error": "#dc2626"}
-    _BADGES  = {"ok": "OK", "warn": "STALE", "error": "OVERDUE"}
-
-    if ts is None:
-        colour   = "#94a3b8"
-        ts_str   = "Never"
-        age_str  = "—"
-        badge    = html.escape(never_badge)
-        badge_bg = "#94a3b820"
-        badge_fg = "#94a3b8"
-    else:
-        _ts     = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
-        hours   = (datetime.utcnow() - _ts).total_seconds() / 3600
-        ts_str  = _fmt_uk(_ts, "%Y-%m-%d %H:%M")
-        age_str = (
-            f"{int(hours * 60)}m ago" if hours < 1
-            else f"{int(hours)}h ago" if hours < 24
-            else f"{hours / 24:.1f}d ago"
-        )
-        level    = _age_level(ts, warn_hours=warn_h, error_hours=error_h)
-        colour   = _COLOURS[level]
-        badge    = _BADGES[level]
-        badge_bg = f"{colour}20"
-        badge_fg = colour
-
-    return (
-        f'<div style="display:flex;align-items:center;padding:9px 0;'
-        f'border-bottom:1px solid #1E2D45;gap:0;font-size:0.88rem">'
-        f'<div style="width:32px;flex-shrink:0;display:flex;justify-content:center;align-items:center">'
-        f'<span style="display:block;width:10px;height:10px;border-radius:50%;background:{colour}"></span>'
-        f'</div>'
-        f'<div style="flex:0 0 18%;min-width:0;font-weight:600;color:#CCDDEE;padding-right:8px">'
-        f'{html.escape(label)}</div>'
-        f'<div style="flex:0 0 17%;min-width:0;color:#8899AA;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
-        f'{html.escape(ts_str)}</div>'
-        f'<div style="flex:0 0 7%;min-width:0;color:#8899AA;font-size:0.82rem;padding-right:8px;white-space:nowrap">'
-        f'{html.escape(age_str)}</div>'
-        f'<div style="flex:0 0 8%;min-width:0;padding-right:8px">'
-        f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 9px;border-radius:4px;'
-        f'font-size:0.73rem;font-weight:700;letter-spacing:0.04em">{badge}</span></div>'
-        f'<div style="flex:1;min-width:0;color:#8899AA;font-size:0.82rem">'
-        f'{html.escape(desc)}</div>'
-        f'</div>'
-    )
-
-
-def _render_home_page(config: dict, watchlist: dict[str, str]) -> None:
-    """System status panel — rendered as the Status page and as the Charts landing."""
-    st.cache_data.clear()
-    _render_page_wordmark("Status")
-    st.markdown("## System Status")
-
-    # ── Collect data needed for both status rows ──────────────────────────
-    deploy_ts, deploy_msg = _git_log_info()
-    uptime                = _service_uptime()
-    db_size_str, db_level = _db_size(config)
-
-    last_refresh   = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
-    last_analysis  = get_metadata("last_analysis_run")
-    last_sched     = get_metadata("last_scheduled_run") or last_analysis
-    last_sched_name = get_metadata_str("last_scheduled_run_name") or ""
-
-    # ── Status grid row 1: system info ───────────────────────────────────
-    sc1, sc2, sc3 = st.columns(3)
-    _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info")
-    _status_card(sc2, "Service Uptime",  uptime, "Process running", "ok")
-    _status_card(sc3, "Database Size",   db_size_str, "", db_level)
-
-    # ── Status grid row 2: scheduling health ─────────────────────────────
-    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
-    pr1, pr2, pr3 = st.columns(3)
-
-    # Last Data Refresh
-    _ref_val, _ref_sub = _age_display(last_refresh)
-    _status_card(pr1, "Last Data Refresh", _ref_val, _ref_sub,
-                 _age_level(last_refresh, warn_hours=48.0, error_hours=96.0))
-
-    # Last Scheduled Run — red when >26 h on a weekday (missed cycle indicator)
-    _sched_val, _sched_sub = _age_display(last_sched)
-    if last_sched_name:
-        _sched_sub = f"{last_sched_name} · {_sched_sub}"
-    _now_check  = datetime.utcnow()
-    _sched_hrs  = (
-        (_now_check - last_sched.replace(tzinfo=None)).total_seconds() / 3600
-        if last_sched else float("inf")
-    )
-    _is_weekday = _now_check.weekday() < 5
-    _sched_lvl  = (
-        "error" if (_sched_hrs > 26 and _is_weekday)
-        else "warn" if _sched_hrs > 14
-        else ("ok" if last_sched else "error")
-    )
-    _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub, _sched_lvl)
-
-    # Next Scheduled Run — soonest upcoming job across all configured runs.
-    # The pre_market slot is Monday Pre-Market (_monday_premarket_job — adds
-    # stale weekend-order cancellation) on Mondays and the regular Pre-Market
-    # job (_pre_market_job, Tue-Fri only) every other weekday; _next_run_for_time()
-    # still finds the correct next weekday occurrence for either since a job
-    # fires at this hour:minute every weekday, just a different function on Monday.
-    _sched_cfg_runs = config.get("scheduler", {}).get("runs", {})
-    _RUN_LABELS = {"pre_market": "Pre-Market", "us_open": "US Open", "eod": "End of Day"}
-    _nxt_dt, _nxt_label = None, ""
-    for _rn, _rl in _RUN_LABELS.items():
-        _rc = _sched_cfg_runs.get(_rn, {})
-        _nt = _next_run_for_time(int(_rc.get("hour", 0)), int(_rc.get("minute", 0)))
-        _rl_eff = "Monday Pre-Market" if (_rn == "pre_market" and _nt.weekday() == 0) else _rl
-        if _nxt_dt is None or _nt < _nxt_dt:
-            _nxt_dt, _nxt_label = _nt, _rl_eff
-    if _nxt_dt:
-        _nxt_delta = (_nxt_dt - datetime.utcnow()).total_seconds()
-        _nxt_until = (
-            f"in {int(_nxt_delta / 60)}m" if _nxt_delta < 3600
-            else f"in {_nxt_delta / 3600:.1f}h" if _nxt_delta < 86400
-            else f"in {_nxt_delta / 86400:.1f}d"
-        )
-        _nxt_val = _fmt_uk(_nxt_dt, "%a %H:%M")
-        _nxt_sub = f"{_nxt_until} — {_nxt_label}"
-    else:
-        _nxt_val, _nxt_sub = "Unknown", ""
-    _status_card(pr3, "Next Scheduled Run", _nxt_val, _nxt_sub, "info")
-
-    # ── Collect pipeline data ─────────────────────────────────────────────
-    last_fred      = get_metadata("last_fred_run")
-    last_run_type  = get_metadata_str("last_run_type")
-    active_overlays = get_metadata_str("active_overlays") or "none"
-    fred_key       = bool(config.get("macro", {}).get("fred_api_key", ""))
-    series_count   = len(config.get("macro", {}).get("fred_series", {}))
-
-    fresh, stale, missing, _max_stale_td = _price_coverage(config)
-    total = len(watchlist)
-
-    try:
-        from sqlalchemy import text as sa_text
-        with get_engine().connect() as _conn:
-            _cr = _conn.execute(
-                sa_text(
-                    "SELECT COUNT(*) AS cnt, "
-                    "SUM(CASE WHEN divergence='DIVERGING' THEN 1 ELSE 0 END) AS divg, "
-                    "MAX(created_at) AS last_ts "
-                    "FROM correlations"
-                )
-            ).mappings().first()
-            corr_cnt  = int(_cr["cnt"] or 0)
-            corr_divg = int(_cr["divg"] or 0)
-
-            _sr = _conn.execute(
-                sa_text(
-                    "SELECT COUNT(*) AS cnt, "
-                    "SUM(CASE WHEN signal IN ('BUY','STRONG_BUY') THEN 1 ELSE 0 END) AS buys, "
-                    "SUM(CASE WHEN signal IN ('SELL','STRONG_SELL') THEN 1 ELSE 0 END) AS sells "
-                    "FROM signals WHERE date=(SELECT MAX(date) FROM signals)"
-                )
-            ).mappings().first()
-            sig_cnt  = int(_sr["cnt"]  or 0)
-            sig_buys = int(_sr["buys"] or 0)
-            sig_sells= int(_sr["sells"]or 0)
-
-            _mac = _conn.execute(
-                sa_text("SELECT COUNT(DISTINCT series_id) AS cnt FROM macro_indicators")
-            ).mappings().first()
-            fred_stored = int(_mac["cnt"] or 0)
-
-            _ind = _conn.execute(
-                sa_text("SELECT COUNT(DISTINCT ticker) AS cnt FROM indicators")
-            ).mappings().first()
-            ind_tickers = int(_ind["cnt"] or 0)
-    except Exception:
-        corr_cnt = corr_divg = sig_cnt = sig_buys = sig_sells = fred_stored = ind_tickers = 0
-        corr_ts = None
-
-    regime_result  = detect_regime()
-    regime_name    = str(regime_result["regime"]).replace("Regime.", "")
-    overlay_list   = [k for k in (active_overlays or "").split(",") if k and k != "none"]
-
-    # ── Price Data Refresh description ────────────────────────────────────
-    if not fresh and not stale and not missing:
-        price_desc = "No price data yet — use Manual Controls below to trigger an immediate pull"
-    elif missing:
-        price_desc = (
-            f"{len(fresh)}/{total} tickers up to date"
-            + (f" · {len(stale)} stale" if stale else "")
-            + f" · {len(missing)} missing: {', '.join(missing[:4])}"
-            + ("…" if len(missing) > 4 else "")
-        )
-    elif stale:
-        price_desc = (
-            f"{len(fresh)}/{total} fresh · {len(stale)} stale: "
-            + ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "")
-        )
-    else:
-        price_desc = f"All {total} tickers up to date"
-
-    # ── FRED description ──────────────────────────────────────────────────
-    if not fred_key:
-        fred_desc = (
-            "No FRED API key — macro scoring uses VIX and stored data only. "
-            "Add fred_api_key to config.yaml to enable full macro indicators."
-        )
-        fred_badge = "NO KEY"
-    elif fred_stored == 0:
-        fred_desc  = f"{series_count} series configured — not yet fetched (runs at EOD)"
-        fred_badge = "PENDING"
-    else:
-        fred_desc  = f"{fred_stored} series stored · {series_count} configured"
-        fred_badge = "OK" if last_fred else "PENDING"
-
-    # ── Analysis description ──────────────────────────────────────────────
-    run_label   = {"full": "Full Refresh", "analysis_only": "Analysis Only"}.get(last_run_type or "", "")
-    analysis_desc = (
-        f"{ind_tickers} tickers analysed"
-        + (f" · {run_label}" if run_label else "")
-    ) if ind_tickers else "Not yet run"
-
-    # ── Correlations description ──────────────────────────────────────────
-    corr_desc = (
-        f"{corr_cnt} pairs computed · {corr_divg} DIVERGING"
-        if corr_cnt else "Not yet computed"
-    )
-
-    # ── Signals description ───────────────────────────────────────────────
-    sig_neutral = sig_cnt - sig_buys - sig_sells
-    signals_desc = (
-        f"{sig_cnt} signals · {sig_buys} BUY/STRONG_BUY · {sig_sells} SELL/STRONG_SELL"
-        + (f" · {sig_neutral} NEUTRAL" if sig_neutral else "")
-        if sig_cnt else "No signals generated yet"
-    )
-
-    # ── Regime description ────────────────────────────────────────────────
-    regime_desc = regime_name
-    if overlay_list:
-        regime_desc += " · Overlays: " + ", ".join(overlay_list)
-    else:
-        regime_desc += " · No overlays active"
-
-    # ── Render pipeline table ─────────────────────────────────────────────
-    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
-    st.markdown("### Pipeline")
-
-    _THEAD = (
-        '<div style="font-size:0.88rem">'
-        '<div style="display:flex;align-items:center;padding:4px 0 6px;border-bottom:2px solid #1E2D45;'
-        'color:#8899AA;font-size:0.70rem;text-transform:uppercase;letter-spacing:0.07em">'
-        '<div style="width:32px;flex-shrink:0"></div>'
-        '<div style="flex:0 0 18%;padding-right:8px">Step</div>'
-        '<div style="flex:0 0 17%;padding-right:8px">Last Run</div>'
-        '<div style="flex:0 0 7%;padding-right:8px">Age</div>'
-        '<div style="flex:0 0 8%;padding-right:8px">Status</div>'
-        '<div style="flex:1">Description</div>'
-        '</div>'
-    )
-    _TFOOT = "</div>"
-
-    rows = "".join([
-        _pipeline_row(
-            "1 · Price Data Refresh",
-            last_refresh,
-            warn_h=48.0, error_h=96.0,
-            desc=price_desc,
-            never_badge="PENDING",
-        ),
-        _pipeline_row(
-            "2 · FRED Macro Indicators",
-            last_fred if fred_key else None,
-            warn_h=48.0, error_h=168.0,
-            desc=fred_desc,
-            never_badge="NO KEY" if not fred_key else "PENDING",
-        ),
-        _pipeline_row(
-            "3 · Technical Analysis",
-            last_analysis,
-            warn_h=48.0, error_h=72.0,
-            desc=analysis_desc,
-            never_badge="PENDING",
-        ),
-        _pipeline_row(
-            "4 · Correlation Pairs",
-            last_analysis,
-            warn_h=48.0, error_h=72.0,
-            desc=corr_desc,
-            never_badge="PENDING",
-        ),
-        _pipeline_row(
-            "5 · Signal Generation",
-            last_analysis,
-            warn_h=48.0, error_h=72.0,
-            desc=signals_desc,
-            never_badge="PENDING",
-        ),
-        _pipeline_row(
-            "6 · Regime & Overlays",
-            last_analysis,
-            warn_h=48.0, error_h=72.0,
-            desc=regime_desc,
-            never_badge="PENDING",
-        ),
-    ])
-
-    st.markdown(_THEAD + rows + _TFOOT, unsafe_allow_html=True)
-
-    # ── Scheduled runs ────────────────────────────────────────────────────
-    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
-    st.markdown("### Scheduled Runs")
-    sched_runs = config.get("scheduler", {}).get("runs", {})
-    _RUN_DISPLAY = {
-        "pre_market": ("Pre-Market",  "Tue–Fri: analysis only — Asian closed, European opening. "
-                                       "Mon: Monday Pre-Market job runs instead — cancels stale "
-                                       "weekend BUY orders first, then the same analysis-only run."),
-        "us_open":    ("US Open",     "Analysis only — catches overnight moves before US open"),
-        "eod":        ("End of Day",  "Full refresh + analysis after NYSE close"),
-    }
-    run_cols = st.columns(len(_RUN_DISPLAY))
-    for col, (run_name, (label, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
-        run_cfg = sched_runs.get(run_name, {})
-        h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
-        time_str = _uk_sched_time(h, m)
-        nxt     = _next_run_for_time(h, m)
-        delta   = (nxt - datetime.utcnow()).total_seconds()
-        until   = (
-            f"in {int(delta / 60)}m" if delta < 3600
-            else f"in {delta / 3600:.1f}h" if delta < 86400
-            else f"in {delta / 86400:.1f}d"
-        )
-        _status_card(col, f"{label} · {time_str}", _fmt_uk(nxt, "%a %H:%M"),
-                     f"{until} — {desc}", "info")
-
-    # ── Data coverage ─────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Data Coverage")
-    cc1, cc2, cc3 = st.columns(3)
-    fresh_level   = "ok"    if len(fresh)   == total else ("warn" if len(fresh) >= total * 0.9 else "error")
-    stale_level   = "ok"    if not stale    else ("error" if _max_stale_td > 7 else "warn")
-    missing_level = "ok"    if not missing  else "error"
-    _status_card(cc1, "Fresh (≤3 trading days)", f"{len(fresh)} / {total}",
-                 "all up to date" if len(fresh) == total else f"{total - len(fresh)} not fresh", fresh_level)
-    _status_card(cc2, "Stale (>3 trading days)", f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
-                 ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "") if stale else "none", stale_level)
-    _status_card(cc3, "Missing entirely", f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
-                 ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
-
-    # ── Manual controls ───────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Manual Controls")
-    st.caption("Trigger the analysis pipeline immediately without waiting for the next scheduled run.")
-    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
-
-    with _mc1:
-        if st.button("Run Analysis Now", width="stretch", type="primary",
-                     key="status_run_analysis"):
-            _cfg     = _load_config()
-            _tickers = get_all_tickers(_cfg)
-            with st.spinner("Running analysis pipeline…"):
-                try:
-                    run_analysis(tickers=_tickers, config=_cfg)
-                    generate_signals(tickers=_tickers, config=_cfg)
-                    st.success(
-                        f"Analysis complete — signals updated at "
-                        f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
-                    )
-                    st.cache_data.clear()
-                except Exception as _exc:
-                    st.error(f"Analysis failed: {_exc}")
-
-    with _mc2:
-        if st.button("Refresh Data + Analysis", width="stretch",
-                     key="status_full_refresh"):
-            _cfg     = _load_config()
-            _tickers = get_all_tickers(_cfg)
-            with st.spinner("Pulling latest prices…"):
-                try:
-                    _results  = pull_incremental(tickers=_tickers)
-                    _new_rows = sum(_results.values())
-                    if _new_rows > 0:
-                        set_metadata("last_full_refresh", datetime.utcnow().isoformat())
-                except Exception as _exc:
-                    st.error(f"Data pull failed: {_exc}")
-                    _new_rows = 0
-            with st.spinner("Fetching FRED macro indicators…"):
-                try:
-                    fetch_and_store_macro_indicators(_cfg)
-                except Exception as _exc:
-                    st.warning(f"FRED fetch failed (continuing): {_exc}")
-            with st.spinner("Refreshing FRED release calendars…"):
-                try:
-                    refresh_release_calendars(_cfg)
-                except Exception as _exc:
-                    st.warning(f"FRED release-calendar refresh failed (continuing): {_exc}")
-            with st.spinner("Running analysis pipeline…"):
-                try:
-                    run_analysis(tickers=_tickers, config=_cfg)
-                    generate_signals(tickers=_tickers, config=_cfg)
-                    st.success(
-                        f"Done — {_new_rows} new price rows · signals updated at "
-                        f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
-                    )
-                    st.cache_data.clear()
-                except Exception as _exc:
-                    st.error(f"Analysis failed: {_exc}")
-
-    with _mc3:
-        if st.button(
-            "Backfill FRED History", width="stretch",
-            key="status_backfill_fred",
-            help=(
-                "Pulls full 2019-present history for all 17 FRED macro series "
-                "(currently the EOD job only stores each series' latest value, "
-                "so the backtest's macro scoring is otherwise blind for most of "
-                "its date range). Run once after a fresh deployment or after "
-                "adding a new series to config.yaml. Estimated time: ~30 seconds."
-            ),
-        ):
-            _cfg = _load_config()
-            with st.spinner("Backfilling FRED history since 2019-01-01 (~30s)…"):
-                try:
-                    _backfill_results = backfill_macro_indicators(_cfg)
-                    if not _backfill_results:
-                        st.warning(
-                            "Backfill did not run — no FRED API key configured, or no "
-                            "fred_series entries in config.yaml."
-                        )
-                    else:
-                        from sqlalchemy import text as _sa_backfill_text
-                        _total_rows = sum(_backfill_results.values())
-                        _n_ok       = sum(1 for n in _backfill_results.values() if n > 0)
-                        with get_engine().connect() as _conn:
-                            _min_date = _conn.execute(
-                                _sa_backfill_text("SELECT MIN(date) AS d FROM macro_indicators")
-                            ).mappings().first()
-                        _earliest = _min_date["d"] if _min_date and _min_date["d"] else "—"
-                        st.success(
-                            f"✓ Backfill complete — {_total_rows} observations stored across "
-                            f"{_n_ok} series (earliest: {_earliest})."
-                        )
-                        _failed = [sid for sid, n in _backfill_results.items() if n == 0]
-                        if _failed:
-                            st.warning(f"No data for: {', '.join(_failed)}")
-                        st.cache_data.clear()
-                except Exception as _exc:
-                    st.error(f"Backfill failed: {_exc}")
-
-    with _mc4:
-        if st.button(
-            "Backfill Regime Metrics History", width="stretch",
-            key="status_backfill_regime_metrics",
-            help=(
-                "Reconstructs the Charts page's regime trend chart from "
-                "history that already exists in the indicators/signals "
-                "tables — one row per calendar date (the day's last "
-                "analysis run only; per-run resolution only exists going "
-                "forward, so the chart will show a visible density jump at "
-                "the backfill/live boundary — expected, not a bug). "
-                "Backfilled rows also infer the entries-blocked shading "
-                "from today's config applied retroactively, since no "
-                "historical config snapshot exists — live rows record the "
-                "gate result exactly as computed at the time. Safe to run "
-                "repeatedly — already-backfilled dates are skipped."
-            ),
-        ):
-            _cfg = _load_config()
-            with st.spinner("Reconstructing regime metrics history…"):
-                try:
-                    _rm_results = backfill_regime_metrics_history(_cfg)
-                    if _rm_results["rows_written"] == 0:
-                        st.info("Nothing new to backfill — all available dates are already recorded.")
-                    else:
-                        st.success(
-                            f"✓ Backfilled {_rm_results['rows_written']} day(s) "
-                            f"({_rm_results['earliest_date']} → {_rm_results['latest_date']})."
-                        )
-                        st.cache_data.clear()
-                except Exception as _exc:
-                    st.error(f"Backfill failed: {_exc}")
-
-    # ── Email notification test ────────────────────────────────────────────
-    notif_cfg = config.get("notifications", {}).get("email", {})
-    st.divider()
-    st.markdown("### Email Notifications")
-    _from    = notif_cfg.get("from_address") or notif_cfg.get("smtp_user", "—")
-    _to      = ", ".join(notif_cfg.get("to_addresses") or []) or "—"
-    _relay   = f"{notif_cfg.get('smtp_host', 'smtp-relay.brevo.com')}:{notif_cfg.get('smtp_port', 587)}"
-    _enabled = notif_cfg.get("enabled", False)
-    st.caption(
-        f"From: **{_from}** · To: **{_to}** · Via: {_relay} · "
-        f"Alerts: {'**enabled**' if _enabled else 'disabled'}"
-    )
-    _btn_col1, _btn_col2 = st.columns(2)
-    with _btn_col1:
-        if st.button("Send Test Email", key="status_send_test_email"):
-            _regime_str = detect_regime().get("regime", "MIXED")
-            _open_count = len(_get_t212_invest_brief_cards(config))
-            with st.spinner("Sending…"):
-                _ok, _msg = send_test_email(config, _regime_str, last_analysis, _open_count)
-            if _ok:
-                st.success(_msg)
-            else:
-                st.error(_msg)
-        st.caption("Confirms SMTP delivery is working.")
-    with _btn_col2:
-        if not st.session_state.get("_weekly_summary_confirm"):
-            if st.button("Send Weekly Summary Now", key="status_send_weekly"):
-                st.session_state["_weekly_summary_confirm"] = True
-                st.rerun()
-            st.caption("Sends the full weekly summary immediately — useful for testing.")
-        else:
-            notif_to = ", ".join(
-                config.get("notifications", {}).get("email", {}).get("to_addresses") or []
-            ) or "configured recipients"
-            st.warning(f"This will send the weekly summary email to **{notif_to}** now.")
-            _wc1, _wc2 = st.columns(2)
-            with _wc1:
-                if st.button("Confirm Send", type="primary", key="status_weekly_confirm_yes"):
-                    st.session_state["_weekly_summary_confirm"] = False
-                    with st.spinner("Gathering data and sending…"):
-                        _ok, _msg = send_weekly_summary_email(config)
-                    if _ok:
-                        st.success(_msg)
-                    else:
-                        st.error(_msg)
-            with _wc2:
-                if st.button("Cancel", key="status_weekly_cancel"):
-                    st.session_state["_weekly_summary_confirm"] = False
-                    st.rerun()
-
-    # ── T212 Invest Account ───────────────────────────────────────────────
-    st.divider()
-    st.markdown("### T212 Invest Account")
-
-    _t212_cfg     = config.get("trading212_invest", {})
-    _t212_enabled = _t212_cfg.get("enabled", False)
-    _t212_live    = _t212_cfg.get("live", False)
-    _t212_error   = get_metadata_str("t212_invest_error")
-    _t212_has_key = bool(os.environ.get("T212_API_KEY", "")) and bool(os.environ.get("T212_API_SECRET", ""))
-    _v2_cfg_status = config.get("trading212_v2", {})
-    _v2_enabled_status = _v2_cfg_status.get("enabled", False)
-
-    st.markdown(
-        '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
-        'font-size:0.78rem;font-weight:700">🔴 V1 (T212 Invest / T212 Stocks) — RETIRED</span>',
-        unsafe_allow_html=True,
-    )
-
-    if not _t212_enabled:
-        st.info(
-            (
-                "**Retired 2026-07-31** — superseded by V2 (momentum + crisis override; "
-                "see the V2 section below). `trading212_invest.enabled: false` is a deliberate "
-                "shutdown, not a not-yet-configured state: the code is kept intact for reference "
-                "and possible rollback, but every call site (`maybe_place_t212_orders()`, "
-                "`maybe_exit_t212_positions()`) now early-returns without acting. "
-                if _v2_enabled_status else
-                "T212 Invest integration is **disabled**. "
-                "Set `trading212_invest.enabled: true` in config.yaml (on the server) to activate. "
-                "Add `T212_API_KEY` and `T212_API_SECRET` to the systemd service environment first."
-            )
-        )
-    else:
-        _env_label  = "DEMO" if not _t212_live else "LIVE"
-        _env_colour = "#f97316" if _t212_live else "#6366f1"
-        st.markdown(
-            f'<span style="background:{_env_colour};color:#fff;padding:2px 8px;'
-            f'border-radius:4px;font-size:0.78rem;font-weight:600">{_env_label}</span> '
-            f'max £{_t212_cfg.get("max_position_gbp", 500):,.0f}/order · '
-            f'max {int(float(_t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed',
-            unsafe_allow_html=True,
-        )
-        _t212_regime = detect_regime()["regime"].value
-        if is_entry_allowed(config, _t212_regime, "trading212_invest"):
-            _t212_entry_eff = resolve_entry_signal(_t212_cfg, _t212_regime)
-            _t212_entry_overridden = _t212_regime in _t212_cfg.get("entry_signal_overrides", {})
-            st.caption(
-                f"Entry threshold: **{_t212_entry_eff}** "
-                f"({'regime override for ' if _t212_entry_overridden else 'global default, regime '}"
-                f"{_t212_regime.replace('_', ' ')})"
-            )
-        else:
-            st.caption(f"⛔ **Entry blocked** ({_t212_regime.replace('_', ' ')} regime not in allowed_entry_regimes)")
-
-        if _t212_cfg.get("position_sizing", "fixed") == "var":
-            st.caption(
-                f"Position sizing: **VaR** "
-                f"({int(float(_t212_cfg.get('var_confidence', 0.95)) * 100)}% confidence, "
-                f"{int(_t212_cfg.get('var_lookback_days', 252))}-day lookback, "
-                f"{float(_t212_cfg.get('max_risk_pct', 0.01)) * 100:.0f}% max risk — "
-                f"floor £{float(_t212_cfg.get('min_position_gbp', 50)):.0f}, "
-                f"ceiling £{float(_t212_cfg.get('max_position_gbp', 500)):.0f})"
-            )
-        else:
-            st.caption(
-                f"Position sizing: **Fixed** "
-                f"(flat £{float(_t212_cfg.get('max_position_gbp', 500)):.0f} per order)"
-            )
-
-        _dd_status_row = _get_drawdown_status(config)
-        if _dd_status_row:
-            if _dd_status_row["enabled"]:
-                _dd_when = ""
-                if _dd_status_row["peak_date"]:
-                    try:
-                        _dd_when = f" ({_fmt_uk(datetime.fromisoformat(_dd_status_row['peak_date']))})"
-                    except (ValueError, TypeError):
-                        pass
-                st.caption(
-                    f"Drawdown scaling: **{_dd_status_row['status']}** — "
-                    f"{_dd_status_row['drawdown_pct'] * 100:.1f}% drawdown from peak, "
-                    f"scale factor **{_dd_status_row['scale_factor'] * 100:.0f}%** "
-                    f"(peak £{_dd_status_row['peak_value_gbp']:,.0f}{_dd_when})"
-                )
-            else:
-                st.caption("Drawdown scaling: **disabled** (`drawdown_scaling.enabled: false`)")
-        st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
-
-        if _t212_error:
-            _err_col, _err_btn_col = st.columns([8, 1])
-            with _err_col:
-                st.warning(f"Last API error: {_t212_error}")
-            with _err_btn_col:
-                st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
-                if st.button("Clear", key="clear_t212_error"):
-                    from data.database import set_metadata as _set_meta
-                    _set_meta("t212_invest_error", "")
-                    st.rerun()
-
-        if not _t212_has_key:
-            st.error(
-                "API credentials not found. Set `T212_API_KEY` and `T212_API_SECRET` "
-                "in the systemd service file and restart the service."
-            )
-        else:
-            _tab_account, _tab_stocks, _tab_mapping = st.tabs(["Account", "Stocks", "Mapping"])
-
-            with _tab_account:
-                # ── Account data from scheduler snapshot (reads DB; no direct API calls) ──
-                import json as _json  # noqa: PLC0415
-                _snap_raw      = get_metadata_str("t212_account_snapshot")
-                _pos_raw       = get_metadata_str("t212_positions_snapshot")
-                _snap_fetched  = get_metadata_str("t212_snapshot_fetched_at")
-                _pending_fetch = get_metadata_str("pending_t212_fetch")
-
-                _t2_col_status, _t2_col_btn = st.columns([3, 1])
-                with _t2_col_btn:
-                    if st.button("Refresh Account", key="t212_refresh_btn"):
-                        from data.database import set_metadata as _set_meta_t2  # noqa: PLC0415
-                        _set_meta_t2("pending_t212_fetch", "1")
-                        st.rerun()
-
-                # Build _t2_data from stored JSON blobs
-                _t2_data = None
-                if _snap_raw:
-                    try:
-                        _t2_data = {
-                            "summary":    _json.loads(_snap_raw),
-                            "positions":  _json.loads(_pos_raw) if _pos_raw else [],
-                            "fetched_at": _snap_fetched or "",
-                            "error":      None,
-                        }
-                    except Exception as _je:
-                        _t2_data = {
-                            "error":      f"Snapshot parse error: {_je}",
-                            "fetched_at": _snap_fetched or "",
-                        }
-
-                with _t2_col_status:
-                    if _pending_fetch:
-                        st.info("Refresh requested — updating within 60s.")
-                    elif _snap_fetched:
-                        try:
-                            _age_s = (
-                                datetime.utcnow() - datetime.fromisoformat(_snap_fetched)
-                            ).total_seconds()
-                            _age_str = (
-                                f"{int(_age_s / 3600)}h ago" if _age_s >= 3600
-                                else f"{int(_age_s / 60)}m ago" if _age_s >= 60
-                                else f"{int(_age_s)}s ago"
-                            )
-                            st.caption(f"Last updated: {_age_str}")
-                        except Exception:
-                            pass
-
-                if _t2_data is None:
-                    st.caption("No account data yet — click Refresh Account to fetch.")
-                elif _t2_data.get("error"):
-                    st.error(f"Connection failed: {_t2_data['error']}")
-                else:
-                    _sum       = _t2_data["summary"]
-                    _positions = _t2_data["positions"]
-                    _fetched   = _t2_data.get("fetched_at", "")
-
-                    # T212 account summary structure (v0 API):
-                    # {"totalValue": 5000, "currency": "GBP",
-                    #  "cash": {"availableToTrade": 5000, "reservedForOrders": 0, "inPies": 0},
-                    #  "investments": {"currentValue": 0, "totalCost": 0,
-                    #                  "realizedProfitLoss": 0, "unrealizedProfitLoss": 0}}
-                    _cash_obj  = _sum.get("cash", {}) if isinstance(_sum.get("cash"), dict) else {}
-                    _inv_obj   = _sum.get("investments", {}) if isinstance(_sum.get("investments"), dict) else {}
-                    _total     = float(_sum.get("totalValue", 0) or 0)
-                    _free      = float(_cash_obj.get("availableToTrade", 0) or 0)
-                    _invested  = float(_inv_obj.get("currentValue", 0) or 0)
-                    _result    = float(
-                        (_inv_obj.get("unrealizedProfitLoss", 0) or 0) +
-                        (_inv_obj.get("realizedProfitLoss",   0) or 0)
-                    )
-                    _deployed = (_invested / _total * 100) if _total else 0.0
-                    _pos_count = len(_positions) if isinstance(_positions, list) else 0
-
-                    _ta1, _ta2, _ta3, _ta4 = st.columns(4)
-                    _ta1.metric("Account Value",   f"£{_total:,.2f}")
-                    _ta2.metric("Available Cash",  f"£{_free:,.2f}")
-                    _ta3.metric("Invested",        f"£{_invested:,.2f}",
-                                 delta=f"{_deployed:.0f}% deployed")
-                    _ta4.metric("Open Positions",  str(_pos_count),
-                                 delta=f"P&L £{_result:+,.2f}" if _result else None)
-
-                    # Deployed capital progress bar
-                    _deploy_limit = float(_t212_cfg.get("max_total_deployed", 0.5))
-                    _bar_pct      = min(1.0, (_invested / _total) if _total else 0.0)
-                    _bar_colour   = "#dc2626" if _bar_pct >= _deploy_limit else (
-                        "#f97316" if _bar_pct >= _deploy_limit * 0.85 else "#6366f1"
-                    )
-                    st.markdown(
-                        f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#8899AA">'
-                        f'Deployed: £{_invested:,.0f} of £{_total:,.0f} '
-                        f'(limit {int(_deploy_limit * 100)}%)</div>'
-                        f'<div style="background:#1E2D45;border-radius:4px;height:6px">'
-                        f'<div style="background:{_bar_colour};width:{_bar_pct * 100:.1f}%;'
-                        f'height:6px;border-radius:4px"></div></div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
-
-                    st.caption("Open positions are shown in the **Performance** and **Daily Briefing** pages.")
-
-                    if _fetched:
-                        try:
-                            _fetched_disp = _fmt_uk(datetime.fromisoformat(_fetched))
-                        except (ValueError, TypeError):
-                            _fetched_disp = _fetched[:16].replace("T", " ")
-                        st.caption(f"Updated {_fetched_disp}")
-
-                # ── Recent T212 orders from our DB ────────────────────────────────────
-                try:
-                    from sqlalchemy import text as _sa_text
-                    with get_engine().connect() as _t2_conn:
-                        _ord_rows = _t2_conn.execute(_sa_text("""
-                            SELECT id, ticker, t212_ticker, direction, quantity,
-                                   estimated_value_gbp, var_pct, status, signal_type,
-                                   confluence_score, regime, account_type,
-                                   error_message, placed_at
-                            FROM t212_invest_orders
-                            ORDER BY placed_at DESC
-                            LIMIT 10
-                        """)).mappings().all()
-                    _ord_data = [dict(r) for r in _ord_rows]
-                except Exception:
-                    _ord_data = []
-
-                st.markdown("#### Recent Orders")
-                if _ord_data:
-                    _ord_df = pd.DataFrame([{k: v for k, v in r.items() if k != "id"} for r in _ord_data])
-                    _ord_df["var_pct"] = _ord_df["var_pct"].map(
-                        lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
-                    )
-                    _ord_df.columns = [
-                        "Ticker", "UCITS Ticker", "Dir", "Qty",
-                        "Est. Value (£)", "VaR at Entry", "Status", "Signal",
-                        "Score", "Regime", "Account",
-                        "Error", "Placed At",
-                    ]
-                    st.dataframe(
-                        _ord_df.style.map(
-                            lambda v: "color:#16a34a" if v == "FILLED"
-                            else ("color:#d97706" if v == "PLACED"
-                            else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
-                            subset=["Status"],
-                        ).map(
-                            lambda v: "color:#16a34a" if v in ("BUY",)
-                            else ("color:#dc2626" if v == "SELL" else ""),
-                            subset=["Dir"],
-                        ),
-                        width="stretch", hide_index=True,
-                    )
-
-                    # ── Retry buttons for FAILED orders ──────────────────────────────
-                    _failed_orders = [r for r in _ord_data if r.get("status") == "FAILED"]
-                    if _failed_orders and _t212_has_key:
-                        st.markdown("**Retry failed orders**")
-                        for _fo in _failed_orders:
-                            _fo_id      = _fo["id"]
-                            _fo_ticker  = _fo["ticker"]
-                            _fo_ucits   = _fo["t212_ticker"]
-                            _fo_dir     = _fo["direction"]
-                            _fo_qty     = float(_fo["quantity"] or 0)
-                            _fo_err     = (_fo.get("error_message") or "")[:80]
-                            _fo_placed_raw = _fo.get("placed_at") or ""
-                            try:
-                                _fo_placed = _fmt_uk(datetime.fromisoformat(_fo_placed_raw))
-                            except (ValueError, TypeError):
-                                _fo_placed = _fo_placed_raw[:16].replace("T", " ")
-
-                            _rc1, _rc2, _rc3 = st.columns([5, 1, 1])
-                            with _rc1:
-                                st.caption(
-                                    f"**{_fo_ticker}** → `{_fo_ucits}` | "
-                                    f"{_fo_dir} {_fo_qty:.4f} | {_fo_placed} | "
-                                    f"_{_fo_err}_"
-                                )
-                            with _rc3:
-                                if st.button("Delete", key=f"delete_order_{_fo_id}"):
-                                    from sqlalchemy import text as _sa_del_text
-                                    with get_engine().begin() as _del_conn:
-                                        _del_conn.execute(
-                                            _sa_del_text("DELETE FROM t212_invest_orders WHERE id = :row_id"),
-                                            {"row_id": _fo_id},
-                                        )
-                                    st.rerun()
-                            with _rc2:
-                                if st.button("Retry", key=f"retry_order_{_fo_id}"):
-                                    with st.spinner(f"Placing {_fo_dir} order for {_fo_ticker}…"):
-                                        try:
-                                            import math as _math
-                                            from brokers.trading212 import (
-                                                Trading212Client as _T212Retry,
-                                            )
-                                            _rc_client = _T212Retry(live=_t212_live)
-
-                                            # Apply minimum-quantity guard.
-                                            # Always floor to integer — all ucits_mapping
-                                            # instruments are EU/UK ETFs requiring whole shares.
-                                            # T212's maxQuantityPrecision metadata is unreliable.
-                                            _r_instruments = _rc_client.get_instruments()
-                                            _r_imeta = {
-                                                i["ticker"]: i
-                                                for i in (_r_instruments or [])
-                                                if "ticker" in i
-                                            }
-                                            _r_meta = _r_imeta.get(_fo_ucits, {})
-                                            _r_min  = float(_r_meta.get("minTradeQuantity", 1.0))
-                                            _r_qty  = _math.floor(_fo_qty)
-
-                                            if _r_qty < _r_min:
-                                                st.error(
-                                                    f"Quantity {_r_qty} is below the instrument "
-                                                    f"minimum of {_r_min} for {_fo_ucits}. "
-                                                    f"Original qty {_fo_qty:.4f} was floored to {_r_qty}."
-                                                )
-                                            else:
-                                                _r_signed = _r_qty if _fo_dir == "BUY" else -_r_qty
-                                                _r_resp   = _rc_client.place_market_order(_fo_ucits, _r_signed)
-                                                _r_order_id = str(_r_resp.get("id", ""))
-                                                # Update the original FAILED row in-place so it
-                                                # drops out of the retry list on next render.
-                                                from sqlalchemy import text as _sa_retry_text
-                                                with get_engine().begin() as _rc_conn:
-                                                    _rc_conn.execute(_sa_retry_text("""
-                                                        UPDATE t212_invest_orders
-                                                        SET status        = 'PLACED',
-                                                            order_id      = :order_id,
-                                                            quantity      = :qty,
-                                                            error_message = NULL,
-                                                            placed_at     = :now
-                                                        WHERE id = :row_id
-                                                    """), {
-                                                        "order_id": _r_order_id,
-                                                        "qty":      _r_qty,
-                                                        "now":      datetime.utcnow().isoformat(),
-                                                        "row_id":   _fo_id,
-                                                    })
-                                                st.success(
-                                                    f"{_fo_dir} {_r_qty} × {_fo_ucits} placed. "
-                                                    f"Order ID: {_r_order_id or '?'}"
-                                                )
-                                                st.rerun()
-                                        except Exception as _r_exc:
-                                            st.error(f"Retry failed: {_r_exc}")
-                else:
-                    st.caption("No orders recorded yet.")
-
-
-            with _tab_stocks:
-                _stock_cfg = config.get("trading212_stocks", {})
-                if not _stock_cfg.get("enabled", False):
-                    st.info(
-                        "T212 Stocks automation is **disabled**. "
-                        "Set `trading212_stocks.enabled: true` in config.yaml (on the server) to activate."
-                    )
-                else:
-                    _stock_regime = detect_regime()["regime"].value
-                    if is_entry_allowed(config, _stock_regime, "trading212_stocks"):
-                        _stock_entry_eff = resolve_entry_signal(_stock_cfg, _stock_regime)
-                        _stock_overridden = _stock_regime in _stock_cfg.get("entry_signal_overrides", {})
-                        st.caption(
-                            f"Entry threshold: **{_stock_entry_eff}** "
-                            f"({'regime override for ' if _stock_overridden else 'global default, regime '}"
-                            f"{_stock_regime.replace('_', ' ')})"
-                        )
-                    else:
-                        st.caption(f"⛔ **Entry blocked** ({_stock_regime.replace('_', ' ')} regime not in allowed_entry_regimes)")
-                    st.caption(
-                        f"max £{_stock_cfg.get('max_position_gbp', 200):,.0f}/order · "
-                        f"max {int(float(_stock_cfg.get('max_total_deployed', 0.3)) * 100)}% deployed · "
-                        f"allowed regimes: {', '.join(_stock_cfg.get('allowed_entry_regimes', []) or ['all'])}"
-                    )
-
-                    _stock_tickers = {
-                        e["ticker"] for e in config.get("watchlist", {}).get("us_large_cap", [])
-                        if isinstance(e, dict) and "ticker" in e
-                    }
-                    st.markdown("#### Recent Stock Orders")
-                    if _stock_tickers:
-                        try:
-                            from sqlalchemy import text as _sa_stock_text
-                            with get_engine().connect() as _stock_conn:
-                                _stock_placeholders = ", ".join(f":t{i}" for i in range(len(_stock_tickers)))
-                                _stock_params = {f"t{i}": t for i, t in enumerate(_stock_tickers)}
-                                _stock_ord_rows = _stock_conn.execute(
-                                    _sa_stock_text(f"""
-                                        SELECT ticker, t212_ticker, direction, quantity,
-                                               estimated_value_gbp, var_pct, status, signal_type,
-                                               confluence_score, regime, account_type,
-                                               error_message, placed_at
-                                        FROM t212_invest_orders
-                                        WHERE ticker IN ({_stock_placeholders})
-                                        ORDER BY placed_at DESC
-                                        LIMIT 10
-                                    """),  # noqa: S608 — placeholders are :t0.. bind params, not interpolated values
-                                    _stock_params,
-                                ).mappings().all()
-                            _stock_ord_data = [dict(r) for r in _stock_ord_rows]
-                        except Exception:
-                            _stock_ord_data = []
-
-                        if _stock_ord_data:
-                            _stock_ord_df = pd.DataFrame(_stock_ord_data)
-                            _stock_ord_df["var_pct"] = _stock_ord_df["var_pct"].map(
-                                lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
-                            )
-                            _stock_ord_df.columns = [
-                                "Ticker", "T212 Ticker", "Dir", "Qty",
-                                "Est. Value (£)", "VaR at Entry", "Status", "Signal",
-                                "Score", "Regime", "Account",
-                                "Error", "Placed At",
-                            ]
-                            st.dataframe(
-                                _stock_ord_df.style.map(
-                                    lambda v: "color:#16a34a" if v == "FILLED"
-                                    else ("color:#d97706" if v == "PLACED"
-                                    else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
-                                    subset=["Status"],
-                                ).map(
-                                    lambda v: "color:#16a34a" if v in ("BUY",)
-                                    else ("color:#dc2626" if v == "SELL" else ""),
-                                    subset=["Dir"],
-                                ),
-                                width="stretch", hide_index=True,
-                            )
-                        else:
-                            st.caption("No stock orders recorded yet.")
-                    else:
-                        st.caption("No tickers in watchlist.us_large_cap.")
-
-
-            with _tab_mapping:
-                _ucits_map = _t212_cfg.get("ucits_mapping", {})
-                if _ucits_map:
-                    st.caption(
-                        "Automated T212 Invest orders are only placed for tickers listed here. "
-                        "The UCITS Ticker is the T212 internal instrument ID used in API calls."
-                    )
-                    _ucits_rows = []
-                    for _uk, _uv in _ucits_map.items():
-                        _ut, _uc = _ucits_entry(_uv)
-                        _ucits_rows.append({"US Ticker": _uk, "T212 UCITS Ticker": _ut, "Currency": _uc})
-                    st.dataframe(
-                        pd.DataFrame(_ucits_rows),
-                        width="stretch", hide_index=True,
-                    )
-                else:
-                    st.caption("No UCITS mapping configured.")
-
-    # ── T212 V2 Account ──────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### T212 V2 Account")
-    st.markdown(
-        (
-            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700">🟢 V2 — LIVE (DEMO)</span>'
-            if _v2_enabled_status else
-            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700">V2 — NOT ENABLED</span>'
-        ),
-        unsafe_allow_html=True,
-    )
-
-    if not _v2_enabled_status:
-        st.info(
-            "V2 (momentum + crisis override) integration is disabled. "
-            "Set `trading212_v2.enabled: true` in config.yaml to activate."
-        )
-    else:
-        _v2_live = _v2_cfg_status.get("live", False)
-        _v2_mapping = _v2_cfg_status.get("instrument_mapping", {})
-        st.markdown(
-            f'<span style="background:{"#f97316" if _v2_live else "#6366f1"};color:#fff;'
-            f'padding:2px 8px;border-radius:4px;font-size:0.78rem;font-weight:600">'
-            f'{"LIVE" if _v2_live else "DEMO"}</span> '
-            f'{len(_v2_mapping)} tickers · '
-            f'max {int(float(_v2_cfg_status.get("max_total_deployed", 0.5)) * 100)}% deployed · '
-            f'max {_v2_cfg_status.get("max_open_positions", 999)} open positions',
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "Entry: 12-month momentum > 0, current index membership, not in the "
-            "crisis entry-block window. Position sizing reuses trading212_invest's "
-            "VaR configuration verbatim (see CLAUDE.md's \"V2 live execution and cutover\" section)."
-        )
-
-        if not _t212_has_key:
-            st.error(
-                "API credentials not found. Set `T212_API_KEY` and `T212_API_SECRET` "
-                "in the systemd service file and restart the service."
-            )
-        else:
-            # Shares the exact same live account/positions snapshot V1's section
-            # above reads — one physical T212 demo account, not a second one.
-            import json as _json_v2  # noqa: PLC0415
-            _v2_snap_raw     = get_metadata_str("t212_account_snapshot")
-            _v2_pos_raw      = get_metadata_str("t212_positions_snapshot")
-            _v2_snap_fetched = get_metadata_str("t212_snapshot_fetched_at")
-
-            if _v2_snap_raw:
-                try:
-                    _v2_sum = _json_v2.loads(_v2_snap_raw)
-                    _v2_positions_all = _json_v2.loads(_v2_pos_raw) if _v2_pos_raw else []
-                    _v2_cash_obj = _v2_sum.get("cash", {}) if isinstance(_v2_sum.get("cash"), dict) else {}
-                    _v2_inv_obj  = _v2_sum.get("investments", {}) if isinstance(_v2_sum.get("investments"), dict) else {}
-                    _v2_total    = float(_v2_sum.get("totalValue", 0) or 0)
-                    _v2_free     = float(_v2_cash_obj.get("availableToTrade", 0) or 0)
-                    _v2_invested = float(_v2_inv_obj.get("currentValue", 0) or 0)
-                    _v2_deployed = (_v2_invested / _v2_total * 100) if _v2_total else 0.0
-                    _v2_pos_count = len(_v2_positions_all) if isinstance(_v2_positions_all, list) else 0
-
-                    _v2a1, _v2a2, _v2a3, _v2a4 = st.columns(4)
-                    _v2a1.metric("Account Value", f"£{_v2_total:,.2f}")
-                    _v2a2.metric("Available Cash", f"£{_v2_free:,.2f}")
-                    _v2a3.metric("Invested", f"£{_v2_invested:,.2f}", delta=f"{_v2_deployed:.0f}% deployed")
-                    _v2a4.metric("Open Positions (account-wide)", str(_v2_pos_count))
-                    st.caption(
-                        "Account Value/Cash/Invested reflect the whole shared T212 account "
-                        "(V1 no longer contributes to it). Open V2 positions specifically are "
-                        "shown on the **Performance** page."
-                    )
-                    if _v2_snap_fetched:
-                        try:
-                            _v2_fetched_disp = _fmt_uk(datetime.fromisoformat(_v2_snap_fetched))
-                        except (ValueError, TypeError):
-                            _v2_fetched_disp = _v2_snap_fetched[:16].replace("T", " ")
-                        st.caption(f"Updated {_v2_fetched_disp}")
-                except Exception:
-                    st.caption("No account data yet — click Refresh Account above to fetch.")
-            else:
-                st.caption("No account data yet — click Refresh Account above to fetch.")
-
-            try:
-                from sqlalchemy import text as _sa_v2ord
-                with get_engine().connect() as _v2_conn:
-                    _v2_ord_rows = _v2_conn.execute(_sa_v2ord("""
-                        SELECT ticker, t212_ticker, direction, quantity,
-                               estimated_value_gbp, var_pct, status, is_etf,
-                               momentum_pct, account_type, error_message, placed_at
-                        FROM v2_invest_orders
-                        ORDER BY placed_at DESC
-                        LIMIT 10
-                    """)).mappings().all()
-                _v2_ord_data = [dict(r) for r in _v2_ord_rows]
-            except Exception:
-                _v2_ord_data = []
-
-            st.markdown("#### Recent V2 Orders")
-            if _v2_ord_data:
-                _v2_ord_df = pd.DataFrame(_v2_ord_data)
-                _v2_ord_df["Type"] = _v2_ord_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-                _v2_ord_df["var_pct"] = _v2_ord_df["var_pct"].map(
-                    lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
-                )
-                _v2_ord_df["momentum_pct"] = _v2_ord_df["momentum_pct"].map(
-                    lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
-                )
-                _v2_ord_df = _v2_ord_df[[
-                    "ticker", "t212_ticker", "Type", "direction", "quantity",
-                    "estimated_value_gbp", "var_pct", "momentum_pct", "status",
-                    "account_type", "error_message", "placed_at",
-                ]]
-                _v2_ord_df.columns = [
-                    "Ticker", "T212 Ticker", "Type", "Dir", "Qty",
-                    "Est. Value (£)", "VaR at Entry", "Momentum at Entry", "Status",
-                    "Account", "Error", "Placed At",
-                ]
-                st.dataframe(
-                    _v2_ord_df.style.map(
-                        lambda v: "color:#16a34a" if v == "FILLED"
-                        else ("color:#d97706" if v == "PLACED"
-                        else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
-                        subset=["Status"],
-                    ).map(
-                        lambda v: "color:#16a34a" if v == "BUY"
-                        else ("color:#dc2626" if v == "SELL" else ""),
-                        subset=["Dir"],
-                    ),
-                    width="stretch", hide_index=True,
-                )
-            else:
-                st.caption("No V2 orders recorded yet.")
-
-            _v2_mapping_full = _v2_cfg_status.get("instrument_mapping", {})
-            if _v2_mapping_full:
-                with st.expander(f"V2 instrument mapping ({len(_v2_mapping_full)} tickers)"):
-                    _v2_map_rows = [
-                        {
-                            "Ticker": rt,
-                            "T212 Instrument": (raw.get("ticker") if isinstance(raw, dict) else raw),
-                            "Currency": (raw.get("currency", "USD") if isinstance(raw, dict) else "USD"),
-                            "Type": "ETF" if (isinstance(raw, dict) and raw.get("is_etf")) else "STOCK",
-                        }
-                        for rt, raw in _v2_mapping_full.items()
-                    ]
-                    st.dataframe(pd.DataFrame(_v2_map_rows), width="stretch", hide_index=True)
-
-    # ── Scheduler Health ──────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Scheduler Health")
-
-    try:
-        import data.scheduler as _sched_mod  # noqa: PLC0415
-        _aps        = getattr(_sched_mod, "_scheduler", None)
-        _aps_running = _aps is not None and getattr(_aps, "running", False)
-    except Exception:
-        _aps        = None
-        _aps_running = False
-
-    # Check for the standalone daemon heartbeat (written every 60s by the
-    # scheduler daemon process via _dispatch_pending_jobs).
-    _daemon_active = False
-    _daemon_age_s: float = float("inf")
-    try:
-        _hb_str = get_metadata_str("scheduler_heartbeat")
-        if _hb_str:
-            _hb_dt = datetime.fromisoformat(_hb_str)
-            _daemon_age_s = (datetime.utcnow() - _hb_dt).total_seconds()
-            _daemon_active = _daemon_age_s < 90
-    except Exception:
-        pass
-
-    _JOB_LABELS: dict[str, tuple[str, str]] = {
-        "scheduled_pre_market": ("Pre-Market",    f"{_uk_sched_time(7, 0)} · Mon–Fri"),
-        "scheduled_us_open":    ("US Open",       f"{_uk_sched_time(13, 30)} · Mon–Fri"),
-        "scheduled_eod":        ("End of Day",    f"{_uk_sched_time(21, 30)} · Mon–Fri"),
-        "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
-        "weekly_summary":       ("Weekly Summary",f"{_uk_sched_time(10, 0)} · Sunday"),
-        "fomc_reaction":        ("FOMC Reaction", f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)"),
-        "boj_reaction":         ("BoJ Reaction",  f"{_uk_sched_time(3, 30)} · Mon–Fri (BoJ days only)"),
-        "ecb_reaction":         ("ECB Reaction",  f"{_uk_sched_time(12, 30)} · Mon–Fri (ECB days only)"),
-        "v2_membership_refresh": ("V2 Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri"),
-        "job_dispatcher":       ("job_dispatcher","—"),
-    }
-
-    if _daemon_active:
-        _aps_label  = "RUNNING"
-        _mode_note  = f"(daemon · heartbeat {int(_daemon_age_s)}s ago)"
-        _aps_colour = "#16a34a"
-    elif _aps_running:
-        _aps_label  = "RUNNING"
-        _mode_note  = "(in-process)"
-        _aps_colour = "#16a34a"
-    else:
-        _aps_label  = "STOPPED"
-        _mode_note  = ""
-        _aps_colour = "#dc2626"
-
-    st.markdown(
-        f'<div style="margin-bottom:10px">'
-        f'<span style="font-size:0.82rem;color:#8899AA">Scheduler: </span>'
-        f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
-        + (f'<span style="font-size:0.75rem;color:#8899AA;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-    if _aps_running and _aps is not None:
-        # In-process scheduler: show live next-run times from APScheduler.
-        _aps_jobs   = _aps.get_jobs()
-        _now_utc_tz = datetime.now(timezone.utc)
-        _sh_rows: list[str] = []
-        for _job in _aps_jobs:
-            _jlabel, _jsched = _JOB_LABELS.get(_job.id, (_job.id, "—"))
-            _nrt = _job.next_run_time
-            if _nrt is None:
-                _nrt_str, _until_str, _dot, _badge = "Paused", "—", "#94a3b8", "PAUSED"
-            else:
-                _d = (_nrt - _now_utc_tz).total_seconds()
-                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
-                _until_str = (
-                    f"{int(_d / 60)}m"  if _d < 3600
-                    else f"{_d / 3600:.1f}h" if _d < 86400
-                    else f"{_d / 86400:.1f}d"
-                )
-                _dot, _badge = "#16a34a", "OK"
-
-            # Overdue flag for EOD: last_full_refresh > 26 h on a weekday.
-            # Exempt Monday before today's own 21:30 UTC EOD run — no EOD job
-            # runs Sat/Sun, so last_full_refresh is *always* >26h old every
-            # Monday morning/afternoon (Friday 21:30 UTC -> Monday is ~58h)
-            # with nothing actually wrong; without this exemption the row
-            # falsely reads OVERDUE every single week until Monday's own EOD
-            # run completes.
-            if _job.id == "scheduled_eod":
-                _ref_age = (
-                    (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
-                    if last_refresh else float("inf")
-                )
-                _now_u = datetime.utcnow()
-                _monday_before_eod = _now_u.weekday() == 0 and (_now_u.hour, _now_u.minute) < (21, 30)
-                if _ref_age > 26 and _now_u.weekday() < 5 and not _monday_before_eod:
-                    _dot, _badge = "#dc2626", "OVERDUE"
-
-            _sh_rows.append(
-                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
-                f'align-items:center;font-size:0.78rem">'
-                f'<div style="flex:0 0 22%;font-weight:600">{html.escape(_jlabel)}</div>'
-                f'<div style="flex:0 0 28%;color:#8899AA;font-size:0.73rem">{html.escape(_jsched)}</div>'
-                f'<div style="flex:0 0 25%">{html.escape(_nrt_str)}</div>'
-                f'<div style="flex:0 0 12%;color:#8899AA">{html.escape(_until_str)}</div>'
-                f'<div style="flex:0 0 13%;color:{_dot};font-weight:700">{html.escape(_badge)}</div>'
-                f'</div>'
-            )
-        _sh_head = (
-            '<div style="font-size:0.82rem">'
-            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
-            'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
-            '<div style="flex:0 0 22%">Job</div>'
-            '<div style="flex:0 0 28%">Schedule</div>'
-            '<div style="flex:0 0 25%">Next Run</div>'
-            '<div style="flex:0 0 12%">In</div>'
-            '<div style="flex:0 0 13%">Status</div>'
-            '</div>'
-        )
-        st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
-    elif _daemon_active:
-        # Daemon mode: show static schedule from config; next-run times computed
-        # via APScheduler trigger objects (no running scheduler required).
-        from apscheduler.triggers.cron import CronTrigger as _CronTrigger  # noqa: PLC0415
-        from apscheduler.triggers.interval import IntervalTrigger as _ItvTrigger  # noqa: PLC0415
-        _cfg_s  = _load_config()["scheduler"]
-        _tz_s   = _cfg_s["timezone"]
-        _now_tz = datetime.now(timezone.utc)
-
-        # Static job definitions mirroring scheduler.py
-        _static_jobs: list[tuple[str, str, str, object]] = []
-        for _rn, _rc in _cfg_s.get("runs", {}).items():
-            _sid = f"scheduled_{_rn}"
-            _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
-            _trigger = _CronTrigger(
-                hour=_rc["hour"], minute=_rc["minute"],
-                day_of_week="mon-fri", timezone=_tz_s,
-            )
-            _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
-
-        _extra_static = [
-            ("job_dispatcher",    "job_dispatcher",    "—",                          _ItvTrigger(seconds=60)),
-            ("trade_alert_check", "Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri", _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
-            ("weekly_summary",    "Weekly Summary",    f"{_uk_sched_time(10, 0)} · Sunday",         _CronTrigger(hour=10, minute=0, day_of_week="sun", timezone=_tz_s)),
-            ("fomc_reaction",     "FOMC Reaction",     f"{_uk_sched_time(19, 5)} · Mon–Fri (FOMC days only)", _CronTrigger(hour=19, minute=5, day_of_week="mon-fri", timezone=_tz_s)),
-            ("boj_reaction",      "BoJ Reaction",      f"{_uk_sched_time(3, 30)} · Mon–Fri (BoJ days only)",  _CronTrigger(hour=3, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
-            ("ecb_reaction",      "ECB Reaction",      f"{_uk_sched_time(12, 30)} · Mon–Fri (ECB days only)", _CronTrigger(hour=12, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
-            ("v2_membership_refresh", "V2 Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri", _CronTrigger(hour=21, minute=15, day_of_week="mon-fri", timezone=_tz_s)),
-        ]
-        _static_jobs.extend(_extra_static)
-
-        _sh_rows_d: list[str] = []
-        for _sid, _jlabel, _jsched, _trigger in _static_jobs:
-            if _jlabel == "job_dispatcher":
-                continue  # internal — don't show
-            try:
-                _nrt = _trigger.get_next_fire_time(None, _now_tz)
-            except Exception:
-                _nrt = None
-            if _nrt is None:
-                _nrt_str, _until_str = "—", "—"
-            else:
-                _d = (_nrt - _now_tz).total_seconds()
-                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
-                _until_str = (
-                    f"{int(_d / 60)}m"  if _d < 3600
-                    else f"{_d / 3600:.1f}h" if _d < 86400
-                    else f"{_d / 86400:.1f}d"
-                )
-            _dot, _badge = "#16a34a", "OK"
-            if _sid == "scheduled_eod":
-                _ref_age2 = (
-                    (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
-                    if last_refresh else float("inf")
-                )
-                # See the matching in-process-scheduler branch above for why
-                # Monday before today's own EOD run is exempted.
-                _now_u2 = datetime.utcnow()
-                _monday_before_eod2 = _now_u2.weekday() == 0 and (_now_u2.hour, _now_u2.minute) < (21, 30)
-                if _ref_age2 > 26 and _now_u2.weekday() < 5 and not _monday_before_eod2:
-                    _dot, _badge = "#dc2626", "OVERDUE"
-
-            _sh_rows_d.append(
-                f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
-                f'align-items:center;font-size:0.78rem">'
-                f'<div style="flex:0 0 22%;font-weight:600">{html.escape(_jlabel)}</div>'
-                f'<div style="flex:0 0 28%;color:#8899AA;font-size:0.73rem">{html.escape(_jsched)}</div>'
-                f'<div style="flex:0 0 25%">{html.escape(_nrt_str)}</div>'
-                f'<div style="flex:0 0 12%;color:#8899AA">{html.escape(_until_str)}</div>'
-                f'<div style="flex:0 0 13%;color:{_dot};font-weight:700">{html.escape(_badge)}</div>'
-                f'</div>'
-            )
-        _sh_head_d = (
-            '<div style="font-size:0.82rem">'
-            '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
-            'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
-            '<div style="flex:0 0 22%">Job</div>'
-            '<div style="flex:0 0 28%">Schedule</div>'
-            '<div style="flex:0 0 25%">Next Run</div>'
-            '<div style="flex:0 0 12%">In</div>'
-            '<div style="flex:0 0 13%">Status</div>'
-            '</div>'
-        )
-        st.markdown(_sh_head_d + "".join(_sh_rows_d) + "</div>", unsafe_allow_html=True)
-    else:
-        st.warning(
-            "Scheduler is not running — scheduled jobs will not fire until the service restarts. "
-            "On the server, ensure investment-research-scheduler.service is enabled and running."
-        )
-
-    # ── Log Viewer ─────────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Log Viewer")
-
-    _lc1, _lc2, _lc3 = st.columns([3, 2, 1])
-    with _lc1:
-        _log_search = st.text_input(
-            "Search logs", placeholder="Filter by keyword…",
-            key="status_log_search", label_visibility="collapsed",
-        )
-    with _lc2:
-        _log_filter = st.selectbox(
-            "Category", ["All", "Errors Only", "Scheduler", "Data", "Analysis", "Trades"],
-            key="status_log_filter", label_visibility="collapsed",
-        )
-    with _lc3:
-        _log_auto_refresh = st.toggle("Auto-refresh", key="status_log_auto_refresh")
-
-    # Read last 200 lines from journalctl
-    try:
-        _jctl_result = subprocess.run(
-            ["journalctl", "-u", "investment-research", "--no-pager",
-             "-n", "200", "--output=short-iso"],
-            capture_output=True, text=True, timeout=10,
-        )
-        _raw_log_lines = (
-            _jctl_result.stdout.strip().splitlines()
-            if _jctl_result.returncode == 0 else []
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        _raw_log_lines = []
-
-    if not _raw_log_lines:
-        st.info(
-            "Log output not available on this machine. "
-            "On the server, view logs with:  `journalctl -u investment-research -f`"
-        )
-    else:
-        # Parse and filter
-        _FILTER_KEYWORDS: dict[str, frozenset[str]] = {
-            "Errors Only": frozenset(),   # handled separately by level
-            "Scheduler":   frozenset({"scheduler", "pre-market", "us-open", "eod",
-                                      "analysis starting", "pipeline complete",
-                                      "weekly summary", "fomc", "boj", "ecb", "catch-up",
-                                      "missed eod", "trade alert", "scheduled_"}),
-            "Data":        frozenset({"pull_incremental", "yfinance", "new rows", "fred",
-                                      "price data", "data pull", "incremental",
-                                      "ingestion", "rows across"}),
-            "Analysis":    frozenset({"run_analysis", "generate_signals",
-                                      "compute_all_pairs", "analysis pipeline",
-                                      "indicators", "signals", "confluence", "regime"}),
-            "Trades":      frozenset({"stop loss", "exit signal",
-                                      "alert email", "pnl", "open trade", "alerted"}),
-        }
-        _GREEN_KEYS = frozenset({
-            "complete", "success", "opened", "closed at", "started", "sent",
-            "pipeline complete", "new rows",
-        })
-
-        _parsed: list[dict] = []
-        for _rl in _raw_log_lines:
-            _p = _parse_journal_line(_rl)
-            if _p:
-                _parsed.append(_p)
-
-        _filtered: list[dict] = []
-        _search_lower = _log_search.lower() if _log_search else ""
-        for _p in _parsed:
-            _lvl = _p["level"]
-            _msg_lower = _p["message"].lower()
-            if _log_filter == "Errors Only":
-                if _lvl not in ("ERROR", "CRITICAL", "WARNING"):
-                    continue
-            elif _log_filter in _FILTER_KEYWORDS:
-                if not any(k in _msg_lower for k in _FILTER_KEYWORDS[_log_filter]):
-                    continue
-            if _search_lower and _search_lower not in _p["raw"].lower():
-                continue
-            _filtered.append(_p)
-
-        # Display newest-first
-        _display_lines = _filtered[::-1]
-
-        _line_htmls: list[str] = []
-        for _p in _display_lines:
-            _lvl = _p["level"]
-            _msg = _p["message"]
-            if _lvl in ("ERROR", "CRITICAL"):
-                _mc, _lc_col = "#ef4444", "#ef4444"
-            elif _lvl == "WARNING":
-                _mc, _lc_col = "#f97316", "#f97316"
-            elif any(k in _msg.lower() for k in _GREEN_KEYS):
-                _mc, _lc_col = "#22c55e", "#22c55e"
-            else:
-                _mc, _lc_col = "#cbd5e1", "#94a3b8"
-            _line_htmls.append(
-                f'<div style="line-height:1.5;padding:1px 0">'
-                f'<span style="color:#8899AA">{html.escape(_p["ts"])}</span>'
-                f'<span style="color:{_lc_col};font-weight:600;margin-left:6px">'
-                f'{html.escape(_lvl[:4])}</span>'
-                f'<span style="color:{_mc};margin-left:6px;word-break:break-all">'
-                f'{html.escape(_msg)}</span>'
-                f'</div>'
-            )
-
-        _count_note = (
-            f"{len(_filtered)} lines shown (newest first)"
-            if _log_filter == "All" and not _log_search
-            else f"{len(_filtered)} matching lines"
-        )
-        st.caption(_count_note)
-
-        if _line_htmls:
-            st.markdown(
-                '<div style="background:#0f172a;border-radius:6px;padding:10px 14px;'
-                'height:420px;overflow-y:auto;font-family:monospace;font-size:0.72rem">'
-                + "".join(_line_htmls)
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No log lines match the current filter / search.")
-
-        # Download buttons
-        _dl1, _dl2, _dl3, _dl4 = st.columns([1, 1, 1, 3])
-        with _dl1:
-            st.download_button(
-                "⬇ Current view",
-                data="\n".join(_p["raw"] for _p in _filtered),
-                file_name="investment-research-log.txt",
-                mime="text/plain",
-                key="log_dl_current",
-            )
-        with _dl2:
-            try:
-                _dl_24h = subprocess.run(
-                    ["journalctl", "-u", "investment-research", "--no-pager",
-                     "--since", "24 hours ago", "--output=short-iso"],
-                    capture_output=True, text=True, timeout=15,
-                ).stdout
-            except Exception:
-                _dl_24h = ""
-            st.download_button(
-                "⬇ Last 24 h",
-                data=_dl_24h or "(not available)",
-                file_name="investment-research-log-24h.txt",
-                mime="text/plain",
-                key="log_dl_24h",
-            )
-        with _dl3:
-            try:
-                _dl_7d = subprocess.run(
-                    ["journalctl", "-u", "investment-research", "--no-pager",
-                     "--since", "7 days ago", "--output=short-iso"],
-                    capture_output=True, text=True, timeout=30,
-                ).stdout
-            except Exception:
-                _dl_7d = ""
-            st.download_button(
-                "⬇ Last 7 days",
-                data=_dl_7d or "(not available)",
-                file_name="investment-research-log-7d.txt",
-                mime="text/plain",
-                key="log_dl_7d",
-            )
-
-    _render_footer()
-
-    # Auto-refresh for log viewer only (opt-in via toggle) — after the
-    # footer so the page still renders its full content before any rerun.
-    if _log_auto_refresh:
-        import time as _time_mod  # noqa: PLC0415
-        _time_mod.sleep(30)
-        st.rerun()
-
-
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
-
-def _initialise() -> None:
-    """Ensure the DB schema is current and run any first-session setup.
-
-    init_db() is called on every render because it is idempotent — create_all()
-    is a no-op when tables exist and _apply_migrations() skips columns that are
-    already present. This guarantees schema changes are picked up immediately
-    after a code update without requiring a Streamlit session restart.
-
-    The scheduler is started at module load via _start_scheduler_at_startup()
-    (a st.cache_resource call), so jobs fire even if nobody has visited the
-    page since the last server restart. This function handles only the
-    once-per-session setup that requires session_state (FX pre-fetch, startup
-    analysis on fresh installs).
-    """
-    init_db()
-    if "app_initialised" not in st.session_state:
-        try:
-            _prefetch_fx_rates()
-        except Exception as exc:
-            logger.warning("FX rate pre-fetch failed: %s", exc)
-
-        # Run analysis on startup only on the very first run (last_analysis_run is None),
-        # i.e. a fresh install where price data exists but has never been analysed.
-        # For all subsequent startups the scheduler keeps analysis current — blocking
-        # the page load to reprocess identical data is not worthwhile.
-        if _has_price_data() and get_metadata("last_analysis_run") is None:
-            try:
-                _cfg = _load_config()
-                _tickers = get_all_tickers(_cfg)
-                run_analysis(tickers=_tickers, config=_cfg)
-                generate_signals(tickers=_tickers, config=_cfg)
-                ts = _fmt_uk(datetime.utcnow(), '%H:%M')
-                st.session_state["_startup_msg"] = ("ok", f"Initial analysis complete — {ts}")
-                logger.info("First-run startup analysis complete.")
-            except Exception as exc:
-                logger.warning("Startup analysis failed: %s", exc)
-                st.session_state["_startup_msg"] = ("err", f"Startup analysis failed: {exc}")
-
-        st.session_state["app_initialised"] = True
-
-
-# ---------------------------------------------------------------------------
-# Relationships page
-# ---------------------------------------------------------------------------
-
-_DIV_COLOURS = {
-    "CONFIRMING": "#16a34a",
-    "DIVERGING":  "#ef5350",
-    "NEUTRAL":    "#8899AA",
-}
-_DIV_ICONS = {
-    "CONFIRMING": "✓",
-    "DIVERGING":  "⚠",
-    "NEUTRAL":    "●",
-}
-
-
-def _render_relationships_page(config: dict) -> None:
-    """Render the Relationships page: divergence narratives, pair table, correlation heatmap."""
-    _render_page_wordmark("Relationships")
-    from analysis.correlations import RELATIONSHIP_MAP as _REL_MAP
-    _corr_ts  = get_metadata("last_analysis_run")
-    _ts_str   = _fmt_uk(_corr_ts, "%Y-%m-%d %H:%M") if _corr_ts else "pending"
-    _n_pairs  = len(_REL_MAP)
-    st.caption(
-        f"**Cross-Asset Relationships** &nbsp;·&nbsp; {_n_pairs} pairs &nbsp;·&nbsp; "
-        f"Last computed: {_ts_str} &nbsp;·&nbsp; "
-        f"Updates: {_uk_sched_time(7,0)} / {_uk_sched_time(13,30)} / {_uk_sched_time(21,30)}"
-    )
-
-    stored = get_stored_correlations()
-    _has_data = bool(stored) and any(p.get("corr_30d") is not None for p in stored)
-
-    # ── Plain-English divergence narratives (most actionable — shown first) ───
-    st.markdown("### Notable Relationships")
-
-    if not _has_data:
-        st.info(f"No correlation data yet — analysis runs automatically at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}.")
-    else:
-        diverging = [p for p in stored if p.get("divergence") == "DIVERGING"]
-        confirming_notable = [
-            p for p in stored
-            if p.get("divergence") == "CONFIRMING"
-            and p.get("z_score") is not None
-            and abs(p["z_score"]) <= 0.5
-        ]
-
-        if diverging:
-            st.markdown("**Unusual / Diverging Pairs**")
-            for p in diverging:
-                z   = p.get("z_score")
-                c30 = p.get("corr_30d")
-                z_str  = f"Z={z:+.2f}" if z is not None else ""
-                c_str  = f"30d corr: {c30:+.3f}" if c30 is not None else ""
-                st.markdown(
-                    f'<div style="border-left:3px solid #ef5350;background:#ef535018;'
-                    f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
-                    f'<span style="color:#ef5350;font-weight:700">⚠ {html.escape(p["label"])}</span>'
-                    f'<span style="color:#8899AA;font-size:0.8rem;margin-left:10px">'
-                    f'{html.escape(c_str)} · {html.escape(z_str)}</span><br>'
-                    f'<span style="font-size:0.88rem">{html.escape(p["diverge_template"])}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.success("No significant divergences detected — all tracked relationships are within historical norms.")
-
-        if confirming_notable:
-            st.markdown("**Strongly Confirming Pairs**")
-            for p in confirming_notable:
-                c30   = p.get("corr_30d")
-                c_str = f"30d corr: {c30:+.3f}" if c30 is not None else ""
-                st.markdown(
-                    f'<div style="border-left:3px solid #16a34a;background:#16a34a18;'
-                    f'padding:8px 14px;border-radius:0 6px 6px 0;margin-bottom:6px">'
-                    f'<span style="color:#16a34a;font-weight:700">✓ {html.escape(p["label"])}</span>'
-                    f'<span style="color:#8899AA;font-size:0.8rem;margin-left:10px">'
-                    f'{html.escape(c_str)}</span><br>'
-                    f'<span style="font-size:0.88rem">{html.escape(p["confirm_template"])}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-    st.divider()
-
-    # ── Pair-level table ──────────────────────────────────────────────────────
-    st.markdown("### Tracked Pair Details")
-    st.caption(
-        "30d Corr: current 30-day rolling correlation · "
-        "90d Corr: 90-day rolling · "
-        "Norm: historical average · "
-        "Z: standard deviations from the historical norm · "
-        "Status: CONFIRMING / NEUTRAL / DIVERGING"
-    )
-
-    if not _has_data:
-        st.info(f"No correlation data yet — analysis runs automatically at {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}.")
-    else:
-        records = []
-        for p in stored:
-            corr_30 = p.get("corr_30d")
-            corr_90 = p.get("corr_90d")
-            hist_m  = p.get("hist_mean")
-            z       = p.get("z_score")
-            div     = p.get("divergence", "NEUTRAL")
-
-            records.append({
-                "Pair":       p["label"],
-                "30d Corr":   corr_30,
-                "90d Corr":   corr_90,
-                "Norm":       hist_m,
-                "Z-Score":    z,
-                "Status":     div,
-                "Score":      p.get("pair_score", 0),
-                "Expected":   "↑↑ Positive" if p["expected_sign"] > 0 else "↑↓ Inverse",
-            })
-
-        pair_df = pd.DataFrame(records)
-
-        def _style_status(val: str) -> str:
-            colours = {
-                "CONFIRMING": "background-color:#1a5c38;color:white;font-weight:600",
-                "DIVERGING":  "background-color:#7f1d1d;color:white;font-weight:600",
-                "NEUTRAL":    "color:#8899AA",
-            }
-            return colours.get(val, "")
-
-        def _style_corr(val) -> str:
-            if not isinstance(val, float):
-                return ""
-            if val > 0.5:   return "color:#16a34a"
-            if val < -0.5:  return "color:#ef5350"
-            return ""
-
-        def _style_zscore(val) -> str:
-            if not isinstance(val, float):
-                return ""
-            if abs(val) > 2: return "color:#ef5350;font-weight:bold"
-            if abs(val) > 1: return "color:#f59e0b"
-            return ""
-
-        def _style_score(val) -> str:
-            if val == 1:  return "color:#16a34a;font-weight:bold"
-            if val == -1: return "color:#ef5350;font-weight:bold"
-            return ""
-
-        styler = (
-            pair_df.style
-            .map(_style_status, subset=["Status"])
-            .map(_style_corr,   subset=["30d Corr", "90d Corr", "Norm"])
-            .map(_style_zscore, subset=["Z-Score"])
-            .map(_style_score,  subset=["Score"])
-            .format({
-                "30d Corr": lambda v: f"{v:+.3f}" if isinstance(v, float) else "—",
-                "90d Corr": lambda v: f"{v:+.3f}" if isinstance(v, float) else "—",
-                "Norm":     lambda v: f"{v:+.3f}" if isinstance(v, float) else "—",
-                "Z-Score":  lambda v: f"{v:+.2f}" if isinstance(v, float) else "—",
-                "Score":    lambda v: {1: "▲ +1", 0: "● 0", -1: "▼ -1"}.get(v, "—"),
-            })
-        )
-        st.dataframe(
-            styler,
-            width="stretch",
-            hide_index=True,
-            height=38 + 35 * len(records),
-        )
-
-    st.divider()
-
-    # ── Correlation Proxy Mappings ────────────────────────────────────────────
-    st.markdown("### Correlation Proxy Mappings")
-    st.caption(
-        "Assets not directly tracked in correlation pairs inherit a partial score from "
-        "a related proxy asset. This ensures all assets receive a meaningful correlation "
-        "weight rather than defaulting to zero."
-    )
-
-    from analysis.correlations import (
-        CATEGORY_PROXY as _PROXY_MAP,
-        _ALL_PAIR_TICKERS as _DIRECT_TICKERS,
-    )
-
-    # Build ticker → display name from watchlist config
-    _wl_names: dict[str, str] = {}
-    for _grp in config.get("watchlist", {}).values():
-        if isinstance(_grp, list):
-            for _wl_e in _grp:
-                if isinstance(_wl_e, dict) and "ticker" in _wl_e:
-                    _wl_names[_wl_e["ticker"]] = _wl_e.get("name", _wl_e["ticker"])
-
-    # Proxy inheritance table — one row per CATEGORY_PROXY entry
-    _proxy_rows = [
-        {
-            "Ticker":          _pt,
-            "Name":            _wl_names.get(_pt, _pt),
-            "Proxy Ticker":    _pp,
-            "Proxy Name":      _wl_names.get(_pp, _pp),
-            "Inherited Score": f"50% of {_pp} correlation score",
-        }
-        for _pt, _pp in sorted(_PROXY_MAP.items())
-    ]
-    st.dataframe(
-        pd.DataFrame(_proxy_rows),
-        width="stretch",
-        hide_index=True,
-        height=38 + 35 * len(_proxy_rows),
-    )
-
-    # Coverage breakdown — every watchlist asset classified
-    st.markdown("#### Coverage — all watchlist assets")
-
-    _cov_rows = []
-    for _ct, _cn in _wl_names.items():
-        if _ct in _DIRECT_TICKERS:
-            _cov_rows.append({
-                "Ticker":   _ct,
-                "Name":     _cn,
-                "Coverage": "DIRECT",
-                "Detail":   "Appears in a tracked pair — most reliable score",
-            })
-        elif _ct in _PROXY_MAP:
-            _pp2 = _PROXY_MAP[_ct]
-            _cov_rows.append({
-                "Ticker":   _ct,
-                "Name":     _cn,
-                "Coverage": "PROXY",
-                "Detail":   f"via {_pp2} ({_wl_names.get(_pp2, _pp2)}) — 50% inherited",
-            })
-        else:
-            _cov_rows.append({
-                "Ticker":   _ct,
-                "Name":     _cn,
-                "Coverage": "NONE",
-                "Detail":   "Correlation score defaults to 0",
-            })
-
-    _cov_df = pd.DataFrame(_cov_rows)
-    _sort_key = {"DIRECT": 0, "PROXY": 1, "NONE": 2}
-    _cov_df = (
-        _cov_df.assign(_s=_cov_df["Coverage"].map(_sort_key))
-        .sort_values(["_s", "Ticker"])
-        .drop(columns="_s")
-        .reset_index(drop=True)
-    )
-
-    _n_direct = int((_cov_df["Coverage"] == "DIRECT").sum())
-    _n_proxy  = int((_cov_df["Coverage"] == "PROXY").sum())
-    _n_none   = int((_cov_df["Coverage"] == "NONE").sum())
-    st.caption(
-        f"**{_n_direct}** direct &nbsp;·&nbsp; **{_n_proxy}** proxy &nbsp;·&nbsp; "
-        f"**{_n_none}** unmapped &nbsp;·&nbsp; {len(_cov_df)} total watchlist assets"
-    )
-
-    def _style_coverage(val: str) -> str:
-        return {
-            "DIRECT": "background-color:#1a5c38;color:white;font-weight:600",
-            "PROXY":  "background-color:#78350f;color:white;font-weight:600",
-            "NONE":   "color:#8899AA",
-        }.get(val, "")
-
-    st.dataframe(
-        _cov_df.style.map(_style_coverage, subset=["Coverage"]),
-        width="stretch",
-        hide_index=True,
-        height=38 + 35 * len(_cov_df),
-    )
-
-    st.divider()
-
-    # ── Correlation heatmap (detail view — at the bottom) ─────────────────────
-    st.markdown("### Correlation Matrix (30-day window)")
-    st.caption(f"Rolling 30-day pairwise correlation for all tracked assets · as of {_ts_str}")
-
-    with st.spinner("Building correlation matrix…"):
-        corr_df, tickers_in_matrix = build_correlation_matrix(window=30)
-
-    if corr_df.empty:
-        st.info(f"Insufficient price data to build the correlation matrix — data refreshes automatically at {_uk_sched_time(21,30)}.")
-    else:
-        z_vals    = corr_df.values.tolist()
-        fig_heat  = go.Figure(
-            data=go.Heatmap(
-                z=z_vals,
-                x=tickers_in_matrix,
-                y=tickers_in_matrix,
-                colorscale=[
-                    [0.0,  "#ef5350"],
-                    [0.5,  "#1f2937"],
-                    [1.0,  "#16a34a"],
-                ],
-                zmin=-1,
-                zmax=1,
-                text=[[f"{v:.2f}" for v in row] for row in z_vals],
-                texttemplate="%{text}",
-                textfont={"size": 10},
-                hoverongaps=False,
-                hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{z:.3f}<extra></extra>",
-            )
-        )
-        fig_heat.update_layout(
-            height=500,
-            margin=dict(l=10, r=10, t=30, b=10),
-            xaxis=dict(side="bottom", tickangle=-45),
-            yaxis=dict(autorange="reversed"),
-        )
-        _apply_dark_theme(fig_heat)
-        st.plotly_chart(fig_heat, width="stretch")
-
-    _render_footer()
-
-
-# ---------------------------------------------------------------------------
-# Charts landing (grouped asset cards)
-# ---------------------------------------------------------------------------
-
-_GROUP_LABELS = {
-    "indices":               "Indices",
-    "sector_etfs":           "Sector ETFs",
-    "energy":                "Energy",
-    "commodities":           "Commodities",
-    "bonds":                 "Bonds",
-    "volatility":            "Volatility",
-    "international":         "International",
-    "forex":                 "Forex",
-    "crypto":                "Crypto",
-    "volatility_complex":    "Volatility (Complex)",
-    "tech_subsectors":       "Tech Sub-Sectors",
-    "financial_subsectors":  "Financial Sub-Sectors",
-    "healthcare_subsectors": "Healthcare Sub-Sectors",
-    "factor_etfs":           "Factor ETFs",
-    "international_expanded": "International (Expanded)",
-    "real_assets":           "Real Assets",
-    "fixed_income_expanded": "Fixed Income (Expanded)",
-    "commodities_expanded":  "Commodities (Expanded)",
-    "crypto_expanded":       "Crypto (Expanded)",
-    "uk_etfs":               "UK ETFs (GBP)",
-    "us_large_cap":          "US Large Cap Stocks",
-}
-
-
-def _render_charts_landing(config: dict) -> None:
-    """Grouped asset cards shown on Charts before any ticker is selected."""
-    from sqlalchemy import text as sa_text
-    from data.database import get_engine
-
-    _render_page_wordmark("Charts")
-    st.markdown("## Charts")
-
-    # ── Market Regime Trend ──────────────────────────────────────────────
-    # Lives here (rather than a new sidebar page, or bolted onto Daily
-    # Briefing/Signals) because Charts' whole job is already "time-series
-    # chart" — this is that same job applied to regime/market-health
-    # metrics instead of a single ticker's price. See
-    # analysis/regime_history.py for what feeds it.
-    st.markdown("### Market Regime Trend")
-    st.caption(
-        "ADX, VIX, and S&P 500 % vs SMA200 across every analysis run. "
-        "Shaded bands mark when the regime gate blocked new T212 entries."
-    )
-    _RM_RANGE_DAYS = {"3M": 90, "6M": 180, "All": None}
-    _rm_range = st.radio(
-        "Trend range", list(_RM_RANGE_DAYS.keys()), index=1,
-        horizontal=True, label_visibility="collapsed", key="regime_trend_range",
-    )
-    _rm_days = _RM_RANGE_DAYS[_rm_range]
-    _rm_start = (datetime.utcnow() - timedelta(days=_rm_days)) if _rm_days is not None else None
-    _rm_df = get_regime_metrics_history(start=_rm_start)
-    if _rm_df.empty:
-        st.info(
-            'No regime metrics history yet for this range — this chart fills in as scheduled '
-            'analysis runs happen automatically, or use "Backfill Regime Metrics History" on '
-            "the Status page to reconstruct available history."
-        )
-    else:
-        _rm_res = summarise_resolution(_rm_df)
-        if _rm_res["boundary_timestamp"] is not None:
-            # Mixed backfilled + live data in view — both the point density
-            # and the shading's reliability change at the marked boundary,
-            # so both are called out explicitly rather than left to look
-            # like an unexplained artifact. See analysis/regime_history.py:
-            # summarise_resolution() for the full reasoning.
-            st.caption(
-                f"📅 **{_rm_res['n_backfilled']} backfilled day(s)** (one point/day, "
-                f"reconstructed from historical indicators/signals) up to "
-                f"{_rm_res['boundary_timestamp'].strftime('%Y-%m-%d')}, then "
-                f"**{_rm_res['n_live']} live analysis run(s)** (up to 3/day) from there on — "
-                "marked by the vertical line below."
-            )
-            st.caption(
-                "⚠️ Shading before that line is **inferred**: today's regime-gate config applied "
-                "retroactively to the historical regime (no historical config snapshot is kept). "
-                "Shading after that line is **recorded**: the actual gate result computed at the "
-                "time of each run. Treat pre-line shading as indicative, not authoritative."
-            )
-        elif _rm_res["n_backfilled"]:
-            st.caption(
-                f"📅 All {_rm_res['n_backfilled']} point(s) shown are backfilled (one per calendar "
-                "day) and shading is inferred from today's regime-gate config applied "
-                "retroactively — live, per-run, ground-truth shading begins accumulating from today."
-            )
-        st.plotly_chart(_regime_trend_chart(_rm_df), width="stretch")
-
-    st.divider()
-    st.caption("Select an asset to view its price chart and indicators.")
-
-    # Build signal lookup for badges
-    _all_tickers_cl = [
-        e["ticker"]
-        for g in config.get("watchlist", {}).values()
-        if isinstance(g, list)
-        for e in g
-        if isinstance(e, dict) and "ticker" in e
-    ]
-    _sig_rows_cl = get_latest_signals(_all_tickers_cl)
-    _sig_map_cl: dict[str, str] = {
-        r["ticker"]: (r.get("signal") or "NEUTRAL") for r in _sig_rows_cl
-    }
-
-    # Fetch last two closes per ticker in one query for 1-day change
-    _chg_map_cl: dict[str, float] = {}
-    try:
-        with get_engine().connect() as _conn_cl:
-            _price_rows_cl = _conn_cl.execute(sa_text(
-                "WITH ranked AS ("
-                "  SELECT ticker, close,"
-                "         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn"
-                "  FROM price_data"
-                ") SELECT ticker, close, rn FROM ranked WHERE rn <= 2"
-            )).mappings().all()
-        _lat_cl: dict[str, float] = {}
-        _prv_cl: dict[str, float] = {}
-        for _row_cl in _price_rows_cl:
-            _tk_cl, _cl_cl, _rn_cl = _row_cl["ticker"], _row_cl["close"], _row_cl["rn"]
-            if _rn_cl == 1:
-                _lat_cl[_tk_cl] = _cl_cl
-            else:
-                _prv_cl[_tk_cl] = _cl_cl
-        for _tk_cl in _lat_cl:
-            if _tk_cl in _prv_cl and _prv_cl[_tk_cl] > 0:
-                _chg_map_cl[_tk_cl] = (_lat_cl[_tk_cl] - _prv_cl[_tk_cl]) / _prv_cl[_tk_cl] * 100
-    except Exception:
-        pass
-
-    _SIG_CARD_ICONS = {
-        "STRONG_BUY": "▲▲", "BUY": "▲", "NEUTRAL": "●",
-        "SELL": "▼", "STRONG_SELL": "▼▼",
-    }
-
-    for group_key, group_label in _GROUP_LABELS.items():
-        group = config["watchlist"].get(group_key, [])
-        if not group:
-            continue
-        st.markdown(f"#### {group_label}")
-        cols = st.columns(4)
-        for i, entry in enumerate(sorted(group, key=lambda e: e["ticker"])):
-            ticker  = entry["ticker"]
-            name    = entry["name"]
-            _signal = _sig_map_cl.get(ticker, "NEUTRAL")
-            _sym    = _SIG_CARD_ICONS.get(_signal, "●")
-            _chg    = _chg_map_cl.get(ticker)
-            _chg_str = f"  {_chg:+.2f}%" if _chg is not None else ""
-            with cols[i % 4]:
-                if st.button(
-                    f"**{ticker}**  \n{name}  \n{_sym}{_chg_str}",
-                    key=f"cl_{ticker}",
-                    width="stretch",
-                ):
-                    st.session_state["selected_ticker"] = ticker
-                    st.rerun()
-        st.markdown("")
-
-    _render_footer()
-
-
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Daily Briefing page
-# ---------------------------------------------------------------------------
-
-def _render_trade_card(e: dict) -> None:
-    """Render one enriched open trade as a styled HTML status card."""
-    status  = e.get("status", "ON TRACK")
-    colour  = _BRIEF_STATUS_COLOURS.get(status, "#8899AA")
-    icon    = _BRIEF_STATUS_ICONS.get(status, "")
-    bg      = _hex_rgba(colour, 0.08)
-
-    ticker         = html.escape(str(e.get("ticker",    "")))
-    _ucits         = e.get("ucits_ticker", "")
-    ucits_suffix   = (f" <span style='color:#8899AA;font-size:0.82rem;font-weight:400'>"
-                      f"({html.escape(str(_ucits))})</span>"
-                      if _ucits and _ucits != e.get("ticker") else "")
-    direction      = html.escape(str(e.get("direction", "LONG")))
-    days_held      = int(e.get("days_held") or 0)
-    days_remaining = int(e.get("days_remaining") or 0)
-    near_max_hold  = bool(e.get("near_max_hold"))
-    _raw_max       = e.get("max_holding_days")
-    max_hold_days  = int(_raw_max) if _raw_max is not None else None
-    acct_name      = html.escape(str(e.get("account_name") or e.get("account_type") or ""))
-
-    # ── P&L — GBP only, no raw secondary ─────────────────────────────────────
-    unreal_pnl_gbp    = e.get("unreal_pnl_gbp")
-    unreal_pct        = e.get("unreal_pct")
-    price_unavailable = e.get("price_unavailable", e.get("live_price") is None)
-
-    if price_unavailable:
-        pnl_html = "⚠ Price unavailable"
-        pnl_col  = "#f59e0b"
-    elif unreal_pnl_gbp is not None and unreal_pct is not None:
-        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
-        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
-    elif e.get("unreal_pnl") is not None and unreal_pct is not None:
-        _upnl    = e["unreal_pnl"]
-        pnl_col  = "#16a34a" if _upnl >= 0 else "#dc2626"
-        pnl_html = html.escape(
-            f"{_quote_ccy_sym(e.get('ticker') or '')}{_upnl:+.2f} ({unreal_pct:+.2f}%)"
-        )
-    else:
-        pnl_html = "—"
-        pnl_col  = "#8899AA"
-
-    # ── Signal / score — delta only when non-zero ─────────────────────────────
-    entry_sig = html.escape((e.get("entry_signal")   or "—").replace("_", " "))
-    curr_sig  = html.escape((e.get("current_signal") or "—").replace("_", " "))
-    e_score   = float(e.get("entry_score")   or 0)
-    c_score   = float(e.get("current_score") or 0)
-    delta     = c_score - e_score
-
-    score_str = html.escape(f"Score: {e_score:+.3f} → {c_score:+.3f}")
-    if abs(delta) >= 0.001:
-        delta_col  = "#16a34a" if delta >= 0 else "#f59e0b"
-        score_html = (
-            f"{score_str}"
-            f" <span style='color:{delta_col}'>{html.escape(f'(Δ {delta:+.3f})')}</span>"
-        )
-    else:
-        score_html = score_str
-
-    # ── SL / TP / live R:R ────────────────────────────────────────────────────
-    # Prefer the stored trade-plan SL over the ATR-computed one
-    _stored_sl = e.get("stop_loss_price")
-    _atr_sl    = e.get("stop_loss")
-    sl_price   = (float(_stored_sl) if _stored_sl is not None
-                  else float(_atr_sl) if _atr_sl is not None else None)
-    tp_price   = float(e["take_profit_price"]) if e.get("take_profit_price") is not None else None
-
-    live_price  = e.get("live_price")
-    entry_price = float(e.get("entry_price") or 0)
-    _mult       = 1 if e.get("direction", "LONG") == "LONG" else -1
-    live_rr     = None
-    if sl_price is not None and live_price is not None and entry_price > 0:
-        sl_risk = abs(entry_price - sl_price)
-        if sl_risk > 0:
-            live_rr = _mult * (live_price - entry_price) / sl_risk
-
-    # ── Build compact dot-separated detail row ────────────────────────────────
-    detail_parts = [
-        f"Signal: {entry_sig} → <strong>{curr_sig}</strong>",
-        score_html,
-    ]
-    if sl_price is not None:
-        _sl_dist_pct = e.get("stop_distance_pct")
-        _sl_label    = e.get("stop_label") or "ATR stop"
-        _sl_str = f"SL: {sl_price:,.4f}"
-        if _sl_dist_pct is not None:
-            _sl_str += f" (-{float(_sl_dist_pct):.1f}%)"
-        _sl_str += f" · {_sl_label}"
-        detail_parts.append(html.escape(_sl_str))
-    if tp_price is not None:
-        detail_parts.append(html.escape(f"TP: {tp_price:,.4f}"))
-    if live_rr is not None:
-        detail_parts.append(html.escape(f"R:R: {live_rr:+.2f}"))
-    _entry_var_pct = e.get("entry_var_pct")
-    if _entry_var_pct is not None:
-        detail_parts.append(html.escape(f"VaR at entry: {_entry_var_pct * 100:.2f}%"))
-    if near_max_hold:
-        detail_parts.append(
-            f"<span style='color:#f59e0b;font-weight:700'>⏱ {days_remaining}d left</span>"
-        )
-
-    st.markdown(
-        f"<div style='border-left:4px solid {colour};padding:10px 16px;"
-        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:8px'>"
-        f"<div style='display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px'>"
-        f"<span style='background:{colour};color:#fff;padding:2px 9px;"
-        f"border-radius:4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em'>"
-        f"{icon} {status}</span>"
-        f"<strong style='font-size:1rem'>{ticker}</strong>{ucits_suffix}"
-        f"<span style='color:#8899AA;font-size:0.85rem'>{direction} · "
-        f"{'Day ' + str(days_held) + '/' + str(max_hold_days) if max_hold_days is not None else 'Day ' + str(days_held)}</span>"
-        f"<span style='color:{pnl_col};font-weight:700;font-size:0.9rem'>{pnl_html}</span>"
-        f"<span style='color:#8899AA;font-size:0.78rem'>{acct_name}</span>"
-        f"</div>"
-        f"<div style='font-size:0.82rem;color:#8899AA'>"
-        f"{' · '.join(detail_parts)}"
-        f"</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _render_trade_card_compact(e: dict) -> None:
-    """Render one open T212 position as a single-line summary row.
-
-    Used on the Daily Briefing, where full per-position detail (signal delta,
-    SL/TP, live R:R) would crowd a page that already covers regime, macro,
-    and opportunities — that detail lives on the Performance page's Open
-    Positions section via the full _render_trade_card().
-    """
-    status = e.get("status", "ON TRACK")
-    colour = _BRIEF_STATUS_COLOURS.get(status, "#8899AA")
-    icon   = _BRIEF_STATUS_ICONS.get(status, "")
-    bg     = _hex_rgba(colour, 0.08)
-
-    ticker    = html.escape(str(e.get("ticker", "")))
-    asset_tag = html.escape(str(e.get("asset_type", "")))
-    days_held = int(e.get("days_held") or 0)
-
-    unreal_pnl_gbp    = e.get("unreal_pnl_gbp")
-    unreal_pct        = e.get("unreal_pct")
-    price_unavailable = e.get("price_unavailable", e.get("live_price") is None)
-
-    if price_unavailable:
-        pnl_html = "⚠ Price unavailable"
-        pnl_col  = "#f59e0b"
-    elif unreal_pnl_gbp is not None and unreal_pct is not None:
-        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
-        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
-    else:
-        pnl_html = "—"
-        pnl_col  = "#8899AA"
-
-    # Stop-loss detail is only surfaced here when it's the active reason for
-    # the badge — otherwise this stays a single line by design (see
-    # docstring); full stop price/distance/label for every position lives on
-    # the Performance page's full _render_trade_card().
-    stop_html = ""
-    if status == "STOP LOSS":
-        _sl_price = e.get("stop_loss_price")
-        _sl_dist  = e.get("stop_distance_pct")
-        _sl_label = e.get("stop_label") or "ATR stop"
-        if _sl_price is not None:
-            _sl_text = f"Stop: {_sl_price:,.4f}"
-            if _sl_dist is not None:
-                _sl_text += f" (-{float(_sl_dist):.1f}%)"
-            _sl_text += f" · {_sl_label}"
-            stop_html = (
-                f"<span style='color:#dc2626;font-size:0.78rem;font-weight:600'>"
-                f"{html.escape(_sl_text)}</span>"
-            )
-
-    st.markdown(
-        f"<div style='border-left:4px solid {colour};padding:6px 14px;"
-        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:6px;"
-        f"display:flex;align-items:center;gap:12px;flex-wrap:wrap'>"
-        f"<span style='background:{colour};color:#fff;padding:1px 8px;"
-        f"border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:0.05em'>"
-        f"{icon} {status}</span>"
-        f"<strong style='font-size:0.92rem'>{ticker}</strong>"
-        f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
-        f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
-        f"{stop_html}"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-
-# V2 has its own five exit reasons (see brokers/trading212_v2.py's exit
-# precedence) — deliberately a separate dict from output/briefing.py's
-# STATUS_COLOURS/STATUS_ICONS (V1's four alert states, still used by V1's
-# email-alert code), not merged into it, matching this whole task's
-# principle of keeping V1 and V2 concepts distinguishable rather than
-# reusing one enum for two different models.
-_V2_STATUS_COLOURS: dict[str, str] = {
+_STATUS_COLOURS: dict[str, str] = {
     "ON TRACK":      "#16a34a",
     "SIGNAL OFF":    "#d97706",
     "MAX HOLDING":   "#ea580c",
@@ -3803,7 +488,7 @@ _V2_STATUS_COLOURS: dict[str, str] = {
     "INDEX REMOVAL": "#dc2626",
     "CRISIS EXIT":   "#991b1b",
 }
-_V2_STATUS_ICONS: dict[str, str] = {
+_STATUS_ICONS: dict[str, str] = {
     "ON TRACK":      "✅",
     "SIGNAL OFF":    "⚠️",
     "MAX HOLDING":   "⏱️",
@@ -3813,13 +498,12 @@ _V2_STATUS_ICONS: dict[str, str] = {
 }
 
 
-def _render_v2_trade_card(e: dict) -> None:
-    """Render one open analysis/v2 position as a styled HTML status card —
-    V2's counterpart to _render_trade_card(), showing momentum/membership/
-    crisis context instead of V1's signal/confluence-score fields."""
+def _render_trade_card(e: dict) -> None:
+    """Render one open position as a styled HTML status card — momentum/
+    membership/crisis context (see output/performance.py:get_brief_cards())."""
     status = e.get("status", "ON TRACK")
-    colour = _V2_STATUS_COLOURS.get(status, "#8899AA")
-    icon   = _V2_STATUS_ICONS.get(status, "")
+    colour = _STATUS_COLOURS.get(status, "#8899AA")
+    icon   = _STATUS_ICONS.get(status, "")
     bg     = _hex_rgba(colour, 0.08)
 
     ticker      = html.escape(str(e.get("ticker", "")))
@@ -3870,2609 +554,68 @@ def _render_v2_trade_card(e: dict) -> None:
     )
 
 
-def _expected_last_eod(now: datetime) -> datetime:
-    """Return the UTC datetime of the most recent EOD run that should have fired by now.
+def _render_trade_card_compact(e: dict) -> None:
+    """Render one open position as a single-line summary row — used on the
+    Daily Briefing, where full detail lives on the Performance page."""
+    status = e.get("status", "ON TRACK")
+    colour = _STATUS_COLOURS.get(status, "#8899AA")
+    icon   = _STATUS_ICONS.get(status, "")
+    bg     = _hex_rgba(colour, 0.08)
 
-    The EOD run fires at 21:30 UTC Mon–Fri.  If today's run hasn't fired yet (or today
-    is a weekend) we walk back to the previous weekday's slot.
-    """
-    eod_today = now.replace(hour=21, minute=30, second=0, microsecond=0)
-    expected = eod_today if now >= eod_today else eod_today - timedelta(days=1)
-    while expected.weekday() >= 5:
-        expected -= timedelta(days=1)
-    return expected
+    ticker    = html.escape(str(e.get("ticker", "")))
+    asset_tag = html.escape(str(e.get("asset_type", "")))
+    days_held = int(e.get("days_held") or 0)
 
+    unreal_pnl_gbp = e.get("unreal_pnl_gbp")
+    unreal_pct     = e.get("unreal_pct")
+    if unreal_pnl_gbp is not None and unreal_pct is not None:
+        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
+        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
+    else:
+        pnl_html = "—"
+        pnl_col  = "#8899AA"
 
-def _is_refresh_overdue(last_refresh: "datetime | None") -> "tuple[bool, bool]":
-    """Return (is_warning, is_critical) based on the scheduled EOD run time.
-
-    is_warning  — last refresh missed the expected EOD by more than 1 hour
-    is_critical — last refresh missed the expected EOD by more than 25 hours (full day)
-    Both return False on weekends (no EOD run is scheduled).
-    """
-    now = datetime.utcnow()
-    if now.weekday() >= 5:
-        return False, False
-    if last_refresh is None:
-        return True, True
-    expected = _expected_last_eod(now)
-    missed_by = (expected - last_refresh).total_seconds() / 3600
-    return missed_by > 1, missed_by > 25
+    st.markdown(
+        f"<div style='border-left:4px solid {colour};padding:6px 14px;"
+        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:6px;"
+        f"display:flex;align-items:center;gap:12px;flex-wrap:wrap'>"
+        f"<span style='background:{colour};color:#fff;padding:1px 8px;"
+        f"border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:0.05em'>"
+        f"{icon} {status}</span>"
+        f"<strong style='font-size:0.92rem'>{ticker}</strong>"
+        f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
+        f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_data(ttl=300)
-def _system_health_check() -> list[dict]:
-    """Check system health and return a list of alert dicts (level, message).
-
-    Cached for 5 minutes to avoid DB / subprocess overhead on every page render.
-    """
-    alerts: list[dict] = []
-    now = datetime.utcnow()
-    today = now.date()
-    is_weekday = today.weekday() < 5
-
-    # 1. Data staleness — schedule-aware check against the expected EOD run time.
-    #    A simple age_hours threshold causes false alarms because the EOD run fires at
-    #    21:30 UTC and data will naturally be 18-23 h old during the following day.
-    last_refresh = get_metadata("last_full_refresh")
-    is_warning, is_critical = _is_refresh_overdue(last_refresh)
-    if is_critical:
-        last_str = _fmt_uk(last_refresh) if last_refresh else "never"
-        alerts.append({
-            "level": "red",
-            "message": (
-                f"Data refresh overdue — EOD run appears to have been missed "
-                f"(last updated: {last_str})."
-            ),
-        })
-    elif is_warning:
-        alerts.append({
-            "level": "amber",
-            "message": "Data refresh missed — last EOD run did not complete as scheduled.",
-        })
-
-    # 2. Forex / crypto price freshness — flag only when data predates the most recent
-    #    expected EOD run, not based on an absolute calendar-day count.
-    _FC_TICKERS = ["GBPUSD=X", "USDJPY=X", "EURUSD=X", "AUDUSD=X", "BTC-USD", "ETH-USD"]
-    if is_weekday:
-        try:
-            expected_date = _expected_last_eod(now).date()
-            params = {f"t{i}": t for i, t in enumerate(_FC_TICKERS)}
-            placeholders = ",".join(f":t{i}" for i in range(len(_FC_TICKERS)))
-            with get_engine().connect() as _conn:
-                rows = _conn.execute(
-                    text(
-                        f"SELECT ticker, MAX(date) AS last_date FROM price_data "
-                        f"WHERE ticker IN ({placeholders}) GROUP BY ticker"
-                    ),
-                    params,
-                ).fetchall()
-            stale = [
-                r[0] for r in rows
-                if r[1] and date.fromisoformat(str(r[1])) < expected_date
-            ]
-            if stale:
-                alerts.append({
-                    "level": "red",
-                    "message": (
-                        f"Forex/crypto data overdue for {len(stale)} ticker(s): "
-                        f"{', '.join(stale[:3])}{'…' if len(stale) > 3 else ''}."
-                    ),
-                })
-        except Exception:
-            pass
-
-    # 3. Signal generation staleness
-    last_signal = get_metadata("last_analysis_run")
-    if last_signal and is_weekday:
-        sig_age = (now - last_signal).total_seconds() / 3600
-        if sig_age > 26:
-            alerts.append({
-                "level": "amber",
-                "message": (
-                    f"Signals not regenerated in {sig_age:.0f}h — analysis pipeline "
-                    "may have failed."
-                ),
-            })
-
-    # 4. EOD pull returned 0 rows — silent data failure (e.g. yfinance rate-limit)
-    last_pull_rows_str = get_metadata_str("last_pull_rows")
-    if last_pull_rows_str is not None and is_weekday and last_refresh:
-        try:
-            if int(last_pull_rows_str) == 0 and last_refresh.date() == today:
-                alerts.append({
-                    "level": "red",
-                    "message": (
-                        "Last EOD data pull returned 0 rows — refresh may have "
-                        "silently failed."
-                    ),
-                })
-        except ValueError:
-            pass
-
-    # 5. Recent ERROR lines in the systemd journal (Linux / server only)
-    try:
-        result = subprocess.run(
-            [
-                "journalctl", "-u", "investment-research",
-                "--since", "2 hours ago",
-                "--grep", "ERROR",
-                "-q", "--no-pager",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            error_count = len(result.stdout.strip().splitlines())
-            alerts.append({
-                "level": "amber",
-                "message": (
-                    f"{error_count} ERROR log line(s) detected in the last 2 hours."
-                ),
-            })
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-
-    return alerts
-
-
-def _render_system_health_banner() -> None:
-    """Render dismissible amber/red system health alerts at the top of the page."""
-    alerts = _system_health_check()
-    if not alerts:
-        return
-
-    dismissed: set[str] = st.session_state.get("health_dismissed", set())
-    active = [a for a in alerts if f"{a['level']}:{a['message']}" not in dismissed]
-    if not active:
-        return
-
-    for i, alert in enumerate(active):
-        alert_key = f"{alert['level']}:{alert['message']}"
-        c_msg, c_nav, c_x = st.columns([15, 2, 1])
-        with c_msg:
-            if alert["level"] == "red":
-                st.error(f"⚠️ {alert['message']}")
-            else:
-                st.warning(f"⚠️ {alert['message']}")
-        with c_nav:
-            if st.button(
-                "View Status →",
-                key=f"health_nav_{i}",
-                width="stretch",
-            ):
-                st.session_state["page"] = "status"
-                st.rerun()
-        with c_x:
-            if st.button(
-                "✕",
-                key=f"health_dismiss_{i}",
-                help="Dismiss this alert for this session",
-                width="stretch",
-            ):
-                dismissed.add(alert_key)
-                st.session_state["health_dismissed"] = dismissed
-                st.rerun()
-
-
-def _ucits_entry(raw) -> "tuple[str, str]":
-    """Extract (ucits_ticker, currency) from a ucits_mapping value.
-
-    Handles both the legacy flat-string format ("I50Dl_EQ") and the new
-    nested-dict format ({"ticker": "I50Dl_EQ", "currency": "USD"}).
-    Defaults currency to "USD" for backward-compat with old configs.
-    """
-    if isinstance(raw, dict):
-        return raw.get("ticker", ""), raw.get("currency", "USD")
-    return str(raw), "USD"
-
-
-def _t212_ccy_to_gbp(amount: float, currency: str) -> float:
-    """Convert *amount* from the instrument's trading currency to GBP.
-
-    Uses _get_fx_rate() for USD/EUR; GBX is handled as pence (÷100).
-    Falls back to 1:1 when the rate is unavailable.
-    """
-    if not currency or currency == "GBP":
-        return amount
-    if currency == "GBX":
-        return amount / 100.0
-    rate, _ = _get_fx_rate(currency, "GBP")
-    if rate and rate > 0:
-        return amount / rate
-    return amount  # fallback: return unconverted rather than zero
-
-
-def _get_drawdown_status(config: dict) -> "dict | None":
-    """Return the current drawdown-scaling status for display, or None if unavailable.
-
-    Reads account value from the scheduler-maintained t212_account_snapshot (no
-    direct T212 API calls from the UI thread — same pattern as
-    _get_t212_invest_brief_cards() above). Uses trading212_invest's
-    drawdown_scaling thresholds — trading212_stocks ships with identical
-    defaults (see analysis/risk.py) so this single call is representative of
-    both automation paths for display purposes.
-    """
-    snap_raw = get_metadata_str("t212_account_snapshot")
-    if not snap_raw:
-        return None
-    try:
-        import json as _json
-        summary = _json.loads(snap_raw)
-        total_val = float(summary.get("totalValue", 0) or 0)
-    except Exception:
-        return None
-    if total_val <= 0:
-        return None
-
-    scale_factor, drawdown_pct, status = compute_drawdown_scale_factor(
-        account_value_gbp=total_val, config=config, section="trading212_invest",
-    )
-    peak_str = get_metadata_str("t212_peak_value_gbp")
-    peak_val = float(peak_str) if peak_str else total_val
-    peak_date_str = get_metadata_str("t212_peak_value_date")
-
-    return {
-        "status": status,
-        "scale_factor": scale_factor,
-        "drawdown_pct": drawdown_pct,
-        "peak_value_gbp": peak_val,
-        "peak_date": peak_date_str,
-        "current_value_gbp": total_val,
-        "enabled": bool(
-            config.get("trading212_invest", {}).get("drawdown_scaling", {}).get("enabled", False)
-        ),
-    }
-
-
-@st.cache_data(ttl=300)
-def _get_v2_ticker_status() -> list[dict]:
-    """Per-ticker live status for every analysis/v2 ticker (momentum, index
-    membership, crisis flags). Thin cached wrapper — the actual data-shaping
-    logic lives in output/v2_performance.py, which is directly unit-tested
-    (main.py itself is not importable in tests — see that module's docstring).
-    Reads config fresh via _load_config() since unhashable dicts can't be
-    Streamlit cache keys.
-    """
-    from output.v2_performance import get_v2_ticker_status
-    return get_v2_ticker_status(_load_config())
-
-
-def _get_v2_brief_cards(config: dict) -> list[dict]:
-    """Enriched trade-card dicts for open analysis/v2 positions — thin
-    wrapper around output/v2_performance.py:get_v2_brief_cards(), passing in
-    this page's already-cached _get_v2_ticker_status() so the momentum/
-    membership/crisis computation isn't repeated."""
-    from output.v2_performance import get_v2_brief_cards
-    return get_v2_brief_cards(config, ticker_status_rows=_get_v2_ticker_status())
-
-
-def _get_v2_pnl_rows() -> list[dict]:
-    """All reconstructed closed analysis/v2 positions — thin wrapper around
-    output/v2_performance.py:get_v2_pnl_rows()."""
-    from output.v2_performance import get_v2_pnl_rows
-    return get_v2_pnl_rows()
-
-
-def _v2_pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
-    """Adapt v2_pnl rows for analysis/backtest_metrics.py — thin wrapper
-    around output/v2_performance.py:v2_pnl_metrics_df()."""
-    from output.v2_performance import v2_pnl_metrics_df
-    return v2_pnl_metrics_df(pnl_rows)
-
-
-def _get_t212_invest_brief_cards(config: dict) -> list[dict]:
-    """Return enriched trade-card dicts for open T212 Invest positions.
-
-    Reads the scheduler-maintained ``t212_positions_snapshot`` from system_metadata
-    (written by ``_fetch_t212_snapshot`` in the scheduler).  No direct T212 API
-    calls are made here — the scheduler owns all outbound requests.  Covers both
-    T212 automation paths — UCITS ETFs (trading212_invest.ucits_mapping) and
-    direct US stocks (trading212_stocks + watchlist.us_large_cap) — since both
-    write into the same live T212 portfolio and the same t212_invest_orders
-    table. Each card carries ``"asset_type"``: ``"ETF"`` or ``"STOCK"``, so
-    callers can render a type badge.
-    """
-    if not (os.environ.get("T212_API_KEY", "") and os.environ.get("T212_API_SECRET", "")):
-        return []
-
-    t212_cfg  = config.get("trading212_invest", {})
-    stock_cfg = config.get("trading212_stocks", {})
-
-    # Build a unified t212_ticker -> (research_ticker, asset_type) map across both
-    # automation paths. ETF mapping takes priority on a ticker collision — the two
-    # ticker universes are disjoint by design (see brokers.trading212._stock_universe).
-    reverse_map: dict[str, tuple[str, str]] = {}
-    ucits_currencies: dict[str, str] = {}
-
-    if t212_cfg.get("enabled", False):
-        for _rt, _raw in t212_cfg.get("ucits_mapping", {}).items():
-            _ut, _ccy = _ucits_entry(_raw)
-            reverse_map[_ut] = (_rt, "ETF")
-            ucits_currencies[_ut] = _ccy
-
-    if stock_cfg.get("enabled", False):
-        for _entry in config.get("watchlist", {}).get("us_large_cap", []):
-            if not isinstance(_entry, dict) or "ticker" not in _entry:
-                continue
-            _rt  = _entry["ticker"]
-            _t2t = _entry.get("trading212_instrument", _rt)
-            if _t2t not in reverse_map:
-                reverse_map[_t2t] = (_rt, "STOCK")
-
-    if not reverse_map:
-        return []
-
-    # Read positions from the scheduler-maintained DB snapshot (no direct API calls).
-    import json as _json_brief  # noqa: PLC0415
-    _pos_raw_brief = get_metadata_str("t212_positions_snapshot")
-    t2_positions: list | None = None
-    if _pos_raw_brief:
-        try:
-            t2_positions = _json_brief.loads(_pos_raw_brief) or []
-        except Exception:
-            pass
-
-    if t2_positions is None:
-        return []
-
-    # Build a lookup: t212_ticker → position dict (for O(1) access)
-    pos_by_t212 = {p.get("ticker", ""): p for p in (t2_positions or [])}
-
-    # Load entry info (signal, score, fill date, currency) from t212_invest_orders
-    try:
-        from data.database import get_engine as _get_eng  # noqa: PLC0415
-        from sqlalchemy import text as _sa_t              # noqa: PLC0415
-        with _get_eng().connect() as _tc:
-            _entry_rows = _tc.execute(_sa_t("""
-                SELECT t212_ticker, signal_type, confluence_score, filled_at, currency_code, var_pct,
-                       fill_price
-                FROM t212_invest_orders
-                WHERE direction = 'BUY' AND status = 'FILLED'
-                ORDER BY filled_at ASC
-            """)).mappings().all()
-        # Keep only the earliest fill per instrument ticker (= opening entry)
-        entry_by_t212: dict[str, dict] = {}
-        for _r in _entry_rows:
-            _u = _r["t212_ticker"]
-            if _u not in entry_by_t212:
-                entry_by_t212[_u] = dict(_r)
-    except Exception:
-        entry_by_t212 = {}
-
-    cards: list[dict] = []
-    for t212_ticker, (research_ticker, asset_type) in reverse_map.items():
-        pos = pos_by_t212.get(t212_ticker)
-        if not pos:
-            continue  # no open position for this mapping
-
-        avg_price     = float(pos.get("averagePrice") or 0)
-        qty           = float(pos.get("quantity")     or 0)
-        current_price = float(pos.get("currentPrice") or 0)
-        ppl           = float(pos.get("ppl")          or 0)
-
-        if qty <= 0 or avg_price <= 0:
-            continue
-
-        unreal_pct = round((current_price - avg_price) / avg_price * 100, 2) if avg_price > 0 else 0.0
-
-        entry_info    = entry_by_t212.get(t212_ticker, {})
-        entry_signal  = entry_info.get("signal_type")  or "NEUTRAL"
-        entry_score   = float(entry_info.get("confluence_score") or 0)
-        entry_var_pct = entry_info.get("var_pct")  # None when placed under position_sizing: fixed
-
-        # Stop loss — computed on the fly from the ticker's own ATR history
-        # (no order-time stop is persisted; see analysis/volatility.py:_atr_fallback_stop()).
-        try:
-            from analysis.volatility import _atr_fallback_stop  # noqa: PLC0415
-            _fallback = _atr_fallback_stop(research_ticker, avg_price, "LONG", config)
-            stop_loss_price   = _fallback.get("stop_price")
-            stop_distance_pct = _fallback.get("stop_distance_pct")
-        except Exception:
-            stop_loss_price   = None
-            stop_distance_pct = None
-        stop_label = "ATR stop"
-
-        # Resolve instrument currency: prefer DB-stored value (set at order time from T212 API),
-        # then fall back to config ucits_mapping currency field (ETF only; stocks default USD).
-        _db_ccy  = entry_info.get("currency_code")
-        currency = _db_ccy or ucits_currencies.get(t212_ticker, "USD")
-
-        # Convert position value and P&L from instrument currency to GBP.
-        current_value_gbp = round(_t212_ccy_to_gbp(qty * current_price, currency), 2)
-        pnl_gbp           = round(_t212_ccy_to_gbp(ppl, currency), 2)
-        filled_at_str = entry_info.get("filled_at")
-
-        entry_dt: datetime | None = None
-        if filled_at_str:
-            try:
-                entry_dt = datetime.fromisoformat(str(filled_at_str))
-            except Exception:
-                pass
-        days_held = max(0, (datetime.utcnow() - entry_dt).days) if entry_dt else 0
-
-        try:
-            sig_row       = get_current_signal(research_ticker)
-            current_signal = sig_row.get("signal") or "NEUTRAL"
-            current_score  = float(sig_row.get("confluence_score") or 0)
-        except Exception:
-            current_signal = "NEUTRAL"
-            current_score  = 0.0
-
-        # Status for buy-and-hold ETF/stock — mirrors the exit logic in
-        # maybe_place_t212_orders() / maybe_place_stock_orders(): immediate exits
-        # (SELL/STRONG_SELL), confirmed NEUTRAL, and backstop time limit. Reads
-        # from whichever config section matches this card's asset_type.
-        _section_cfg     = t212_cfg if asset_type == "ETF" else stock_cfg
-        _default_hold    = 90 if asset_type == "ETF" else 30
-        _t212_max_hold   = int(_section_cfg.get("max_holding_days", _default_hold))
-        _exit_on_signal  = _section_cfg.get("exit_on_signal", True)
-        _conf_runs       = int(config.get("signals", {}).get("reversal_confirmation_runs", 2))
-        _conf_hours      = _conf_runs * 3
-        _neutral_prefix  = "t212_neutral_since" if asset_type == "ETF" else "t212_stock_neutral_since"
-        _neutral_key     = f"{_neutral_prefix}:{t212_ticker}"
-
-        # Stop loss takes priority over signal status — mirrors the hourly
-        # enforcement check in maybe_exit_t212_positions()/maybe_exit_stock_positions().
-        if (stop_loss_price is not None and current_price > 0
-                and current_price <= stop_loss_price):
-            status = "STOP LOSS"
-        elif current_signal in ("SELL", "STRONG_SELL"):
-            status = "EXIT SIGNAL"
-        elif _exit_on_signal and current_signal not in ("BUY", "STRONG_BUY"):
-            # NEUTRAL — check whether the confirmation timer has elapsed
-            try:
-                from data.database import get_metadata_str as _gms  # noqa: PLC0415
-                _first_neutral = _gms(_neutral_key)
-            except Exception:
-                _first_neutral = None
-            if _first_neutral is not None:
-                try:
-                    _hours = (
-                        datetime.utcnow() - datetime.fromisoformat(_first_neutral)
-                    ).total_seconds() / 3600
-                    status = "EXIT SIGNAL" if _hours >= _conf_hours else "WEAKENING"
-                except Exception:
-                    status = "WEAKENING"
-            else:
-                status = "WEAKENING"   # timer not yet started (first NEUTRAL run)
-        elif days_held >= _t212_max_hold:
-            status = "EXIT SIGNAL"     # backstop time limit
-        else:
-            status = "ON TRACK"
-
-        days_remaining = max(0, _t212_max_hold - days_held)
-        near_max_hold  = 0 < days_remaining <= 7
-        status_priority = {"STOP LOSS": 3, "EXIT SIGNAL": 2, "WEAKENING": 1, "ON TRACK": 0}[status]
-
-        cards.append({
-            "ticker":            research_ticker,
-            "ucits_ticker":      t212_ticker,
-            "asset_type":        asset_type,
-            "direction":         "LONG",
-            "entry_price":       avg_price,
-            "quantity":          qty,
-            "entry_date":        entry_dt.isoformat() if entry_dt else None,
-            "days_held":         days_held,
-            "days_remaining":    days_remaining,
-            "near_max_hold":     near_max_hold,
-            "max_holding_days":  _t212_max_hold,
-            "live_price":        current_price,
-            "currency":          currency,
-            "current_value_gbp": current_value_gbp,
-            "unreal_pnl":        ppl,
-            "unreal_pnl_gbp":    pnl_gbp,
-            "unreal_pct":        unreal_pct,
-            "price_unavailable": current_price == 0,
-            "current_signal":    current_signal,
-            "current_score":     current_score,
-            "entry_signal":      entry_signal,
-            "entry_score":       entry_score,
-            "entry_var_pct":     entry_var_pct,
-            "status":            status,
-            "status_priority":   status_priority,
-            "account_name":      "T212 Invest" if asset_type == "ETF" else "T212 Stocks",
-            "account_type":      "T212_INVEST",
-            "stop_loss_price":   stop_loss_price,
-            "stop_loss":         None,
-            "stop_distance_pct": stop_distance_pct,
-            "stop_label":        stop_label,
-            "take_profit_price": None,
-        })
-
-    return cards
-
-
-def _render_briefing_page(config: dict, watchlist: dict[str, str], tradeable_set: set[str], t212_names: dict[str, str]) -> None:
-    """Render the Daily Briefing: market overview, open trade monitor, opportunities."""
-    _render_page_wordmark("Daily Briefing")
-    st.markdown("## Daily Briefing")
-
-    _render_system_health_banner()
-
-    last_analysis = get_metadata("last_analysis_run")
-    if last_analysis:
-        st.caption(
-            f"As of: {_fmt_uk(last_analysis, '%Y-%m-%d %H:%M')} · "
-            f"Updates: {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}"
-        )
-    else:
-        st.caption("No analysis run yet — updates run automatically on weekdays.")
-
-    # ── Market Overview (compact status bar) ────────────────────────────────
-    regime_result = detect_regime()
-    regime  = regime_result["regime"]
-    colour  = regime_result["colour"]
-    details = regime_result["details"]
-    price   = details.get("price")
-    sma_200 = details.get("sma_200")
-    adx     = details.get("adx")
-    price_pct = f"^GSPC {(price/sma_200-1)*100:+.1f}% vs SMA200" if (price and sma_200) else ""
-    adx_str   = f"ADX {adx:.1f}" if adx else ""
-
-    ctx     = get_macro_context()
-    vix_v   = ctx.get("vix")
-    vix_col = (
-        "#dc2626" if vix_v and vix_v > 30 else
-        "#f59e0b" if vix_v and vix_v > 20 else
-        "#16a34a"
-    )
-    vix_str = f"VIX {vix_v:.1f}" if vix_v else "VIX —"
-    ys      = ctx.get("yield_spread")
-    yr      = (ctx.get("yield_regime") or "—").lower()
-    ys_str  = f"Yield {ys:+.2f}% ({yr})" if ys is not None else f"Yield: {yr}"
-    dp      = ctx.get("dollar_pct")
-    dt      = ctx.get("dollar_trend") or "—"
-    usd_str = f"USD {dt} ({dp:+.1f}% vs SMA20)" if dp is not None else f"USD {dt}"
-
-    overlay_raw     = get_metadata_str("active_overlays") or ""
-    active_overlays = {k for k in overlay_raw.split(",") if k and k != "none"}
-
-    _overlay_pills_html = ""
-    for _ok in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
-        if _ok not in active_overlays:
-            continue
-        _om = OVERLAY_DESCRIPTIONS.get(_ok, {})
-        _oc = _om.get("colour", "#8899AA")
-        _overlay_pills_html += (
-            f'<span style="background:{_oc}20;border:1px solid {_oc}55;color:{_oc};'
-            f'padding:1px 7px;border-radius:3px;font-size:0.72rem;font-weight:700;'
-            f'white-space:nowrap">'
-            f'{html.escape(_om.get("label", _ok.replace("_", " ")))}</span>'
-        )
-
-    st.markdown(
-        f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;'
-        f'border:1px solid #1E2D45;border-radius:8px;padding:8px 14px;margin-bottom:4px">'
-        f'<span style="background:{colour}18;border:1px solid {colour}44;color:{colour};'
-        f'font-weight:700;padding:3px 10px;border-radius:14px;font-size:0.85rem;white-space:nowrap">'
-        f'{regime.replace("_", " ")}</span>'
-        + (f'<span style="color:#8899AA;font-size:0.8rem">{html.escape(price_pct)}</span>' if price_pct else '')
-        + (f'<span style="color:#8899AA;font-size:0.8rem">{adx_str}</span>' if adx_str else '')
-        + f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>'
-        f'<span style="color:{vix_col};font-size:0.82rem;font-weight:600">{html.escape(vix_str)}</span>'
-        f'<span style="color:#8899AA;font-size:0.82rem">{html.escape(ys_str)}</span>'
-        f'<span style="color:#8899AA;font-size:0.82rem">{html.escape(usd_str)}</span>'
-        + (f'<span style="color:#cbd5e1;font-size:0.8rem">·</span>{_overlay_pills_html}' if _overlay_pills_html else '')
-        + f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(regime_result["description"])
-
-    _buy_th, _sell_th = get_regime_thresholds(regime.value, config)
-    _total_mods = config.get("confluence", {}).get("total_signal_modules", 7)
-    _buy_mods  = round(_buy_th  * _total_mods)
-    _sell_mods = round(_sell_th * _total_mods)
-    if _buy_th == _sell_th:
-        _thresh_label = (
-            f"Threshold: {_buy_th:.2f} ({regime.replace('_', ' ')}) "
-            f"— requires ~{_buy_mods}/{_total_mods} modules to agree"
-        )
-    else:
-        _thresh_label = (
-            f"Thresholds: Buy {_buy_th:.2f} (~{_buy_mods}/{_total_mods} modules) "
-            f"· Sell {_sell_th:.2f} (~{_sell_mods}/{_total_mods} modules) "
-            f"({regime.replace('_', ' ')})"
-        )
-    st.caption(_thresh_label)
-
-    # Effective automation entry threshold for the current regime (per-regime
-    # overrides in trading212_invest / trading212_stocks can differ from the
-    # global default — see analysis/regime.py:resolve_entry_signal()). A regime
-    # not in allowed_entry_regimes blocks entries entirely, ahead of the
-    # threshold check — see analysis/regime.py:is_entry_allowed().
-    #
-    # trading212_invest/trading212_stocks are both retired as of 2026-07-31 —
-    # this block only ever produces output for a re-enabled V1, which is why
-    # it no longer drives the page's primary "what is live trading right now"
-    # framing (that's the V2 status block below it instead).
-    def _automation_bit(cfg: dict, section: str, label: str) -> None:
-        allowed = cfg.get("allowed_entry_regimes")
-        note = f" ({'/'.join(allowed)} only)" if allowed else ""
-        if is_entry_allowed(config, regime.value, section):
-            eff = resolve_entry_signal(cfg, regime.value)
-            overridden = regime.value in cfg.get("entry_signal_overrides", {})
-            suffix = " (override)" if overridden else ""
-            _auto_bits.append(f"{label} {eff}{suffix}{note}")
-        else:
-            _auto_bits.append(f"{label} blocked{note}")
-            _blocked_paths.append(label)
-
-    _auto_bits = []
-    _blocked_paths = []
-    _t212_cfg_b = config.get("trading212_invest", {})
-    if _t212_cfg_b.get("enabled", False):
-        _automation_bit(_t212_cfg_b, "trading212_invest", "T212 ETF")
-    _stock_cfg_b = config.get("trading212_stocks", {})
-    if _stock_cfg_b.get("enabled", False):
-        _automation_bit(_stock_cfg_b, "trading212_stocks", "T212 Stocks")
-    if _auto_bits:
-        st.caption(f"Automation entry: {' · '.join(_auto_bits)}")
-    if _blocked_paths:
-        st.caption(f"⛔ Entries blocked — {regime.replace('_', ' ')} regime ({', '.join(_blocked_paths)})")
-
-    if not _auto_bits:
-        st.caption(
-            "The regime/confluence analysis above is still live, real market analysis — "
-            "it just no longer drives order placement. V1 (T212 ETF/Stocks) is retired; "
-            "see the V2 status below for what's actually trading this account."
-        )
-
-    # ── V2 live status — momentum, membership, crisis override ─────────────
-    _v2_cfg_brief = config.get("trading212_v2", {})
-    if _v2_cfg_brief.get("enabled", False):
-        _v2_status_rows = _get_v2_ticker_status()
-        _v2_valid_rows = [r for r in _v2_status_rows if not r.get("insufficient_history")]
-        _v2_long_count = sum(1 for r in _v2_valid_rows if r.get("sig_on") is True)
-        _v2_flat_count = sum(1 for r in _v2_valid_rows if r.get("sig_on") is False)
-        _v2_crisis_active = any(r.get("crisis_now") for r in _v2_valid_rows)
-        _v2_entry_blocked = any(r.get("entry_blocked") for r in _v2_valid_rows)
-
-        _v2_badge_colour = "#991b1b" if _v2_crisis_active else "#16a34a"
-        _v2_badge_text = "🔴 CRISIS OVERRIDE ACTIVE" if _v2_crisis_active else "🟢 V2 — LIVE (DEMO)"
-        st.markdown(
-            f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
-            f'border:1px solid {_v2_badge_colour}44;border-radius:8px;padding:6px 12px;margin-top:4px">'
-            f'<span style="background:{_v2_badge_colour};color:#fff;font-weight:700;'
-            f'padding:2px 9px;border-radius:12px;font-size:0.78rem">{_v2_badge_text}</span>'
-            f'<span style="color:#8899AA;font-size:0.8rem">'
-            f'{_v2_long_count} long · {_v2_flat_count} flat of {len(_v2_valid_rows)} tickers'
-            + (' · new entries blocked (crisis cooldown)' if _v2_entry_blocked else '')
-            + '</span></div>',
-            unsafe_allow_html=True,
-        )
-        with st.expander(f"V2 per-ticker status ({len(_v2_valid_rows)} tickers)"):
-            _v2_status_df = pd.DataFrame(_v2_valid_rows)
-            _v2_status_df["Type"] = _v2_status_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-            _v2_status_df["sig_on"] = _v2_status_df["sig_on"].map(lambda b: "Long" if b else "Flat")
-            _v2_status_df["is_member"] = _v2_status_df["is_member"].map(lambda b: "Yes" if b else "No")
-            _v2_status_df["momentum_pct"] = _v2_status_df["momentum_pct"].map(
-                lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
-            )
-            _v2_status_df = _v2_status_df[["ticker", "Type", "sig_on", "momentum_pct", "is_member", "entry_blocked"]]
-            _v2_status_df.columns = ["Ticker", "Type", "Momentum", "12m Return", "Index Eligible", "Entry Blocked"]
-            st.dataframe(_v2_status_df, width="stretch", hide_index=True)
-
-    # ── Portfolio risk row (drawdown-based position scaling) ────────────────
-    # Mechanical, non-predictive risk control — see analysis/risk.py. Shown
-    # only when a T212 account snapshot exists; informational even when
-    # drawdown_scaling.enabled is false (still shows the actual drawdown).
-    _dd_status = _get_drawdown_status(config)
-    if _dd_status:
-        _dd_colour = {
-            "NORMAL": "#16a34a", "CAUTION": "#f59e0b",
-            "REDUCED": "#f97316", "MINIMAL": "#dc2626",
-        }.get(_dd_status["status"], "#8899AA")
-        _dd_line = (
-            f"Portfolio Risk: {_dd_status['status']} · "
-            f"Peak £{_dd_status['peak_value_gbp']:,.0f} · "
-            f"Current £{_dd_status['current_value_gbp']:,.0f} · "
-            f"Drawdown {_dd_status['drawdown_pct'] * 100:.1f}%"
-        )
-        if _dd_status["enabled"] and _dd_status["scale_factor"] < 1.0:
-            _dd_line += f" · New positions scaled to {_dd_status['scale_factor'] * 100:.0f}%"
-            _dd_prefix = "⚠ "
-        else:
-            _dd_prefix = ""
-        st.markdown(
-            f'<span style="color:{_dd_colour};font-size:0.85rem;font-weight:600">'
-            f'{_dd_prefix}{html.escape(_dd_line)}</span>',
-            unsafe_allow_html=True,
-        )
-
-    # Active overlay detail strips
-    for overlay_key in ("MACRO_STRESS", "VOL_REGIME_SHIFT", "CREDIT_STRESS", "RECESSION_RISK", "EM_STRESS"):
-        if overlay_key not in active_overlays:
-            continue
-        meta  = OVERLAY_DESCRIPTIONS.get(overlay_key, {})
-        oc    = meta.get("colour", "#8899AA")
-        olabel = html.escape(meta.get("label", overlay_key.replace("_", " ")))
-        obody  = html.escape(meta.get("text", ""))
-        obg    = _hex_rgba(oc, 0.10)
-        st.markdown(
-            f"<div style='border-left:4px solid {oc};padding:8px 14px;"
-            f"background:{obg};border-radius:0 4px 4px 0;margin:6px 0'>"
-            f"<span style='background:{oc};color:#fff;padding:1px 7px;"
-            f"border-radius:3px;font-size:0.68rem;font-weight:800'>OVERLAY</span> "
-            f"<strong style='color:{oc}'>{olabel}</strong>"
-            f"<p style='font-size:0.82rem;line-height:1.5;margin:4px 0 0 0'>"
-            f"{obody}</p></div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Market Narrative (rule-based plain-English summary; see
-    # output/briefing.py:_generate_daily_narrative()) — placed near the top
-    # of the page, directly below the regime status bar. Reuses regime_result,
-    # ctx and active_overlays already computed above; macro_dash and the
-    # signal-distribution counts are re-fetched here under a "_narrative_"
-    # prefix (cheap, read-only DB calls) since the page's own copies of
-    # those aren't computed until further down. Open-position status comes
-    # from _get_t212_invest_brief_cards(), the same helper the Open Trade
-    # Monitor section uses further down. ────────────────────────────────────
-    _narrative_macro_dash   = get_macro_dashboard(config)
-    relationships_data      = get_stored_correlations()
-    _narrative_all_signals  = get_latest_signals(list(watchlist.keys()))
-    _narrative_trd_signals  = [s for s in _narrative_all_signals if s.get("ticker") in tradeable_set]
-
-    def _narrative_count_signals(signals_list: list) -> dict:
-        c = dict.fromkeys(["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"], 0)
-        for s in signals_list:
-            lbl = (s.get("signal") or "NEUTRAL").replace("_", " ")
-            if lbl in c:
-                c[lbl] += 1
-        return c
-
-    _narrative_open_trades: list[dict] = _get_t212_invest_brief_cards(config)
-
-    _narrative_macro_data = {**ctx, **_narrative_macro_dash}
-    _narrative_signals = {
-        "counts":           _narrative_count_signals(_narrative_all_signals),
-        "tradeable_counts": _narrative_count_signals(_narrative_trd_signals),
-        "total":            len(_narrative_all_signals),
-        "tradeable_total":  len(_narrative_trd_signals),
-    }
-
-    _narrative_html = _generate_daily_narrative(
-        regime_result,
-        _narrative_macro_data,
-        relationships_data,
-        _narrative_signals,
-        active_overlays,
-        _narrative_open_trades,
-        config,
-    )
-    st.markdown(
-        "<div style='border:1px solid #1E2D45;border-radius:8px;padding:14px 18px;margin:10px 0'>"
-        "<div style='font-size:0.75rem;font-weight:700;color:#8899AA;"
-        "text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px'>Today's Briefing</div>"
-        f"{_narrative_html}"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ── Key Events (FOMC / Fed calendar + BoJ / ECB — see CLAUDE.md's
-    # "Central bank event monitoring" section) ─────────────────────────────
-    try:
-        from analysis.fomc import get_fomc_events  # noqa: PLC0415
-        _fomc_events = get_fomc_events(days_ahead=7)
-    except Exception:
-        _fomc_events = []
-    try:
-        from analysis.central_bank import get_central_bank_events  # noqa: PLC0415
-        _cb_events = get_central_bank_events(config, days_ahead=7)
-    except Exception:
-        _cb_events = []
-
-    _all_cb_events = sorted(_fomc_events + _cb_events, key=lambda e: e["date"])
-
-    if _all_cb_events:
-        _EV_COLOURS = {
-            "FOMC Decision":    "#dc2626",
-            "FOMC Minutes":     "#f59e0b",
-            "Fed Speech":       "#3b82f6",
-            "Fed Announcement": "#8899AA",
-            "BoJ Decision":     "#f59e0b",  # matches the Asia region-pill colour elsewhere
-            "ECB Decision":     "#6366f1",  # matches the Europe region-pill colour elsewhere
-        }
-        # (event_type, caution label, watch text) for events within 2 days that
-        # warrant a caution banner — mirrors the original FOMC-only behaviour,
-        # extended to BoJ/ECB with bank-appropriate wording.
-        _CAUTION_META = {
-            "FOMC Decision": ("Fed Decision", "consider reducing position sizes ahead of the announcement"),
-            "BoJ Decision":  ("BoJ Decision", "watch USDJPY for carry-trade unwind signals"),
-            "ECB Decision":  ("ECB Decision", "European equity signals (VGK/EWG) may move on the announcement"),
-        }
-        _ev_parts: list[str] = []
-        _caution_days: list[tuple[int, str]] = []   # (days_away, event_type)
-
-        for ev in _all_cb_events:
-            ec      = _EV_COLOURS.get(ev["event_type"], "#8899AA")
-            da      = ev["days_away"]
-            da_str  = "Today" if da == 0 else ("Tomorrow" if da == 1 else f"in {da}d")
-            _ev_parts.append(
-                f'<span style="background:{ec}18;border:1px solid {ec}44;'
-                f'border-radius:4px;padding:2px 9px;font-size:0.8rem;'
-                f'color:{ec};font-weight:600;white-space:nowrap">'
-                f'{html.escape(ev["event_type"])} &nbsp;'
-                f'<span style="font-weight:400">{html.escape(ev["date"].strftime("%b") + " " + ev["date"].strftime("%d").lstrip("0"))} '
-                f'({da_str})</span></span>'
-            )
-            if ev["event_type"] in _CAUTION_META and da <= 2:
-                _caution_days.append((da, ev["event_type"]))
-
-        _ev_html = (
-            '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;'
-            'padding:6px 0 4px">'
-            '<span style="font-size:0.75rem;font-weight:700;color:#8899AA;'
-            'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">'
-            'Key Events</span> '
-            + " ".join(_ev_parts)
-            + "</div>"
-        )
-        st.markdown(_ev_html, unsafe_allow_html=True)
-
-        for days_away, ev_type in _caution_days:
-            _when = "Today" if days_away == 0 else ("Tomorrow" if days_away == 1 else f"in {days_away} days")
-            _label, _watch = _CAUTION_META[ev_type]
-            st.markdown(
-                '<div style="border-left:4px solid #f59e0b;padding:7px 14px;'
-                'background:#fef3c720;border-radius:0 4px 4px 0;margin:4px 0 6px">'
-                f'<span style="background:#f59e0b;color:#fff;padding:1px 7px;'
-                f'border-radius:3px;font-size:0.68rem;font-weight:800">CAUTION</span> '
-                f'<strong style="color:#fbbf24">{html.escape(_label)} {_when}</strong>'
-                f'<span style="font-size:0.82rem;color:#fbbf24"> — {html.escape(_watch)}</span></div>',
-                unsafe_allow_html=True,
-            )
-
-    # ── Top Long / Short Opportunities ─────────────────────────────────────
-    all_signals = get_latest_signals(list(watchlist.keys()))
-
-    # Ticker sets for overlay confidence warnings
-    _EQ_BOND_GROUPS = {"indices", "sector_etfs", "bonds", "international"}
-    _eq_bond_tickers: set[str] = {
-        entry["ticker"]
-        for gname, group in config.get("watchlist", {}).items()
-        if gname in _EQ_BOND_GROUPS and isinstance(group, list)
-        for entry in group
-        if isinstance(entry, dict) and "ticker" in entry
-    }
-    _EQUITY_GROUPS_BROAD = {
-        "indices", "sector_etfs", "international", "uk_etfs",
-        "tech_subsectors", "financial_subsectors", "healthcare_subsectors",
-        "international_expanded",
-    }
-    _equity_tickers: set[str] = {
-        entry["ticker"]
-        for gname, group in config.get("watchlist", {}).items()
-        if gname in _EQUITY_GROUPS_BROAD and isinstance(group, list)
-        for entry in group
-        if isinstance(entry, dict) and "ticker" in entry
-    }
-    _EM_GROUPS = {"international", "international_expanded"}
-    _em_tickers: set[str] = {
-        entry["ticker"]
-        for gname, group in config.get("watchlist", {}).items()
-        if gname in _EM_GROUPS and isinstance(group, list)
-        for entry in group
-        if isinstance(entry, dict) and "ticker" in entry
-    }
-    macro_stress_active    = "MACRO_STRESS"   in active_overlays
-    recession_risk_active  = "RECESSION_RISK" in active_overlays
-    em_stress_active       = "EM_STRESS"      in active_overlays
-
-    _BRIEF_MODULE_KEYS = [
-        "trend_score", "mean_reversion_score", "volatility_score",
-        "volume_score", "macro_score",
-    ]
-
-    # Signal distribution counts (all assets and tradeable-only)
-    _SIG_ORDER  = ["STRONG BUY", "BUY", "NEUTRAL", "SELL", "STRONG SELL"]
-    _SIG_COLOUR = {
-        "STRONG BUY": "#16a34a", "BUY": "#26a69a", "NEUTRAL": "#8899AA",
-        "SELL": "#f59e0b", "STRONG SELL": "#ef5350",
-    }
-
-    def _count_signals(signals_list: list) -> dict:
-        c = dict.fromkeys(_SIG_ORDER, 0)
-        for s in signals_list:
-            lbl = (s.get("signal") or "NEUTRAL").replace("_", " ")
-            if lbl in c:
-                c[lbl] += 1
-        return c
-
-    _trd_signals_all = [s for s in all_signals if s.get("ticker") in tradeable_set]
-    _all_counts      = _count_signals(all_signals)
-    _trd_counts      = _count_signals(_trd_signals_all)
-
-    def _counts_html(counts: dict, total: int, label: str) -> str:
-        parts = " &nbsp;·&nbsp; ".join(
-            f"<span style='color:{_SIG_COLOUR[lbl]};font-weight:700'>{counts[lbl]}</span>"
-            f"&nbsp;<span style='color:#8899AA;font-size:0.75rem'>{lbl}</span>"
-            for lbl in _SIG_ORDER
-        )
-        return (
-            f"<div style='font-size:0.8rem;margin-bottom:2px'>"
-            f"<span style='color:#8899AA;min-width:120px;display:inline-block'>{label} ({total}):</span>"
-            f" {parts}</div>"
-        )
-
-    st.markdown(
-        _counts_html(_all_counts, len(all_signals), "All assets")
-        + _counts_html(_trd_counts, len(_trd_signals_all), "Tradeable"),
-        unsafe_allow_html=True,
-    )
-
-    def _brief_qualifies(s: dict, direction: int) -> bool:
-        score  = s.get("confluence_score") or 0.0
-        signal = (s.get("signal") or "").upper()
-        if direction == 1:
-            if score < 0.5:
-                return False
-            # STRONG BUY (≥ 0.6) always qualifies; BUY needs multi-module agreement
-            if "STRONG" in signal:
-                return True
-        else:
-            if score > -0.5:
-                return False
-            if "STRONG" in signal:
-                return True
-        agreeing = sum(1 for k in _BRIEF_MODULE_KEYS if (s.get(k) or 0) == direction)
-        return agreeing >= 3
-
-    _include_analysis = st.checkbox(
-        "Include analysis-only assets in opportunities",
-        value=False,
-        key="brief_include_analysis",
-    )
-    _picks_pool = all_signals if _include_analysis else _trd_signals_all
-    long_picks  = [s for s in _picks_pool           if _brief_qualifies(s,  1)]
-    short_picks = [s for s in reversed(_picks_pool) if _brief_qualifies(s, -1)]
-
-    def _brief_rationale(sig: dict, direction: int) -> str:
-        _labels = {
-            "trend_score":          "trend momentum",
-            "mean_reversion_score": "mean reversion",
-            "volatility_score":     "volatility conditions",
-            "volume_score":         "volume confirmation",
-            "macro_score":          "macro backdrop",
-        }
-        agreeing = [lbl for key, lbl in _labels.items() if (sig.get(key) or 0) == direction]
-        if not agreeing:
-            return "Cross-module signal with limited individual confirmation."
-        if len(agreeing) >= 4:
-            return f"Strong conviction — {', '.join(agreeing[:3])} and more all align."
-        if len(agreeing) >= 2:
-            return f"{agreeing[0].capitalize()} and {agreeing[1]} align in the same direction."
-        return f"{agreeing[0].capitalize()} is the primary driver of this signal."
-
-    def _opp_card(sig: dict, direction: int, fg: str, strong_fg: str, live_price=None) -> str:
-        ticker    = sig.get("ticker", "")
-        score     = sig.get("confluence_score") or 0.0
-        signal    = sig.get("signal", "")
-        is_strong = "STRONG" in signal
-        col       = strong_fg if is_strong else fg
-        weight    = "800" if is_strong else "600"
-        sig_label = signal.replace("_", " ")
-        name      = html.escape(watchlist.get(ticker, ticker))
-        if len(name) > 32:
-            name = name[:30] + "…"
-
-        badges = ""
-        if ticker not in tradeable_set:
-            badges += (
-                "<span style='background:#475569;color:#e2e8f0;padding:1px 6px;"
-                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Analysis only</span>"
-            )
-        if direction == 1 and macro_stress_active and ticker in _eq_bond_tickers:
-            badges += (
-                "<span style='background:#92400e;color:#fef3c7;padding:1px 6px;"
-                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −20%</span>"
-            )
-        if direction == 1 and recession_risk_active and ticker in _equity_tickers:
-            badges += (
-                "<span style='background:#7f1d1d;color:#fee2e2;padding:1px 6px;"
-                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −25%</span>"
-            )
-        if direction == 1 and em_stress_active and ticker in _em_tickers:
-            badges += (
-                "<span style='background:#78350f;color:#fef3c7;padding:1px 6px;"
-                "border-radius:3px;font-size:0.65rem;margin-left:5px'>Confidence −15%</span>"
-            )
-
-        if live_price is not None:
-            p = live_price
-            p_str = f"{p:.4f}" if p < 10 else (f"{p:,.2f}" if p < 100_000 else f"{p:,.0f}")
-            price_html = f"<span style='color:#8899AA;font-size:0.78rem'>Last: {p_str}</span>"
-        else:
-            price_html = (
-                "<span style='color:#8899AA;font-size:0.72rem'>"
-                "⚠ Market closed · price unavailable</span>"
-            )
-
-        return (
-            f"<div style='background:{col}18;border-left:3px solid {col};"
-            f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
-            f"<div style='display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px'>"
-            f"<span style='font-weight:{weight};color:{col};font-size:0.95rem'>"
-            f"{html.escape(ticker)}</span>"
-            f"<span style='color:#8899AA;font-size:0.78rem'>{name}</span>"
-            f"{badges}</div>"
-            f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:5px'>"
-            f"<span style='color:{col};font-size:0.8rem;font-weight:{weight}'>{sig_label}</span>"
-            f"<span style='color:{col};font-weight:700'>{score:+.3f}</span>"
-            f"{price_html}"
-            f"</div>"
-            f"<div style='color:#8899AA;font-size:0.75rem;line-height:1.4'>"
-            f"{html.escape(_brief_rationale(sig, direction))}</div>"
-            f"</div>"
-        )
-
-    # Pre-fetch live prices for all qualifying opportunity tickers (cached 5 min)
-    _opp_tickers = tuple(sorted({
-        s.get("ticker") for s in long_picks + short_picks if s.get("ticker")
-    }))
-    with st.spinner("Fetching live prices…"):
-        _opp_prices: dict = {t: _cached_latest_price(t) for t in _opp_tickers}
-
-    st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
-    lc, rc = st.columns(2)
-
-    with lc:
-        n_long = len(long_picks)
-        st.markdown(f"**Long Opportunities** ({n_long})" if n_long else "**Long Opportunities**")
-        if long_picks:
-            for sig in long_picks:
-                lp = _opp_prices.get(sig.get("ticker", ""))
-                st.markdown(_opp_card(sig, 1, "#26a69a", "#16a34a", live_price=lp), unsafe_allow_html=True)
-        else:
-            st.caption("No qualifying long signals today.")
-
-    with rc:
-        n_short = len(short_picks)
-        st.markdown(f"**Short Opportunities** ({n_short})" if n_short else "**Short Opportunities**")
-        if short_picks:
-            for sig in short_picks:
-                lp = _opp_prices.get(sig.get("ticker", ""))
-                st.markdown(_opp_card(sig, -1, "#f59e0b", "#ef5350", live_price=lp), unsafe_allow_html=True)
-        else:
-            st.caption("No qualifying short signals today.")
-
-    _filter_note = (
-        "Showing tradeable assets only · Toggle above to include analysis-only assets"
-        if not _include_analysis
-        else "Showing all assets including analysis-only"
-    )
-    st.caption(_filter_note)
-
-    # Catch-up opportunities
-    catch_ups = get_active_opportunity_flags()
-    if catch_ups:
-        n = len(catch_ups)
-        st.markdown(
-            f"<div style='margin-top:10px'><strong>"
-            f"{n} catch-up opportunit{'y' if n == 1 else 'ies'} detected"
-            f"</strong></div>",
-            unsafe_allow_html=True,
-        )
-        for flag in catch_ups:
-            td = html.escape(flag.get("ticker", ""))
-            dd = html.escape(flag.get("description", ""))
-            sd = html.escape(flag.get("flag_source", ""))
-            z  = flag.get("z_score")
-            zs = f"z={z:.2f}" if z is not None else ""
-            st.caption(f"• **{td}** — {dd} *({sd} {zs})*")
-
-    st.divider()
-
-    # ── Section 2: Macro Dashboard ─────────────────────────────────────────
-    st.markdown("### Macro Dashboard")
-
-    macro_dash = get_macro_dashboard(config)
-
-    if not macro_dash.get("has_data"):
-        st.info(
-            "No FRED macro data yet — the first fetch runs automatically at the next "
-            f"EOD scheduler run ({_uk_sched_time(21,30)} on weekdays)."
-        )
-    else:
-        # ── Composite health score bar ──
-        comp   = macro_dash["composite_score"]
-        nb     = macro_dash["n_bullish"]
-        nbr    = macro_dash["n_bearish"]
-        nn     = macro_dash["n_neutral"]
-        ns     = macro_dash["n_series"]
-        score_colour = (
-            "#16a34a" if comp >= 0.25 else
-            "#ef5350" if comp <= -0.25 else
-            "#f59e0b"
-        )
-        score_label = (
-            "BULLISH"  if comp >= 0.25 else
-            "BEARISH"  if comp <= -0.25 else
-            "NEUTRAL"
-        )
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:16px;flex-wrap:wrap;"
-            f"background:{_hex_rgba(score_colour,0.08)};border:1px solid {score_colour}44;"
-            f"padding:8px 16px;border-radius:8px;margin-bottom:8px'>"
-            f"<div>"
-            f"<span style='font-size:1.1rem;font-weight:700;color:{score_colour}'>"
-            f"Macro Health: {comp:+.2f}</span> "
-            f"<span style='background:{score_colour};color:#fff;padding:1px 8px;"
-            f"border-radius:3px;font-size:0.7rem;font-weight:800'>{score_label}</span>"
-            f"</div>"
-            f"<div style='color:#8899AA;font-size:0.82rem'>"
-            f"{ns} indicators · "
-            f"<span style='color:#16a34a'>▲ {nb} bullish</span> · "
-            f"<span style='color:#8899AA'>◆ {nn} neutral</span> · "
-            f"<span style='color:#ef5350'>▼ {nbr} bearish</span>"
-            f"</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Regional breakdown — see analysis/macro.py's "Regional grouping" section
-        _REGION_LABEL = {"us": "US", "europe": "Europe", "asia": "Asia"}
-        region_scores       = macro_dash.get("region_scores", {}) or {}
-        region_weights_cfg  = macro_dash.get("region_weights_config", {}) or {}
-        if region_scores:
-            _region_bits = " · ".join(
-                f"{_REGION_LABEL.get(r, r.title())}: {v:+.2f}"
-                for r, v in region_scores.items()
-            )
-            _weight_bits = " · ".join(
-                f"{_REGION_LABEL.get(r, r.title())} {w:.0%}"
-                for r, w in region_weights_cfg.items()
-            )
-            st.markdown(
-                f"<div style='font-size:0.78rem;color:#8899AA;margin:-2px 0 8px 0'>"
-                f"{html.escape(_region_bits)}"
-                + (f"<br><span style='color:#8899AA'>Regional weights: {html.escape(_weight_bits)}</span>"
-                   if _weight_bits else "")
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-
-        # Plain-English summary
-        summary = html.escape(macro_dash.get("summary", ""))
-        st.markdown(
-            f"<p style='font-size:0.84rem;color:#8899AA;margin:0 0 10px 0;font-style:italic'>"
-            f"{summary}</p>",
-            unsafe_allow_html=True,
-        )
-
-        # ── Metric cards ────────────────────────────────────────────────────
-        _TREND_ARROW = {"rising": "↑", "falling": "↓", "flat": "→"}
-        _YC_COLOUR   = {"normal": "#16a34a", "flat": "#f59e0b", "inverted": "#ef5350"}
-        _CS_COLOUR   = {"NORMAL": "#16a34a", "ELEVATED": "#f59e0b", "STRESSED": "#ef5350"}
-
-        def _metric_card(
-            title: str, value_str: str, sub: str,
-            colour: str = "#8899AA", bg_alpha: float = 0.06,
-            tag: str = "",
-        ) -> str:
-            bg = _hex_rgba(colour, bg_alpha)
-            tag_html = (
-                "<span style='color:#16a34a;font-size:0.58rem;margin-left:4px"
-                ";font-weight:400;text-transform:none'>✓ Signals</span>"
-                if tag == "signals" else
-                "<span style='color:#8899AA;font-size:0.58rem;margin-left:4px"
-                ";font-weight:400;text-transform:none'>Composite</span>"
-                if tag == "composite" else ""
-            )
-            return (
-                f"<div style='background:{bg};border:1px solid {colour}33;"
-                f"border-radius:8px;padding:10px 14px;min-height:72px'>"
-                f"<div style='font-size:0.72rem;font-weight:600;color:#8899AA;"
-                f"text-transform:uppercase;letter-spacing:0.05em'>{html.escape(title)}"
-                f"{tag_html}</div>"
-                f"<div style='font-size:1.05rem;font-weight:700;color:{colour};margin:2px 0'>"
-                f"{html.escape(value_str)}</div>"
-                f"<div style='font-size:0.76rem;color:#8899AA'>{html.escape(sub)}</div>"
-                f"</div>"
-            )
-
-        _region_pct = lambda r: f" ({region_weights_cfg[r]:.0%})" if r in region_weights_cfg else ""
-
-        st.markdown(
-            f"<div style='font-size:0.76rem;font-weight:700;color:#8899AA;"
-            f"text-transform:uppercase;letter-spacing:0.04em;margin:4px 0 4px 0'>"
-            f"🇺🇸 United States{_region_pct('us')}</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Row 1: Real yields | Breakeven | HY Credit spread
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            ry    = macro_dash["real_yield"]
-            rt    = macro_dash["real_yield_trend"]
-            rt_ar = _TREND_ARROW.get(rt, "→")
-            ry_c  = "#16a34a" if rt == "falling" else ("#ef5350" if rt == "rising" else "#f59e0b")
-            v_str = f"{ry:+.2f}%" if ry is not None else "—"
-            sub   = f"Trend: {rt}"
-            if macro_dash.get("real_yield_stale"):
-                sub += f" (stale — {macro_dash['real_yield_age_days']}d old)"
-            st.markdown(
-                _metric_card("10Y Real Yield", f"{rt_ar} {v_str}", sub, ry_c, tag="signals"),
-                unsafe_allow_html=True,
-            )
-        with c2:
-            bk  = macro_dash["breakeven"]
-            bt  = macro_dash["breakeven_trend"]
-            bt_ar = _TREND_ARROW.get(bt, "→")
-            bk_c  = "#16a34a" if 1.5 <= (bk or 0) <= 2.5 else "#f59e0b"
-            v_str = f"{bk:.2f}%" if bk is not None else "—"
-            sub   = f"Trend: {bt}"
-            if macro_dash.get("breakeven_stale"):
-                sub += f" (stale — {macro_dash['breakeven_age_days']}d old)"
-            st.markdown(
-                _metric_card("10Y Breakeven Inflation", f"{bt_ar} {v_str}", sub, bk_c, tag="signals"),
-                unsafe_allow_html=True,
-            )
-        with c3:
-            hy_bps = macro_dash["hy_oas_bps"]
-            cs     = macro_dash["credit_status"] or "—"
-            cs_c   = _CS_COLOUR.get(cs, "#8899AA")
-            v_str  = f"{hy_bps:.0f} bps" if hy_bps is not None else "—"
-            p30    = macro_dash["hy_oas_pct_30d"]
-            sub    = f"Status: {cs}" + (f" | 30d: {p30:+.1f}%" if p30 is not None else "")
-            if macro_dash.get("hy_oas_stale"):
-                sub += f" (stale — {macro_dash['hy_oas_age_days']}d old)"
-            st.markdown(
-                _metric_card("HY Credit Spread (OAS)", v_str, sub, cs_c, tag="signals"),
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-        # Row 2: Yield curve 10Y2Y | Yield curve 10Y3M | IG spread + Composite details
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            yc2y  = macro_dash["t10y2y"]
-            sh2y  = macro_dash["t10y2y_shape"] or "—"
-            yc2_c = _YC_COLOUR.get(sh2y, "#8899AA")
-            v_str = f"{yc2y:+.2f}%" if yc2y is not None else "—"
-            sub   = f"Shape: {sh2y}"
-            if macro_dash.get("t10y2y_stale"):
-                sub += f" (stale — {macro_dash['t10y2y_age_days']}d old)"
-            st.markdown(
-                _metric_card("Yield Curve 10Y-2Y", v_str, sub, yc2_c, tag="signals"),
-                unsafe_allow_html=True,
-            )
-        with c5:
-            yc3m  = macro_dash["t10y3m"]
-            sh3m  = macro_dash["t10y3m_shape"] or "—"
-            yc3_c = _YC_COLOUR.get(sh3m, "#8899AA")
-            v_str = f"{yc3m:+.2f}%" if yc3m is not None else "—"
-            sub   = f"Shape: {sh3m}"
-            if macro_dash.get("t10y3m_stale"):
-                sub += f" (stale — {macro_dash['t10y3m_age_days']}d old)"
-            st.markdown(
-                _metric_card("Yield Curve 10Y-3M", v_str, sub, yc3_c, tag="signals"),
-                unsafe_allow_html=True,
-            )
-        with c6:
-            ig_bps = macro_dash["ig_oas_bps"]
-            ig_c   = "#16a34a" if ig_bps is not None and ig_bps < 100 else (
-                     "#ef5350" if ig_bps is not None and ig_bps > 150 else "#f59e0b"
-            )
-            v_str  = f"{ig_bps:.0f} bps" if ig_bps is not None else "—"
-            sub    = "Investment Grade bonds"
-            if macro_dash.get("ig_oas_stale"):
-                sub += f" (stale — {macro_dash['ig_oas_age_days']}d old)"
-            st.markdown(
-                _metric_card("IG Credit Spread (OAS)", v_str, sub, ig_c, tag="signals"),
-                unsafe_allow_html=True,
-            )
-
-        # Row 3: PERMIT (specialty) | Fed Rate (specialty) | first US extra series (dynamic)
-        extra_series = macro_dash.get("extra_series", [])
-        us_extra     = [e for e in extra_series if e.get("region", "us") == "us"]
-        europe_extra = [e for e in extra_series if e.get("region") == "europe"]
-        asia_extra   = [e for e in extra_series if e.get("region") == "asia"]
-        permit_val   = macro_dash.get("permit")
-        permit_pct   = macro_dash.get("permit_pct1m")
-        permit_sc    = macro_dash.get("permit_score")
-        permit_stale = macro_dash.get("permit_stale")
-        permit_age   = macro_dash.get("permit_age_days")
-
-        fed_rate_val   = macro_dash.get("fed_rate")
-        fed_rate_trend = macro_dash.get("fed_rate_trend", "unchanged")
-        fed_rate_sc    = macro_dash.get("fed_rate_score")
-
-        if permit_val is not None or fed_rate_val is not None or us_extra:
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            c7, c8, c9 = st.columns(3)
-            with c7:
-                permit_c = (
-                    "#16a34a" if permit_sc == 1 else
-                    "#ef5350" if permit_sc == -1 else "#f59e0b"
-                )
-                if permit_val is not None:
-                    ar  = _TREND_ARROW.get("rising" if (permit_pct or 0) > 1.0 else "falling" if (permit_pct or 0) < -1.0 else "flat", "→")
-                    sub = f"MoM: {permit_pct:+.1f}%" if permit_pct is not None else "MoM: —"
-                    if permit_stale:
-                        sub += f" (stale — {permit_age}d old)"
-                    st.markdown(
-                        _metric_card(
-                            "Housing Permits (SAAR)",
-                            f"{ar} {permit_val:.0f}k units",
-                            sub + " · thousands, SA",
-                            permit_c,
-                            tag="signals",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(_metric_card("Housing Permits (SAAR)", "—", "No data", "#8899AA", tag="signals"), unsafe_allow_html=True)
-            with c8:
-                if fed_rate_val is not None:
-                    _FED_TREND_LABEL = {"cut": "Rate cut ↓", "hiked": "Rate hiked ↑", "unchanged": "Unchanged →"}
-                    _FED_TREND_COLOUR = {"cut": "#16a34a", "hiked": "#ef5350", "unchanged": "#8899AA"}
-                    fr_c   = _FED_TREND_COLOUR.get(fed_rate_trend, "#8899AA")
-                    fr_lbl = _FED_TREND_LABEL.get(fed_rate_trend, "Unchanged →")
-                    if macro_dash.get("fed_rate_stale"):
-                        fr_lbl += f" (stale — {macro_dash['fed_rate_age_days']}d old)"
-                    st.markdown(
-                        _metric_card(
-                            "Fed Funds Rate (Upper Bound)",
-                            f"{fed_rate_val:.2f}%",
-                            fr_lbl,
-                            fr_c,
-                            tag="signals",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(_metric_card("Fed Funds Rate (Upper Bound)", "—", "No data", "#8899AA", tag="signals"), unsafe_allow_html=True)
-            with c9:
-                if us_extra:
-                    es   = us_extra[0]
-                    es_c = "#16a34a" if es["score"] == 1 else "#ef5350" if es["score"] == -1 else "#f59e0b"
-                    ar   = _TREND_ARROW.get(es["trend"], "→")
-                    dv   = es["display_value"]
-                    st.markdown(
-                        _metric_card(
-                            es["label"],
-                            f"{ar} {dv}" if dv != "—" else "—",
-                            es["context"],
-                            es_c,
-                            tag="signals" if es["in_signals"] else "composite",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-        def _render_extra_tile_row(chunk: list[dict]) -> None:
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            _ecols = st.columns(3)
-            for _ec, _es in zip(_ecols, chunk):
-                with _ec:
-                    _es_c = "#16a34a" if _es["score"] == 1 else "#ef5350" if _es["score"] == -1 else "#f59e0b"
-                    _ar   = _TREND_ARROW.get(_es["trend"], "→")
-                    _dv   = _es["display_value"]
-                    st.markdown(
-                        _metric_card(
-                            _es["label"],
-                            f"{_ar} {_dv}" if _dv != "—" else "—",
-                            _es["context"],
-                            _es_c,
-                            tag="signals" if _es["in_signals"] else "composite",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-        # Remaining US extra series (row 3's slot already used us_extra[0])
-        for _row_start in range(1, len(us_extra), 3):
-            _render_extra_tile_row(us_extra[_row_start:_row_start + 3])
-
-        # ── Europe / Asia groups — one tile per configured series in that
-        # region, same as the US tiles above (a series with no stored data
-        # yet, e.g. no FRED key or a failed fetch, shows a "No data" tile
-        # rather than being hidden — consistent with how PERMIT/Fed Rate
-        # above already behave). The section header itself is only omitted
-        # when config.yaml defines no series at all for that region.
-        for _region_key, _region_flag, _region_label, _region_tiles in (
-            ("europe", "🇪🇺", "Europe", europe_extra),
-            ("asia",   "🌏", "Asia",   asia_extra),
-        ):
-            if not _region_tiles:
-                continue
-            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"<div style='font-size:0.76rem;font-weight:700;color:#8899AA;"
-                f"text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px'>"
-                f"{_region_flag} {_region_label}{_region_pct(_region_key)}</div>",
-                unsafe_allow_html=True,
-            )
-            for _row_start in range(0, len(_region_tiles), 3):
-                _render_extra_tile_row(_region_tiles[_row_start:_row_start + 3])
-
-    st.divider()
-
-    # ── Section 3: Open Trade Monitor ──────────────────────────────────────
-    st.markdown("### Open Trade Monitor")
-
-    t212_invest_cards = _get_t212_invest_brief_cards(config)
-
-    if not t212_invest_cards:
-        st.info("No open T212 Invest positions.")
-    else:
-        all_cards = sorted(
-            t212_invest_cards, key=lambda x: x.get("status_priority", 0), reverse=True
-        )
-        for e in all_cards:
-            _render_trade_card_compact(e)
-        st.caption("Full position detail (signal delta, SL/TP, live R:R) is on the **Performance** page.")
-
-    st.divider()
-
-    # ── Section 4: Today's Opportunities ───────────────────────────────────
-    st.markdown("### Today's Opportunities")
-
-    open_tickers = {c["ticker"] for c in t212_invest_cards}
-    tradeable_signals = [s for s in all_signals if s.get("ticker") in tradeable_set]
-    opps = build_opportunities(tradeable_signals, open_tickers, active_overlays, watchlist)
-
-    if not opps:
-        # Use regime-specific thresholds (computed earlier in col_regime block)
-        _near_miss = sum(
-            1 for s in tradeable_signals
-            if s.get("ticker") not in open_tickers
-            and (
-                0.35 <= (s.get("confluence_score") or 0.0) < _buy_th
-                or -_sell_th < (s.get("confluence_score") or 0.0) <= -0.35
-            )
-        )
-        _overlay_labels = [
-            OVERLAY_DESCRIPTIONS.get(k, {}).get("label", k.replace("_", " "))
-            for k in active_overlays
-        ]
-        _why_parts = [f"Regime: **{regime.replace('_', ' ')}**"]
-        if _overlay_labels:
-            _why_parts.append(f"Active overlay{'s' if len(_overlay_labels) > 1 else ''}: **{', '.join(_overlay_labels)}**")
-        if _near_miss > 0:
-            _thresh_note = (
-                f"0.35–{_buy_th:.2f}"
-                if _buy_th == _sell_th
-                else f"buy 0.35–{_buy_th:.2f} or sell 0.35–{_sell_th:.2f}"
-            )
-            _why_parts.append(
-                f"**{_near_miss}** signal{'s' if _near_miss > 1 else ''} within {_thresh_note} "
-                f"(below STRONG threshold)"
-            )
-        st.info(
-            "No strong signals outside current positions right now.  \n"
-            + " · ".join(_why_parts)
-        )
-    else:
-        def _mod_str(o: dict) -> str:
-            def _s(v: int) -> str:
-                return "+" if v > 0 else ("-" if v < 0 else "·")
-            return (
-                f"T{_s(o['trend'])} MR{_s(o['mean_rev'])} "
-                f"V{_s(o['volatility'])} Vol{_s(o['volume'])} M{_s(o['macro'])}"
-            )
-
-        # Fetch ATR and live price for each opportunity to compute SL/TP suggestions
-        _opp_atr_cache: dict[str, float | None] = {}
-        _opp_px_cache:  dict[str, float | None] = {}
-        for _o in opps:
-            _tk = _o["ticker"]
-            if _tk not in _opp_atr_cache:
-                _opp_atr_cache[_tk] = get_current_atr(_tk)
-            if _tk not in _opp_px_cache:
-                _opp_px_cache[_tk] = _cached_latest_price(_tk)
-
-        opp_rows = []
-        for o in opps:
-            _otk   = o["ticker"]
-            _oatr  = _opp_atr_cache.get(_otk)
-            _opx   = _opp_px_cache.get(_otk)
-            _is_buy = o["signal"] == "STRONG_BUY"
-            _omult  = 1 if _is_buy else -1
-
-            _osl_str = "—"
-            _otp1_str = "—"
-            _otp2_str = "—"
-            _orisk_str = "—"
-
-            if _oatr is not None and _opx is not None and _opx > 0:
-                _osl_dist = 2 * _oatr
-                _osl_px   = _opx - _omult * _osl_dist
-                _otp1_px  = _opx + _omult * _osl_dist
-                _otp2_px  = _opx + _omult * _osl_dist * 2
-                _osl_str  = f"{_osl_px:.4f}"
-                _otp1_str = f"{_otp1_px:.4f}"
-                _otp2_str = f"{_otp2_px:.4f}"
-                # Risk example assumes £150 @ leverage from config default (show plain %)
-                _osl_pct  = _osl_dist / _opx * 100
-                _orisk_str = f"{_osl_pct:.2f}%/1×lev"
-
-            opp_rows.append({
-                "Ticker":  _otk,
-                "Name":    o["name"],
-                "Signal":  o["signal"].replace("_", " "),
-                "Score":   o["score"],
-                "Modules": _mod_str(o),
-                "Sug. SL": _osl_str,
-                "TP1 (1:1)": _otp1_str,
-                "TP2 (2:1)": _otp2_str,
-                "Risk/lev": _orisk_str,
-                "Note":    o["overlay_note"] or "",
-            })
-
-        opp_df = pd.DataFrame(opp_rows)
-
-        def _style_opp_sig(val: str) -> str:
-            if "STRONG BUY"  in val: return "color:#16a34a;font-weight:bold"
-            if "STRONG SELL" in val: return "color:#ef5350;font-weight:bold"
-            return ""
-
-        styler = opp_df.style.map(_style_opp_sig, subset=["Signal"]).format({"Score": "{:+.3f}"})
-        st.dataframe(styler, width="stretch", hide_index=True,
-                     height=38 + 35 * len(opp_rows))
-        st.caption(
-            "Sug. SL = entry ± 2×ATR based on yfinance reference price. "
-            "TP1/TP2 = 1:1 and 2:1 R:R targets. "
-            "Risk/lev = SL distance as % of price per unit of leverage — "
-            "multiply by investment × leverage for GBP risk estimate."
-        )
-
-    _render_footer()
+def _get_ticker_status() -> list[dict]:
+    """Per-ticker live status (momentum, index membership, crisis flags).
+    Thin cached wrapper — the data-shaping logic lives in
+    output/performance.py, which is directly unit-tested (main.py itself is
+    not importable in tests). Reads config fresh via _load_config() since
+    unhashable dicts can't be Streamlit cache keys."""
+    return get_ticker_status(_load_config())
+
+
+def _get_open_cards(config: dict) -> list[dict]:
+    """Enriched trade-card dicts for open positions — thin wrapper around
+    output/performance.py:get_brief_cards(), passing in this page's already-
+    cached _get_ticker_status() so the computation isn't repeated."""
+    return get_brief_cards(config, ticker_status_rows=_get_ticker_status())
+
+
+def _get_closed_rows() -> list[dict]:
+    """All reconstructed closed positions — thin wrapper around
+    output/performance.py:get_pnl_rows()."""
+    return get_pnl_rows()
 
 
 # ---------------------------------------------------------------------------
-# Backtest page
+# Branding
 # ---------------------------------------------------------------------------
-
-def _format_run_label(r: dict) -> str:
-    """'Run #{id} · {Month Day Year} · {N} trades' for a backtest-run selector.
-
-    Parses `created_at` rather than the free-text `name` field — a run
-    started without a custom name defaults to a raw "Backtest {timestamp}"
-    string that reads poorly in a dropdown, while created_at is always
-    present and gives a clean, consistent date regardless of naming.
-    """
-    created_at = r.get("created_at")
-    date_str = ""
-    if created_at:
-        try:
-            dt = created_at if isinstance(created_at, datetime) else datetime.fromisoformat(str(created_at))
-            date_str = f"{dt.strftime('%B')} {dt.day} {dt.strftime('%Y')}"
-        except (ValueError, TypeError):
-            date_str = str(created_at)[:10]
-    n_trades = r.get("total_trades", 0)
-    return f"Run #{r['id']} · {date_str} · {n_trades} trades" if date_str else f"Run #{r['id']} · {n_trades} trades"
-
-
-def _render_backtest_page(config: dict, watchlist: dict[str, str]) -> None:
-    _render_page_wordmark("Backtest")
-    st.markdown("## Backtest")
-    st.caption(
-        "Replay the current signal logic over historical price data. "
-        "Uses vectorized pandas — no look-ahead bias. "
-        "Correlation module excluded (contributes a fixed weight of 0.10); "
-        "remaining module weights are re-normalised."
-    )
-
-    tab_run, tab_period, tab_attr, tab_decay, tab_wf = st.tabs([
-        "▶ Run & Overview",
-        "Period Analysis",
-        "🎯 Module Attribution",
-        "⏱ Signal Decay",
-        "Walk-Forward",
-    ])
-
-    # ── shared: load runs list once ──────────────────────────────────────────
-    all_runs  = get_all_runs()
-    complete  = [r for r in all_runs if r.get("status") == "complete"]
-    run_opts  = {_format_run_label(r): r["id"] for r in complete}
-
-    # ── Tab 1: Run & Overview ─────────────────────────────────────────────────
-    with tab_run:
-        st.markdown("### Configure & Run")
-        st.caption(
-            "The backtest uses the same settings as the live system to show what "
-            "would have happened under current configuration. To test different "
-            "parameters, adjust config.yaml and re-run."
-        )
-
-        tradeable = [t for g in config.get("watchlist", {}).values()
-                     if isinstance(g, list)
-                     for t in g
-                     if isinstance(t, dict) and t.get("tradeable")]
-        tradeable_tickers = [e["ticker"] for e in tradeable]
-        all_tickers_list  = get_all_tickers(config)
-
-        # Tickers that have a Trading212 CFD instrument mapping
-        t212_tickers = [
-            e["ticker"]
-            for g in config.get("watchlist", {}).values()
-            if isinstance(g, list)
-            for e in g
-            if isinstance(e, dict) and e.get("trading212_instrument")
-        ]
-
-        col_l, col_r = st.columns(2)
-        with col_l:
-            preset = st.selectbox("Date range preset", [
-                "Full history (2019–present)",
-                "COVID era (2019–2021)",
-                "Bear market (2022)",
-                "Recovery (2023–2024)",
-                "Custom",
-            ], key="bt_preset")
-            presets = {
-                "Full history (2019–present)": (datetime(2019, 1, 1), datetime.utcnow()),
-                "COVID era (2019–2021)":        (datetime(2019, 1, 1), datetime(2021, 12, 31)),
-                "Bear market (2022)":           (datetime(2022, 1, 1), datetime(2022, 12, 31)),
-                "Recovery (2023–2024)":         (datetime(2023, 1, 1), datetime(2024, 12, 31)),
-            }
-            if preset != "Custom":
-                sd, ed = presets[preset]
-            else:
-                sd = datetime.combine(st.date_input("Start date", value=datetime(2019, 1, 1).date(), key="bt_sd"), datetime.min.time())
-                ed = datetime.combine(st.date_input("End date",   value=datetime.utcnow().date(), key="bt_ed"),     datetime.min.time())
-
-            bt_name = st.text_input("Run name (optional)", placeholder="e.g. Full history LONG-only", key="bt_name")
-
-        with col_r:
-            ticker_scope = st.radio(
-                "Tickers to test",
-                ["Tradeable assets only", "T212 CFD Only", "All assets"],
-                key="bt_scope",
-            )
-            if ticker_scope == "Tradeable assets only":
-                tickers_to_test = tradeable_tickers
-            elif ticker_scope == "T212 CFD Only":
-                tickers_to_test = t212_tickers
-            else:
-                tickers_to_test = all_tickers_list
-            st.caption(f"{len(tickers_to_test)} tickers selected")
-
-        _bt_cfg  = config.get("backtest", {})
-        _etf_max_hold   = config.get("trading212_invest", {}).get("max_holding_days", 90)
-        _stock_max_hold = config.get("trading212_stocks", {}).get("max_holding_days", 30)
-        _bond_max_hold  = _bt_cfg.get("max_holding_days_bonds", 45)
-        _atr_mult       = _bt_cfg.get("atr_stop_multiplier", 2.0)
-        _entry_signal   = _bt_cfg.get("entry_signal", "STRONG_BUY")
-        _allowed_regimes = _bt_cfg.get("allowed_entry_regimes")
-        _regime_note = f"{'/'.join(_allowed_regimes)} only" if _allowed_regimes else "all regimes"
-        st.caption(
-            f"Using live config: ETF max hold {_etf_max_hold}d · "
-            f"Stock max hold {_stock_max_hold}d · Bond max hold {_bond_max_hold}d · "
-            f"entry {_entry_signal} · {_regime_note} · stops: ATR {_atr_mult:.1f}×"
-        )
-
-        if st.button("Run Backtest", type="primary", key="bt_run"):
-            with st.spinner(f"Running backtest for {len(tickers_to_test)} tickers ({sd.date()} → {ed.date()})…"):
-                try:
-                    new_id = run_backtest(tickers_to_test, sd, ed, config, name=bt_name)
-                    st.success(f"Backtest #{new_id} complete.")
-                    st.session_state["bt_selected_run"] = new_id
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Backtest failed: {exc}")
-
-        st.divider()
-        st.markdown("### Previous Runs")
-
-        if not complete:
-            st.info("No completed backtest runs yet — configure and run one above.")
-        else:
-            sel_label = st.selectbox("Select run to view", list(run_opts.keys()), key="bt_sel_run")
-            sel_id    = run_opts[sel_label]
-            st.session_state["bt_selected_run"] = sel_id
-
-            run  = get_run(sel_id)
-            df   = get_run_trades(sel_id)
-            mets = compute_metrics(df)
-
-            # Delete button
-            with st.expander("Manage run"):
-                if st.button(f"Delete run #{sel_id}", key="bt_del"):
-                    db_path = config.get("database", {}).get("path", "database/investment_research.db")
-                    size_before = os.path.getsize(db_path) if os.path.exists(db_path) else None
-
-                    delete_run(sel_id)
-
-                    if size_before is not None and os.path.exists(db_path):
-                        size_after = os.path.getsize(db_path)
-                        reclaimed = size_before - size_after
-                        if reclaimed > 0:
-                            mb_before = size_before / (1024 * 1024)
-                            mb_after  = size_after / (1024 * 1024)
-                            mb_reclaimed = reclaimed / (1024 * 1024)
-                            st.success(
-                                f"✓ Run #{sel_id} deleted — database reduced from "
-                                f"{mb_before:.1f} MB to {mb_after:.1f} MB "
-                                f"(−{mb_reclaimed:.1f} MB reclaimed)"
-                            )
-                        else:
-                            st.success(f"✓ Run #{sel_id} deleted — database optimised.")
-                    else:
-                        st.success(f"✓ Run #{sel_id} deleted.")
-                    st.rerun()
-
-            # Metrics strip
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("Trades", mets.get("total_trades", 0))
-            wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
-            c2.metric("Win Rate", f"{wr_pct}%",
-                      delta=f"{wr_pct - 50:.1f}pp vs 50%",
-                      delta_color="normal")
-            c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
-            c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
-            c5.metric("Sharpe", f"{mets.get('sharpe_ratio', 0):.2f}")
-            c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
-
-            c7, c8, c9 = st.columns(3)
-            c7.metric("Avg Hold", f"{mets.get('avg_holding_days', 0):.0f} days")
-            c8.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
-            c9.metric("Max Loss Streak", mets.get("max_loss_streak", 0))
-
-            # Equity curve — bt_equity_curve() (analysis/backtest_metrics.py:
-            # equity_curve()) returns one row per calendar day (P&L realised
-            # in exit-date order, days with no exit carrying forward the
-            # prior value), not one row per trade, so the date axis below is
-            # always monotonically increasing with no backwards jumps even
-            # when trades overlap.
-            if not df.empty:
-                ec = bt_equity_curve(df)
-                if not ec.empty:
-                    import plotly.graph_objects as go
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=ec["date"], y=ec["equity"],
-                        mode="lines", name="Portfolio (normalised to 1.0)",
-                        line=dict(color="#3b82f6", width=2, shape="linear"),
-                        fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
-                        hovertemplate="%{x|%Y-%m-%d}<br>Equity: %{y:.4f}<extra></extra>",
-                    ))
-                    fig.update_layout(
-                        title=f"Equity Curve — Run #{sel_id} (daily portfolio value)",
-                        xaxis_title="Date", yaxis_title="Portfolio Value",
-                        height=350, margin=dict(l=0, r=0, t=40, b=0),
-                        yaxis=dict(tickformat=".2f"),
-                        xaxis=dict(type="date"),
-                    )
-                    _apply_dark_theme(fig)
-                    st.plotly_chart(fig, width="stretch")
-
-                # Trades table
-                st.markdown("#### Simulated Trades")
-                show_df = df.copy()
-                if "stop_distance_pct" not in show_df.columns:
-                    show_df["stop_distance_pct"] = None
-                show_df = show_df[[
-                    "ticker", "direction", "entry_date", "exit_date",
-                    "entry_price", "exit_price", "pnl_pct",
-                    "exit_reason", "regime_at_entry", "holding_days", "is_win",
-                    "stop_distance_pct",
-                ]].copy()
-                show_df["pnl_pct"] = (show_df["pnl_pct"] * 100).round(2)
-                show_df["stop_distance_pct"] = pd.to_numeric(
-                    show_df["stop_distance_pct"], errors="coerce"
-                ).round(2)
-                show_df.columns = [
-                    "Ticker", "Dir", "Entry Date", "Exit Date",
-                    "Entry Price", "Exit Price", "P&L %",
-                    "Exit Reason", "Regime", "Hold Days", "Win",
-                    "Stop Distance %",
-                ]
-                st.dataframe(
-                    show_df.style.map(lambda v: "color:#16a34a" if v is True else ("color:#dc2626" if v is False else ""), subset=["Win"])
-                              .map(lambda v: f"color:{'#16a34a' if v > 0 else '#dc2626'}" if isinstance(v, (int, float)) else "", subset=["P&L %"]),
-                    width="stretch", hide_index=True,
-                )
-
-            # ── T212 CFD Comparison ───────────────────────────────────────────
-            st.divider()
-            with st.expander("📊 T212 CFD Only — Comparison vs Full Run", expanded=False):
-                st.caption(
-                    "Filters this run's trades to only tickers that have a "
-                    "`trading212_instrument` mapping in config.yaml — i.e. assets "
-                    "actually available as CFDs on Trading212. No re-run required; "
-                    "metrics are recomputed on the filtered subset instantly."
-                )
-
-                _t212_set  = set(t212_tickers)
-                _df_full   = df
-                _df_t212   = df[df["ticker"].isin(_t212_set)].copy() if not df.empty else df
-
-                _mets_full = mets  # already computed above
-                _mets_t212 = compute_metrics(_df_t212)
-
-                def _fmt_wr(m: dict) -> str:
-                    v = m.get("win_rate") or 0
-                    return f"{round(v * 100, 1)}%"
-
-                def _fmt_pf(m: dict) -> str:
-                    v = m.get("profit_factor") or 0
-                    return "∞" if v >= 99.9 else f"{v:.2f}"
-
-                _comparison_rows = [
-                    ("Trades",         str(_mets_full.get("total_trades", 0)),       str(_mets_t212.get("total_trades", 0))),
-                    ("Win Rate",       _fmt_wr(_mets_full),                           _fmt_wr(_mets_t212)),
-                    ("Total Return",   f"{_mets_full.get('total_return_pct', 0):+.1f}%", f"{_mets_t212.get('total_return_pct', 0):+.1f}%"),
-                    ("Avg Return",     f"{_mets_full.get('avg_return_pct', 0):+.2f}%",   f"{_mets_t212.get('avg_return_pct', 0):+.2f}%"),
-                    ("Profit Factor",  _fmt_pf(_mets_full),                           _fmt_pf(_mets_t212)),
-                    ("Sharpe Ratio",   f"{_mets_full.get('sharpe_ratio', 0):.2f}",    f"{_mets_t212.get('sharpe_ratio', 0):.2f}"),
-                    ("Max Drawdown",   f"{_mets_full.get('max_drawdown_pct', 0):.1f}%", f"{_mets_t212.get('max_drawdown_pct', 0):.1f}%"),
-                    ("Avg Hold Days",  f"{_mets_full.get('avg_holding_days', 0):.0f}", f"{_mets_t212.get('avg_holding_days', 0):.0f}"),
-                    ("Max Loss Streak", str(_mets_full.get("max_loss_streak", 0)),    str(_mets_t212.get("max_loss_streak", 0))),
-                ]
-                _cmp_df = pd.DataFrame(_comparison_rows, columns=["Metric", "Full Universe", "T212 CFD Only"])
-
-                def _colour_compare(row: pd.Series) -> list[str]:
-                    styles = ["font-weight:bold", "", ""]
-                    if row["Metric"] in ("Trades", "Avg Hold Days", "Max Loss Streak"):
-                        return styles
-                    try:
-                        fv = float(str(row["Full Universe"]).replace("%", "").replace("+", "").replace("∞", "999"))
-                        tv = float(str(row["T212 CFD Only"]).replace("%", "").replace("+", "").replace("∞", "999"))
-                        better_is_higher = row["Metric"] not in ("Max Drawdown", "Max Loss Streak")
-                        t212_better = tv > fv if better_is_higher else tv < fv
-                        styles[2] = "color:#16a34a;font-weight:bold" if t212_better else "color:#dc2626"
-                    except (ValueError, TypeError):
-                        pass
-                    return styles
-
-                st.dataframe(
-                    _cmp_df.style.apply(_colour_compare, axis=1),
-                    width="stretch", hide_index=True,
-                )
-
-                # ── T212 tickers caption ──────────────────────────────────────
-                st.caption(
-                    f"T212 instruments included ({len(_t212_set)}): "
-                    + ", ".join(sorted(_t212_set))
-                )
-
-                # ── Excluded tickers and their trade counts ───────────────────
-                st.markdown("#### Tickers Excluded by T212 Filter")
-                st.caption(
-                    "These tickers appear in the full run but are not available as "
-                    "T212 CFD instruments. Shows how many simulated trades each contributed."
-                )
-
-                if df.empty:
-                    st.info("No trade data available.")
-                else:
-                    _excluded_tickers = sorted(set(df["ticker"].unique()) - _t212_set)
-                    if not _excluded_tickers:
-                        st.success("All tickers in this run have T212 instruments — no exclusions.")
-                    else:
-                        # Build name lookup from config
-                        _name_lookup: dict[str, str] = {}
-                        for _g in config.get("watchlist", {}).values():
-                            if not isinstance(_g, list):
-                                continue
-                            for _e in _g:
-                                if isinstance(_e, dict) and "ticker" in _e:
-                                    _name_lookup[_e["ticker"]] = _e.get("name", _e["ticker"])
-
-                        _excl_rows = []
-                        for _tkr in _excluded_tickers:
-                            _sub = df[df["ticker"] == _tkr]
-                            _em  = compute_metrics(_sub)
-                            _excl_rows.append({
-                                "Ticker":      _tkr,
-                                "Name":        _name_lookup.get(_tkr, _tkr),
-                                "Trades":      _em.get("total_trades", 0),
-                                "Win Rate":    _fmt_wr(_em),
-                                "Avg Return":  f"{_em.get('avg_return_pct', 0):+.2f}%",
-                                "Total Return": f"{_em.get('total_return_pct', 0):+.1f}%",
-                            })
-
-                        _excl_df = pd.DataFrame(_excl_rows).sort_values("Trades", ascending=False)
-                        st.dataframe(_excl_df, width="stretch", hide_index=True)
-
-                        _total_excl_trades = sum(r["Trades"] for r in _excl_rows)
-                        _total_full_trades = _mets_full.get("total_trades", 0)
-                        _excl_pct = (_total_excl_trades / _total_full_trades * 100) if _total_full_trades else 0
-                        st.caption(
-                            f"{_total_excl_trades} of {_total_full_trades} trades "
-                            f"({_excl_pct:.0f}%) come from non-T212 tickers."
-                        )
-
-    # ── Tab 2: Period Analysis ─────────────────────────────────────────────────
-    with tab_period:
-        st.markdown("### Performance by Market Period")
-        if not complete:
-            st.info("Run a backtest first.")
-        else:
-            sel_id = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
-            df     = get_run_trades(sel_id)
-            bdown  = period_breakdown(df)
-
-            for period_name, m in bdown.items():
-                colour  = m.get("colour", "#8899AA")
-                desc    = m.get("desc", "")
-                n       = m.get("total_trades", 0)
-
-                with st.expander(f"{period_name}  —  {n} trade{'s' if n != 1 else ''}", expanded=True):
-                    st.caption(desc)
-                    if n == 0:
-                        st.info("No trades simulated in this period with the selected run.")
-                        continue
-                    pc1, pc2, pc3, pc4 = st.columns(4)
-                    wr = round((m.get("win_rate") or 0) * 100, 1)
-                    pc1.metric("Win Rate",     f"{wr}%")
-                    pc2.metric("Avg Return",   f"{m.get('avg_return_pct', 0):+.2f}%")
-                    pc3.metric("Total Return", f"{m.get('total_return_pct', 0):+.1f}%")
-                    pc4.metric("Max Drawdown", f"{m.get('max_drawdown_pct', 0):.1f}%")
-
-            # Regime performance
-            st.divider()
-            st.markdown("### Performance by Regime")
-            rp = regime_performance(df)
-            if not rp.empty:
-                st.dataframe(rp, width="stretch")
-
-    # ── Tab 3: Module Attribution ─────────────────────────────────────────────
-    with tab_attr:
-        st.markdown("### Which Modules Drive Winning Trades?")
-        st.caption(
-            "Agreement = module score direction matches trade direction at entry. "
-            "High 'Win Rate When Agree' shows the module is a useful signal."
-        )
-        if not complete:
-            st.info("Run a backtest first.")
-        else:
-            sel_id = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
-            df     = get_run_trades(sel_id)
-            attr   = module_attribution(df)
-
-            if attr.empty:
-                st.info("Not enough trade data for attribution analysis.")
-            else:
-                # Bar chart: win rate when agree vs disagree
-                import plotly.graph_objects as go
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    name="Win rate when module agrees",
-                    x=attr.index.tolist(),
-                    y=attr["win_rate_when_agree"].tolist(),
-                    marker_color="#22c55e",
-                ))
-                fig.add_trace(go.Bar(
-                    name="Win rate when module disagrees",
-                    x=attr.index.tolist(),
-                    y=attr["win_rate_when_disagree"].tolist(),
-                    marker_color="#ef4444",
-                ))
-                fig.add_hline(y=50, line_dash="dot", line_color="#94a3b8",
-                              annotation_text="50% baseline")
-                fig.update_layout(
-                    barmode="group", title="Module Win Rate: Agreement vs Disagreement",
-                    yaxis_title="Win Rate %", height=350,
-                    margin=dict(l=0, r=0, t=40, b=0),
-                )
-                _apply_dark_theme(fig)
-                st.plotly_chart(fig, width="stretch")
-
-                # Detailed table
-                st.markdown("#### Module Detail")
-                show = attr.reset_index().rename(columns={
-                    "module":                 "Module",
-                    "win_rate_when_agree":    "Win% (Agree)",
-                    "win_rate_when_disagree": "Win% (Disagree)",
-                    "avg_score_wins":         "Avg Score (Wins)",
-                    "avg_score_losses":       "Avg Score (Losses)",
-                    "agreement_pct":          "Agreement %",
-                    "n_trades":               "N Trades",
-                })
-                st.dataframe(show, width="stretch", hide_index=True)
-                st.caption(
-                    "A 100%/0% Agreement split for Trend, Volatility, or Volume is expected under the "
-                    "current TRENDING_BULL-only entry gate, not a bug: with Macro's backtest score held "
-                    "constant (latest-observation-only — see CLAUDE.md) and weighted heavily in this "
-                    "regime, only trades where those three modules all score +1 can clear the STRONG_BUY "
-                    "threshold, so every entered trade shows the same value for each. Mean Reversion is "
-                    "the only module whose weight is small enough to vary freely across entries, making "
-                    "it the one row here with genuine discriminating signal."
-                )
-
-    # ── Tab 4: Signal Decay ───────────────────────────────────────────────────
-    with tab_decay:
-        st.markdown("### How Long Do Signals Last?")
-        st.caption("Distribution of holding periods and exit reasons across all simulated trades.")
-        if not complete:
-            st.info("Run a backtest first.")
-        else:
-            sel_id = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
-            df     = get_run_trades(sel_id)
-            decay  = signal_decay(df)
-
-            if not decay:
-                st.info("Not enough trade data.")
-            else:
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Median Hold",   f"{decay.get('median_hold', 0):.0f} days")
-                m2.metric("Mean Hold",     f"{decay.get('mean_hold', 0):.0f} days")
-                m3.metric("Stop Loss %",   f"{decay.get('pct_stop_loss', 0):.1f}%")
-
-                m4, m5, m6 = st.columns(3)
-                m4.metric("Signal Reversal %", f"{decay.get('pct_signal_reversal', 0):.1f}%")
-                m5.metric("Max Holding %",     f"{decay.get('pct_max_holding', 0):.1f}%")
-                m6.metric("End of Data %",     f"{decay.get('pct_end_of_data', 0):.1f}%")
-
-                # ── Performance by Exit Reason ────────────────────────────────
-                st.markdown("#### Performance by Exit Reason")
-                _erb = exit_reason_breakdown(df)
-                if _erb.empty:
-                    st.info("Not enough trade data for an exit reason breakdown.")
-                else:
-                    _has_stop_dist = "avg_stop_distance_pct" in _erb.columns
-                    _erb_df = _erb.reset_index().rename(columns={
-                        "exit_reason":           "Exit Reason",
-                        "trades":                "Trades",
-                        "win_rate":               "Win Rate",
-                        "avg_return":             "Avg Return",
-                        "avg_hold":               "Avg Hold (days)",
-                        "avg_stop_distance_pct":  "Avg Stop Distance %",
-                    })
-
-                    def _style_erb_return(val):
-                        if not isinstance(val, (int, float)): return ""
-                        return ("color:#16a34a;font-weight:bold" if val > 0
-                                else "color:#dc2626;font-weight:bold" if val < 0 else "")
-
-                    _erb_format = {
-                        "Win Rate":        "{:.1f}%",
-                        "Avg Return":      "{:+.2f}%",
-                        "Avg Hold (days)": "{:.1f}",
-                    }
-                    if _has_stop_dist:
-                        _erb_format["Avg Stop Distance %"] = "{:.2f}%"
-
-                    st.dataframe(
-                        _erb_df.style.map(_style_erb_return, subset=["Avg Return"]).format(_erb_format),
-                        width="stretch", hide_index=True,
-                    )
-                    st.caption(
-                        "If MAX_HOLDING shows a higher win rate and avg return than STOP_LOSS, the ATR stop "
-                        "may be cutting profitable trades short — consider widening `backtest.atr_stop_multiplier` "
-                        "in config.yaml. If STOP_LOSS outperforms MAX_HOLDING, the time limit may be holding "
-                        "losers too long."
-                    )
-
-                # Histogram
-                bins = decay.get("hold_bins", [])
-                if bins:
-                    import plotly.graph_objects as go
-                    fig = go.Figure(go.Bar(
-                        x=[b["bin"] for b in bins],
-                        y=[b["count"] for b in bins],
-                        marker_color="#6366f1",
-                    ))
-                    fig.update_layout(
-                        title="Holding Period Distribution",
-                        xaxis_title="Days Held", yaxis_title="Number of Trades",
-                        height=300, margin=dict(l=0, r=0, t=40, b=0),
-                    )
-                    _apply_dark_theme(fig)
-                    st.plotly_chart(fig, width="stretch")
-
-                # Avg hold by regime
-                rh = decay.get("regime_holds", {})
-                if rh:
-                    st.markdown("#### Average Holding by Regime")
-                    rh_df = pd.DataFrame(list(rh.items()), columns=["Regime", "Avg Days"])
-                    st.dataframe(rh_df, width="stretch", hide_index=True)
-
-                # ── Forex Holding Sensitivity ─────────────────────────────────
-                st.markdown("---")
-                st.markdown("#### Forex Holding Sensitivity")
-                st.caption(
-                    "Profit factor and win rate for forex trades (tickers ending in '=X') "
-                    "at different max-hold caps — helps calibrate `max_holding_days_forex` "
-                    "in config.yaml. Trades already closed by stop-loss or signal reversal "
-                    "within the cap are included; those that ran longer are excluded."
-                )
-                _fx_sens = forex_holding_sensitivity(df)
-                if not _fx_sens:
-                    st.info("No forex trades in this backtest run (no tickers ending in '=X').")
-                else:
-                    _fx_df = pd.DataFrame(_fx_sens)
-                    _fx_df.columns = ["Max Days", "N Trades", "Profit Factor", "Win Rate %", "Avg Return %"]
-                    _fx_df["Profit Factor"] = _fx_df["Profit Factor"].apply(
-                        lambda v: "∞ (no losses)" if v is None else f"{v:.2f}"
-                    )
-                    st.dataframe(_fx_df, width="stretch", hide_index=True)
-
-                    # Highlight the current configured value
-                    _cfg_fx_hold = int(config.get("backtest", {}).get("max_holding_days_forex", 5))
-                    st.caption(
-                        f"Current config: `max_holding_days_forex = {_cfg_fx_hold}` · "
-                        f"Look for the row where profit factor peaks to find the optimal cap."
-                    )
-
-    # ── Tab 5: Walk-Forward ───────────────────────────────────────────────────
-    with tab_wf:
-        st.markdown("### Rolling 6-Month Window Validation")
-        st.caption(
-            "Each data point = performance of all trades entered within a 6-month window. "
-            "Consistent win rates across windows suggest the signal logic has stable edge."
-        )
-        if not complete:
-            st.info("Run a backtest first.")
-        else:
-            sel_id  = st.session_state.get("bt_selected_run") or list(run_opts.values())[0]
-            df      = get_run_trades(sel_id)
-            wf_data = walk_forward(df, window_months=config.get("backtest", {}).get("walk_forward_months", 6))
-
-            if not wf_data:
-                st.info("Not enough data for walk-forward analysis (need trades across multiple 6-month windows).")
-            else:
-                wf_df = pd.DataFrame(wf_data)
-
-                import plotly.graph_objects as go
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=wf_df["window_start"], y=(wf_df["win_rate"] * 100).round(1),
-                    mode="lines+markers", name="Win Rate %",
-                    line=dict(color="#3b82f6", width=2),
-                ))
-                fig.add_hline(y=50, line_dash="dot", line_color="#94a3b8",
-                              annotation_text="50% baseline")
-                fig.update_layout(
-                    title="Rolling Win Rate (6-month windows)",
-                    xaxis_title="Window Start", yaxis_title="Win Rate %",
-                    height=320, margin=dict(l=0, r=0, t=40, b=0),
-                )
-                _apply_dark_theme(fig)
-                st.plotly_chart(fig, width="stretch")
-
-                # Avg return line
-                fig2 = go.Figure()
-                fig2.add_trace(go.Bar(
-                    x=wf_df["window_start"],
-                    y=wf_df["avg_return_pct"].round(2),
-                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in wf_df["avg_return_pct"]],
-                    name="Avg Return %",
-                ))
-                fig2.add_hline(y=0, line_color="#94a3b8")
-                fig2.update_layout(
-                    title="Average Return per Window",
-                    xaxis_title="Window Start", yaxis_title="Avg Return %",
-                    height=280, margin=dict(l=0, r=0, t=40, b=0),
-                )
-                _apply_dark_theme(fig2)
-                st.plotly_chart(fig2, width="stretch")
-
-                st.markdown("#### Window Detail")
-                show_wf = wf_df.copy()
-                show_wf["win_rate"] = (show_wf["win_rate"] * 100).round(1)
-                show_wf.columns = ["Window Start", "Window End", "Win Rate %",
-                                    "Avg Return %", "N Trades", "Sharpe", "Max DD %"]
-                st.dataframe(show_wf, width="stretch", hide_index=True)
-
-    _render_footer()
-
-
-def _t212_asset_type_map(config: dict) -> dict[str, str]:
-    """Map research ticker -> 'ETF' or 'STOCK' via the T212 automation config.
-
-    t212_pnl.ticker stores the research ticker, not the T212 instrument ticker,
-    so this is keyed the opposite way to _get_t212_invest_brief_cards()'s
-    internal reverse_map (which is keyed by T212 instrument ticker).
-    """
-    asset_types: dict[str, str] = {}
-    for rt in config.get("trading212_invest", {}).get("ucits_mapping", {}):
-        asset_types[rt] = "ETF"
-    if config.get("trading212_stocks", {}):
-        for entry in config.get("watchlist", {}).get("us_large_cap", []):
-            if isinstance(entry, dict) and "ticker" in entry:
-                asset_types.setdefault(entry["ticker"], "STOCK")
-    return asset_types
-
-
-def _get_t212_pnl_rows() -> list[dict]:
-    """Return all reconstructed closed T212 positions, most recently exited first.
-
-    Reads brokers/t212_learning.py:_reconstruct_t212_pnl()'s output table directly
-    — no T212 API calls, no re-derivation of P&L.
-    """
-    from sqlalchemy import text as sa_text
-    try:
-        with get_engine().connect() as conn:
-            rows = conn.execute(
-                sa_text("SELECT * FROM t212_pnl ORDER BY exit_date DESC")
-            ).mappings().all()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
-
-
-def _t212_pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
-    """Adapt t212_pnl rows to the column shape analysis/backtest_metrics.py expects.
-
-    backtest_metrics.py's functions (compute_metrics, equity_curve,
-    exit_reason_breakdown, regime_performance) were written against
-    BacktestTrade rows and read pnl_pct/is_win/holding_days/entry_date/
-    exit_date/regime_at_entry — reused here rather than reimplementing the
-    same aggregation logic a second time for t212_pnl, which carries the same
-    information under slightly different column names (regime vs
-    regime_at_entry, no is_win/direction columns at all since T212 Invest is
-    long-only cash-account and every row is a realised close).
-    """
-    if not pnl_rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(pnl_rows)
-    df["entry_date"]      = pd.to_datetime(df["entry_date"])
-    df["exit_date"]       = pd.to_datetime(df["exit_date"])
-    df["pnl_pct"]         = df["pnl_pct"].astype(float)
-    df["is_win"]          = df["pnl_gbp"] > 0
-    df["direction"]       = "LONG"
-    df["regime_at_entry"] = df["regime"]
-    return df
-
-
-def _render_performance_page(config: dict) -> None:
-    """Execution performance for both the live V2 system and V1's retired
-    (but permanently retained) historical record.
-
-    All P&L here is derived from actual T212 order fills (see "T212 P&L
-    reconstruction" in CLAUDE.md), not simulated/paper trades. V1's
-    t212_invest_orders/t212_pnl and V2's v2_invest_orders/v2_pnl are
-    genuinely separate tables (see data/database.py:V2InvestOrder's
-    docstring) — this page never blends a row from one into a table meant
-    for the other; V2 is shown first as the current live system, V1 below
-    it as a clearly labelled, still-fully-visible historical record.
-    """
-    _render_page_wordmark("Performance")
-    st.title("Performance")
-
-    _v2_enabled_perf = config.get("trading212_v2", {}).get("enabled", False)
-    _v1_enabled_perf = (
-        config.get("trading212_invest", {}).get("enabled", False)
-        or config.get("trading212_stocks", {}).get("enabled", False)
-    )
-    st.markdown(
-        (
-            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700;margin-right:8px">🟢 V2 — LIVE (DEMO)</span>'
-            if _v2_enabled_perf else
-            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700;margin-right:8px">V2 — NOT ENABLED</span>'
-        ) + (
-            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700">🔴 V1 — RETIRED 2026-07-31</span>'
-            if not _v1_enabled_perf else
-            '<span style="background:#f59e0b;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700">⚠ V1 — RE-ENABLED</span>'
-        ),
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "V2 (momentum + crisis override) is the current live automated system. "
-        "V1's historical record below remains the full, unmodified account of "
-        "everything it did before being retired — nothing here is deleted or merged."
-    )
-
-    # ════════════════════════════════════════════════════════════════════
-    # V2 — LIVE SYSTEM
-    # ════════════════════════════════════════════════════════════════════
-    st.divider()
-    st.markdown("## 🟢 V2 — Live System")
-
-    st.markdown("### Open Positions")
-    v2_open_cards = _get_v2_brief_cards(config)
-    if not v2_open_cards:
-        st.info("No open V2 positions.")
-    else:
-        v2_all_cards = sorted(v2_open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
-        for e in v2_all_cards:
-            _render_v2_trade_card(e)
-
-    st.divider()
-    st.markdown("### Closed Positions")
-    v2_pnl_rows = _get_v2_pnl_rows()
-
-    if not v2_pnl_rows:
-        st.info("No closed V2 positions yet — data will appear as V2 positions close.")
-    else:
-        v2_show_df = pd.DataFrame(v2_pnl_rows)
-        v2_show_df["Type"] = v2_show_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-        v2_show_df["entry_date"] = pd.to_datetime(v2_show_df["entry_date"]).dt.strftime("%Y-%m-%d")
-        v2_show_df["exit_date"]  = pd.to_datetime(v2_show_df["exit_date"]).dt.strftime("%Y-%m-%d")
-        v2_show_df["pnl_pct"]    = (v2_show_df["pnl_pct"] * 100).round(2)
-        v2_show_df["pnl_gbp"]    = v2_show_df["pnl_gbp"].round(2)
-        v2_show_df["momentum_pct_at_entry"] = (v2_show_df["momentum_pct_at_entry"] * 100).round(1)
-
-        v2_show_df = v2_show_df[[
-            "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
-            "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
-            "momentum_pct_at_entry", "exit_reason",
-        ]]
-        v2_show_df.columns = [
-            "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
-            "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
-            "Momentum at Entry %", "Exit Reason",
-        ]
-        st.dataframe(
-            v2_show_df.style
-                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
-                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
-            width="stretch", hide_index=True,
-        )
-
-    st.divider()
-    st.markdown("### Performance Metrics")
-    n_v2_closed = len(v2_pnl_rows)
-
-    if n_v2_closed < 5:
-        st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_v2_closed}/5).")
-        if n_v2_closed:
-            v2_wins = sum(1 for r in v2_pnl_rows if (r.get("pnl_gbp") or 0) > 0)
-            v2_losses = n_v2_closed - v2_wins
-            v2_total_pnl = sum(r.get("pnl_gbp") or 0 for r in v2_pnl_rows)
-            st.caption(
-                f"So far: {v2_wins} win{'s' if v2_wins != 1 else ''} / "
-                f"{v2_losses} loss{'es' if v2_losses != 1 else ''} · "
-                f"total realised P&L £{v2_total_pnl:+,.2f}."
-            )
-    else:
-        v2_mdf  = _v2_pnl_metrics_df(v2_pnl_rows)
-        v2_mets = compute_metrics(v2_mdf)
-
-        vc1, vc2, vc3, vc4, vc5, vc6 = st.columns(6)
-        vc1.metric("Closed Positions", v2_mets.get("total_trades", 0))
-        v2_wr_pct = round((v2_mets.get("win_rate") or 0) * 100, 1)
-        vc2.metric("Win Rate", f"{v2_wr_pct}%")
-        vc3.metric("Avg Return", f"{v2_mets.get('avg_return_pct', 0):+.2f}%")
-        vc4.metric("Total Return", f"{v2_mets.get('total_return_pct', 0):+.1f}%")
-        vc5.metric("Profit Factor", f"{v2_mets.get('profit_factor', 0):.2f}")
-        vc6.metric("Max Drawdown", f"{v2_mets.get('max_drawdown_pct', 0):.1f}%")
-
-        v2_total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in v2_pnl_rows)
-        st.caption(
-            f"Total realised P&L: £{v2_total_pnl_gbp:+,.2f} across {n_v2_closed} closed positions · "
-            f"avg hold {v2_mets.get('avg_holding_days', 0):.0f} days."
-        )
-
-        v2_ec = bt_equity_curve(v2_mdf)
-        if not v2_ec.empty:
-            v2_fig = go.Figure()
-            v2_fig.add_trace(go.Scatter(
-                x=v2_ec["date"], y=v2_ec["equity"],
-                mode="lines", name="Portfolio (normalised to 1.0)",
-                line=dict(color="#3b82f6", width=2, shape="linear"),
-                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
-                hovertemplate="%{x|%Y-%m-%d}<br>Equity: %{y:.4f}<extra></extra>",
-            ))
-            v2_fig.update_layout(
-                title="Equity Curve (daily, normalised to 1.0)",
-                xaxis_title="Date", yaxis_title="Portfolio Value",
-                height=320, margin=dict(l=0, r=0, t=40, b=0),
-                yaxis=dict(tickformat=".2f"),
-                xaxis=dict(type="date"),
-            )
-            _apply_dark_theme(v2_fig)
-            st.plotly_chart(v2_fig, width="stretch")
-
-        # No "Performance by Regime at Entry" here — V2 has no regime
-        # classifier, so regime_performance() (a V1 concept) is never called
-        # against V2 data; see this function's own docstring.
-        v2_erb = exit_reason_breakdown(v2_mdf)
-        if not v2_erb.empty:
-            st.markdown("#### Performance by Exit Reason")
-            v2_erb_show = v2_erb.copy()
-            v2_erb_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
-            st.dataframe(v2_erb_show, width="stretch")
-
-    # ════════════════════════════════════════════════════════════════════
-    # V1 — HISTORICAL RECORD (RETIRED)
-    # ════════════════════════════════════════════════════════════════════
-    st.divider()
-    st.markdown("## 🔴 V1 — Historical Record (Retired 2026-07-31)")
-    st.caption(
-        "The six-module confluence/regime system that traded this account until "
-        "2026-07-31. No longer placing orders — kept in full below as the record "
-        "the V2 rebuild rests on."
-    )
-
-    # ── Section 1: Open Positions ───────────────────────────────────────────
-    st.markdown("### Open Positions")
-
-    _dd_perf_status = _get_drawdown_status(config)
-    if _dd_perf_status and _dd_perf_status["enabled"] and _dd_perf_status["scale_factor"] < 1.0:
-        st.caption(
-            f"⚠ Portfolio drawdown {_dd_perf_status['drawdown_pct'] * 100:.1f}% from peak "
-            f"(£{_dd_perf_status['peak_value_gbp']:,.0f}) — new positions are currently scaled "
-            f"to {_dd_perf_status['scale_factor'] * 100:.0f}% of normal size "
-            f"({_dd_perf_status['status']}). Existing positions below are unaffected."
-        )
-
-    open_cards = _get_t212_invest_brief_cards(config)
-    if not open_cards:
-        st.info("No open T212 Invest positions.")
-    else:
-        all_cards = sorted(open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
-        for e in all_cards:
-            _render_trade_card(e)
-
-    st.divider()
-
-    # ── Section 2: Closed Positions ─────────────────────────────────────────
-    st.markdown("### Closed Positions")
-    pnl_rows = _get_t212_pnl_rows()
-
-    # A scheduler daemon running stale code (fixed 2026-07-06 — see CLAUDE.md's
-    # "Ongoing deploys" section) placed orders under outdated regime-gate logic
-    # for a period before the fix. Those closed positions are real T212 fills,
-    # not fabricated, but don't reflect current strategy logic — flagged here
-    # rather than excluded so the table stays an honest, complete record.
-    _DAEMON_FIX_DATE = "2026-07-06"
-    _pre_fix_trades = [
-        r for r in pnl_rows if str(r.get("exit_date", ""))[:10] < _DAEMON_FIX_DATE
-    ]
-    if _pre_fix_trades:
-        st.info(
-            f"**Note:** {len(_pre_fix_trades)} of the closed positions below "
-            f"({'all' if len(_pre_fix_trades) == len(pnl_rows) else 'some'} shown) "
-            f"were executed before {_DAEMON_FIX_DATE} by a scheduler daemon running stale "
-            f"code — prior to the regime-gate fix that is now enforced. These trades do not "
-            f"reflect the current strategy logic. Full incident details are documented in "
-            f"CLAUDE.md."
-        )
-
-    if not pnl_rows:
-        st.info("No closed positions yet — data will appear as T212 positions close.")
-    else:
-        asset_types = _t212_asset_type_map(config)
-        show_df = pd.DataFrame(pnl_rows)
-        show_df["Type"] = show_df["ticker"].map(lambda t: asset_types.get(t, "—"))
-        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"]).dt.strftime("%Y-%m-%d")
-        show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
-        show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
-        show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
-
-        show_df = show_df[[
-            "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
-            "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
-            "signal_type", "regime", "exit_reason",
-        ]]
-        show_df.columns = [
-            "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
-            "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
-            "Entry Signal", "Regime", "Exit Reason",
-        ]
-        st.dataframe(
-            show_df.style
-                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
-                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
-            width="stretch", hide_index=True,
-        )
-
-    st.divider()
-
-    # ── Section 3: Performance Metrics ──────────────────────────────────────
-    st.markdown("### Performance Metrics")
-    n_closed = len(pnl_rows)
-
-    if n_closed < 5:
-        st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_closed}/5).")
-        if n_closed:
-            wins = sum(1 for r in pnl_rows if (r.get("pnl_gbp") or 0) > 0)
-            losses = n_closed - wins
-            total_pnl = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
-            st.caption(
-                f"So far: {wins} win{'s' if wins != 1 else ''} / "
-                f"{losses} loss{'es' if losses != 1 else ''} · "
-                f"total realised P&L £{total_pnl:+,.2f}."
-            )
-    else:
-        mdf  = _t212_pnl_metrics_df(pnl_rows)
-        mets = compute_metrics(mdf)
-
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Closed Positions", mets.get("total_trades", 0))
-        wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
-        c2.metric("Win Rate", f"{wr_pct}%")
-        c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
-        c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
-        c5.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
-        c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
-
-        total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
-        st.caption(
-            f"Total realised P&L: £{total_pnl_gbp:+,.2f} across {n_closed} closed positions · "
-            f"avg hold {mets.get('avg_holding_days', 0):.0f} days."
-        )
-
-        ec = bt_equity_curve(mdf)
-        if not ec.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=ec["date"], y=ec["equity"],
-                mode="lines", name="Portfolio (normalised to 1.0)",
-                line=dict(color="#3b82f6", width=2, shape="linear"),
-                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
-                hovertemplate="%{x|%Y-%m-%d}<br>Equity: %{y:.4f}<extra></extra>",
-            ))
-            fig.update_layout(
-                title="Equity Curve (daily, normalised to 1.0)",
-                xaxis_title="Date", yaxis_title="Portfolio Value",
-                height=320, margin=dict(l=0, r=0, t=40, b=0),
-                yaxis=dict(tickformat=".2f"),
-                xaxis=dict(type="date"),
-            )
-            _apply_dark_theme(fig)
-            st.plotly_chart(fig, width="stretch")
-
-        rp = regime_performance(mdf)
-        if not rp.empty:
-            st.markdown("#### Performance by Regime at Entry")
-            rp_show = rp.copy()
-            rp_show.columns = ["N Trades", "Win Rate %", "Avg Return %", "Max DD %", "Sharpe"]
-            st.dataframe(rp_show, width="stretch")
-
-        erb = exit_reason_breakdown(mdf)
-        if not erb.empty:
-            st.markdown("#### Performance by Exit Reason")
-            erb_show = erb.copy()
-            erb_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
-            st.dataframe(erb_show, width="stretch")
-
-    st.divider()
-
-    # ── Section 4: Learning System ──────────────────────────────────────────
-    st.markdown("### Learning System")
-    st.caption(
-        "V1-specific — recalculates REGIME_WEIGHTS, a concept V2 has no "
-        "equivalent of (no regime classifier, no per-module weighting)."
-    )
-
-    learning_cfg = config.get("learning", {})
-    min_trades   = learning_cfg.get("min_trades_before_adjustment", 20)
-    n_pnl        = len(pnl_rows)
-
-    st.caption(
-        f"{n_pnl} T212 closed position{'s' if n_pnl != 1 else ''} toward the next weight "
-        f"adjustment (fires at {min_trades})."
-    )
-
-    learned = get_learned_weights()
-    if learned:
-        weights   = learned.get("weights", {})
-        win_rates = learned.get("win_rates", {})
-        modules   = ["trend", "mean_reversion", "volatility", "volume", "macro", "correlation"]
-
-        avg_static = {
-            m: sum(REGIME_WEIGHTS[r][m] for r in REGIME_WEIGHTS) / len(REGIME_WEIGHTS)
-            for m in modules
-        }
-
-        st.markdown("#### Learned Weights vs Static Regime Weights (avg across regimes)")
-        cmp_df = pd.DataFrame([
-            {
-                "Module":            m.replace("_", " ").title(),
-                "Learned Weight":    weights.get(m),
-                "Static Avg Weight": round(avg_static.get(m, 0), 4),
-                "Win Rate":          win_rates.get(m),
-            }
-            for m in modules
-        ])
-        st.dataframe(cmp_df, width="stretch", hide_index=True)
-        st.caption(f"Last computed from {learned.get('n_trades', 0)} T212 closed positions.")
-
-        history = get_weight_history()
-        if history:
-            with st.expander(f"Weight history ({len(history)} snapshots)"):
-                hist_rows = [
-                    {"Timestamp": h.get("ts"), "N Trades": h.get("n_trades"), **h.get("weights", {})}
-                    for h in history
-                ]
-                st.dataframe(pd.DataFrame(hist_rows), width="stretch", hide_index=True)
-    else:
-        st.caption("No learned weights have been computed yet — insufficient T212 closed-position history.")
-
-    _render_footer()
-
 
 def _render_page_wordmark(page_name: str) -> None:
     """Small "SP500INVEST · <page>" brand prefix at the top of a page's main
@@ -6498,435 +641,1095 @@ def _render_footer() -> None:
     )
 
 
-def _render_out_of_sample_badge() -> None:
-    """Small persistent caption shown at the top of every page except
-    Robustness itself — see analysis/robustness.py:PARAMETER_FREEZE_DATE.
-    A constant reminder that every backtest number elsewhere in the app is
-    in-sample (the config was tuned against that same historical data),
-    while T212 trades closed after the freeze date are genuinely
-    out-of-sample. Cheap — a single small t212_pnl read — so it is safe to
-    call on every page render.
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+
+def _initialise() -> None:
+    """Ensure the DB schema is current and run any first-session setup.
+
+    init_db() is called on every render because it is idempotent — create_all()
+    is a no-op when tables exist and _apply_migrations() skips columns that are
+    already present. The scheduler is started at module load via
+    _start_scheduler_at_startup() (a st.cache_resource call), so jobs fire even
+    if nobody has visited the page since the last server restart.
     """
-    oos = compute_out_of_sample_stats()
-    oos_start = PARAMETER_FREEZE_DATE + timedelta(days=1)
-    icon = "⚠️" if oos["status"] == "red" else "✅"
-    st.markdown(
-        '<div style="font-size: 0.8rem; color: #00C2FF;">'
-        f"📊 In-Sample: {BACKTEST_START_DATE} → {PARAMETER_FREEZE_DATE}  |  "
-        f"{icon} Out-of-Sample: {oos_start} → present  |  "
-        f"Live trades: {oos['n_trades']}  |  "
-        f"Live return: {oos['return_since_freeze_pct']:+.1f}%"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    init_db()
+    st.session_state.setdefault("app_initialised", True)
 
 
-@st.cache_data(ttl=600, show_spinner="Generating due diligence report…")
-def _cached_robustness_pdf(run_id: int, config: dict) -> bytes:
-    """Thin cache wrapper around analysis.robustness.generate_robustness_pdf().
+# ---------------------------------------------------------------------------
+# Charts landing (grouped asset cards)
+# ---------------------------------------------------------------------------
 
-    Streamlit reruns the whole page script on every widget interaction (e.g.
-    switching the Attribution tab's Historical/Live/Combined radio), and
-    generation itself takes several seconds (two matplotlib charts, a dozen
-    tables) — without caching, every such interaction on the Robustness page
-    would silently pay that cost again. Keyed on (run_id, config) via
-    st.cache_data's own content hashing, not object identity, so a config.yaml
-    edit still invalidates it correctly.
-    """
-    return generate_robustness_pdf(run_id, config)
+_GROUP_LABELS = {
+    "core":    "Core (index / FX reference)",
+    "trading": "Tracked Universe",
+}
 
 
-def _render_robustness_page(config: dict) -> None:
-    """Due-diligence dashboard — "why should I trust these results?" rather
-    than the Performance page's "what happened?". See CLAUDE.md's
-    "Robustness page" section and analysis/robustness.py for the underlying
-    computations; this function only assembles and renders them.
-    """
-    _render_page_wordmark("Robustness")
-    st.title("Robustness")
-    st.caption(
-        "A due-diligence view of the backtest engine itself — parameter-freeze "
-        "tracking, return concentration, drawdown/recovery behaviour, and "
-        "attribution — rather than a restatement of what the backtest returned."
-    )
+def _render_charts_landing(config: dict) -> None:
+    """Grouped asset cards shown on Charts before any ticker is selected."""
+    from sqlalchemy import text as sa_text
 
-    all_runs = get_all_runs()
-    complete = [r for r in all_runs if r.get("status") == "complete"]
-    if not complete:
-        st.info("No completed backtest runs yet — run one from the Backtest page first.")
-        _render_footer()
-        return
+    _render_page_wordmark("Charts")
+    st.markdown("## Charts")
+    st.caption("Select an asset to view its price chart.")
 
-    run_opts = {_format_run_label(r): r["id"] for r in complete}
-    sel_label = st.selectbox("Backtest run", list(run_opts.keys()), key="rb_sel_run")
-    sel_id = run_opts[sel_label]
+    _all_tickers_cl = [
+        e["ticker"]
+        for g in config.get("watchlist", {}).values()
+        if isinstance(g, list)
+        for e in g
+        if isinstance(e, dict) and "ticker" in e
+    ]
 
-    # Streamlit's "primary" button/tab styling doesn't reliably pick up the
-    # theme's primaryColor for every widget type in every environment — these
-    # two explicit overrides keep the download button and the active tab on
-    # brand (#00C2FF) regardless.
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stDownloadButton"] > button {
-            background-color: #00C2FF !important;
-            color: #0A0F1E !important;
-            border: none !important;
-            font-weight: 700 !important;
-        }
-        div[data-testid="stDownloadButton"] > button:hover {
-            background-color: #0099CC !important;
-            color: #0A0F1E !important;
-        }
-        button[data-baseweb="tab"][aria-selected="true"] {
-            color: #00C2FF !important;
-            border-bottom-color: #00C2FF !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # PDF export — cached per (run_id, config) so switching tabs/toggles below
-    # (each a Streamlit rerun) doesn't silently re-render the whole 10-page
-    # report every time; only a genuinely new run or config change does.
-    pdf_bytes = _cached_robustness_pdf(sel_id, config)
-    st.download_button(
-        label="📄 Download Due Diligence Report (PDF)",
-        data=pdf_bytes,
-        file_name=f"sp500invest_due_diligence_{date.today().isoformat()}.pdf",
-        mime="application/pdf",
-        type="primary",
-        key="rb_pdf_download",
-    )
-    st.divider()
-
-    tab_edge, tab_returns, tab_risk, tab_attr = st.tabs([
-        "1️⃣ Edge Quality",
-        "2️⃣ Returns Analysis",
-        "3️⃣ Risk Analysis",
-        "4️⃣ Attribution",
-    ])
-
-    # ── Panel 1: Edge Quality ────────────────────────────────────────────────
-    with tab_edge:
-        st.warning("⚠ Historical results include parameter optimisation.")
-        st.success(f"✅ Results after {PARAMETER_FREEZE_DATE} are fully out-of-sample.")
-
-        eq = compute_edge_quality(sel_id)
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Parameter Freeze Date", str(eq["parameter_freeze_date"]))
-        c2.metric("In-Sample Period", f"{eq['in_sample_start']} → {eq['in_sample_end']}")
-        c3.metric("Out-of-Sample Period", f"{eq['parameter_freeze_date'] + timedelta(days=1)} onwards")
-
-        st.divider()
-        st.markdown("#### Edge Metrics")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Time Invested", f"{eq.get('time_invested_pct', 0):.1f}%")
-        m2.metric("Cash Allocation", f"{eq.get('cash_allocation_pct', 0):.1f}%")
-        m3.metric("Profit Factor", f"{eq.get('profit_factor', 0):.2f}")
-        m4.metric("Win Rate", f"{eq.get('win_rate_pct', 0):.1f}%")
-
-        exp = eq.get("expectancy", {})
-        m5, m6 = st.columns(2)
-        m5.metric("Expectancy per Trade", f"{exp.get('expectancy_pct', 0):+.2f}%")
-        m6.metric("Expectancy in £", f"£{exp.get('expectancy_gbp', 0):+,.2f}",
-                   help=f"At account value £{exp.get('account_value_gbp', 0):,.0f} (backtest.starting_capital_gbp)")
-
-        st.markdown("#### Winner Concentration")
-        wc = eq.get("winner_concentration", {})
-        w1, w2, w3 = st.columns(3)
-        w1.metric("Top 5 winners", f"{wc.get('top5_pct', 0):.1f}% of profits")
-        w2.metric("Top 10 winners", f"{wc.get('top10_pct', 0):.1f}% of profits")
-        w3.metric("Top 20 winners", f"{wc.get('top20_pct', 0):.1f}% of profits")
-        st.caption(
-            "High concentration means the edge depends heavily on a small number of "
-            "large winners — a warning sign if those winners cluster in a single "
-            "regime or period rather than spreading across the run."
-        )
-
-        st.markdown("#### Exit Reason Breakdown")
-        erb = eq.get("exit_reason_breakdown", {})
-        if not erb:
-            st.info("No trades in this run.")
-        else:
-            erb_df = pd.DataFrame([
-                {"Exit Reason": k, "Count": v["count"], "% of Trades": v["pct"]}
-                for k, v in sorted(erb.items(), key=lambda kv: -kv[1]["count"])
-            ])
-            st.dataframe(
-                erb_df.style.format({"Count": "{:.0f}", "% of Trades": "{:.1f}%"}),
-                width="stretch", hide_index=True,
-            )
-
-        st.divider()
-        st.markdown("#### Out-of-Sample Monitor")
-        oos = eq.get("out_of_sample", {})
-        oos_colour = {"green": "#16a34a", "red": "#dc2626", "grey": "#8899AA"}.get(oos.get("status"), "#8899AA")
-        o1, o2, o3 = st.columns(3)
-        o1.metric("Freeze Date", str(oos.get("freeze_date", PARAMETER_FREEZE_DATE)))
-        o2.metric("Trades Since Freeze", oos.get("n_trades", 0))
-        o3.metric("Return Since Freeze", f"{oos.get('return_since_freeze_pct', 0):+.1f}%")
-        st.markdown(
-            f"<div style='border-left:4px solid {oos_colour};padding:4px 12px;'>"
-            f"£{oos.get('pnl_since_freeze_gbp', 0):+,.2f} realised P&L on real T212 closes "
-            f"since the parameter freeze.</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Panel 2: Returns Analysis ────────────────────────────────────────────
-    with tab_returns:
-        st.markdown("#### Annual Returns vs S&P 500")
-        annual = compute_annual_returns(sel_id)
-        if annual.empty:
-            st.info("No trades in this run.")
-        else:
-            show = annual.copy()
-            show.columns = ["Year", "Trades", "Win Rate %", "Total Return %", "P&L £", "S&P 500 %", "vs S&P 500 %"]
-            st.dataframe(
-                show.style
-                    .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}" if isinstance(v, (int, float)) else "",
-                         subset=["Total Return %", "vs S&P 500 %"])
-                    .format({
-                        "Year": "{:.0f}",
-                        "Trades": "{:.0f}",
-                        "Win Rate %": "{:.1f}%",
-                        "Total Return %": "{:+.1f}%",
-                        "P&L £": "£{:+.2f}",
-                        "S&P 500 %": "{:.1f}%",
-                        "vs S&P 500 %": "{:+.1f}%",
-                    }, na_rep="—"),
-                width="stretch", hide_index=True,
-            )
-            st.caption(
-                "* 2019 and 2023 underperformance reflects periods where the system was mostly "
-                "in cash (MIXED regime) while the S&P 500 rallied on narrow market leadership. "
-                "Capital preservation during these periods enabled full participation in "
-                "subsequent bull markets."
-            )
-
-        st.markdown("#### Monthly Returns Heatmap")
-        heat = compute_monthly_heatmap(sel_id)
-        if heat.empty:
-            st.info("No trades in this run.")
-        else:
-            fig = go.Figure(data=go.Heatmap(
-                z=heat.values,
-                x=heat.columns.tolist(),
-                y=[str(y) for y in heat.index.tolist()],
-                colorscale=[[0.0, "#dc2626"], [0.5, "#1f2937"], [1.0, "#16a34a"]],
-                zmid=0,
-                text=heat.values,
-                texttemplate="%{text:.1f}%",
-                hovertemplate="%{y} %{x}: %{z:.2f}%<extra></extra>",
-            ))
-            fig.update_layout(
-                title="Monthly Return % (0.0% = no trades exited that month)",
-                height=max(280, 32 * len(heat.index)),
-                margin=dict(l=0, r=0, t=40, b=0),
-            )
-            _apply_dark_theme(fig)
-            st.plotly_chart(fig, width="stretch")
-
-        st.markdown("#### Rolling 12-Month Return & Sharpe")
-        roll = compute_rolling_metrics(sel_id)
-        if roll.empty:
-            st.info("Not enough trade history for a rolling window.")
-        else:
-            # The rolling Sharpe axis is clipped to [-2, 2] for display only —
-            # early-period windows (pre-2020) have too few trades for a
-            # meaningful Sharpe estimate and can swing to ~-8, which would
-            # otherwise compress every later, genuinely-informative reading
-            # (recent values sit around +0.9) into a sliver at the top of
-            # the axis. The underlying `roll["rolling_sharpe"]` is untouched.
-            sharpe_display = roll["rolling_sharpe"].clip(lower=-2, upper=2)
-
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(
-                x=roll["date"], y=roll["rolling_return_pct"], name="Rolling 12M Return %",
-                mode="lines", line=dict(color="#3b82f6", width=2), yaxis="y1",
-            ))
-            fig2.add_trace(go.Scatter(
-                x=roll["date"], y=sharpe_display, name="Rolling 12M Sharpe",
-                mode="lines", line=dict(color="#f59e0b", width=2, dash="dot"), yaxis="y2",
-            ))
-            fig2.add_shape(
-                type="line", xref="paper", x0=0, x1=1, yref="y2", y0=1.0, y1=1.0,
-                line=dict(color="#00C2FF", width=1, dash="dash"),
-            )
-            fig2.add_annotation(
-                xref="paper", x=1, y=1.0, yref="y2", xanchor="right", yanchor="bottom",
-                text="Sharpe = 1.0 (professional benchmark)", showarrow=False,
-                font=dict(color="#00C2FF"),
-            )
-            fig2.update_layout(
-                title="Rolling 12-Month Return % and Sharpe",
-                height=350, margin=dict(l=0, r=0, t=40, b=0),
-                yaxis=dict(title="Return %"),
-                yaxis2=dict(
-                    title="Sharpe", overlaying="y", side="right",
-                    range=[-2, 2], tickvals=[-2, -1, 0, 1, 2], ticktext=["-2", "-1", "0", "1", "2"],
-                    zeroline=True, zerolinecolor="#8899AA", zerolinewidth=1, gridcolor="#1E2D45",
-                ),
-                legend=dict(orientation="h", y=1.1),
-            )
-            _apply_dark_theme(fig2)
-            st.plotly_chart(fig2, width="stretch")
-            st.caption(
-                "Early period Sharpe values (pre-2020) reflect insufficient rolling window data "
-                "and are clipped to [-2, 2] for readability. Actual early values reached -8."
-            )
-
-    # ── Panel 3: Risk Analysis ───────────────────────────────────────────────
-    with tab_risk:
-        st.markdown("#### Drawdown Metrics")
-        dd = compute_drawdown_metrics(sel_id)
-        d1, d2, d3 = st.columns(3)
-        d1.metric("Current Drawdown", f"{dd.get('current_drawdown_pct', 0):.1f}%")
-        d2.metric("Maximum Drawdown", f"{dd.get('max_drawdown_pct', 0):.1f}%")
-        d3.metric("Average Drawdown", f"{dd.get('avg_drawdown_pct', 0):.1f}%")
-        d4, d5 = st.columns(2)
-        d4.metric("Average Recovery Time", f"{dd.get('avg_recovery_days', 0):.0f} days")
-        d5.metric("Longest Recovery Time", f"{dd.get('longest_recovery_days', 0)} days")
-
-        st.markdown("#### Calmar Ratio")
-        st.caption("Calmar = CAGR ÷ Max Drawdown. Higher is better. >1.0 is considered strong.")
-        calmar = compute_calmar_ratios(sel_id)
-        calmar_rows = [
-            {"Period": "Lifetime (full run)", **calmar.get("lifetime", {})},
-            {"Period": "36-month rolling",    **calmar.get("rolling_36m", {})},
-            {"Period": "12-month rolling",    **calmar.get("rolling_12m", {})},
-        ]
-        calmar_df = pd.DataFrame(calmar_rows)
-        calmar_df.columns = ["Period", "CAGR %", "Max DD %", "Calmar"]
-        st.dataframe(
-            calmar_df.style.format({
-                "CAGR %": "{:.2f}%", "Max DD %": "{:.2f}%", "Calmar": "{:.2f}",
-            }),
-            width="stretch", hide_index=True,
-        )
-
-        st.markdown("#### Rolling 12-Month Sharpe")
-        roll = compute_rolling_metrics(sel_id)
-        if roll.empty:
-            st.info("Not enough trade history for a rolling window.")
-        else:
-            # See the identical clipping note on the combined Return & Sharpe
-            # chart above — same reasoning, same [-2, 2] display-only clip.
-            sharpe_display = roll["rolling_sharpe"].clip(lower=-2, upper=2)
-
-            fig3 = go.Figure()
-            fig3.add_trace(go.Scatter(
-                x=roll["date"], y=sharpe_display, name="Rolling 12M Sharpe",
-                mode="lines", line=dict(color="#6366f1", width=2),
-            ))
-            fig3.add_hline(y=1.0, line_dash="dash", line_color="#00C2FF",
-                            annotation_text="Sharpe = 1.0 (professional benchmark)",
-                            annotation_font_color="#00C2FF")
-            fig3.update_layout(
-                title="Rolling 12-Month Sharpe Ratio",
-                xaxis_title="Date",
-                yaxis=dict(
-                    title="Sharpe", range=[-2, 2], tickvals=[-2, -1, 0, 1, 2],
-                    ticktext=["-2", "-1", "0", "1", "2"],
-                    zeroline=True, zerolinecolor="#8899AA", zerolinewidth=1,
-                ),
-                height=320, margin=dict(l=0, r=0, t=40, b=0),
-            )
-            _apply_dark_theme(fig3)
-            st.plotly_chart(fig3, width="stretch")
-            st.caption(
-                "Early period Sharpe values (pre-2020) reflect insufficient rolling window data "
-                "and are clipped to [-2, 2] for readability. Actual early values reached -8."
-            )
-
-    # ── Panel 4: Attribution ─────────────────────────────────────────────────
-    with tab_attr:
-        attr_source_label = st.radio(
-            "Attribution source", ["Historical", "Live", "Combined"],
-            horizontal=True, key="rb_attr_source",
-        )
-        source_key = attr_source_label.lower()
-        attr = compute_attribution(sel_id, config, source=source_key)
-
-        if source_key == "live" and not attr.get("available"):
-            st.info("No closed T212 positions yet — live attribution will populate as real trades close.")
-        elif not attr.get("available"):
-            st.info("No trade data available for this source.")
-        else:
-            _bucket_fmt = {
-                "Trades": "{:.0f}", "Win Rate %": "{:.1f}%",
-                "% of Total Profit": "{:.1f}%", "Profit Factor": "{:.2f}",
-            }
-
-            def _bucket_table(rows: list[dict]) -> pd.DataFrame:
-                df = pd.DataFrame(rows)
-                if df.empty:
-                    return df
-                df.columns = ["Name", "Trades", "Win Rate %", "% of Total Profit", "Profit Factor"]
-                return df
-
-            st.markdown("#### ETF vs Stock")
-            _etf_vs_stock = _bucket_table(attr["etf_vs_stock"])
-            st.dataframe(
-                _etf_vs_stock.style.format(_bucket_fmt) if not _etf_vs_stock.empty else _etf_vs_stock,
-                width="stretch", hide_index=True,
-            )
-
-            st.markdown("#### Domestic (US) vs International")
-            _dom_vs_intl = _bucket_table(attr["domestic_vs_intl"])
-            st.dataframe(
-                _dom_vs_intl.style.format(_bucket_fmt) if not _dom_vs_intl.empty else _dom_vs_intl,
-                width="stretch", hide_index=True,
-            )
-
-            st.markdown("#### Asset Class")
-            _asset_class = _bucket_table(attr["asset_class"])
-            st.dataframe(
-                _asset_class.style.format(_bucket_fmt) if not _asset_class.empty else _asset_class,
-                width="stretch", hide_index=True,
-            )
-
-            st.markdown("#### Sector Attribution")
-            sector_table = attr["sector_table"]
-            if sector_table.empty:
-                st.info("No sector data available.")
+    # Fetch last two closes per ticker in one query for 1-day change
+    _chg_map_cl: dict[str, float] = {}
+    try:
+        with get_engine().connect() as _conn_cl:
+            _price_rows_cl = _conn_cl.execute(sa_text(
+                "WITH ranked AS ("
+                "  SELECT ticker, close,"
+                "         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn"
+                "  FROM price_data"
+                ") SELECT ticker, close, rn FROM ranked WHERE rn <= 2"
+            )).mappings().all()
+        _lat_cl: dict[str, float] = {}
+        _prv_cl: dict[str, float] = {}
+        for _row_cl in _price_rows_cl:
+            _tk_cl, _cl_cl, _rn_cl = _row_cl["ticker"], _row_cl["close"], _row_cl["rn"]
+            if _rn_cl == 1:
+                _lat_cl[_tk_cl] = _cl_cl
             else:
-                show_sector = sector_table.copy()
-                show_sector.columns = ["Sector", "Trades", "Win Rate %", "Profit %", "Profit Factor"]
-                st.dataframe(
-                    show_sector.style.format({
-                        "Trades": "{:.0f}", "Win Rate %": "{:.1f}%",
-                        "Profit %": "{:.1f}%", "Profit Factor": "{:.2f}",
-                    }),
-                    width="stretch", hide_index=True,
-                )
+                _prv_cl[_tk_cl] = _cl_cl
+        for _tk_cl in _lat_cl:
+            if _tk_cl in _prv_cl and _prv_cl[_tk_cl] > 0:
+                _chg_map_cl[_tk_cl] = (_lat_cl[_tk_cl] - _prv_cl[_tk_cl]) / _prv_cl[_tk_cl] * 100
+    except Exception:
+        pass
 
-        st.divider()
-        st.markdown("#### Regime Filter Contribution")
-        st.caption(
-            "Compares this run's actual trades (allowed_entry_regimes applied) against "
-            "a second, comparison-only pass with every regime admitted — isolating how "
-            "much of the run's edge comes from the regime gate itself."
-        )
-        rfc = compute_regime_filter_contribution(sel_id)
-        if not rfc.get("available"):
-            st.info("This run predates the regime-filter contribution feature — re-run the backtest to populate it.")
-        else:
-            wf, wof = rfc["with_filter"], rfc["without_filter"]
-            rfc_rows = [
-                {"Metric": "Return",        "With Filter": f"{wf.get('total_return_pct', 0):+.1f}%",  "Without Filter": f"{wof.get('total_return_pct', 0):+.1f}%",  "Difference": f"{rfc['return_improvement_pct']:+.1f}%"},
-                {"Metric": "Max Drawdown",  "With Filter": f"{wf.get('max_drawdown_pct', 0):.1f}%",    "Without Filter": f"{wof.get('max_drawdown_pct', 0):.1f}%",    "Difference": f"{rfc['max_dd_reduction_pct']:+.1f}%"},
-                {"Metric": "Sharpe",        "With Filter": f"{wf.get('sharpe_ratio', 0):.2f}",         "Without Filter": f"{wof.get('sharpe_ratio', 0):.2f}",         "Difference": f"{rfc['sharpe_improvement']:+.2f}"},
-                {"Metric": "Trades",        "With Filter": str(wf.get('total_trades', 0)),             "Without Filter": str(wof.get('total_trades', 0)),             "Difference": "—"},
-            ]
-            st.dataframe(pd.DataFrame(rfc_rows), width="stretch", hide_index=True)
+    for group_key, group_label in _GROUP_LABELS.items():
+        group = config["watchlist"].get(group_key, [])
+        if not group:
+            continue
+        st.markdown(f"#### {group_label}")
+        cols = st.columns(4)
+        for i, entry in enumerate(sorted(group, key=lambda e: e["ticker"])):
+            ticker  = entry["ticker"]
+            name    = entry["name"]
+            _chg    = _chg_map_cl.get(ticker)
+            _chg_str = f"  {_chg:+.2f}%" if _chg is not None else ""
+            with cols[i % 4]:
+                if st.button(
+                    f"**{ticker}**  \n{name}{_chg_str}",
+                    key=f"cl_{ticker}",
+                    width="stretch",
+                ):
+                    st.session_state["selected_ticker"] = ticker
+                    st.rerun()
+        st.markdown("")
 
     _render_footer()
 
 
-# Main UI
+# ---------------------------------------------------------------------------
+# Daily Briefing page
+# ---------------------------------------------------------------------------
+
+def _render_briefing_page(config: dict) -> None:
+    """Render the Daily Briefing: live momentum/crisis status and open positions."""
+    _render_page_wordmark("Daily Briefing")
+    st.markdown("## Daily Briefing")
+
+    last_sched = get_metadata("last_scheduled_run")
+    if last_sched:
+        st.caption(
+            f"As of: {_fmt_uk(last_sched, '%Y-%m-%d %H:%M')} · "
+            f"Updates: {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}"
+        )
+    else:
+        st.caption("No scheduled run yet — updates run automatically on weekdays.")
+
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        st.info("Trading is disabled. Set `trading212_invest.enabled: true` in config.yaml to activate.")
+        _render_footer()
+        return
+
+    status_rows = _get_ticker_status()
+    valid_rows  = [r for r in status_rows if not r.get("insufficient_history")]
+    long_count  = sum(1 for r in valid_rows if r.get("sig_on") is True)
+    flat_count  = sum(1 for r in valid_rows if r.get("sig_on") is False)
+    crisis_active = any(r.get("crisis_now") for r in valid_rows)
+    entry_blocked = any(r.get("entry_blocked") for r in valid_rows)
+
+    badge_colour = "#991b1b" if crisis_active else "#16a34a"
+    badge_text   = "🔴 CRISIS OVERRIDE ACTIVE" if crisis_active else "🟢 LIVE (DEMO)"
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
+        f'border:1px solid {badge_colour}44;border-radius:8px;padding:8px 14px;margin-bottom:6px">'
+        f'<span style="background:{badge_colour};color:#fff;font-weight:700;'
+        f'padding:2px 9px;border-radius:12px;font-size:0.8rem">{badge_text}</span>'
+        f'<span style="color:#8899AA;font-size:0.85rem">'
+        f'{long_count} long · {flat_count} flat of {len(valid_rows)} tickers'
+        + (' · new entries blocked (crisis cooldown)' if entry_blocked else '')
+        + '</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Entry: 12-month momentum > 0, current index membership, not in the "
+        "crisis entry-block window. Exit priority: crisis override → index "
+        "removal → ATR stop loss → momentum turning non-positive → max holding."
+    )
+
+    with st.expander(f"Per-ticker status ({len(valid_rows)} tickers)"):
+        status_df = pd.DataFrame(valid_rows)
+        status_df["Type"] = status_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        status_df["sig_on"] = status_df["sig_on"].map(lambda b: "Long" if b else "Flat")
+        status_df["is_member"] = status_df["is_member"].map(lambda b: "Yes" if b else "No")
+        status_df["momentum_pct"] = status_df["momentum_pct"].map(
+            lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
+        )
+        status_df = status_df[["ticker", "Type", "sig_on", "momentum_pct", "is_member", "entry_blocked"]]
+        status_df.columns = ["Ticker", "Type", "Momentum", "12m Return", "Index Eligible", "Entry Blocked"]
+        st.dataframe(status_df, width="stretch", hide_index=True)
+
+    st.divider()
+    st.markdown("### Open Positions")
+    open_cards = _get_open_cards(config)
+    if not open_cards:
+        st.info("No open positions.")
+    else:
+        all_cards = sorted(open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
+        for e in all_cards:
+            _render_trade_card_compact(e)
+        st.caption("Full position detail is on the **Performance** page.")
+
+    _render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Status page
+# ---------------------------------------------------------------------------
+
+def _pipeline_row(label: str, ts: "datetime | None", warn_h: float, error_h: float,
+                   desc: str, never_badge: str = "PENDING") -> str:
+    """Build one row of the Status page's Pipeline table as an HTML string."""
+    if ts is None:
+        badge, colour = never_badge, ("#8899AA" if never_badge != "PENDING" else "#f59e0b")
+        age_str = "—"
+    else:
+        level = _age_level(ts, warn_h, error_h)
+        colour = _LEVEL_COLOUR.get(level, "#8899AA")
+        badge = {"ok": "OK", "warn": "STALE", "error": "OVERDUE"}.get(level, "OK")
+        _, age_str = _age_display(ts)
+    ts_str = _fmt_uk(ts, "%Y-%m-%d %H:%M") if ts else "Never"
+    return (
+        '<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #1E2D45;'
+        'font-size:0.85rem">'
+        f'<div style="width:32px;flex-shrink:0;color:{colour}">●</div>'
+        f'<div style="flex:0 0 18%;padding-right:8px;font-weight:600">{html.escape(label)}</div>'
+        f'<div style="flex:0 0 17%;padding-right:8px;color:#8899AA">{html.escape(ts_str)}</div>'
+        f'<div style="flex:0 0 7%;padding-right:8px;color:#8899AA">{html.escape(age_str)}</div>'
+        f'<div style="flex:0 0 8%;padding-right:8px;color:{colour};font-weight:700">{badge}</div>'
+        f'<div style="flex:1;color:#8899AA">{html.escape(desc)}</div>'
+        '</div>'
+    )
+
+
+def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
+    """System status panel — rendered as the Status page."""
+    st.cache_data.clear()
+    _render_page_wordmark("Status")
+    st.markdown("## System Status")
+
+    deploy_ts, deploy_msg = _git_log_info()
+    uptime                = _service_uptime()
+    db_size_str, db_level = _db_size(config)
+
+    last_refresh = get_metadata("last_full_refresh")
+    last_sched   = get_metadata("last_scheduled_run")
+    last_sched_name = get_metadata_str("last_scheduled_run_name") or ""
+
+    sc1, sc2, sc3 = st.columns(3)
+    _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info")
+    _status_card(sc2, "Service Uptime",  uptime, "Process running", "ok")
+    _status_card(sc3, "Database Size",   db_size_str, "", db_level)
+
+    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+    pr1, pr2, pr3 = st.columns(3)
+
+    _ref_val, _ref_sub = _age_display(last_refresh)
+    _status_card(pr1, "Last Data Refresh", _ref_val, _ref_sub,
+                 _age_level(last_refresh, warn_hours=48.0, error_hours=96.0))
+
+    _sched_val, _sched_sub = _age_display(last_sched)
+    if last_sched_name:
+        _sched_sub = f"{last_sched_name} · {_sched_sub}"
+    _now_check  = datetime.utcnow()
+    _sched_hrs  = (
+        (_now_check - last_sched.replace(tzinfo=None)).total_seconds() / 3600
+        if last_sched else float("inf")
+    )
+    _is_weekday = _now_check.weekday() < 5
+    _sched_lvl  = (
+        "error" if (_sched_hrs > 26 and _is_weekday)
+        else "warn" if _sched_hrs > 14
+        else ("ok" if last_sched else "error")
+    )
+    _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub, _sched_lvl)
+
+    _sched_cfg_runs = config.get("scheduler", {}).get("runs", {})
+    _RUN_LABELS = {"pre_market": "Pre-Market", "us_open": "US Open", "eod": "End of Day"}
+    _nxt_dt, _nxt_label = None, ""
+    for _rn, _rl in _RUN_LABELS.items():
+        _rc = _sched_cfg_runs.get(_rn, {})
+        _nt = _next_run_for_time(int(_rc.get("hour", 0)), int(_rc.get("minute", 0)))
+        _rl_eff = "Monday Pre-Market" if (_rn == "pre_market" and _nt.weekday() == 0) else _rl
+        if _nxt_dt is None or _nt < _nxt_dt:
+            _nxt_dt, _nxt_label = _nt, _rl_eff
+    if _nxt_dt:
+        _nxt_delta = (_nxt_dt - datetime.utcnow()).total_seconds()
+        _nxt_until = (
+            f"in {int(_nxt_delta / 60)}m" if _nxt_delta < 3600
+            else f"in {_nxt_delta / 3600:.1f}h" if _nxt_delta < 86400
+            else f"in {_nxt_delta / 86400:.1f}d"
+        )
+        _nxt_val = _fmt_uk(_nxt_dt, "%a %H:%M")
+        _nxt_sub = f"{_nxt_until} — {_nxt_label}"
+    else:
+        _nxt_val, _nxt_sub = "Unknown", ""
+    _status_card(pr3, "Next Scheduled Run", _nxt_val, _nxt_sub, "info")
+
+    fresh, stale, missing, _max_stale_td = _price_coverage(config)
+    total = len(watchlist)
+
+    if not fresh and not stale and not missing:
+        price_desc = "No price data yet — use Manual Controls below to trigger an immediate pull"
+    elif missing:
+        price_desc = (
+            f"{len(fresh)}/{total} tickers up to date"
+            + (f" · {len(stale)} stale" if stale else "")
+            + f" · {len(missing)} missing: {', '.join(missing[:4])}"
+            + ("…" if len(missing) > 4 else "")
+        )
+    elif stale:
+        price_desc = (
+            f"{len(fresh)}/{total} fresh · {len(stale)} stale: "
+            + ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "")
+        )
+    else:
+        price_desc = f"All {total} tickers up to date"
+
+    last_run_type = get_metadata_str("last_run_type")
+    run_label = {"full": "Full Refresh", "analysis_only": "Order Logic Only"}.get(last_run_type or "", "")
+    order_desc = (
+        f"Last run: {run_label}" if run_label else "Not yet run"
+    )
+
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+    st.markdown("### Pipeline")
+
+    _THEAD = (
+        '<div style="font-size:0.88rem">'
+        '<div style="display:flex;align-items:center;padding:4px 0 6px;border-bottom:2px solid #1E2D45;'
+        'color:#8899AA;font-size:0.70rem;text-transform:uppercase;letter-spacing:0.07em">'
+        '<div style="width:32px;flex-shrink:0"></div>'
+        '<div style="flex:0 0 18%;padding-right:8px">Step</div>'
+        '<div style="flex:0 0 17%;padding-right:8px">Last Run</div>'
+        '<div style="flex:0 0 7%;padding-right:8px">Age</div>'
+        '<div style="flex:0 0 8%;padding-right:8px">Status</div>'
+        '<div style="flex:1">Description</div>'
+        '</div>'
+    )
+    _TFOOT = "</div>"
+
+    rows = "".join([
+        _pipeline_row(
+            "1 · Price Data Refresh", last_refresh,
+            warn_h=48.0, error_h=96.0, desc=price_desc, never_badge="PENDING",
+        ),
+        _pipeline_row(
+            "2 · Order Logic", last_sched,
+            warn_h=48.0, error_h=72.0, desc=order_desc, never_badge="PENDING",
+        ),
+    ])
+    st.markdown(_THEAD + rows + _TFOOT, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+    st.markdown("### Scheduled Runs")
+    sched_runs = config.get("scheduler", {}).get("runs", {})
+    _RUN_DISPLAY = {
+        "pre_market": ("Pre-Market",  "Tue–Fri: order logic only — Asian closed, European opening. "
+                                       "Mon: Monday Pre-Market job runs instead — cancels stale "
+                                       "weekend BUY orders first, then the same order-logic-only run."),
+        "us_open":    ("US Open",     "Order logic only — catches overnight moves before US open"),
+        "eod":        ("End of Day",  "Full data refresh + order logic after NYSE close"),
+    }
+    run_cols = st.columns(len(_RUN_DISPLAY))
+    for col, (run_name, (label, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
+        run_cfg = sched_runs.get(run_name, {})
+        h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
+        time_str = _uk_sched_time(h, m)
+        nxt     = _next_run_for_time(h, m)
+        delta   = (nxt - datetime.utcnow()).total_seconds()
+        until   = (
+            f"in {int(delta / 60)}m" if delta < 3600
+            else f"in {delta / 3600:.1f}h" if delta < 86400
+            else f"in {delta / 86400:.1f}d"
+        )
+        _status_card(col, f"{label} · {time_str}", _fmt_uk(nxt, "%a %H:%M"),
+                     f"{until} — {desc}", "info")
+
+    st.divider()
+    st.markdown("### Data Coverage")
+    cc1, cc2, cc3 = st.columns(3)
+    fresh_level   = "ok"    if len(fresh)   == total else ("warn" if len(fresh) >= total * 0.9 else "error")
+    stale_level   = "ok"    if not stale    else ("error" if _max_stale_td > 7 else "warn")
+    missing_level = "ok"    if not missing  else "error"
+    _status_card(cc1, "Fresh (≤3 trading days)", f"{len(fresh)} / {total}",
+                 "all up to date" if len(fresh) == total else f"{total - len(fresh)} not fresh", fresh_level)
+    _status_card(cc2, "Stale (>3 trading days)", f"{len(stale)} ticker{'s' if len(stale) != 1 else ''}",
+                 ", ".join(stale[:5]) + ("…" if len(stale) > 5 else "") if stale else "none", stale_level)
+    _status_card(cc3, "Missing entirely", f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
+                 ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
+
+    st.divider()
+    st.markdown("### Manual Controls")
+    st.caption("Trigger the data pull + order pipeline immediately without waiting for the next scheduled run.")
+    _mc1, _mc2 = st.columns(2)
+
+    with _mc1:
+        if st.button("Refresh Data + Orders Now", width="stretch", type="primary",
+                     key="status_full_refresh"):
+            _cfg     = _load_config()
+            _tickers = get_all_tickers(_cfg)
+            with st.spinner("Pulling latest prices…"):
+                try:
+                    _results  = pull_incremental(tickers=_tickers)
+                    _new_rows = sum(_results.values())
+                    if _new_rows > 0:
+                        set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+                except Exception as _exc:
+                    st.error(f"Data pull failed: {_exc}")
+                    _new_rows = 0
+            with st.spinner("Running order pipeline…"):
+                try:
+                    from brokers.trading212 import maybe_place_orders
+                    maybe_place_orders(_cfg, run_type="full")
+                    set_metadata("last_run_type", "full")
+                    st.success(
+                        f"Done — {_new_rows} new price rows · order pipeline ran at "
+                        f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
+                    )
+                    st.cache_data.clear()
+                except Exception as _exc:
+                    st.error(f"Order pipeline failed: {_exc}")
+
+    with _mc2:
+        if st.button("Order Logic Only", width="stretch", key="status_run_orders"):
+            _cfg = _load_config()
+            with st.spinner("Running order pipeline…"):
+                try:
+                    from brokers.trading212 import maybe_place_orders
+                    maybe_place_orders(_cfg, run_type="analysis_only")
+                    set_metadata("last_run_type", "analysis_only")
+                    st.success(f"Done — exit check ran at {_fmt_uk(datetime.utcnow(), '%H:%M')}.")
+                    st.cache_data.clear()
+                except Exception as _exc:
+                    st.error(f"Order pipeline failed: {_exc}")
+
+    notif_cfg = config.get("notifications", {}).get("email", {})
+    st.divider()
+    st.markdown("### Email Notifications")
+    _from    = notif_cfg.get("from_address") or notif_cfg.get("smtp_user", "—")
+    _to      = ", ".join(notif_cfg.get("to_addresses") or []) or "—"
+    _relay   = f"{notif_cfg.get('smtp_host', 'smtp-relay.brevo.com')}:{notif_cfg.get('smtp_port', 587)}"
+    _enabled = notif_cfg.get("enabled", False)
+    st.caption(
+        f"From: **{_from}** · To: **{_to}** · Via: {_relay} · "
+        f"Alerts: {'**enabled**' if _enabled else 'disabled'} "
+        "(order-placement error alerts only — see brokers/trading212.py)"
+    )
+
+    # ── T212 Invest Account ───────────────────────────────────────────────
+    st.divider()
+    st.markdown("### T212 Invest Account")
+
+    t212_cfg     = config.get("trading212_invest", {})
+    t212_enabled = t212_cfg.get("enabled", False)
+    t212_has_key = bool(os.environ.get("T212_API_KEY", "")) and bool(os.environ.get("T212_API_SECRET", ""))
+    t212_error   = get_metadata_str("t212_invest_error")
+
+    st.markdown(
+        (
+            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">🟢 LIVE (DEMO)</span>'
+            if t212_enabled else
+            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">NOT ENABLED</span>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if not t212_enabled:
+        st.info(
+            "Trading is disabled. Set `trading212_invest.enabled: true` in config.yaml "
+            "to activate. Add `T212_API_KEY` and `T212_API_SECRET` to the systemd service "
+            "environment first."
+        )
+    else:
+        t212_live = t212_cfg.get("live", False)
+        mapping   = t212_cfg.get("instrument_mapping", {})
+        st.markdown(
+            f'<span style="background:{"#f97316" if t212_live else "#6366f1"};color:#fff;'
+            f'padding:2px 8px;border-radius:4px;font-size:0.78rem;font-weight:600">'
+            f'{"LIVE" if t212_live else "DEMO"}</span> '
+            f'{len(mapping)} tickers · '
+            f'max £{float(t212_cfg.get("max_position_gbp", 2500)):,.0f}/order · '
+            f'max {int(float(t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed · '
+            f'max {t212_cfg.get("max_open_positions", 999)} open positions',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"Position sizing: VaR "
+            f"({int(float(t212_cfg.get('var_confidence', 0.95)) * 100)}% confidence, "
+            f"{int(t212_cfg.get('var_lookback_days', 252))}-day lookback, "
+            f"{float(t212_cfg.get('max_risk_pct', 0.01)) * 100:.0f}% max risk — "
+            f"floor £{float(t212_cfg.get('min_position_gbp', 50)):.0f})"
+        )
+
+        if t212_error:
+            _err_col, _err_btn_col = st.columns([8, 1])
+            with _err_col:
+                st.warning(f"Last API error: {t212_error}")
+            with _err_btn_col:
+                st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+                if st.button("Clear", key="clear_t212_error"):
+                    set_metadata("t212_invest_error", "")
+                    st.rerun()
+
+        if not t212_has_key:
+            st.error(
+                "API credentials not found. Set `T212_API_KEY` and `T212_API_SECRET` "
+                "in the systemd service file and restart the service."
+            )
+        else:
+            import json as _json
+            snap_raw     = get_metadata_str("t212_account_snapshot")
+            pos_raw      = get_metadata_str("t212_positions_snapshot")
+            snap_fetched = get_metadata_str("t212_snapshot_fetched_at")
+            pending_fetch = get_metadata_str("pending_t212_fetch")
+
+            t2_col_status, t2_col_btn = st.columns([3, 1])
+            with t2_col_btn:
+                if st.button("Refresh Account", key="t212_refresh_btn"):
+                    set_metadata("pending_t212_fetch", "1")
+                    st.rerun()
+
+            with t2_col_status:
+                if pending_fetch:
+                    st.info("Refresh requested — updating within 60s.")
+                elif snap_fetched:
+                    try:
+                        age_s = (datetime.utcnow() - datetime.fromisoformat(snap_fetched)).total_seconds()
+                        age_str = (
+                            f"{int(age_s / 3600)}h ago" if age_s >= 3600
+                            else f"{int(age_s / 60)}m ago" if age_s >= 60
+                            else f"{int(age_s)}s ago"
+                        )
+                        st.caption(f"Last updated: {age_str}")
+                    except Exception:
+                        pass
+
+            if snap_raw:
+                try:
+                    summary   = _json.loads(snap_raw)
+                    positions = _json.loads(pos_raw) if pos_raw else []
+                    cash_obj  = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+                    inv_obj   = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+                    total_val = float(summary.get("totalValue", 0) or 0)
+                    free_val  = float(cash_obj.get("availableToTrade", 0) or 0)
+                    invested  = float(inv_obj.get("currentValue", 0) or 0)
+                    deployed  = (invested / total_val * 100) if total_val else 0.0
+                    pos_count = len(positions) if isinstance(positions, list) else 0
+
+                    a1, a2, a3, a4 = st.columns(4)
+                    a1.metric("Account Value", f"£{total_val:,.2f}")
+                    a2.metric("Available Cash", f"£{free_val:,.2f}")
+                    a3.metric("Invested", f"£{invested:,.2f}", delta=f"{deployed:.0f}% deployed")
+                    a4.metric("Open Positions", str(pos_count))
+
+                    deploy_limit = float(t212_cfg.get("max_total_deployed", 0.5))
+                    bar_pct      = min(1.0, (invested / total_val) if total_val else 0.0)
+                    bar_colour   = "#dc2626" if bar_pct >= deploy_limit else (
+                        "#f97316" if bar_pct >= deploy_limit * 0.85 else "#6366f1"
+                    )
+                    st.markdown(
+                        f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#8899AA">'
+                        f'Deployed: £{invested:,.0f} of £{total_val:,.0f} '
+                        f'(limit {int(deploy_limit * 100)}%)</div>'
+                        f'<div style="background:#1E2D45;border-radius:4px;height:6px">'
+                        f'<div style="background:{bar_colour};width:{bar_pct * 100:.1f}%;'
+                        f'height:6px;border-radius:4px"></div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+                    st.caption("Open positions are shown in full on the **Performance** and **Daily Briefing** pages.")
+
+                    if snap_fetched:
+                        try:
+                            fetched_disp = _fmt_uk(datetime.fromisoformat(snap_fetched))
+                        except (ValueError, TypeError):
+                            fetched_disp = snap_fetched[:16].replace("T", " ")
+                        st.caption(f"Updated {fetched_disp}")
+                except Exception:
+                    st.caption("No account data yet — click Refresh Account to fetch.")
+            else:
+                st.caption("No account data yet — click Refresh Account to fetch.")
+
+            try:
+                from sqlalchemy import text as _sa_ord
+                with get_engine().connect() as _conn:
+                    ord_rows = _conn.execute(_sa_ord("""
+                        SELECT ticker, t212_ticker, direction, quantity,
+                               estimated_value_gbp, var_pct, status, is_etf,
+                               momentum_pct, account_type, error_message, placed_at
+                        FROM invest_orders
+                        ORDER BY placed_at DESC
+                        LIMIT 10
+                    """)).mappings().all()
+                ord_data = [dict(r) for r in ord_rows]
+            except Exception:
+                ord_data = []
+
+            st.markdown("#### Recent Orders")
+            if ord_data:
+                ord_df = pd.DataFrame(ord_data)
+                ord_df["Type"] = ord_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+                ord_df["var_pct"] = ord_df["var_pct"].map(
+                    lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
+                )
+                ord_df["momentum_pct"] = ord_df["momentum_pct"].map(
+                    lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
+                )
+                ord_df = ord_df[[
+                    "ticker", "t212_ticker", "Type", "direction", "quantity",
+                    "estimated_value_gbp", "var_pct", "momentum_pct", "status",
+                    "account_type", "error_message", "placed_at",
+                ]]
+                ord_df.columns = [
+                    "Ticker", "T212 Ticker", "Type", "Dir", "Qty",
+                    "Est. Value (£)", "VaR at Entry", "Momentum at Entry", "Status",
+                    "Account", "Error", "Placed At",
+                ]
+                st.dataframe(
+                    ord_df.style.map(
+                        lambda v: "color:#16a34a" if v == "FILLED"
+                        else ("color:#d97706" if v == "PLACED"
+                        else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
+                        subset=["Status"],
+                    ).map(
+                        lambda v: "color:#16a34a" if v == "BUY"
+                        else ("color:#dc2626" if v == "SELL" else ""),
+                        subset=["Dir"],
+                    ),
+                    width="stretch", hide_index=True,
+                )
+            else:
+                st.caption("No orders recorded yet.")
+
+            mapping_full = t212_cfg.get("instrument_mapping", {})
+            if mapping_full:
+                with st.expander(f"Instrument mapping ({len(mapping_full)} tickers)"):
+                    map_rows = [
+                        {
+                            "Ticker": rt,
+                            "T212 Instrument": (raw.get("ticker") if isinstance(raw, dict) else raw),
+                            "Currency": (raw.get("currency", "USD") if isinstance(raw, dict) else "USD"),
+                            "Type": "ETF" if (isinstance(raw, dict) and raw.get("is_etf")) else "STOCK",
+                        }
+                        for rt, raw in mapping_full.items()
+                    ]
+                    st.dataframe(pd.DataFrame(map_rows), width="stretch", hide_index=True)
+
+    # ── Scheduler Health ──────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Scheduler Health")
+
+    try:
+        import data.scheduler as _sched_mod
+        _aps        = getattr(_sched_mod, "_scheduler", None)
+        _aps_running = _aps is not None and getattr(_aps, "running", False)
+    except Exception:
+        _aps        = None
+        _aps_running = False
+
+    _daemon_active = False
+    _daemon_age_s: float = float("inf")
+    try:
+        _hb_str = get_metadata_str("scheduler_heartbeat")
+        if _hb_str:
+            _hb_dt = datetime.fromisoformat(_hb_str)
+            _daemon_age_s = (datetime.utcnow() - _hb_dt).total_seconds()
+            _daemon_active = _daemon_age_s < 90
+    except Exception:
+        pass
+
+    _JOB_LABELS: dict[str, tuple[str, str]] = {
+        "scheduled_pre_market": ("Pre-Market",    f"{_uk_sched_time(7, 0)} · Mon–Fri"),
+        "scheduled_us_open":    ("US Open",       f"{_uk_sched_time(13, 30)} · Mon–Fri"),
+        "scheduled_eod":        ("End of Day",    f"{_uk_sched_time(21, 30)} · Mon–Fri"),
+        "monday_premarket":     ("Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday"),
+        "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
+        "membership_refresh":   ("Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri"),
+        "job_dispatcher":       ("job_dispatcher","—"),
+    }
+
+    if _daemon_active:
+        _aps_label, _mode_note, _aps_colour = "RUNNING", f"(daemon · heartbeat {int(_daemon_age_s)}s ago)", "#16a34a"
+    elif _aps_running:
+        _aps_label, _mode_note, _aps_colour = "RUNNING", "(in-process)", "#16a34a"
+    else:
+        _aps_label, _mode_note, _aps_colour = "STOPPED", "", "#dc2626"
+
+    st.markdown(
+        f'<div style="margin-bottom:10px">'
+        f'<span style="font-size:0.82rem;color:#8899AA">Scheduler: </span>'
+        f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
+        + (f'<span style="font-size:0.75rem;color:#8899AA;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    def _sched_row_html(jlabel: str, jsched: str, nrt_str: str, until_str: str, dot: str, badge: str) -> str:
+        return (
+            f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
+            f'align-items:center;font-size:0.78rem">'
+            f'<div style="flex:0 0 22%;font-weight:600">{html.escape(jlabel)}</div>'
+            f'<div style="flex:0 0 28%;color:#8899AA;font-size:0.73rem">{html.escape(jsched)}</div>'
+            f'<div style="flex:0 0 25%">{html.escape(nrt_str)}</div>'
+            f'<div style="flex:0 0 12%;color:#8899AA">{html.escape(until_str)}</div>'
+            f'<div style="flex:0 0 13%;color:{dot};font-weight:700">{html.escape(badge)}</div>'
+            f'</div>'
+        )
+
+    _sh_head = (
+        '<div style="font-size:0.82rem">'
+        '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
+        'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
+        '<div style="flex:0 0 22%">Job</div>'
+        '<div style="flex:0 0 28%">Schedule</div>'
+        '<div style="flex:0 0 25%">Next Run</div>'
+        '<div style="flex:0 0 12%">In</div>'
+        '<div style="flex:0 0 13%">Status</div>'
+        '</div>'
+    )
+
+    def _eod_overdue() -> bool:
+        _ref_age = (
+            (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
+            if last_refresh else float("inf")
+        )
+        _now_u = datetime.utcnow()
+        _monday_before_eod = _now_u.weekday() == 0 and (_now_u.hour, _now_u.minute) < (21, 30)
+        return _ref_age > 26 and _now_u.weekday() < 5 and not _monday_before_eod
+
+    if _aps_running and _aps is not None:
+        _aps_jobs   = _aps.get_jobs()
+        _now_utc_tz = datetime.now(timezone.utc)
+        _sh_rows: list[str] = []
+        for _job in _aps_jobs:
+            _jlabel, _jsched = _JOB_LABELS.get(_job.id, (_job.id, "—"))
+            if _jlabel == "job_dispatcher":
+                continue
+            _nrt = _job.next_run_time
+            if _nrt is None:
+                _nrt_str, _until_str, _dot, _badge = "Paused", "—", "#94a3b8", "PAUSED"
+            else:
+                _d = (_nrt - _now_utc_tz).total_seconds()
+                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
+                _until_str = (
+                    f"{int(_d / 60)}m"  if _d < 3600
+                    else f"{_d / 3600:.1f}h" if _d < 86400
+                    else f"{_d / 86400:.1f}d"
+                )
+                _dot, _badge = "#16a34a", "OK"
+            if _job.id == "scheduled_eod" and _eod_overdue():
+                _dot, _badge = "#dc2626", "OVERDUE"
+            _sh_rows.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge))
+        st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
+    elif _daemon_active:
+        from apscheduler.triggers.cron import CronTrigger as _CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger as _ItvTrigger
+        _cfg_s  = _load_config()["scheduler"]
+        _tz_s   = _cfg_s["timezone"]
+        _now_tz = datetime.now(timezone.utc)
+
+        _static_jobs: list[tuple[str, str, str, object]] = []
+        for _rn, _rc in _cfg_s.get("runs", {}).items():
+            _sid = f"scheduled_{_rn}"
+            _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
+            _day_of_week = "tue-fri" if _rn == "pre_market" else "mon-fri"
+            _trigger = _CronTrigger(
+                hour=_rc["hour"], minute=_rc["minute"],
+                day_of_week=_day_of_week, timezone=_tz_s,
+            )
+            _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
+
+        _pm_cfg = _cfg_s.get("runs", {}).get("pre_market", {})
+        _extra_static = [
+            ("monday_premarket", "Monday Pre-Market", f"{_uk_sched_time(_pm_cfg.get('hour', 7), _pm_cfg.get('minute', 0))} · Monday",
+             _CronTrigger(day_of_week="mon", hour=_pm_cfg.get("hour", 7), minute=_pm_cfg.get("minute", 0), timezone=_tz_s)),
+            ("trade_alert_check", "Trade Alerts", "Hourly 00–21, 23 · Mon–Fri",
+             _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
+            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri",
+             _CronTrigger(hour=21, minute=15, day_of_week="mon-fri", timezone=_tz_s)),
+        ]
+        _static_jobs.extend(_extra_static)
+
+        _sh_rows_d: list[str] = []
+        for _sid, _jlabel, _jsched, _trigger in _static_jobs:
+            try:
+                _nrt = _trigger.get_next_fire_time(None, _now_tz)
+            except Exception:
+                _nrt = None
+            if _nrt is None:
+                _nrt_str, _until_str = "—", "—"
+            else:
+                _d = (_nrt - _now_tz).total_seconds()
+                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
+                _until_str = (
+                    f"{int(_d / 60)}m"  if _d < 3600
+                    else f"{_d / 3600:.1f}h" if _d < 86400
+                    else f"{_d / 86400:.1f}d"
+                )
+            _dot, _badge = "#16a34a", "OK"
+            if _sid == "scheduled_eod" and _eod_overdue():
+                _dot, _badge = "#dc2626", "OVERDUE"
+            _sh_rows_d.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge))
+        st.markdown(_sh_head + "".join(_sh_rows_d) + "</div>", unsafe_allow_html=True)
+    else:
+        st.warning(
+            "Scheduler is not running — scheduled jobs will not fire until the service restarts. "
+            "On the server, ensure investment-research-scheduler.service is enabled and running."
+        )
+
+    # ── Log Viewer ─────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Log Viewer")
+
+    _lc1, _lc2, _lc3 = st.columns([3, 2, 1])
+    with _lc1:
+        _log_search = st.text_input(
+            "Search logs", placeholder="Filter by keyword…",
+            key="status_log_search", label_visibility="collapsed",
+        )
+    with _lc2:
+        _log_filter = st.selectbox(
+            "Category", ["All", "Errors Only", "Scheduler", "Data", "Orders"],
+            key="status_log_filter", label_visibility="collapsed",
+        )
+    with _lc3:
+        _log_auto_refresh = st.toggle("Auto-refresh", key="status_log_auto_refresh")
+
+    try:
+        _jctl_result = subprocess.run(
+            ["journalctl", "-u", "investment-research", "--no-pager",
+             "-n", "200", "--output=short-iso"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _raw_log_lines = (
+            _jctl_result.stdout.strip().splitlines()
+            if _jctl_result.returncode == 0 else []
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        _raw_log_lines = []
+
+    if not _raw_log_lines:
+        st.info(
+            "Log output not available on this machine. "
+            "On the server, view logs with:  `journalctl -u investment-research -f`"
+        )
+    else:
+        _FILTER_KEYWORDS: dict[str, frozenset[str]] = {
+            "Errors Only": frozenset(),
+            "Scheduler":   frozenset({"scheduler", "pre-market", "us-open", "eod",
+                                      "order pipeline", "pipeline complete",
+                                      "trade alert", "membership", "scheduled_", "catch-up",
+                                      "missed eod"}),
+            "Data":        frozenset({"pull_incremental", "yfinance", "new rows",
+                                      "price data", "data pull", "incremental",
+                                      "ingestion", "rows across"}),
+            "Orders":      frozenset({"stop loss", "crisis", "index removal",
+                                      "signal off", "max holding", "buy", "sell",
+                                      "order", "pnl", "position"}),
+        }
+        _GREEN_KEYS = frozenset({
+            "complete", "success", "opened", "closed at", "started", "sent",
+            "pipeline complete", "new rows",
+        })
+
+        _parsed: list[dict] = []
+        for _rl in _raw_log_lines:
+            _p = _parse_journal_line(_rl)
+            if _p:
+                _parsed.append(_p)
+
+        _filtered: list[dict] = []
+        _search_lower = _log_search.lower() if _log_search else ""
+        for _p in _parsed:
+            _lvl = _p["level"]
+            _msg_lower = _p["message"].lower()
+            if _log_filter == "Errors Only":
+                if _lvl not in ("ERROR", "CRITICAL", "WARNING"):
+                    continue
+            elif _log_filter in _FILTER_KEYWORDS:
+                if not any(k in _msg_lower for k in _FILTER_KEYWORDS[_log_filter]):
+                    continue
+            if _search_lower and _search_lower not in _p["raw"].lower():
+                continue
+            _filtered.append(_p)
+
+        _display_lines = _filtered[::-1]
+
+        _line_htmls: list[str] = []
+        for _p in _display_lines:
+            _lvl = _p["level"]
+            _msg = _p["message"]
+            if _lvl in ("ERROR", "CRITICAL"):
+                _mc, _lc_col = "#ef4444", "#ef4444"
+            elif _lvl == "WARNING":
+                _mc, _lc_col = "#f97316", "#f97316"
+            elif any(k in _msg.lower() for k in _GREEN_KEYS):
+                _mc, _lc_col = "#22c55e", "#22c55e"
+            else:
+                _mc, _lc_col = "#cbd5e1", "#94a3b8"
+            _line_htmls.append(
+                f'<div style="line-height:1.5;padding:1px 0">'
+                f'<span style="color:#8899AA">{html.escape(_p["ts"])}</span>'
+                f'<span style="color:{_lc_col};font-weight:600;margin-left:6px">'
+                f'{html.escape(_lvl[:4])}</span>'
+                f'<span style="color:{_mc};margin-left:6px;word-break:break-all">'
+                f'{html.escape(_msg)}</span>'
+                f'</div>'
+            )
+
+        _count_note = (
+            f"{len(_filtered)} lines shown (newest first)"
+            if _log_filter == "All" and not _log_search
+            else f"{len(_filtered)} matching lines"
+        )
+        st.caption(_count_note)
+
+        if _line_htmls:
+            st.markdown(
+                '<div style="background:#0f172a;border-radius:6px;padding:10px 14px;'
+                'height:420px;overflow-y:auto;font-family:monospace;font-size:0.72rem">'
+                + "".join(_line_htmls)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No log lines match the current filter / search.")
+
+        _dl1, _dl2, _dl3, _dl4 = st.columns([1, 1, 1, 3])
+        with _dl1:
+            st.download_button(
+                "⬇ Current view",
+                data="\n".join(_p["raw"] for _p in _filtered),
+                file_name="investment-research-log.txt",
+                mime="text/plain",
+                key="log_dl_current",
+            )
+        with _dl2:
+            try:
+                _dl_24h = subprocess.run(
+                    ["journalctl", "-u", "investment-research", "--no-pager",
+                     "--since", "24 hours ago", "--output=short-iso"],
+                    capture_output=True, text=True, timeout=15,
+                ).stdout
+            except Exception:
+                _dl_24h = ""
+            st.download_button(
+                "⬇ Last 24 h",
+                data=_dl_24h or "(not available)",
+                file_name="investment-research-log-24h.txt",
+                mime="text/plain",
+                key="log_dl_24h",
+            )
+        with _dl3:
+            try:
+                _dl_7d = subprocess.run(
+                    ["journalctl", "-u", "investment-research", "--no-pager",
+                     "--since", "7 days ago", "--output=short-iso"],
+                    capture_output=True, text=True, timeout=30,
+                ).stdout
+            except Exception:
+                _dl_7d = ""
+            st.download_button(
+                "⬇ Last 7 days",
+                data=_dl_7d or "(not available)",
+                file_name="investment-research-log-7d.txt",
+                mime="text/plain",
+                key="log_dl_7d",
+            )
+
+    _render_footer()
+
+    if _log_auto_refresh:
+        time.sleep(30)
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Performance page
+# ---------------------------------------------------------------------------
+
+def _asset_type_map(config: dict) -> dict[str, str]:
+    """Map research ticker -> 'ETF' or 'STOCK' via trading212_invest.instrument_mapping."""
+    asset_types: dict[str, str] = {}
+    for rt, raw in config.get("trading212_invest", {}).get("instrument_mapping", {}).items():
+        is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
+        asset_types[rt] = "ETF" if is_etf else "STOCK"
+    return asset_types
+
+
+def _render_performance_page(config: dict) -> None:
+    """Execution performance driven entirely by real T212 order fills — see
+    "T212 P&L reconstruction" in CLAUDE.md. No simulated/paper trades."""
+    _render_page_wordmark("Performance")
+    st.title("Performance")
+
+    t212_enabled = config.get("trading212_invest", {}).get("enabled", False)
+    st.markdown(
+        (
+            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">🟢 LIVE (DEMO)</span>'
+            if t212_enabled else
+            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
+            'font-size:0.78rem;font-weight:700">NOT ENABLED</span>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+    st.markdown("### Open Positions")
+    open_cards = _get_open_cards(config)
+    if not open_cards:
+        st.info("No open positions.")
+    else:
+        all_cards = sorted(open_cards, key=lambda x: x.get("status_priority", 0), reverse=True)
+        for e in all_cards:
+            _render_trade_card(e)
+
+    st.divider()
+    st.markdown("### Closed Positions")
+    pnl_rows = _get_closed_rows()
+
+    if not pnl_rows:
+        st.info("No closed positions yet — data will appear as positions close.")
+    else:
+        show_df = pd.DataFrame(pnl_rows)
+        show_df["Type"] = show_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"]).dt.strftime("%Y-%m-%d")
+        show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
+        show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
+        show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
+        show_df["momentum_pct_at_entry"] = (show_df["momentum_pct_at_entry"] * 100).round(1)
+
+        show_df = show_df[[
+            "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
+            "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
+            "momentum_pct_at_entry", "exit_reason",
+        ]]
+        show_df.columns = [
+            "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
+            "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
+            "Momentum at Entry %", "Exit Reason",
+        ]
+        st.dataframe(
+            show_df.style
+                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
+                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
+            width="stretch", hide_index=True,
+        )
+
+    st.divider()
+    st.markdown("### Performance Metrics")
+    n_closed = len(pnl_rows)
+
+    if n_closed < 5:
+        st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_closed}/5).")
+        if n_closed:
+            wins = sum(1 for r in pnl_rows if (r.get("pnl_gbp") or 0) > 0)
+            losses = n_closed - wins
+            total_pnl = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
+            st.caption(
+                f"So far: {wins} win{'s' if wins != 1 else ''} / "
+                f"{losses} loss{'es' if losses != 1 else ''} · "
+                f"total realised P&L £{total_pnl:+,.2f}."
+            )
+    else:
+        mdf  = pnl_metrics_df(pnl_rows)
+        mets = compute_metrics(mdf)
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Closed Positions", mets.get("total_trades", 0))
+        wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
+        c2.metric("Win Rate", f"{wr_pct}%")
+        c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
+        c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
+        c5.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
+        c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
+
+        total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
+        st.caption(
+            f"Total realised P&L: £{total_pnl_gbp:+,.2f} across {n_closed} closed positions · "
+            f"avg hold {mets.get('avg_holding_days', 0):.0f} days."
+        )
+
+        starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
+        ec = equity_curve_gbp(mdf, starting_capital_gbp=starting_capital)
+        if not ec.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=ec["date"], y=ec["equity_gbp"],
+                mode="lines", name="Portfolio (£)",
+                line=dict(color="#3b82f6", width=2, shape="linear"),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                hovertemplate="%{x|%Y-%m-%d}<br>Equity: £%{y:,.2f}<extra></extra>",
+            ))
+            fig.update_layout(
+                title="Equity Curve (£, daily)",
+                xaxis_title="Date", yaxis_title="Portfolio Value (£)",
+                height=320, margin=dict(l=0, r=0, t=40, b=0),
+                xaxis=dict(type="date"),
+            )
+            _apply_dark_theme(fig)
+            st.plotly_chart(fig, width="stretch")
+
+        exit_df = mdf.groupby("exit_reason").agg(
+            trades=("pnl_pct", "count"),
+            win_rate=("is_win", "mean"),
+            avg_return=("pnl_pct", "mean"),
+            avg_hold=("holding_days", "mean"),
+        )
+        if not exit_df.empty:
+            st.markdown("#### Performance by Exit Reason")
+            exit_show = exit_df.copy()
+            exit_show["win_rate"] = (exit_show["win_rate"] * 100).round(1)
+            exit_show["avg_return"] = (exit_show["avg_return"] * 100).round(2)
+            exit_show["avg_hold"] = exit_show["avg_hold"].round(1)
+            exit_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
+            st.dataframe(exit_show, width="stretch")
+
+    _render_footer()
+
+
+# ---------------------------------------------------------------------------
+# Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
@@ -6939,16 +1742,8 @@ def main() -> None:
 
     _initialise()
 
-    # Show a brief toast if startup analysis just ran (fires once per session)
-    _startup = st.session_state.pop("_startup_msg", None)
-    if _startup:
-        _lvl, _msg = _startup
-        st.toast(_msg, icon="✅" if _lvl == "ok" else "⚠️")
-
     config = _load_config()
     watchlist = _build_watchlist(config)
-    tradeable_set = _build_tradeable_set(config)
-    t212_names    = _build_t212_names(config)
 
     # ---- Sidebar -------------------------------------------------------
     with st.sidebar:
@@ -6964,17 +1759,12 @@ def main() -> None:
         """, unsafe_allow_html=True)
         st.divider()
 
-        # Page navigation
-        _PAGES = ["Daily Briefing", "Signals", "Charts", "Relationships", "Performance", "Robustness", "Backtest", "Status"]
+        _PAGES = ["Daily Briefing", "Charts", "Performance", "Status"]
         _PAGE_KEYS = {
             "Daily Briefing": "briefing",
-            "Signals":       "signals",
-            "Charts":        "charts",
-            "Relationships": "relationships",
-            "Performance":   "performance",
-            "Robustness":    "robustness",
-            "Backtest":      "backtest",
-            "Status":        "status",
+            "Charts":         "charts",
+            "Performance":    "performance",
+            "Status":         "status",
         }
         current_key = st.session_state.get("page", "briefing")
         default_idx = next(
@@ -6993,49 +1783,26 @@ def main() -> None:
 
         st.divider()
 
-        # Pipeline status — last data pull and last analysis timestamps.
-        _sb_refresh  = get_metadata("last_full_refresh") or get_metadata("last_refresh_run")
-        _sb_analysis = get_metadata("last_analysis_run")
-        _sb_r_str = _fmt_uk(_sb_refresh,  "%Y-%m-%d %H:%M") if _sb_refresh  else "Pending"
-        _sb_a_str = _fmt_uk(_sb_analysis, "%Y-%m-%d %H:%M") if _sb_analysis else "Pending"
+        _sb_refresh = get_metadata("last_full_refresh")
+        _sb_sched   = get_metadata("last_scheduled_run")
+        _sb_r_str = _fmt_uk(_sb_refresh, "%Y-%m-%d %H:%M") if _sb_refresh else "Pending"
+        _sb_s_str = _fmt_uk(_sb_sched,   "%Y-%m-%d %H:%M") if _sb_sched   else "Pending"
         st.caption(f"**Last refresh:** {_sb_r_str}")
-        st.caption(f"**Last analysis:** {_sb_a_str}")
-
+        st.caption(f"**Last scheduled run:** {_sb_s_str}")
 
     # ---- Main content --------------------------------------------------
     page_key = st.session_state.get("page", "briefing")
 
-    # Persistent in-sample/out-of-sample badge — every page except
-    # Robustness itself (which already shows this context in full).
-    if page_key != "robustness":
-        _render_out_of_sample_badge()
-
     if page_key == "briefing":
-        _render_briefing_page(config, watchlist, tradeable_set, t212_names)
-        return
-
-    if page_key == "signals":
-        _render_signals_page(config, watchlist, tradeable_set)
+        _render_briefing_page(config)
         return
 
     if page_key == "status":
-        _render_home_page(config, watchlist)
-        return
-
-    if page_key == "relationships":
-        _render_relationships_page(config)
+        _render_status_page(config, watchlist)
         return
 
     if page_key == "performance":
         _render_performance_page(config)
-        return
-
-    if page_key == "robustness":
-        _render_robustness_page(config)
-        return
-
-    if page_key == "backtest":
-        _render_backtest_page(config, watchlist)
         return
 
     # Charts page
@@ -7055,8 +1822,6 @@ def main() -> None:
     st.markdown(f"## {name}")
     st.caption(f"Ticker: **{selected}**")
 
-    # Chart range selector — persists across renders but resets when switching
-    # to a new ticker so the user always starts fresh on the default view.
     _RANGE_DAYS = {"1Y": 365, "3Y": 1095, "5Y": 1826, "10Y": 3652}
     if st.session_state.get("_chart_range_ticker") != selected:
         st.session_state["chart_range"] = "1Y"
@@ -7081,8 +1846,6 @@ def main() -> None:
         _render_footer()
         return
 
-    # Key metrics row — always computed from the full loaded window so YTD
-    # uses this calendar year regardless of which range is selected.
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
     daily_chg = (latest["close"] - prev["close"]) / prev["close"] * 100
@@ -7096,16 +1859,9 @@ def main() -> None:
     col3.metric("YTD Return", f"{ytd_chg:+.2f}%", delta=f"{ytd_chg:+.2f}%")
     col4.metric("Volume", f"{latest['volume']:,.0f}")
 
-    # Price chart
     st.plotly_chart(_candlestick_chart(df, selected, name), width="stretch")
-
-    # Volume chart
     st.plotly_chart(_volume_bar_chart(df), width="stretch")
 
-    # Indicator panel
-    _render_indicator_panel(selected)
-
-    # Raw data expander
     with st.expander("Raw OHLCV data"):
         display_df = df.copy()
         display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")

@@ -1,1204 +1,414 @@
-"""Vectorized backtesting engine.
+"""Backtest engine — momentum signal + crisis override, validated across the
+phased rebuild (see CLAUDE.md's "V2 architecture — phased rebuild" section
+for the full validation history). This is the module the reproducibility
+check ran against to confirm the production execution path
+(brokers/trading212.py) matches what the research clone validated.
 
-Replays the full signal-generation pipeline over historical price data using
-pandas rolling/ewm operations, which are inherently look-ahead free — each
-computation at date T only uses data up to and including T.
-
-Entry point: run_backtest()  — writes results to backtest_runs / backtest_signals
-                                / backtest_trades tables and returns the run_id.
-
-The engine replicates the scoring logic of the five main analysis modules
-(trend, mean_reversion, volatility, volume, macro) as time-series operations
-rather than per-date scalar computations.  The correlation module is omitted
-because it requires pair-level data and contributes a fixed 0.10 weight; its
-absence is compensated by normalising confluence over the five present modules.
+Also holds the metrics/equity-curve functions the engine itself needs
+(compute_metrics, equity_curve_gbp) — these were originally in a separate
+analysis/backtest_metrics.py alongside several V1-only analysis functions
+(module attribution, signal decay, walk-forward by calendar window, per-
+regime performance) that had no equivalent here; consolidated into this
+file since these two are the only ones this engine (or live execution)
+actually uses.
 """
-
-import copy
-import json
 import logging
-from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-import yaml
-from sqlalchemy import text
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from data.database import (
-    BacktestRun,
-    BacktestSignal,
-    BacktestTrade,
-    get_engine,
-)
+from analysis import crisis, signals
+from analysis import universe
+from analysis.universe import get_max_holding_days
+from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
 from data.ingestion import get_price_df
 
 logger = logging.getLogger(__name__)
 
-try:
-    import talib as _talib
-    _TALIB = True
-except ImportError:
-    _TALIB = False
 
 # ---------------------------------------------------------------------------
-# Config
+# Metrics / equity curve
 # ---------------------------------------------------------------------------
 
-def _load_config() -> dict:
-    p = Path(__file__).resolve().parent.parent / "config.yaml"
-    with open(p) as f:
-        return yaml.safe_load(f)
+def compute_metrics(df: pd.DataFrame) -> dict:
+    """Compute full performance metrics from a trades DataFrame.
 
+    Args:
+        df: DataFrame with columns pnl_pct, is_win, holding_days, entry_date.
+            An optional pnl_gbp column (VaR-scaled £ P&L) adds a parallel set
+            of "_gbp"-suffixed keys to the returned dict below; all existing
+            "_pct"-suffixed keys are always computed from pnl_pct.
 
-# ---------------------------------------------------------------------------
-# Vectorized indicator series
-# ---------------------------------------------------------------------------
-
-def _rsi(close: pd.Series, period: int) -> pd.Series:
-    delta    = close.diff()
-    gain     = delta.clip(lower=0)
-    loss     = (-delta).clip(lower=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
-
-
-def _macd(close: pd.Series, fast: int, slow: int, signal: int):
-    ema_fast   = close.ewm(span=fast, adjust=False).mean()
-    ema_slow   = close.ewm(span=slow, adjust=False).mean()
-    macd_line  = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    return macd_line, signal_line
-
-
-def _adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
-    prev_close  = close.shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    up_move   = high.diff()
-    down_move = -low.diff()
-    plus_dm   = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm  = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    alpha      = 1.0 / period
-    smooth_tr  = pd.Series(tr,       index=close.index).ewm(alpha=alpha, adjust=False).mean() * period
-    smooth_p   = pd.Series(plus_dm,  index=close.index).ewm(alpha=alpha, adjust=False).mean() * period
-    smooth_m   = pd.Series(minus_dm, index=close.index).ewm(alpha=alpha, adjust=False).mean() * period
-    pdi  = 100 * smooth_p / smooth_tr.replace(0, np.nan)
-    mdi  = 100 * smooth_m / smooth_tr.replace(0, np.nan)
-    dx   = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
-    return dx.ewm(alpha=alpha, adjust=False).mean()
-
-
-def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    return tr.ewm(alpha=1 / period, adjust=False).mean()
-
-
-# ---------------------------------------------------------------------------
-# Vectorized module scoring — returns integer Series (-1 / 0 / 1) per date
-# ---------------------------------------------------------------------------
-
-def _ma_cross_vote(sma_50: pd.Series, sma_200: pd.Series, slope_window: int, near_pct: float) -> pd.Series:
-    """Vectorized version of analysis/trend.py:_ma_cross_vote — see there for rationale.
-
-    A pure positional SMA50-vs-SMA200 check treats a golden cross as bullish
-    even while SMA50 is rolling over toward a death cross. This votes with
-    the cross direction only while SMA50's slope agrees with it; otherwise
-    the vote goes neutral, or flips if the lines have converged to within
-    `near_pct` of each other (an imminent cross).
+    Returns:
+        Dict of metrics suitable for display.
     """
-    positional = pd.Series(np.where(sma_50 > sma_200, 1, -1), index=sma_50.index)
-    prev_sma50 = sma_50.shift(slope_window)
-    slope_agrees = ((sma_50 - prev_sma50) * positional) >= 0
-    gap_pct = (sma_50 - sma_200).abs() / sma_200.replace(0, np.nan)
-    imminent = gap_pct < near_pct
+    if df is None or df.empty:
+        return {"total_trades": 0}
 
-    vote = pd.Series(
-        np.where(slope_agrees, positional, np.where(imminent, -positional, 0)),
-        index=sma_50.index,
-    )
-    return vote.where(prev_sma50.notna(), positional).astype(int)
+    n        = len(df)
+    wins     = df[df["is_win"] == True]
+    losses   = df[df["is_win"] == False]
 
+    win_rate = len(wins) / n if n > 0 else 0.0
+    avg_ret  = df["pnl_pct"].mean() * 100
+    avg_win  = wins["pnl_pct"].mean() * 100  if not wins.empty  else 0.0
+    avg_loss = losses["pnl_pct"].mean() * 100 if not losses.empty else 0.0
 
-def _trend_scores(df: pd.DataFrame, config: dict) -> pd.Series:
-    sig      = config["signals"]
-    adx_thr  = sig["adx_trend_threshold"]
-    slope_w  = int(sig.get("ma_cross_slope_window", 10))
-    near_pct = float(sig.get("ma_cross_near_pct", 0.02))
-    close    = df["close"].astype(float)
-    high     = df["high"].astype(float)
-    low      = df["low"].astype(float)
-
-    sma_50  = close.rolling(50).mean()
-    sma_200 = close.rolling(200).mean()
-    macd_l, macd_s = _macd(close, sig["macd_fast"], sig["macd_slow"], sig["macd_signal"])
-    adx_s   = _adx(high, low, close, sig["adx_period"])
-
-    # Three votes
-    v1 = pd.Series(np.where(close > sma_200, 1, -1), index=close.index)
-    v2 = _ma_cross_vote(sma_50, sma_200, slope_w, near_pct)
-    macd_vote = np.where(macd_l > macd_s, 1, -1)
-    v3 = pd.Series(np.where(adx_s >= adx_thr, macd_vote, 0), index=close.index)
-
-    valid   = sma_200.notna()
-    bull    = (v1 == 1).astype(int) + (v2 == 1).astype(int) + (v3 == 1).astype(int)
-    bear    = (v1 == -1).astype(int) + (v2 == -1).astype(int) + (v3 == -1).astype(int)
-    raw     = pd.Series(np.where(bull >= 2, 1, np.where(bear >= 2, -1, 0)), index=close.index)
-    return raw.where(valid, 0).astype(int)
-
-
-def _mean_rev_scores(df: pd.DataFrame, config: dict) -> pd.Series:
-    """50% RSI + 50% 52-week Z-score — mirrors compute_mean_reversion()'s live
-    scoring. Bollinger %B is deliberately not computed here: a production
-    correlation analysis (200 rows, 49 tickers, 2026-07-05) measured RSI vs
-    Bollinger %B at 0.927, so it was dropped from the score in both the live
-    and backtest paths — see analysis/mean_reversion.py's docstring."""
-    sig     = config["signals"]
-    close   = df["close"].astype(float)
-
-    rsi_s   = _rsi(close, sig["rsi_period"])
-    roll252 = close.rolling(252)
-    z_score = (close - roll252.mean()) / roll252.std().replace(0, np.nan)
-
-    rsi_sig = pd.Series(np.where(rsi_s < 30, 1, np.where(rsi_s > 70, -1, 0)), index=close.index)
-    z_sig   = pd.Series(np.where(z_score < -1.5, 1, np.where(z_score > 1.5, -1, 0)), index=close.index)
-
-    raw  = pd.Series(
-        np.where((rsi_sig == 1) & (z_sig == 1), 1,
-        np.where((rsi_sig == -1) & (z_sig == -1), -1, 0)),
-        index=close.index,
-    )
-    return raw.astype(int)
-
-
-def _vol_scores(df: pd.DataFrame, vix_s: Optional[pd.Series], config: dict) -> pd.Series:
-    """ATR% percentile + VIX regime (equal-weight combination, mirroring
-    compute_volatility()'s live scoring minus its change-point adjustment —
-    see the "Scope note" in CLAUDE.md's Volatility module section for why
-    CPD isn't vectorised into the backtest). hist_vol_20 was never a scoring
-    input here to begin with (only ATR% and VIX ever were) — the production
-    correlation analysis that dropped hist_vol_20 from the live score
-    (ATR% vs hist_vol_20: 0.929, see analysis/volatility.py's docstring)
-    changes nothing on this path."""
-    sig     = config["signals"]
-    close   = df["close"].astype(float)
-    high    = df["high"].astype(float)
-    low     = df["low"].astype(float)
-
-    atr_s   = _atr(high, low, close, sig["atr_period"])
-    atr_pct = atr_s / close.replace(0, np.nan)
-
-    # Approximate 25th/75th percentile via rolling mean ± 0.674σ
-    rm = atr_pct.rolling(252).mean()
-    rs = atr_pct.rolling(252).std()
-    lo_thr = rm - 0.674 * rs
-    hi_thr = rm + 0.674 * rs
-    atr_sc  = pd.Series(
-        np.where(atr_pct <= lo_thr, 1, np.where(atr_pct >= hi_thr, -1, 0)),
-        index=close.index,
+    profit_factor = (
+        (wins["pnl_pct"].sum() / abs(losses["pnl_pct"].sum()))
+        if not losses.empty and losses["pnl_pct"].sum() != 0
+        else float("inf")
     )
 
-    vix_sc      = pd.Series(0, index=close.index, dtype=int)
-    extreme_vix = pd.Series(False, index=close.index)
-    if vix_s is not None:
-        va = vix_s.reindex(close.index).ffill()
-        vix_sc      = pd.Series(np.where(va < 12, 1, np.where(va >= 20, -1, 0)), index=close.index)
-        extreme_vix = va >= 30
+    avg_hold = df["holding_days"].mean() if "holding_days" in df.columns else 0.0
+    total_return = df["pnl_pct"].sum() * 100
 
-    raw = pd.Series(
-        np.where(extreme_vix, -1,
-        np.where((atr_sc == 1) & (vix_sc >= 0), 1,
-        np.where((atr_sc == -1) | (vix_sc == -1), -1, 0))),
-        index=close.index,
-    )
-    return raw.astype(int)
+    # Equity curve (compounded)
+    cum = (1 + df["pnl_pct"]).cumprod()
+    final_equity = float(cum.iloc[-1]) - 1 if not cum.empty else 0.0
+    peak = cum.cummax()
+    max_dd = float(((cum - peak) / peak).min() * 100) if not cum.empty else 0.0
+
+    # Sharpe (annualised, treating each trade return as a period)
+    if n > 1 and df["pnl_pct"].std() > 0 and avg_hold > 0:
+        periods_per_year = 252.0 / avg_hold
+        sr = (df["pnl_pct"].mean() / df["pnl_pct"].std()) * np.sqrt(periods_per_year)
+    else:
+        sr = 0.0
+
+    # Calmar
+    calmar = (final_equity * 100 / abs(max_dd)) if max_dd < 0 else float("inf")
+
+    # Longest drawdown streak
+    streak = max_loss_streak = 0
+    for w in df["is_win"]:
+        if not w:
+            streak += 1
+            max_loss_streak = max(max_loss_streak, streak)
+        else:
+            streak = 0
+
+    result = {
+        "total_trades":       n,
+        "win_rate":           round(win_rate, 4),
+        "avg_return_pct":     round(avg_ret, 3),
+        "avg_win_pct":        round(avg_win, 3),
+        "avg_loss_pct":       round(avg_loss, 3),
+        "profit_factor":      round(min(profit_factor, 99.9), 2),
+        "total_return_pct":   round(total_return, 2),
+        "compounded_return_pct": round(final_equity * 100, 2),
+        "max_drawdown_pct":   round(max_dd, 2),
+        "sharpe_ratio":       round(sr, 3),
+        "calmar_ratio":       round(min(calmar, 99.9), 2),
+        "avg_holding_days":   round(avg_hold, 1),
+        "max_loss_streak":    max_loss_streak,
+        "has_pnl_gbp":        False,
+    }
+
+    if "pnl_gbp" in df.columns and df["pnl_gbp"].notna().any():
+        gbp = df["pnl_gbp"].dropna().astype(float)
+        gbp_wins   = df[(df["is_win"] == True)  & df["pnl_gbp"].notna()]["pnl_gbp"]
+        gbp_losses = df[(df["is_win"] == False) & df["pnl_gbp"].notna()]["pnl_gbp"]
+
+        profit_factor_gbp = (
+            (gbp_wins.sum() / abs(gbp_losses.sum()))
+            if not gbp_losses.empty and gbp_losses.sum() != 0
+            else float("inf")
+        )
+
+        result.update({
+            "has_pnl_gbp":       True,
+            "total_pnl_gbp":     round(float(gbp.sum()), 2),
+            "avg_pnl_gbp":       round(float(gbp.mean()), 2),
+            "avg_win_gbp":       round(float(gbp_wins.mean()), 2)  if not gbp_wins.empty  else 0.0,
+            "avg_loss_gbp":      round(float(gbp_losses.mean()), 2) if not gbp_losses.empty else 0.0,
+            "profit_factor_gbp": round(min(profit_factor_gbp, 999999.0), 2),
+        })
+
+    return result
 
 
-def _volume_scores(df: pd.DataFrame, config: dict) -> pd.Series:
-    period  = config["signals"]["volume_avg_period"]
-    close   = df["close"].astype(float)
-    volume  = df["volume"].astype(float)
+def equity_curve_gbp(df: pd.DataFrame, starting_capital_gbp: float = 10000.0) -> pd.DataFrame:
+    """Return a daily £ portfolio equity curve DataFrame from VaR-sized trades.
 
-    direction = np.sign(close.diff().fillna(0))
-    obv       = (direction * volume).cumsum()
-    obv_trend = obv - obv.shift(period)
-    vol_ratio = volume / volume.rolling(period).mean().replace(0, np.nan)
-    price_ch  = close.diff()
-
-    elevated = vol_ratio >= 1.5
-    raw = pd.Series(
-        np.where(elevated & (price_ch > 0) & (obv_trend > 0), 1,
-        np.where(elevated & (price_ch < 0) & (obv_trend < 0), -1, 0)),
-        index=close.index,
-    )
-    return raw.astype(int)
-
-
-def _macro_scores(
-    df: pd.DataFrame,
-    ticker: str,
-    vix_s: Optional[pd.Series],
-    macro_df: Optional[pd.DataFrame],
-    config: dict,
-) -> pd.Series:
-    """Vectorized mirror of analysis/macro.py:compute_macro()'s regional
-    weighting (2026-07-07) — grouped by region, blended via
-    signals.macro_regional_weights, with per-date graceful degradation when a
-    region has no data yet, mirroring the live _regional_macro_score(). This
-    mirrors analysis/macro.py's own per-series region tags (imported
-    directly, not re-hardcoded) — the same "shared core, no re-implementation
-    of the mapping" pattern already used for VaR sizing elsewhere in this
-    file.
-
-    Uses genuine per-date historical macro values (permanent as of
-    2026-07-30), not a single latest-observation constant broadcast across
-    the whole backtest range. The earlier latest-observation-only design
-    (shipped 2026-07-08, reverted from a brief attempt at real history that
-    same day) rested on a category error: it was framed as "matching what
-    live does" — live's compute_macro() only ever reads the latest row per
-    series — but live is only ever asked about *today*, so "the latest
-    value" and "the correct value for the date being evaluated" are the same
-    thing there. A backtest evaluates thousands of past dates, not today; on
-    each of those dates, "the correct value" is whatever was genuinely latest
-    as of *that* date, not whatever happens to be latest right now. Broadcasting
-    today's value across 2019 doesn't replay what live experienced in 2019 —
-    it replays a scenario ("every historical date sees today's macro reading")
-    that never occurs in live trading at all, which is the opposite of a
-    faithful backtest. `aligned = macro_df.reindex(close.index).ffill()` gives
-    each date its own genuinely-as-of-that-date value (forward-filled from
-    the most recent prior observation, never a future one — still fully
-    look-ahead free).
-
-    This surfaced real, materially worse TRENDING_BULL performance under
-    genuine macro variation on two separate occasions (2026-07-08 and
-    2026-07-30, the latter run directly against production data) — deeper
-    drawdown, roughly double the trade count, and macro's own discriminating
-    power turning mildly anti-predictive — see CLAUDE.md's "Macro module
-    regime-weight rebalance (2026-07-08)" section and the 2026-07-30 DD
-    report limitation for the full findings. That is a genuine finding about
-    the current weight scheme, not a reason to keep testing against an
-    unrealistic scenario instead: the fix ships permanently here, and
-    re-tuning TRENDING_BULL's weights against this now-honest methodology is
-    separate, deferred work (see analysis/regime.py's REGIME_WEIGHTS comment).
-    analysis/macro.py:backfill_macro_indicators() and the historical depth it
-    stores — previously groundwork for a "someday" re-tuning study — are now
-    what every backtest run actually consumes.
+    A true £ equity curve: with VaR position sizing, each trade only ever
+    risks a small slice of the account (position_gbp), so £ P&L ADDS onto a
+    starting capital baseline: equity_t = starting_capital_gbp +
+    cumsum(pnl_gbp), realised in exit-date order (the order P&L actually
+    lands in a real account, not entry-date order — entry-date order can
+    produce backwards jumps in the time axis whenever trades of different
+    holding periods overlap). Returns an empty-columns DataFrame (not a
+    curve pinned at starting_capital_gbp) when df has no usable pnl_gbp, so
+    callers can tell "no £-sized trades in this run" apart from "a flat
+    £ curve".
     """
-    from analysis.macro import _regional_weights, _series_region
+    if df is None or df.empty or "pnl_gbp" not in df.columns or df["pnl_gbp"].isna().all():
+        return pd.DataFrame(columns=["date", "equity_gbp", "drawdown_gbp"])
 
-    _MACRO_SKIP = frozenset({"^VIX", "TLT", "IEF", "HYG"})
-    close = df["close"].astype(float)
+    df = df.dropna(subset=["pnl_gbp"]).copy()
+    df["entry_date"] = pd.to_datetime(df["entry_date"]).dt.normalize()
+    exit_col = "exit_date" if "exit_date" in df.columns else "entry_date"
+    df["exit_date"] = pd.to_datetime(df[exit_col]).dt.normalize()
 
-    if ticker in _MACRO_SKIP:
-        return pd.Series(0, index=close.index, dtype=int)
+    df = df.sort_values("exit_date").reset_index(drop=True)
+    cum_at_exit = starting_capital_gbp + df["pnl_gbp"].cumsum()
 
-    region_series: dict[str, list[pd.Series]] = {}
+    exit_equity = pd.Series(cum_at_exit.values, index=df["exit_date"])
+    exit_equity = exit_equity.groupby(level=0).last()
 
-    if vix_s is not None:
-        va = vix_s.reindex(close.index).ffill()
-        vix_sc = pd.Series(np.where(va < 12, 1.0, np.where(va < 20, 0.0, -1.0)), index=close.index)
-        region_series.setdefault("us", []).append(vix_sc)  # VIX is a US-sourced index
+    all_days = pd.date_range(df["entry_date"].min(), df["exit_date"].max(), freq="D")
+    equity = exit_equity.reindex(all_days).ffill().fillna(starting_capital_gbp)
 
-    if macro_df is not None and not macro_df.empty:
-        # Each date gets the value genuinely latest as of that date — never a
-        # future observation — so this stays look-ahead free while replaying
-        # the same real macro variation live trading actually experiences.
-        aligned = macro_df.reindex(close.index).ffill()
-        for col in aligned.columns:
-            col_series = aligned[col]
-            if col_series.isna().all():
-                continue
-            region_series.setdefault(_series_region(col, config), []).append(col_series)
+    peak = equity.cummax()
+    dd   = equity - peak
 
-    if not region_series:
-        return pd.Series(0, index=close.index, dtype=int)
-
-    # Per-region average — NaN on any date before that region's first series
-    # has reported at all (nothing yet to ffill from).
-    region_avg = pd.concat(
-        {region: pd.concat(series_list, axis=1).mean(axis=1) for region, series_list in region_series.items()},
-        axis=1,
-    )
-
-    weights_cfg = _regional_weights(config)
-    weight_row  = pd.Series({r: weights_cfg.get(r, 0.0) for r in region_avg.columns})
-    avail       = region_avg.notna()
-    applied_w   = avail.mul(weight_row, axis=1)
-    weight_sum  = applied_w.sum(axis=1)
-
-    # Graceful degradation, vectorized: dates where the configured weights
-    # available sum to 0 (e.g. every region with data has a 0 configured
-    # weight) fall back to a flat average across whatever regions do have
-    # data that date, mirroring _regional_macro_score()'s own fallback.
-    flat_fallback = region_avg.mean(axis=1)
-    weighted = (region_avg.fillna(0.0) * applied_w).sum(axis=1) / weight_sum.replace(0, np.nan)
-    avg = weighted.fillna(flat_fallback).fillna(0.0)
-
-    raw = pd.Series(np.where(avg >= 0.25, 1, np.where(avg <= -0.25, -1, 0)), index=close.index)
-    return raw.astype(int)
+    return pd.DataFrame({
+        "date":           all_days,
+        "equity_gbp":     equity.values,
+        "drawdown_gbp":   dd.values,
+    })
 
 
 # ---------------------------------------------------------------------------
-# Regime history (vectorized, based on ^GSPC + VIX)
+# Signal precomputation
 # ---------------------------------------------------------------------------
 
-def _regime_history(gspc_df: pd.DataFrame, vix_s: Optional[pd.Series], config: dict) -> pd.DataFrame:
-    """Return a date-indexed DataFrame with a 'regime' column — the
-    rule-based ADX/VIX/SMA200 classification.
-
-    An HMM confidence gate (validating, never replacing, this rule-based
-    call) was implemented, backtested both alone and combined with a
-    MIXED -> TRENDING_BULL upgrade path, and found to deteriorate every
-    metric versus the rule-based-only baseline — see CLAUDE.md's "HMM
-    confidence gate — why it's disabled" section. Since this is computed
-    ONCE per backtest run from the single shared ^GSPC series (not once per
-    ticker — every ticker's compute_signal_history() call reuses this same
-    DataFrame), the cost of this classification is not multiplied by the
-    ticker count either way.
-    """
-    sig     = config["signals"]
-    close   = gspc_df["close"].astype(float)
-    high    = gspc_df["high"].astype(float)
-    low     = gspc_df["low"].astype(float)
-
-    sma_200 = close.rolling(200).mean()
-    adx_s   = _adx(high, low, close, sig["adx_period"])
-
-    vix = pd.Series(np.nan, index=close.index)
-    if vix_s is not None:
-        vix = vix_s.reindex(close.index).ffill()
-
-    regime = np.where(
-        vix > 30, "HIGH_VOLATILITY",
-        np.where(
-            (close > sma_200) & (adx_s > 25) & (vix < 20), "TRENDING_BULL",
-            np.where(
-                (close < sma_200) & (adx_s > 25) & (vix > 20), "TRENDING_BEAR",
-                np.where(
-                    (adx_s < 20) & (vix < 15), "RANGING_LOW_VOL",
-                    "MIXED",
-                ),
-            ),
-        ),
-    )
-    regime = np.where(sma_200.isna(), "MIXED", regime)
-
-    return pd.DataFrame({"regime": regime}, index=close.index)
-
-
-# ---------------------------------------------------------------------------
-# Macro history from DB  (all stored rows, not just latest)
-# ---------------------------------------------------------------------------
-
-def _load_macro_history() -> Optional[pd.DataFrame]:
-    """Return all stored macro_indicator scores as a wide date×series DataFrame."""
-    engine = get_engine()
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT series_id, date, score FROM macro_indicators ORDER BY date")
-            ).mappings().all()
-    except Exception:
+def precompute_ticker(ticker: str, config: dict) -> Optional[dict]:
+    """Load a ticker's full available price history and compute its ATR
+    and momentum signal. Membership is looked up per-date at simulation
+    time (not baked in here) so a live universe.py refresh is always
+    reflected without needing to re-run this step."""
+    df = get_price_df(ticker, days=8000)
+    if df.empty or len(df) < 300:
         return None
-
-    if not rows:
-        return None
-
-    df = pd.DataFrame([dict(r) for r in rows])
-    # format="mixed": macro_indicators can hold rows written through more than
-    # one code path with different literal datetime string formats (ORM
-    # inserts always include a ".000000" suffix; some bulk/raw-SQL paths
-    # historically didn't — see analysis/macro.py:_scored_df_to_rows()'s
-    # docstring for the exact mechanism). A plain pd.to_datetime() caches a
-    # format from the first values in the column and raises the moment a
-    # differently-formatted value appears once rows from both are sorted
-    # together by date; format="mixed" parses each value independently instead.
-    df["date"] = pd.to_datetime(df["date"], format="mixed")
-    try:
-        wide = df.pivot(index="date", columns="series_id", values="score")
-        return wide.astype(float)
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Signal history for one ticker
-# ---------------------------------------------------------------------------
-
-def compute_signal_history(
-    ticker: str,
-    df: pd.DataFrame,
-    vix_s: Optional[pd.Series],
-    regime_hist: pd.DataFrame,
-    macro_df: Optional[pd.DataFrame],
-    config: dict,
-) -> pd.DataFrame:
-    """Compute a daily signal series for *ticker* over the full price history.
-
-    Uses vectorized pandas rolling/ewm — inherently look-ahead free.
-
-    Returns a DataFrame indexed by date with columns:
-        close, atr, regime, confluence_score, signal,
-        trend_score, mean_reversion_score, volatility_score,
-        volume_score, macro_score
-    """
-    from analysis.regime import REGIME_WEIGHTS, Regime          # local to avoid circular
-    from analysis.confluence import get_regime_thresholds       # regime-aware thresholds
-
-    if df.empty or len(df) < 210:
-        return pd.DataFrame()
-
-    df = df.copy()
-    if "date" in df.columns:
-        df = df.set_index("date")
+    df = df.set_index("date")
     df.index = pd.to_datetime(df.index)
 
     close = df["close"].astype(float)
-    high  = df["high"].astype(float)
-    low   = df["low"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
 
-    atr_s       = _atr(high, low, close, config["signals"]["atr_period"])
-    trend_sc    = _trend_scores(df, config)
-    mean_rev_sc = _mean_rev_scores(df, config)
-    vol_sc      = _vol_scores(df, vix_s, config)
-    volume_sc   = _volume_scores(df, config)
-    macro_sc    = _macro_scores(df, ticker, vix_s, macro_df, config)
+    atr_s = _atr(high, low, close, config["signals"]["atr_period"])
+    sig = signals.compute_signal_series(close)
 
-    regime_aligned = regime_hist["regime"].reindex(df.index).ffill().fillna("MIXED")
-
-    # Build per-date weight series for the five modules included in backtest.
-    # Correlation module (weight=0.10) is excluded; remaining weights are
-    # re-normalised so they still sum to 1.0 per date.
-    WEIGHT_KEYS = ["trend", "mean_reversion", "volatility", "volume", "macro"]
-    regime_map  = {r.value: r for r in Regime}
-
-    w = {k: pd.Series(np.nan, index=df.index) for k in WEIGHT_KEYS}
-    for rname in regime_aligned.unique():
-        mask = regime_aligned == rname
-        r    = regime_map.get(rname, Regime.MIXED)
-        rw   = REGIME_WEIGHTS[r]
-        total = sum(rw[k] for k in WEIGHT_KEYS)
-        for k in WEIGHT_KEYS:
-            w[k][mask] = rw[k] / total  # normalise to 1.0 without correlation
-
-    confluence = (
-        trend_sc.astype(float) * w["trend"] +
-        mean_rev_sc.astype(float) * w["mean_reversion"] +
-        vol_sc.astype(float) * w["volatility"] +
-        volume_sc.astype(float) * w["volume"] +
-        macro_sc.astype(float) * w["macro"]
-    )
-
-    # Build per-date threshold series from regime — mirrors the weight computation above
-    buy_thresh_s  = pd.Series(0.55, index=df.index, dtype=float)
-    sell_thresh_s = pd.Series(0.55, index=df.index, dtype=float)
-    for _rname in regime_aligned.unique():
-        _mask = regime_aligned == _rname
-        _bt, _st = get_regime_thresholds(_rname, config)
-        buy_thresh_s[_mask]  = _bt
-        sell_thresh_s[_mask] = _st
-
-    def _sig(score: float, buy_th: float, sell_th: float) -> str:
-        if score >= buy_th:   return "STRONG_BUY"
-        if score >= 0.3:      return "BUY"
-        if score <= -sell_th: return "STRONG_SELL"
-        if score <= -0.3:     return "SELL"
-        return "NEUTRAL"
-
-    signal = pd.Series(
-        [_sig(c, b, s) for c, b, s in zip(confluence, buy_thresh_s, sell_thresh_s)],
-        index=confluence.index,
-    )
-
-    result = pd.DataFrame({
-        "close":                close,
-        "atr":                  atr_s,
-        "regime":               regime_aligned,
-        "confluence_score":     confluence,
-        "signal":               signal,
-        "trend_score":          trend_sc,
-        "mean_reversion_score": mean_rev_sc,
-        "volatility_score":     vol_sc,
-        "volume_score":         volume_sc,
-        "macro_score":          macro_sc,
-    })
-    result.index.name = "date"
-    return result.dropna(subset=["close", "confluence_score"])
+    frame = pd.DataFrame({"close": close, "atr": atr_s, "signal": sig})
+    return {"ticker": ticker, "frame": frame}
 
 
-def _resolve_entry_stop(
-    direction: str,
-    price: float,
-    atr: float,
-    config: dict,
-) -> tuple[float, float]:
-    """Return (stop_price, stop_distance_pct) for a new entry, sized via the
-    pre-existing entry ± backtest.atr_stop_multiplier x ATR formula.
+def slice_ticker(cached: Optional[dict], ts_start: pd.Timestamp, ts_end: pd.Timestamp) -> Optional[dict]:
+    if cached is None:
+        return None
+    frame = cached["frame"]
+    in_range = frame[(frame.index >= ts_start) & (frame.index <= ts_end)].dropna(subset=["close"])
+    if in_range.empty:
+        return None
+    return {"ticker": cached["ticker"], "frame": in_range}
 
-    A GARCH(1,1)-based dynamic stop was implemented, backtested (via a
-    monthly-granularity calibration cache mirroring the live GARCH stop),
-    and found to underperform this ATR stop on every risk-adjusted metric —
-    see CLAUDE.md's "GARCH/CPD stop loss in the backtest" section.
-    """
-    atr_mult = float(config.get("backtest", {}).get("atr_stop_multiplier", 2.0))
-    distance_frac = (atr_mult * atr / price) if price else 0.0
 
-    stop_distance = distance_frac * price
-    stop_price = price - stop_distance if direction == "LONG" else price + stop_distance
-    return stop_price, round(distance_frac * 100, 4)
+def make_blocks(start: pd.Timestamp, end: pd.Timestamp, n_blocks: int = 16) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    boundaries = pd.date_range(start, end, periods=n_blocks + 1)
+    return [(boundaries[i], boundaries[i + 1]) for i in range(n_blocks)]
 
 
 # ---------------------------------------------------------------------------
 # Trade simulation
 # ---------------------------------------------------------------------------
 
-def simulate_trades(signals: pd.DataFrame, ticker: str, config: dict) -> list[dict]:
-    """Walk forward through *signals* and generate simulated trades.
-
-    Entry: gated per-date in two steps against config["backtest"]'s own
-    entry-gating keys (entry_signal, entry_signal_overrides,
-    allowed_entry_regimes) — kept separate from trading212_invest /
-    trading212_stocks because this backtest, unlike those two long-only
-    cash-account automation paths, can open both LONG and SHORT positions:
-      1. analysis.regime.is_entry_allowed() — a regime not in
-         backtest.allowed_entry_regimes blocks entry entirely for that
-         date, before the signal is even considered (e.g. MIXED has no
-         demonstrable edge, so no position is opened regardless of signal
-         strength).
-      2. analysis.regime.resolve_entry_signal() — for an allowed regime, the
-         resolved entry_signal_overrides threshold ("STRONG_BUY" only enters
-         on STRONG_BUY (LONG) / STRONG_SELL (SHORT); "BUY" also enters on
-         plain BUY / SELL) gates the signal itself.
-    Exit (in priority order, unaffected by either entry gate — an open
-    position always continues to be monitored and closed regardless of what
-    the regime does next):
-      1. Stop loss — entry ± backtest.atr_stop_multiplier × ATR (see
-         _resolve_entry_stop() above).
-      2. Signal reversal, gated by trading212_invest.exit_signal — "SELL"
-         (default) reverses on SELL/STRONG_SELL for LONG (BUY/STRONG_BUY for
-         SHORT); "STRONG_SELL" requires the strong variant only. Mirrors the
-         live exit_signal threshold used by maybe_place_t212_orders() so the
-         backtest's exit behaviour matches production.
-      3. Maximum holding period — per-ticker via
-         analysis.regime.get_max_holding_days() (ETF/stock/bond/forex/crypto
-         asset-class limits read from config).
-    """
-    from analysis.regime import get_max_holding_days, is_entry_allowed, resolve_entry_signal  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
-    from analysis.risk import _drawdown_tier_from_pct  # noqa: PLC0415  shared drawdown-tier math — see that module's docstring
-    from analysis.volatility import _MIN_VAR_RETURNS, _var_position_size_core  # noqa: PLC0415  shared VaR math — see that module's docstring for why this is imported rather than reimplemented
-
-    bt_cfg   = config.get("backtest", {})
+def simulate_trades(
+    frame: pd.DataFrame,
+    ticker: str,
+    config: dict,
+    gspc_close: pd.Series,
+    is_etf: bool,
+) -> list[dict]:
+    """Walk forward through *frame*, applying (in priority order): the
+    crisis override (force-exit + entry block), index-membership gating
+    (stocks only), the ATR stop, the momentum signal turning off, and the
+    per-ticker max-holding backstop. Position sizing is the shared VaR
+    formula every prior research path has used."""
+    bt_cfg = config.get("backtest", {})
     max_hold = get_max_holding_days(ticker, config)
 
-    # VaR position sizing — reads risk parameters from trading212_invest (the
-    # backtest has no config block of its own for these; entry-gating alone
-    # is kept separate under backtest: because it can go LONG or SHORT, but
-    # risk tolerance is not direction-specific, so trading212_invest's
-    # values are reused directly here). starting_capital_gbp is a notional
-    # account size, not a real compounding balance: simulate_trades() runs
-    # one ticker at a time with no shared cross-ticker portfolio, so this
-    # value is constant for every entry across the whole run rather than
-    # growing/shrinking as a real account would — see CLAUDE.md's "VaR
-    # position sizing" section for the full rationale.
-    var_cfg           = config.get("trading212_invest", {})
-    starting_capital  = float(bt_cfg.get("starting_capital_gbp", 10000))
-    var_confidence    = float(var_cfg.get("var_confidence", 0.95))
-    var_lookback      = int(var_cfg.get("var_lookback_days", 252))
-    max_risk_pct      = float(var_cfg.get("max_risk_pct", 0.01))
-    min_position_gbp  = float(var_cfg.get("min_position_gbp", 50))
-    max_position_gbp  = float(var_cfg.get("max_position_gbp", 500))
-    close_series      = signals["close"].astype(float)
+    var_cfg = config.get("trading212_invest", {})
+    starting_capital = float(bt_cfg.get("starting_capital_gbp", 10000))
+    var_confidence = float(var_cfg.get("var_confidence", 0.95))
+    var_lookback = int(var_cfg.get("var_lookback_days", 252))
+    max_risk_pct = float(var_cfg.get("max_risk_pct", 0.01))
+    min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
+    max_position_gbp = float(var_cfg.get("max_position_gbp", 500))
+    close_series = frame["close"].astype(float)
 
-    # Drawdown-based position scaling — mirrors the live mechanism (see
-    # analysis/risk.py:compute_drawdown_scale_factor()), reusing
-    # trading212_invest.drawdown_scaling for the same reason var_cfg above
-    # reuses trading212_invest for VaR risk parameters: entry-gating is kept
-    # separate under backtest: because it can go LONG or SHORT, but risk
-    # tolerance is not direction-specific. Unlike the live path (one shared
-    # T212 account), simulate_trades() runs one ticker at a time with no
-    # cross-ticker portfolio (see the VaR position sizing note above) — so
-    # "drawdown" here is tracked against a running per-ticker notional
-    # equity curve (starting_capital + this ticker's own realised pnl_gbp so
-    # far in this run), not a real shared account balance. This is the same
-    # scoping limitation starting_capital_gbp already has; it lets the
-    # backtest show whether the mechanism would have helped or hurt on a
-    # per-ticker basis, not a true multi-asset portfolio effect.
-    dd_cfg      = var_cfg.get("drawdown_scaling", {})
-    dd_enabled  = bool(dd_cfg.get("enabled", False))
-    dd_equity   = starting_capital
-    dd_peak     = starting_capital
-    dd_tier     = "NORMAL"
-
-    _BULL   = frozenset({"BUY", "STRONG_BUY"})
-    _BEAR   = frozenset({"SELL", "STRONG_SELL"})
-    _STRONG = frozenset({"STRONG_BUY", "STRONG_SELL"})
-    _ALL    = _BULL | _BEAR
-
-    exit_threshold = config.get("trading212_invest", {}).get("exit_signal", "SELL")
-    _EXIT_BEAR = _BEAR if exit_threshold == "SELL" else frozenset({"STRONG_SELL"})
-    _EXIT_BULL = _BULL if exit_threshold == "SELL" else frozenset({"STRONG_BUY"})
+    raw_crisis = crisis.compute_raw_trigger(gspc_close).reindex(frame.index).ffill().fillna(False)
+    entry_blocked = crisis.extend_trigger(raw_crisis).reindex(frame.index).ffill().fillna(False)
 
     trades: list[dict] = []
-    open_trade: Optional[dict] = None
+    open_trade = None
 
-    for dt, row in signals.iterrows():
-        price  = float(row["close"])
-        sig    = str(row["signal"])
-        atr    = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
+    for dt, row in frame.iterrows():
+        price = float(row["close"])
+        atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
+        sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
+        is_member = is_etf or universe.is_member(ticker, dt.date() if hasattr(dt, "date") else dt)
+        crisis_now = bool(raw_crisis.loc[dt])
+        blocked_now = bool(entry_blocked.loc[dt])
 
         if open_trade is None:
-            regime_at_row = str(row["regime"])
-            if not is_entry_allowed(config, regime_at_row, "backtest"):
+            if not sig_on or not is_member or blocked_now:
                 continue
-            entry_threshold = resolve_entry_signal(bt_cfg, regime_at_row)
-            entry_signals   = _ALL if entry_threshold == "BUY" else _STRONG
-            if sig not in entry_signals:
-                continue
-            direction = "LONG" if sig in _BULL else "SHORT"
-
+            direction = "LONG"
             stop, stop_distance_pct = _resolve_entry_stop(direction, price, atr, config)
 
-            # VaR position sizing — uses only prices strictly BEFORE dt (no
-            # look-ahead). Falls back to max_position_gbp * 0.5 when fewer
-            # than _MIN_VAR_RETURNS (60) prior daily returns are available
-            # within the signals range passed to this call — the same
-            # fallback threshold and value analysis/volatility.py:
-            # compute_var_position_size() uses live, so an entry early in a
-            # short requested backtest window degrades safely rather than
-            # erroring or silently reusing future data.
             prior_closes = close_series.loc[close_series.index < dt].tail(var_lookback + 1)
-            log_returns  = np.log(prior_closes / prior_closes.shift(1)).dropna()
+            log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
             if len(log_returns) >= _MIN_VAR_RETURNS:
-                position_gbp, _daily_var, _holding_var = _var_position_size_core(
+                position_gbp, _dv, _hv = _var_position_size_core(
                     log_returns, starting_capital, max_position_gbp, max_hold,
                     var_confidence, max_risk_pct, min_position_gbp,
                 )
             else:
                 position_gbp = round(max_position_gbp * 0.5, 2)
 
-            dd_pct_at_entry = max(0.0, (dd_peak - dd_equity) / dd_peak) if dd_peak > 0 else 0.0
-            if dd_enabled:
-                dd_tier, dd_scale = _drawdown_tier_from_pct(dd_pct_at_entry, dd_cfg, dd_tier)
-                if dd_scale < 1.0:
-                    position_gbp = max(position_gbp * dd_scale, min_position_gbp)
-            else:
-                dd_scale = 1.0
-
             open_trade = {
-                "ticker":                   ticker,
-                "direction":                direction,
-                "entry_date":               dt,
-                "entry_price":              price,
-                "entry_signal":             sig,
-                "stop_price":               stop,
-                "stop_distance_pct":        stop_distance_pct,
-                "position_gbp":             position_gbp,
-                "drawdown_scale_factor":    dd_scale,
-                "drawdown_pct_at_entry":    dd_pct_at_entry,
-                "regime_at_entry":          str(row["regime"]),
-                "trend_at_entry":           int(row["trend_score"]),
-                "mean_reversion_at_entry":  int(row["mean_reversion_score"]),
-                "volatility_at_entry":      int(row["volatility_score"]),
-                "volume_at_entry":          int(row["volume_score"]),
-                "macro_at_entry":           int(row["macro_score"]),
+                "ticker": ticker, "direction": direction, "entry_date": dt, "entry_price": price,
+                "stop_price": stop, "stop_distance_pct": stop_distance_pct, "position_gbp": position_gbp,
             }
             continue
 
-        direction    = open_trade["direction"]
-        entry_price  = open_trade["entry_price"]
-        stop_price   = open_trade["stop_price"]
+        entry_price = open_trade["entry_price"]
+        stop_price = open_trade["stop_price"]
         holding_days = (dt - open_trade["entry_date"]).days
 
-        exit_reason: Optional[str] = None
+        exit_reason = None
         exit_price = price
 
-        # 1. Stop loss
-        if direction == "LONG"  and price <= stop_price:
+        if crisis_now:
+            exit_reason = "CRISIS_EXIT"
+        elif not is_member:
+            exit_reason = "INDEX_REMOVAL"
+        elif price <= stop_price:
             exit_reason = "STOP_LOSS"
-            exit_price  = stop_price  # assume filled at stop
-        elif direction == "SHORT" and price >= stop_price:
-            exit_reason = "STOP_LOSS"
-            exit_price  = stop_price
-        # 2. Signal reversal (gated by trading212_invest.exit_signal)
-        elif direction == "LONG"  and sig in _EXIT_BEAR:
-            exit_reason = "SIGNAL_REVERSAL"
-        elif direction == "SHORT" and sig in _EXIT_BULL:
-            exit_reason = "SIGNAL_REVERSAL"
-        # 3. Max holding period
+            exit_price = stop_price
+        elif not sig_on:
+            exit_reason = "SIGNAL_OFF"
         elif holding_days >= max_hold:
             exit_reason = "MAX_HOLDING"
 
         if exit_reason:
             pnl_pct = (exit_price - entry_price) / entry_price
-            if direction == "SHORT":
-                pnl_pct = -pnl_pct
-
             trades.append({
-                "ticker":                   ticker,
-                "direction":                direction,
-                "entry_date":               open_trade["entry_date"].date() if hasattr(open_trade["entry_date"], "date") else open_trade["entry_date"],
-                "exit_date":                dt.date() if hasattr(dt, "date") else dt,
-                "entry_price":              entry_price,
-                "exit_price":               float(exit_price),
-                "entry_signal":             open_trade["entry_signal"],
-                "exit_reason":              exit_reason,
-                "pnl_pct":                  float(pnl_pct),
-                "position_gbp":             open_trade["position_gbp"],
-                "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
-                "stop_distance_pct":        open_trade["stop_distance_pct"],
-                "drawdown_scale_factor":    open_trade["drawdown_scale_factor"],
-                "drawdown_pct_at_entry":    open_trade["drawdown_pct_at_entry"],
-                "regime_at_entry":          open_trade["regime_at_entry"],
-                "trend_at_entry":           open_trade["trend_at_entry"],
-                "mean_reversion_at_entry":  open_trade["mean_reversion_at_entry"],
-                "volatility_at_entry":      open_trade["volatility_at_entry"],
-                "volume_at_entry":          open_trade["volume_at_entry"],
-                "macro_at_entry":           open_trade["macro_at_entry"],
-                "holding_days":             holding_days,
-                "is_win":                   pnl_pct > 0,
+                "ticker": ticker, "direction": "LONG",
+                "entry_date": open_trade["entry_date"].date() if hasattr(open_trade["entry_date"], "date") else open_trade["entry_date"],
+                "exit_date": dt.date() if hasattr(dt, "date") else dt,
+                "entry_price": entry_price, "exit_price": float(exit_price),
+                "exit_reason": exit_reason, "pnl_pct": float(pnl_pct),
+                "position_gbp": open_trade["position_gbp"], "pnl_gbp": open_trade["position_gbp"] * float(pnl_pct),
+                "stop_distance_pct": open_trade["stop_distance_pct"],
+                "holding_days": holding_days, "is_win": pnl_pct > 0,
             })
-            dd_equity += open_trade["position_gbp"] * float(pnl_pct)
-            dd_peak    = max(dd_peak, dd_equity)
             open_trade = None
 
-    # Close any still-open position at end of data
     if open_trade is not None:
-        last      = signals.iloc[-1]
-        exit_p    = float(last["close"])
-        pnl_pct   = (exit_p - open_trade["entry_price"]) / open_trade["entry_price"]
-        if open_trade["direction"] == "SHORT":
-            pnl_pct = -pnl_pct
-        hd = (signals.index[-1] - open_trade["entry_date"]).days
+        last = frame.iloc[-1]
+        exit_p = float(last["close"])
+        pnl_pct = (exit_p - open_trade["entry_price"]) / open_trade["entry_price"]
+        hd = (frame.index[-1] - open_trade["entry_date"]).days
         trades.append({
-            "ticker":                   ticker,
-            "direction":                open_trade["direction"],
-            "entry_date":               open_trade["entry_date"].date() if hasattr(open_trade["entry_date"], "date") else open_trade["entry_date"],
-            "exit_date":                signals.index[-1].date(),
-            "entry_price":              open_trade["entry_price"],
-            "exit_price":               exit_p,
-            "entry_signal":             open_trade["entry_signal"],
-            "exit_reason":              "END_OF_DATA",
-            "pnl_pct":                  float(pnl_pct),
-            "position_gbp":             open_trade["position_gbp"],
-            "pnl_gbp":                  open_trade["position_gbp"] * float(pnl_pct),
-            "stop_distance_pct":        open_trade["stop_distance_pct"],
-            "drawdown_scale_factor":    open_trade["drawdown_scale_factor"],
-            "drawdown_pct_at_entry":    open_trade["drawdown_pct_at_entry"],
-            "regime_at_entry":          open_trade["regime_at_entry"],
-            "trend_at_entry":           open_trade["trend_at_entry"],
-            "mean_reversion_at_entry":  open_trade["mean_reversion_at_entry"],
-            "volatility_at_entry":      open_trade["volatility_at_entry"],
-            "volume_at_entry":          open_trade["volume_at_entry"],
-            "macro_at_entry":           open_trade["macro_at_entry"],
-            "holding_days":             hd,
-            "is_win":                   pnl_pct > 0,
+            "ticker": ticker, "direction": "LONG",
+            "entry_date": open_trade["entry_date"].date() if hasattr(open_trade["entry_date"], "date") else open_trade["entry_date"],
+            "exit_date": frame.index[-1].date(),
+            "entry_price": open_trade["entry_price"], "exit_price": exit_p,
+            "exit_reason": "END_OF_DATA", "pnl_pct": float(pnl_pct),
+            "position_gbp": open_trade["position_gbp"], "pnl_gbp": open_trade["position_gbp"] * float(pnl_pct),
+            "stop_distance_pct": open_trade["stop_distance_pct"],
+            "holding_days": hd, "is_win": pnl_pct > 0,
         })
 
     return trades
 
 
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
-
-def _create_run(engine, name: str, start: datetime, end: datetime,
-                tickers: list[str], config: dict) -> int:
-    bt_cfg = config.get("backtest", {})
-    with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                "INSERT INTO backtest_runs "
-                "(name, created_at, start_date, end_date, tickers_json, params_json, status) "
-                "VALUES (:name, :ts, :sd, :ed, :tj, :pj, 'pending')"
-            ),
-            {
-                "name": name or f"Backtest {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
-                "ts":   datetime.utcnow(),
-                "sd":   start.date() if isinstance(start, datetime) else start,
-                "ed":   end.date()   if isinstance(end,   datetime) else end,
-                "tj":   json.dumps(tickers),
-                "pj":   json.dumps(bt_cfg),
-            },
-        )
-        return result.lastrowid
+def run_candidate(tickers_cache: list, config: dict, gspc_close: pd.Series) -> list[dict]:
+    all_trades: list[dict] = []
+    for cached in tickers_cache:
+        if cached is None:
+            continue
+        ticker = cached["ticker"]
+        is_etf = ticker in universe.ETF_TICKERS
+        all_trades.extend(simulate_trades(cached["frame"], ticker, config, gspc_close, is_etf))
+    return all_trades
 
 
-def _update_run_status(engine, run_id: int, status: str, error: str = "") -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text("UPDATE backtest_runs SET status = :s, error_message = :e WHERE id = :id"),
-            {"s": status, "e": error, "id": run_id},
-        )
-
-
-_SIGNALS_UPSERT_SQL = text("""
-    INSERT INTO backtest_signals
-        (run_id, ticker, date, regime, confluence_score, signal, trend_score,
-         mean_reversion_score, volatility_score, volume_score, macro_score, close_price, atr)
-    VALUES
-        (:run_id, :ticker, :date, :regime, :confluence_score, :signal, :trend_score,
-         :mean_reversion_score, :volatility_score, :volume_score, :macro_score, :close_price, :atr)
-    ON CONFLICT(run_id, ticker, date) DO UPDATE SET
-        confluence_score = excluded.confluence_score,
-        signal            = excluded.signal
-""")
-
-
-def _store_signals_batch(engine, run_id: int, ticker: str, signals: pd.DataFrame) -> None:
-    """Upsert one backtest_signals row per date in *signals*.
-
-    Uses raw SQL with a list-of-dicts parameter set (conn.execute(text(...),
-    rows)) rather than sqlite_insert(BacktestSignal).values(chunk) — the
-    original ORM-expression-builder approach measured at ~0.6s/ticker (~38s
-    across a 64-ticker run) purely from SQLAlchemy's Core/ORM query-building
-    overhead for a multi-row VALUES + ON CONFLICT construct, unrelated to
-    the actual row count or SQLite itself (a Core-Table-object variant of
-    the same `.values([...])` pattern measured identically slow). Passing a
-    list of dicts to conn.execute() here instead dispatches through the
-    DBAPI's executemany() with a single prepared statement reused across
-    all rows — measured ~12x faster for the same data (0.43s vs 5.2s for 12
-    tickers' worth of rows in isolation). Discovered while adding GARCH/CPD
-    support to the backtest (see CLAUDE.md's "Backtesting engine
-    performance" note) — this fix is unrelated to that feature but was
-    necessary to keep a full 64-ticker run within its performance budget.
-    """
-    rows = []
-    for dt, row in signals.iterrows():
-        d = dt.date() if hasattr(dt, "date") else dt
-        rows.append({
-            "run_id":               run_id,
-            "ticker":               ticker,
-            "date":                 d,
-            "regime":               str(row["regime"]),
-            "confluence_score":     float(row["confluence_score"]),
-            "signal":               str(row["signal"]),
-            "trend_score":          int(row["trend_score"]),
-            "mean_reversion_score": int(row["mean_reversion_score"]),
-            "volatility_score":     int(row["volatility_score"]),
-            "volume_score":         int(row["volume_score"]),
-            "macro_score":          int(row["macro_score"]),
-            "close_price":          float(row["close"]),
-            "atr":                  float(row["atr"]) if pd.notna(row["atr"]) else None,
-        })
-    if not rows:
-        return
-    with engine.begin() as conn:
-        conn.execute(_SIGNALS_UPSERT_SQL, rows)
-
-
-def _store_trades_batch(engine, run_id: int, trades: list[dict]) -> None:
+def ex_best_trades(trades: list[dict]) -> list[dict]:
     if not trades:
-        return
-    rows = [{"run_id": run_id, **t} for t in trades]
-    _BATCH = 200
-    with engine.begin() as conn:
-        for i in range(0, len(rows), _BATCH):
-            conn.execute(sqlite_insert(BacktestTrade).values(rows[i : i + _BATCH]))
-
-
-def _update_run_complete(engine, run_id: int, metrics: dict) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "UPDATE backtest_runs SET "
-                "status='complete', total_trades=:tt, win_rate=:wr, "
-                "avg_return_pct=:ar, sharpe_ratio=:sr, max_drawdown_pct=:md, "
-                "total_return_pct=:tr, avg_holding_days=:ah "
-                "WHERE id=:id"
-            ),
-            {
-                "tt": metrics.get("total_trades", 0),
-                "wr": metrics.get("win_rate"),
-                "ar": metrics.get("avg_return_pct"),
-                "sr": metrics.get("sharpe_ratio"),
-                "md": metrics.get("max_drawdown_pct"),
-                "tr": metrics.get("total_return_pct"),
-                "ah": metrics.get("avg_holding_days"),
-                "id": run_id,
-            },
-        )
-
-
-def _store_regime_filter_contribution(engine, run_id: int, with_metrics: dict, without_metrics: dict) -> None:
-    """Persist the two-pass regime-filter comparison — see run_backtest()'s
-    "Regime filter contribution" pass and analysis/robustness.py:
-    compute_regime_filter_contribution(), which reads these columns back."""
-    with engine.begin() as conn:
-        conn.execute(
-            text("UPDATE backtest_runs SET with_regime_filter=:w, without_regime_filter=:wo WHERE id=:id"),
-            {"w": json.dumps(with_metrics), "wo": json.dumps(without_metrics), "id": run_id},
-        )
-
-
-# ---------------------------------------------------------------------------
-# Quick metrics for run summary (full metrics in backtest_metrics.py)
-# ---------------------------------------------------------------------------
-
-def _quick_metrics(trades: list[dict]) -> dict:
-    if not trades:
-        return {"total_trades": 0}
-    df = pd.DataFrame(trades)
-    n  = len(df)
-    wr = df["is_win"].mean()
-    ar = df["pnl_pct"].mean() * 100
-    tr = df["pnl_pct"].sum() * 100  # simple sum (not compounded)
-    ah = df["holding_days"].mean()
-
-    # Sharpe: annualised (assume each trade = independent daily observation)
-    if n > 1 and df["pnl_pct"].std() > 0:
-        sr = (df["pnl_pct"].mean() / df["pnl_pct"].std()) * np.sqrt(252 / ah if ah > 0 else 1)
-    else:
-        sr = 0.0
-
-    # Max drawdown on cumulative equity curve — realised in exit_date order
-    # (the order P&L actually lands in a real account), not the incoming
-    # list's insertion order (per-ticker loop order in run_backtest()), which
-    # produces a path-dependent statistic with no correspondence to any real
-    # sequence of events. Mirrors analysis/backtest_metrics.py:equity_curve()'s
-    # own exit-date-sort rationale.
-    dd_df = df.sort_values("exit_date")
-    cum = (1 + dd_df["pnl_pct"]).cumprod()
-    peak = cum.cummax()
-    dd   = ((cum - peak) / peak).min() * 100
-
-    return {
-        "total_trades":    n,
-        "win_rate":        round(float(wr), 4),
-        "avg_return_pct":  round(float(ar), 4),
-        "total_return_pct": round(float(tr), 4),
-        "sharpe_ratio":    round(float(sr), 4),
-        "max_drawdown_pct": round(float(dd), 4),
-        "avg_holding_days": round(float(ah), 1),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
-def run_backtest(
-    tickers: list[str],
-    start_date: datetime,
-    end_date: datetime,
-    config: Optional[dict] = None,
-    name: str = "",
-) -> int:
-    """Run the full vectorized backtest and persist results.
-
-    Also runs a second, comparison-only simulation pass per ticker with
-    `backtest.allowed_entry_regimes` bypassed (every regime admitted) —
-    quick-metrics summaries from both passes are stored as JSON on
-    backtest_runs.with_regime_filter / without_regime_filter, so the
-    Robustness page can show how much of the run's edge comes from the
-    regime gate itself vs. the underlying signal logic. Only the actually-
-    gated pass's trades are persisted to backtest_trades / used for the
-    run's own summary metrics — the unfiltered pass is comparison-only and
-    is not stored trade-by-trade.
-
-    Returns:
-        run_id — integer primary key of the BacktestRun row.
-    """
-    if config is None:
-        config = _load_config()
-
-    engine = get_engine()
-    run_id = _create_run(engine, name, start_date, end_date, tickers, config)
-
-    try:
-        _update_run_status(engine, run_id, "running")
-        logger.info("Backtest run %d starting: %d tickers, %s → %s",
-                    run_id, len(tickers), start_date, end_date)
-
-        # --- Shared series (loaded once for all tickers) ---------------------
-        vix_df = get_price_df("^VIX", days=4000)
-        if not vix_df.empty:
-            vix_df = vix_df.set_index("date")
-            vix_df.index = pd.to_datetime(vix_df.index)
-            vix_s = vix_df["close"].astype(float)
-        else:
-            vix_s = None
-
-        gspc_df = get_price_df("^GSPC", days=4000)
-        if not gspc_df.empty:
-            gspc_df = gspc_df.set_index("date")
-            gspc_df.index = pd.to_datetime(gspc_df.index)
-            reg_hist = _regime_history(gspc_df, vix_s, config)
-        else:
-            reg_hist = pd.DataFrame({"regime": pd.Series(dtype=str)})
-
-        macro_df = _load_macro_history()
-
-        # Date bounds as Timestamps for filtering
-        ts_start = pd.Timestamp(start_date)
-        ts_end   = pd.Timestamp(end_date)
-
-        # --- Regime filter contribution: unfiltered config for the second,
-        # comparison-only pass below. Bypasses allowed_entry_regimes by
-        # admitting every regime instead — everything else (entry_signal,
-        # entry_signal_overrides, ATR stop, VaR/drawdown params) is identical
-        # to the run's own config, so the only variable between the two
-        # passes is the regime gate itself. See CLAUDE.md's "Regime filter
-        # contribution" section and analysis/robustness.py:
-        # compute_regime_filter_contribution(), which reads the two metrics
-        # dicts stored below back out.
-        from analysis.regime import Regime as _Regime  # noqa: PLC0415  local import — mirrors compute_signal_history()'s pattern above
-        unfiltered_config = copy.deepcopy(config)
-        unfiltered_config.setdefault("backtest", {})["allowed_entry_regimes"] = [r.value for r in _Regime]
-
-        # --- Per-ticker signal computation -----------------------------------
-        all_trades: list[dict] = []
-        all_trades_unfiltered: list[dict] = []
-        for ticker in tickers:
-            try:
-                df = get_price_df(ticker, days=4000)
-                if df.empty or len(df) < 250:
-                    logger.debug("Skipping %s — insufficient price data (%d rows).", ticker, len(df))
-                    continue
-
-                df = df.set_index("date")
-                df.index = pd.to_datetime(df.index)
-
-                signals = compute_signal_history(ticker, df, vix_s, reg_hist, macro_df, config)
-                if signals.empty:
-                    continue
-
-                # Store full signal history for attribution / decay analysis
-                _store_signals_batch(engine, run_id, ticker, signals)
-
-                # Filter to requested date range for trade simulation
-                in_range = signals[(signals.index >= ts_start) & (signals.index <= ts_end)]
-                if in_range.empty:
-                    continue
-
-                ticker_trades = simulate_trades(in_range, ticker, config)
-                all_trades.extend(ticker_trades)
-                logger.debug("%s: %d trades simulated.", ticker, len(ticker_trades))
-
-                # Second, comparison-only pass — reuses the same in_range
-                # signal history (no recomputation), so this only re-runs
-                # the cheap per-date simulate_trades() walk, not the
-                # vectorized pandas scoring above.
-                ticker_trades_unfiltered = simulate_trades(in_range, ticker, unfiltered_config)
-                all_trades_unfiltered.extend(ticker_trades_unfiltered)
-
-            except Exception as exc:
-                logger.warning("Backtest: error processing %s: %s", ticker, exc)
-                continue
-
-        # --- Store trades and finalize ---------------------------------------
-        _store_trades_batch(engine, run_id, all_trades)
-        metrics = _quick_metrics(all_trades)
-        _update_run_complete(engine, run_id, metrics)
-
-        metrics_unfiltered = _quick_metrics(all_trades_unfiltered)
-        _store_regime_filter_contribution(engine, run_id, metrics, metrics_unfiltered)
-
-        logger.info(
-            "Backtest run %d complete — %d trades, win_rate=%.1f%%, return=%.1f%%",
-            run_id, metrics.get("total_trades", 0),
-            (metrics.get("win_rate") or 0) * 100,
-            metrics.get("total_return_pct") or 0,
-        )
-        return run_id
-
-    except Exception as exc:
-        logger.error("Backtest run %d failed: %s", run_id, exc, exc_info=True)
-        _update_run_status(engine, run_id, "error", error=str(exc))
-        raise
-
-
-# ---------------------------------------------------------------------------
-# Query helpers
-# ---------------------------------------------------------------------------
-
-def get_all_runs() -> list[dict]:
-    """Return all backtest runs ordered newest first."""
-    engine = get_engine()
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT * FROM backtest_runs ORDER BY created_at DESC")
-            ).mappings().all()
-        return [dict(r) for r in rows]
-    except Exception:
         return []
+    df = pd.DataFrame(trades)
+    if df.empty:
+        return trades
+    idx_best = df["pnl_pct"].idxmax()
+    return df.drop(index=idx_best).to_dict("records")
 
 
-def get_run(run_id: int) -> Optional[dict]:
-    engine = get_engine()
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM backtest_runs WHERE id = :id"), {"id": run_id}
-            ).mappings().first()
-        return dict(row) if row else None
-    except Exception:
-        return None
+def compute_metrics_fixed(trades: list[dict], starting_capital: float) -> dict:
+    """Additive-GBP, exit-date-sorted drawdown/CAGR — the corrected
+    methodology, the standard for every result reported since."""
+    if not trades:
+        return {"total_trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
+                "sharpe_ratio": 0.0, "max_drawdown_pct": 0.0, "cagr_pct": 0.0,
+                "total_return_pct": 0.0}
+    df = pd.DataFrame(trades)
+    base = compute_metrics(df)
+
+    ec = equity_curve_gbp(df, starting_capital_gbp=starting_capital)
+    if ec.empty or len(ec) < 2:
+        base["max_drawdown_pct"] = 0.0
+        base["cagr_pct"] = 0.0
+        base["total_return_pct"] = 0.0
+        return base
+
+    peak = ec["equity_gbp"].cummax()
+    dd_pct = (ec["equity_gbp"] - peak) / starting_capital * 100.0
+    max_dd = float(dd_pct.min())
+
+    start_eq = float(ec["equity_gbp"].iloc[0])
+    end_eq = float(ec["equity_gbp"].iloc[-1])
+    days = (ec["date"].iloc[-1] - ec["date"].iloc[0]).days
+    years = days / 365.25 if days > 0 else 0.0
+
+    total_return_pct = (end_eq - starting_capital) / starting_capital * 100.0
+    cagr = ((end_eq / starting_capital) ** (1.0 / years) - 1.0) * 100.0 if years > 0 and end_eq > 0 else 0.0
+
+    base["max_drawdown_pct"] = round(max_dd, 2)
+    base["cagr_pct"] = round(cagr, 2)
+    base["total_return_pct"] = round(total_return_pct, 2)
+    return base
 
 
-def get_run_trades(run_id: int) -> pd.DataFrame:
-    engine = get_engine()
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT * FROM backtest_trades WHERE run_id = :id ORDER BY entry_date"),
-                {"id": run_id},
-            ).mappings().all()
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame([dict(r) for r in rows])
-        df["entry_date"] = pd.to_datetime(df["entry_date"])
-        df["exit_date"]  = pd.to_datetime(df["exit_date"])
-        return df
-    except Exception:
-        return pd.DataFrame()
+def full_metrics_fixed(trades: list[dict], starting_capital: float) -> dict:
+    return {"raw": compute_metrics_fixed(trades, starting_capital),
+            "ex_best": compute_metrics_fixed(ex_best_trades(trades), starting_capital)}
 
 
-def get_run_signals(run_id: int, ticker: Optional[str] = None) -> pd.DataFrame:
-    engine = get_engine()
-    sql = "SELECT * FROM backtest_signals WHERE run_id = :id"
-    params: dict = {"id": run_id}
-    if ticker:
-        sql += " AND ticker = :t"
-        params["t"] = ticker
-    sql += " ORDER BY ticker, date"
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text(sql), params).mappings().all()
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame([dict(r) for r in rows])
-        df["date"] = pd.to_datetime(df["date"])
-        return df
-    except Exception:
-        return pd.DataFrame()
+def walk_forward_pf(trades: list[dict], window_months: int = 6, step_months: int = 1) -> dict:
+    if not trades:
+        return {"n_total": 0, "n_positive": 0, "success_rate_pct": 0.0}
+    df = pd.DataFrame(trades)
+    df["entry_date"] = pd.to_datetime(df["entry_date"])
+    df = df.sort_values("entry_date")
 
+    min_date, max_date = df["entry_date"].min(), df["entry_date"].max()
+    current = min_date.to_period("M")
+    end_p = max_date.to_period("M")
+    windows = []
+    while current <= end_p:
+        win_start = current.to_timestamp()
+        win_end = (current + window_months).to_timestamp() - pd.Timedelta(days=1)
+        sub = df[(df["entry_date"] >= win_start) & (df["entry_date"] <= win_end)]
+        if len(sub) >= 3:
+            m = compute_metrics(sub)
+            windows.append(m.get("profit_factor", 0.0))
+        current = current + step_months
 
-def delete_run(run_id: int) -> None:
-    """Delete a backtest run and all its associated signals and trades.
-
-    Runs VACUUM after the delete transaction commits to reclaim the freed
-    page space on disk — backtest_signals in particular can accumulate a
-    large number of rows per run (one per ticker per date), so repeated
-    deletes without a VACUUM leave the .db file bloated with empty pages.
-    """
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM backtest_signals WHERE run_id = :id"), {"id": run_id})
-        conn.execute(text("DELETE FROM backtest_trades  WHERE run_id = :id"), {"id": run_id})
-        conn.execute(text("DELETE FROM backtest_runs    WHERE id     = :id"), {"id": run_id})
-
-    # VACUUM cannot run inside a transaction — must be on a fresh connection
-    # after the DELETE transaction above has already committed.
-    with get_engine().connect() as conn:
-        conn.execute(text("VACUUM"))
-        conn.commit()
-    logger.info("VACUUM complete after deleting backtest run %s", run_id)
+    n_total = len(windows)
+    n_positive = sum(1 for pf in windows if pf > 1.0)
+    success_rate_pct = round(n_positive / n_total * 100, 1) if n_total else 0.0
+    return {"n_total": n_total, "n_positive": n_positive, "success_rate_pct": success_rate_pct}

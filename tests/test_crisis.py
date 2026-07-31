@@ -1,7 +1,7 @@
-"""Tests for analysis/v2/crisis.py -- pure functions, no DB needed."""
+"""Tests for analysis/crisis.py -- pure functions, no DB needed."""
 import pandas as pd
 
-from analysis.v2 import crisis as v2c
+from analysis import crisis as v2c
 
 
 def _gspc_series():

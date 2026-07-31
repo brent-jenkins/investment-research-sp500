@@ -335,12 +335,11 @@ def backfill_price_history(
     for anything before 2016 again, no matter how large data.history_days
     is raised, because incremental refreshes use a rolling 10-day window
     and pull_history() only ever fetches [today - days, today]. This
-    function is the missing backward direction, mirroring
-    analysis/macro.py:backfill_macro_indicators()'s "one-off full-range
-    fetch from start_date" pattern for price data specifically — but
-    deliberately narrower than a full re-fetch-and-upsert of the whole
-    range: it only ever requests [start_date, existing_earliest_date),
-    strictly before whatever a ticker's own earliest stored row already is.
+    function is the missing backward direction: a one-off full-range fetch
+    from start_date for price data specifically — but deliberately narrower
+    than a full re-fetch-and-upsert of the whole range: it only ever
+    requests [start_date, existing_earliest_date), strictly before whatever
+    a ticker's own earliest stored row already is.
 
     That narrower range is a deliberate safety choice, not just the
     simplest implementation. yfinance's "Close" is split-adjusted

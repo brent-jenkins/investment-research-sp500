@@ -2,27 +2,27 @@
 
 Run schedule (UTC):
   07:00  Pre-market (Tue-Fri) — pull fresh data for exchanges that just closed (Asian
-                       markets), then run analysis
+                       markets), then place/exit orders
   07:00  Monday pre-market (Mon only) — cancel stale weekend BUY orders left PLACED
-                       from Friday's EOD run, then the same analysis-only pipeline as
-                       the Tue-Fri pre-market job (no data pull — see
+                       from Friday's EOD run, then the same order-logic-only pipeline
+                       as the Tue-Fri pre-market job (no data pull — see
                        _monday_premarket_job() for why Monday needs its own job
                        instead of just widening _pre_market_job() to "mon-fri")
-  13:30  US open     — analysis only, no data pull
-  21:30  End of day  — full data refresh then analysis (all exchanges); places T212 orders
-  00-21,23  Hourly   — open-trade health check; email alert on STOP LOSS / EXIT SIGNAL
-                       only fires for trades whose home exchange is currently in session
+  13:30  US open     — order logic only, no data pull
+  21:15  Membership refresh — refresh point-in-time index-membership windows
+                       15 minutes ahead of the EOD job's own trading decisions
+  21:30  End of day  — full data refresh, then place/exit orders (all exchanges)
+  00-21,23  Hourly   — T212 order-status poll, exit check, account snapshot refresh
 
-Every analysis run executes the complete analysis pipeline:
-  run_analysis()       → indicators table
-  generate_signals()   → signals table  (also stamps last_analysis_run)
-  compute_all_pairs()  → correlations table
+Every scheduled trading run calls brokers/trading212.py:maybe_place_orders()
+(which itself calls maybe_exit_positions() first) — there is no separate
+"analysis pipeline" step: momentum signal, index membership, and the crisis
+circuit breaker are all computed on demand, straight from price_data, by
+brokers/trading212.py's own _ticker_state() at order-decision time.
 
 Metadata keys written to system_metadata:
   last_full_refresh          — UTC timestamp of the last successful data pull (EOD run or manual)
-  last_analysis_run          — UTC timestamp of the last completed analysis (any run type)
-  last_run_type              — 'full' or 'analysis_only'
-  trade_alert_status:{id}    — last health status for which an alert email was sent per trade
+  last_run_type               — 'full' or 'analysis_only' — which pipeline variant last ran
   t212_account_snapshot      — JSON of latest T212 account summary (written by _fetch_t212_snapshot)
   t212_positions_snapshot    — JSON of latest T212 positions list (written by _fetch_t212_snapshot)
   t212_snapshot_fetched_at   — UTC ISO timestamp of last successful T212 fetch
@@ -41,10 +41,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from analysis.confluence import generate_signals
-from analysis.correlations import compute_all_pairs
-from analysis.engine import run_analysis
-from analysis.macro import fetch_and_store_macro_indicators, refresh_release_calendars
 from data.database import get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, pull_incremental
 
@@ -209,16 +205,6 @@ def _fetch_t212_snapshot(config: dict) -> None:
         set_metadata("t212_snapshot_fetched_at", datetime.utcnow().isoformat())
         n_pos = len(positions) if isinstance(positions, list) else 0
         logger.info("T212 account snapshot updated (%d position(s)).", n_pos)
-
-        # Update the drawdown-scaling high water mark on every snapshot refresh —
-        # see analysis/risk.py:update_peak_portfolio_value().
-        try:
-            from analysis.risk import update_peak_portfolio_value  # noqa: PLC0415
-            _total_val = float((summary or {}).get("totalValue", 0) or 0)
-            if _total_val > 0:
-                update_peak_portfolio_value(_total_val, config)
-        except Exception as exc:
-            logger.warning("Drawdown peak update failed: %s", exc)
     except Exception as exc:
         logger.error("T212 snapshot fetch failed: %s", exc)
         set_metadata("t212_invest_error", str(exc))
@@ -258,52 +244,37 @@ def _run_analysis_pipeline(
     all_tickers: list[str],
     run_type: str,
 ) -> None:
-    """Execute the full analysis pipeline and stamp metadata."""
-    try:
-        run_analysis(tickers=all_tickers, config=config)
-    except Exception as exc:
-        logger.error("run_analysis failed: %s", exc, exc_info=True)
+    """Run the momentum + crisis-override order logic for every scheduled slot.
 
-    try:
-        generate_signals(tickers=all_tickers, config=config)
-    except Exception as exc:
-        logger.error("generate_signals failed: %s", exc, exc_info=True)
-
+    "all_tickers" is accepted for call-site symmetry with the previous
+    six-module pipeline (which needed a ticker list to analyse), but the
+    momentum signal, index membership, and crisis check are all computed
+    per-ticker on demand inside maybe_place_orders()/_ticker_state() from
+    trading212_invest.instrument_mapping — this parameter is unused here.
+    """
     try:
         set_metadata("last_run_type", run_type)
     except Exception as exc:
         logger.warning("Could not stamp last_run_type: %s", exc)
 
     try:
-        from brokers.trading212 import maybe_place_t212_orders  # noqa: PLC0415
-        maybe_place_t212_orders(config, run_type)
+        from brokers.trading212 import maybe_place_orders  # noqa: PLC0415
+        maybe_place_orders(config, run_type)
     except Exception as exc:
-        logger.error("T212 Invest order placement failed: %s", exc, exc_info=True)
+        logger.error("Order placement failed: %s", exc, exc_info=True)
 
-    try:
-        from brokers.trading212 import maybe_place_stock_orders  # noqa: PLC0415
-        maybe_place_stock_orders(config, run_type)
-    except Exception as exc:
-        logger.error("T212 Stocks order placement failed: %s", exc, exc_info=True)
-
-    try:
-        from brokers.trading212_v2 import maybe_place_v2_orders  # noqa: PLC0415
-        maybe_place_v2_orders(config, run_type)
-    except Exception as exc:
-        logger.error("V2 order placement failed: %s", exc, exc_info=True)
-
-    logger.info("Analysis pipeline complete (run_type=%s).", run_type)
+    logger.info("Order pipeline complete (run_type=%s).", run_type)
 
 
 def _pre_market_job() -> None:
-    """07:00 UTC — pull fresh data for exchanges that just closed, then run analysis.
+    """07:00 UTC — pull fresh data for exchanges that just closed, then run order logic.
 
     Asian markets (JPX/Tokyo ~06:30, HKEX ~08:00) close before this run fires.
     For any exchange whose session ended before 07:30 UTC today, we pull
     incremental price data for those tickers. The 13:30 and 21:30 runs
     handle European and US markets respectively.
     """
-    logger.info("Scheduled pre-market analysis starting (07:00 UTC)…")
+    logger.info("Scheduled pre-market run starting (07:00 UTC)…")
     try:
         set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
         set_metadata("last_scheduled_run_name", "Pre-Market")
@@ -341,7 +312,7 @@ def _pre_market_job() -> None:
 
 
 def _cancel_stale_weekend_orders(config: dict) -> int:
-    """Cancel any PLACED BUY order in t212_invest_orders older than _STALE_ORDER_HOURS.
+    """Cancel any PLACED BUY order in invest_orders older than _STALE_ORDER_HOURS.
 
     The Friday 21:30 UTC EOD run can place BUY orders that are still sitting in
     PLACED status when markets reopen Monday — T212 doesn't fill market orders
@@ -350,17 +321,14 @@ def _cancel_stale_weekend_orders(config: dict) -> int:
     futures pricing, macro news), so an order that made sense Friday afternoon
     may no longer reflect a signal worth acting on by Monday.
 
-    Cancelled orders are re-evaluated fresh by the analysis pipeline that
-    _monday_premarket_job() runs right after this — a ticker still showing
-    STRONG_BUY in TRENDING_BULL gets a brand-new order; one whose signal
-    weakened over the weekend does not.
+    Cancelled orders are re-evaluated fresh by the order pipeline that
+    _monday_premarket_job() runs right after this — a ticker whose momentum
+    signal is still on gets a brand-new order; one whose signal turned off
+    over the weekend does not.
 
-    Covers both automation paths (ETF and stock orders share t212_invest_orders)
-    — a stale order is a stale order regardless of which path placed it. No-op
-    (returns 0) if T212 credentials are not configured. Never raises — a
-    failure to cancel one order is logged and the rest still get a chance;
-    matches the "never raises" contract the rest of brokers/trading212.py's
-    automation functions follow.
+    Never raises — a failure to cancel one order is logged and the rest
+    still get a chance; matches the "never raises" contract the rest of
+    brokers/trading212.py's automation functions follow.
 
     Returns the number of orders cancelled.
     """
@@ -386,11 +354,11 @@ def _cancel_stale_weekend_orders(config: dict) -> int:
         with engine.connect() as conn:
             rows = conn.execute(sa_text("""
                 SELECT id, order_id, ticker, placed_at
-                FROM t212_invest_orders
+                FROM invest_orders
                 WHERE status = 'PLACED' AND direction = 'BUY' AND placed_at < :cutoff
             """), {"cutoff": cutoff_str}).mappings().all()
     except Exception as exc:
-        logger.error("Monday pre-market: could not read t212_invest_orders: %s", exc)
+        logger.error("Monday pre-market: could not read invest_orders: %s", exc)
         return 0
 
     if not rows:
@@ -421,7 +389,7 @@ def _cancel_stale_weekend_orders(config: dict) -> int:
                 client.cancel_order(row["order_id"])
             with engine.begin() as upd_conn:
                 upd_conn.execute(sa_text("""
-                    UPDATE t212_invest_orders
+                    UPDATE invest_orders
                     SET status = 'CANCELLED', cancelled_at = :now
                     WHERE id = :row_id
                 """), {"now": datetime.utcnow().isoformat(), "row_id": row["id"]})
@@ -437,7 +405,7 @@ def _cancel_stale_weekend_orders(config: dict) -> int:
 
 def _monday_premarket_job() -> None:
     """07:00 UTC every Monday — cancel stale weekend BUY orders, then re-run
-    analysis so entry/exit decisions are fresh before markets open.
+    the order pipeline so entry/exit decisions are fresh before markets open.
 
     Registered separately from _pre_market_job() (which fires Tuesday-Friday
     only — see start_scheduler()) because Monday needs the extra stale-order
@@ -447,12 +415,11 @@ def _monday_premarket_job() -> None:
     still-open BUY orders deserve to stand, not to ingest new data (prices
     haven't changed since Friday close for anything this job needs to act on).
 
-    maybe_place_t212_orders() / maybe_place_stock_orders() and
-    maybe_exit_t212_positions() / maybe_exit_stock_positions() all fire as
-    part of _run_analysis_pipeline() below (same as every other analysis
-    run) — a ticker still showing STRONG_BUY in TRENDING_BULL after
-    cancellation gets a fresh order; a weakened signal does not get a
-    replacement, and any position whose signal now calls for exit is closed.
+    maybe_place_orders() (which calls maybe_exit_positions() first) fires as
+    part of _run_analysis_pipeline() below (same as every other run) — a
+    ticker whose momentum signal is still on after cancellation gets a fresh
+    order; a signal that turned off does not get a replacement, and any
+    position whose signal now calls for exit is closed.
     """
     logger.info("Scheduled Monday pre-market job starting (07:00 UTC)…")
     try:
@@ -474,12 +441,12 @@ def _monday_premarket_job() -> None:
 
 
 def _us_open_job() -> None:
-    """13:30 UTC — analysis only using most recently stored price data.
+    """13:30 UTC — order logic only using most recently stored price data.
 
     European markets are mid-session; US is about to open. No data pull —
     requires a complete session close.
     """
-    logger.info("Scheduled US-open analysis starting (13:30 UTC)…")
+    logger.info("Scheduled US-open run starting (13:30 UTC)…")
     try:
         set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
         set_metadata("last_scheduled_run_name", "US Open")
@@ -490,7 +457,7 @@ def _us_open_job() -> None:
 
 
 def _eod_job() -> None:
-    """21:30 UTC — pull incremental data for open exchanges, then run full analysis."""
+    """21:30 UTC — pull incremental data for open exchanges, then run the full order pipeline."""
     logger.info("Scheduled end-of-day refresh starting (21:30 UTC)…")
     try:
         set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
@@ -540,20 +507,6 @@ def _eod_job() -> None:
     except Exception as exc:
         logger.warning("Could not stamp last_pull_rows: %s", exc)
 
-    try:
-        logger.info("Fetching FRED macro indicators…")
-        fetch_and_store_macro_indicators(config)
-        set_metadata("last_fred_run", datetime.utcnow().isoformat())
-    except Exception as exc:
-        logger.error("FRED macro indicator fetch failed: %s", exc, exc_info=True)
-
-    try:
-        logger.info("Refreshing FRED release calendars…")
-        refresh_release_calendars(config)
-        set_metadata("last_fred_release_calendar_run", datetime.utcnow().isoformat())
-    except Exception as exc:
-        logger.error("FRED release-calendar refresh failed: %s", exc, exc_info=True)
-
     _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
 
     try:
@@ -563,276 +516,70 @@ def _eod_job() -> None:
 
 
 def _trade_alert_job() -> None:
-    """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — VIX spike check + T212 upkeep.
+    """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — T212 order-status poll,
+    exit check, and account snapshot refresh.
 
     Runs unconditionally on every firing:
-      - VIX spike check: on a >20% intraday VIX jump vs. the previous close,
-        runs an immediate analysis-only pipeline and sends a spike alert email
-        (once per calendar day).
       - T212 order-status polling (`poll_placed_orders()`) and account/positions
         snapshot refresh (`_fetch_t212_snapshot()`), so the Status page snapshot
         stays current.
-      - The T212 Invest exit check — `brokers.trading212.maybe_exit_t212_positions()`
-        / `maybe_exit_stock_positions()` — so a confirmed EXIT SIGNAL or backstop
-        time-limit exit closes within about an hour rather than waiting for the
-        next EOD run (see "Broker integration — Trading212 Invest" in CLAUDE.md
-        for the exit trigger priority and the 24h duplicate-SELL guard shared
-        with the EOD run's own delegated call to the same functions).
-
-    Manually-logged CFD trade alerting (STOP LOSS / EXIT SIGNAL emails, and the
-    price-level SL/TP proximity check) was removed along with the Trade Log
-    page — see "Removed: manual CFD trade logging" in CLAUDE.md. Any CFD trade
-    rows already in the `trades` table are no longer monitored or alerted on.
+      - The exit check — `brokers.trading212.maybe_exit_positions()` — so a
+        crisis exit, index removal, stop loss, signal-off, or max-holding exit
+        closes within about an hour rather than waiting for the next full
+        (07:00/13:30/21:30) run.
     """
     logger.info("Trade alert check starting…")
     config = _load_config()
 
-    # ── VIX spike check ────────────────────────────────────────────────────
-    # Fire once per calendar day when VIX rises >20% vs the previous close.
-    # Triggers an immediate analysis pipeline run and sends a spike alert email.
     try:
-        from data.ingestion import get_price_df as _gpdf  # noqa: PLC0415
-        _vix_df = _gpdf("^VIX", days=5)
-        if _vix_df is not None and len(_vix_df) >= 2:
-            _vix_prev  = float(_vix_df["close"].iloc[-2])
-            _vix_curr  = float(_vix_df["close"].iloc[-1])
-            if _vix_prev > 0:
-                _vix_chg_pct = (_vix_curr - _vix_prev) / _vix_prev * 100
-                if _vix_chg_pct >= 20.0:
-                    _today_str = date.today().isoformat()
-                    _spike_key = "last_vix_spike_alert"
-                    _last_spike = get_metadata_str(_spike_key) or ""
-                    if _last_spike != _today_str:
-                        logger.warning(
-                            "VIX spike detected: %.2f → %.2f (+%.1f%%) — "
-                            "running immediate analysis.",
-                            _vix_prev, _vix_curr, _vix_chg_pct,
-                        )
-                        # Stamp immediately so repeated hourly firings don't
-                        # trigger another analysis run even if the email fails.
-                        set_metadata(_spike_key, _today_str)
-                        _run_analysis_pipeline(
-                            config, get_all_tickers(config), RUN_ANALYSIS_ONLY
-                        )
-                        from output.briefing import send_vix_spike_alert  # noqa: PLC0415
-                        _ok, _msg = send_vix_spike_alert(
-                            _vix_chg_pct, _vix_curr, _vix_prev, config
-                        )
-                        logger.info("VIX spike alert email: %s — %s", _ok, _msg)
-    except Exception as _vix_exc:
-        logger.warning("VIX spike check failed: %s", _vix_exc)
-    # ── End VIX spike check ────────────────────────────────────────────────
-
-    # ── T212 Invest: poll orders + refresh account snapshot ───────────────
-    # These run unconditionally every hour regardless of alert state, so the
-    # Status page snapshot stays current even when there are no new alerts.
-    try:
-        from brokers.trading212 import poll_placed_orders as _poll_t212  # noqa: PLC0415
-        _n_updated = _poll_t212(config)
+        from brokers.trading212 import poll_placed_orders  # noqa: PLC0415
+        _n_updated = poll_placed_orders(config)
         if _n_updated:
             logger.info("T212 order poll: %d order(s) updated to terminal status.", _n_updated)
     except Exception as _poll_exc:
         logger.warning("T212 order poll failed: %s", _poll_exc)
 
     try:
-        from brokers.trading212_v2 import poll_v2_placed_orders as _poll_v2  # noqa: PLC0415
-        _n_v2_updated = _poll_v2(config)
-        if _n_v2_updated:
-            logger.info("V2 order poll: %d order(s) updated to terminal status.", _n_v2_updated)
-    except Exception as _poll_exc:
-        logger.warning("V2 order poll failed: %s", _poll_exc)
-
-    # Exit checks run hourly so a confirmed EXIT SIGNAL closes within ~1h
-    # rather than waiting up to 24h for the next EOD run. The EOD pipeline
-    # calls the same two functions via maybe_place_t212_orders() /
-    # maybe_place_stock_orders() — the 24h duplicate-SELL guard inside each
-    # (_has_recent_sell_order()) keeps the two calls from both selling the
-    # same position.
-    try:
-        from brokers.trading212 import maybe_exit_t212_positions  # noqa: PLC0415
-        maybe_exit_t212_positions(config)
+        from brokers.trading212 import maybe_exit_positions  # noqa: PLC0415
+        maybe_exit_positions(config)
     except Exception as exc:
-        logger.error("T212 Invest hourly exit check failed: %s", exc, exc_info=True)
-
-    try:
-        from brokers.trading212 import maybe_exit_stock_positions  # noqa: PLC0415
-        maybe_exit_stock_positions(config)
-    except Exception as exc:
-        logger.error("T212 Stocks hourly exit check failed: %s", exc, exc_info=True)
-
-    try:
-        from brokers.trading212_v2 import maybe_exit_v2_positions  # noqa: PLC0415
-        maybe_exit_v2_positions(config)
-    except Exception as exc:
-        logger.error("V2 hourly exit check failed: %s", exc, exc_info=True)
+        logger.error("Hourly exit check failed: %s", exc, exc_info=True)
 
     try:
         _fetch_t212_snapshot(config)
     except Exception as exc:
         logger.error("Hourly T212 snapshot refresh failed: %s", exc)
-    # ── End T212 ───────────────────────────────────────────────────────────
 
 
-def _weekly_summary_job() -> None:
-    """Every Sunday at 10:00 UTC — send the weekly performance summary email."""
-    logger.info("Weekly summary job starting…")
-    config = _load_config()
-    from output.briefing import send_weekly_summary_email  # noqa: PLC0415
-    ok, msg = send_weekly_summary_email(config)
-    logger.info("Weekly summary: %s — %s", "sent" if ok else "failed", msg)
-
-
-def _fomc_reaction_job() -> None:
-    """19:05 UTC weekdays — run analysis-only + alert email if today is an FOMC decision day.
-
-    FOMC statements are released at 2:00 PM US/Eastern (18:00–19:00 UTC).
-    This job fires at 19:05 UTC, captures the immediate post-decision market
-    reaction before the regular 21:30 EOD run, and refreshes signals so the
-    Daily Briefing reflects any regime shift triggered by the Fed announcement.
-    Silently exits on non-FOMC days so it adds no cost on normal weekdays.
-    """
-    from analysis.fomc import is_fomc_decision_day  # noqa: PLC0415
-
-    if not is_fomc_decision_day():
-        logger.debug("FOMC reaction check: not an FOMC decision day — skipping.")
-        return
-
-    logger.info("FOMC decision day — running post-decision analysis (19:05 UTC)…")
-    config = _load_config()
-    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
-
-    try:
-        from output.briefing import send_central_bank_alert  # noqa: PLC0415
-        ok, msg = send_central_bank_alert(
-            bank="Fed",
-            label="Federal Reserve FOMC Decision",
-            watch_tickers=["^GSPC", "TLT", "HYG"],
-            correlation_pairs=[("TLT", "^GSPC"), ("HYG", "TLT"), ("KBE", "T10Y2Y")],
-            context=(
-                "Fed rate decisions directly affect US equity valuations, bond prices, "
-                "and credit spreads. A hike tightens financial conditions and pressures "
-                "growth stocks; a cut is broadly bullish for risk assets. Watch the yield "
-                "curve shape (KBE vs T10Y2Y below) — if the curve steepens sharply "
-                "post-decision, bond markets are pricing in growth concerns."
-            ),
-            config=config,
-        )
-        logger.info("FOMC reaction alert email: %s — %s", ok, msg)
-    except Exception as exc:
-        logger.warning("FOMC reaction alert email failed: %s", exc)
-
-    logger.info("FOMC reaction analysis complete.")
-
-
-def _v2_membership_refresh_job() -> None:
-    """21:15 UTC weekdays — refresh analysis/v2's point-in-time S&P 500
-    membership windows from source, 15 minutes before the 21:30 EOD job's
-    live trading decisions run, so V2 eligibility is never computed against
-    stale membership data (see CLAUDE.md's "V2 architecture" section for why
-    this exists — a ticker's real S&P 500 addition/removal must reach V2's
+def _membership_refresh_job() -> None:
+    """21:15 UTC weekdays — refresh point-in-time S&P 500 membership windows
+    from source, 15 minutes before the 21:30 EOD job's live trading decisions
+    run, so ticker eligibility is never computed against stale membership
+    data (a ticker's real S&P 500 addition/removal must reach the
     eligibility check before it can affect that day's entries/exits).
 
     refresh_membership_from_source() is already internally "never raises"
     (per-ticker failures are caught and logged, not propagated) — the outer
-    try/except here is an extra layer specifically because this is new,
-    less battle-tested code sitting directly ahead of the EOD job in the
-    schedule, and a refresh failure must never block that job from running.
+    try/except here is an extra layer specifically because this job sits
+    directly ahead of the EOD job in the schedule, and a refresh failure
+    must never block that job from running.
     """
-    from analysis.v2.universe import refresh_membership_from_source  # noqa: PLC0415
+    from analysis.universe import refresh_membership_from_source  # noqa: PLC0415
 
     try:
         summary = refresh_membership_from_source()
         if summary.get("changed"):
             logger.info(
-                "V2 membership refresh: %d ticker(s) changed — %s",
+                "Membership refresh: %d ticker(s) changed — %s",
                 len(summary["changed"]), [c["ticker"] for c in summary["changed"]],
             )
         if summary.get("errors"):
             logger.warning(
-                "V2 membership refresh: %d error(s) — %s",
+                "Membership refresh: %d error(s) — %s",
                 len(summary["errors"]), summary["errors"],
             )
     except Exception as exc:
-        logger.warning("V2 membership refresh job failed: %s", exc)
-
-
-def _boj_reaction_job() -> None:
-    """03:30 UTC weekdays — run analysis-only + alert email if today is a BoJ decision day.
-
-    Mirrors _fomc_reaction_job(): fires every weekday but is a no-op unless
-    today matches config.yaml's central_bank_events.boj.dates. BoJ decisions
-    land approximately 02:00-05:00 BST with no fixed time (unlike the Fed's
-    consistent 2:00 PM US/Eastern), so 03:30 UTC (04:30 BST) is a safe default
-    that catches the post-decision market reaction without firing too early.
-    Silently exits on non-BoJ days so it adds no cost on normal weekdays.
-    """
-    from analysis.central_bank import is_boj_decision_day  # noqa: PLC0415
-
-    config = _load_config()
-    if not is_boj_decision_day(config):
-        logger.debug("BoJ reaction check: not a BoJ decision day — skipping.")
-        return
-
-    logger.info("BoJ decision day — running post-decision analysis (03:30 UTC)…")
-    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
-
-    try:
-        from output.briefing import send_central_bank_alert  # noqa: PLC0415
-        ok, msg = send_central_bank_alert(
-            bank="BoJ",
-            label="Bank of Japan Policy Decision",
-            watch_tickers=["USDJPY=X", "EWJ"],
-            correlation_pairs=[("USDJPY=X", "^GSPC")],
-            context=(
-                "Rising BoJ rates strengthen JPY, risking a carry-trade unwind. "
-                "Watch USDJPY — a sharp drop from current levels signals carry-trade stress."
-            ),
-            config=config,
-        )
-        logger.info("BoJ reaction alert email: %s — %s", ok, msg)
-    except Exception as exc:
-        logger.warning("BoJ reaction alert email failed: %s", exc)
-
-    logger.info("BoJ reaction analysis complete.")
-
-
-def _ecb_reaction_job() -> None:
-    """12:30 UTC weekdays — run analysis-only + alert email if today is an ECB decision day.
-
-    Mirrors _fomc_reaction_job(): fires every weekday but is a no-op unless
-    today matches config.yaml's central_bank_events.ecb.dates. The ECB
-    announces its rate decision at 12:15 UTC (13:15 CET); this job fires 15
-    minutes later at 12:30 UTC to capture the immediate market reaction.
-    Silently exits on non-ECB days so it adds no cost on normal weekdays.
-    """
-    from analysis.central_bank import is_ecb_decision_day  # noqa: PLC0415
-
-    config = _load_config()
-    if not is_ecb_decision_day(config):
-        logger.debug("ECB reaction check: not an ECB decision day — skipping.")
-        return
-
-    logger.info("ECB decision day — running post-decision analysis (12:30 UTC)…")
-    _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
-
-    try:
-        from output.briefing import send_central_bank_alert  # noqa: PLC0415
-        ok, msg = send_central_bank_alert(
-            bank="ECB",
-            label="ECB Monetary Policy Decision",
-            watch_tickers=["VGK", "EWG"],
-            correlation_pairs=[("VGK", "ECBDFR")],
-            context=(
-                "ECB rate changes affect European equity valuations directly. "
-                "Rate hikes pressure VGK/EWG; cuts are bullish for European exposure."
-            ),
-            config=config,
-        )
-        logger.info("ECB reaction alert email: %s — %s", ok, msg)
-    except Exception as exc:
-        logger.warning("ECB reaction alert email failed: %s", exc)
-
-    logger.info("ECB reaction analysis complete.")
+        logger.warning("Membership refresh job failed: %s", exc)
 
 
 def _check_missed_eod_run(config: dict) -> None:
@@ -859,19 +606,6 @@ def _check_missed_eod_run(config: dict) -> None:
     job is ever scheduled on a weekend, so a stale last_full_refresh there
     is expected, not missed.
 
-    NOTE: this replaces the previous _maybe_catch_up_missed_eod, which used a
-    26-hour staleness threshold OR'd with an unbounded "past today's EOD
-    time" check (anywhere from 21:30 UTC through the next morning could
-    re-trigger it) and re-ran the full _eod_job (incremental data pull +
-    FRED fetch + T212 snapshot). Deployments were landing inside that same
-    window and racing the live EOD job — see "Deployment timing" in
-    CLAUDE.md. The narrower 20h/21:45-23:59 AND-gate makes catch-up fire
-    deterministically within one bounded window instead of however long the
-    service happens to stay down, and it now runs _run_analysis_pipeline()
-    directly (analysis + signals + order logic) rather than re-pulling
-    data — a same-day restart in this window means the pipeline ran on a
-    transitional deploy, not that prices are missing.
-
     The catch-up runs in a daemon thread so start_scheduler() returns promptly.
     """
     now_utc = datetime.now(timezone.utc)
@@ -883,7 +617,7 @@ def _check_missed_eod_run(config: dict) -> None:
     if last_refresh_str is None:
         logger.debug(
             "Missed-EOD check: no last_full_refresh recorded yet — "
-            "startup init handles the first analysis run."
+            "startup init handles the first run."
         )
         return
 
@@ -931,7 +665,7 @@ def _check_missed_eod_run(config: dict) -> None:
 
 
 def start_scheduler() -> BackgroundScheduler:
-    """Start the background scheduler with all three daily jobs if not already running."""
+    """Start the background scheduler with all scheduled jobs if not already running."""
     global _scheduler
     if _scheduler is not None and _scheduler.running:
         return _scheduler
@@ -955,7 +689,7 @@ def start_scheduler() -> BackgroundScheduler:
 
     # pre_market fires Tue-Fri only — Monday morning is handled by the separate
     # monday_premarket job below, which adds stale weekend-order cancellation
-    # before running the same analysis-only pipeline. Every other job below
+    # before running the same order-logic-only pipeline. Every other job below
     # still fires mon-fri.
     _JOB_DAY_OVERRIDES = {"pre_market": "tue-fri"}
 
@@ -983,7 +717,7 @@ def start_scheduler() -> BackgroundScheduler:
 
     # Monday-only pre-market job: cancels stale weekend BUY orders (Friday EOD
     # orders that never filled over the weekend) before re-running the same
-    # analysis-only pipeline the regular pre-market job runs Tue-Fri. Hour/minute
+    # order-logic-only pipeline the regular pre-market job runs Tue-Fri. Hour/minute
     # follow the same config.yaml scheduler.runs.pre_market slot so both jobs
     # always fire at the same time of day even if that's ever retimed.
     _pre_market_cfg = sched_cfg["runs"].get("pre_market", {})
@@ -1000,7 +734,7 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     logger.info(
-        "Scheduled Monday pre-market job (stale-order cancellation + analysis) at %02d:%02d %s.",
+        "Scheduled Monday pre-market job (stale-order cancellation + order logic) at %02d:%02d %s.",
         _pre_market_cfg.get("hour", 7), _pre_market_cfg.get("minute", 0), tz,
     )
 
@@ -1016,8 +750,6 @@ def start_scheduler() -> BackgroundScheduler:
     # Hourly trade alert check across all major market sessions (weekdays only).
     # Hour range covers: Asian (00-08 UTC), European (08-17 UTC), US (14-21 UTC),
     # plus 23:00 UTC for Sydney/Auckland pre-market.
-    # The job itself filters per-trade by exchange session, so only relevant alerts
-    # fire at each hour — no spurious alerts outside market hours.
     _scheduler.add_job(
         _trade_alert_job,
         trigger=CronTrigger(
@@ -1030,95 +762,28 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     logger.info(
-        "Scheduled trade alert check hourly 00:00–21:00 + 23:00 %s on weekdays "
-        "(filtered per-trade by home exchange session).", tz,
+        "Scheduled trade alert check hourly 00:00–21:00 + 23:00 %s on weekdays.", tz,
     )
 
-    _scheduler.add_job(
-        _weekly_summary_job,
-        trigger=CronTrigger(
-            day_of_week="sun",
-            hour=10,
-            minute=0,
-            timezone=tz,
-        ),
-        id="weekly_summary",
-        replace_existing=True,
-    )
-    logger.info("Scheduled weekly summary email every Sunday 10:00 %s.", tz)
-
-    # FOMC reaction run: fires every weekday at 19:05 UTC but executes the
-    # analysis pipeline only on days matching the hardcoded FOMC decision schedule.
-    _scheduler.add_job(
-        _fomc_reaction_job,
-        trigger=CronTrigger(
-            hour=19,
-            minute=5,
-            day_of_week="mon-fri",
-            timezone=tz,
-        ),
-        id="fomc_reaction",
-        replace_existing=True,
-    )
-    logger.info(
-        "Scheduled FOMC reaction analysis at 19:05 %s weekdays "
-        "(active on FOMC decision days only).", tz,
-    )
-
-    # BoJ / ECB reaction runs — same pattern as the FOMC job above: fire every
-    # weekday at a fixed time, execute the analysis pipeline (+ alert email)
-    # only on days matching config.yaml's central_bank_events.boj/.ecb.dates.
-    _scheduler.add_job(
-        _boj_reaction_job,
-        trigger=CronTrigger(
-            hour=3,
-            minute=30,
-            day_of_week="mon-fri",
-            timezone=tz,
-        ),
-        id="boj_reaction",
-        replace_existing=True,
-    )
-    logger.info(
-        "Scheduled BoJ reaction analysis at 03:30 %s weekdays "
-        "(active on BoJ decision days only).", tz,
-    )
-
-    _scheduler.add_job(
-        _ecb_reaction_job,
-        trigger=CronTrigger(
-            hour=12,
-            minute=30,
-            day_of_week="mon-fri",
-            timezone=tz,
-        ),
-        id="ecb_reaction",
-        replace_existing=True,
-    )
-    logger.info(
-        "Scheduled ECB reaction analysis at 12:30 %s weekdays "
-        "(active on ECB decision days only).", tz,
-    )
-
-    # V2 membership refresh — 15 minutes ahead of the EOD job's own 21:30
-    # slot, so any real S&P 500 addition/removal is reflected before that
-    # run's trading decisions. Fixed at 21:15 rather than derived from
+    # Membership refresh — 15 minutes ahead of the EOD job's own 21:30 slot,
+    # so any real S&P 500 addition/removal is reflected before that run's
+    # trading decisions. Fixed at 21:15 rather than derived from
     # sched_cfg["runs"]["eod"] — unlike the Monday pre-market job (which
     # deliberately tracks the pre_market slot if it's ever retimed), this
     # job's only requirement is "shortly before EOD", not "exactly N
     # minutes before whatever EOD currently is".
     _scheduler.add_job(
-        _v2_membership_refresh_job,
+        _membership_refresh_job,
         trigger=CronTrigger(
             hour=21,
             minute=15,
             day_of_week="mon-fri",
             timezone=tz,
         ),
-        id="v2_membership_refresh",
+        id="membership_refresh",
         replace_existing=True,
     )
-    logger.info("Scheduled V2 membership refresh at 21:15 %s weekdays.", tz)
+    logger.info("Scheduled membership refresh at 21:15 %s weekdays.", tz)
 
     _scheduler.start()
     logger.info("Scheduler started with %d jobs.", len(_scheduler.get_jobs()))
