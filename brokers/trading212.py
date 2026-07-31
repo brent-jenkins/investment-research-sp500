@@ -1015,6 +1015,18 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
     if not t212_cfg.get("enabled", False):
         return
 
+    # Temporary safety switch (2026-07-31) — a real pricing bug
+    # (get_instrument_price_gbp() never getting a live T212 quote, silently
+    # falling back to an unrelated proxy price) and a structural exception-
+    # isolation gap in this loop are under investigation/fix. Exits must
+    # keep running (a stop-loss/signal-off/crisis exit is safety-critical),
+    # only new entries are paused. Remove this flag from config.yaml once
+    # the fix is deployed and verified.
+    if t212_cfg.get("pause_new_entries", False):
+        maybe_exit_positions(config)
+        logger.warning("New order placement PAUSED (trading212_invest.pause_new_entries) — exit-only.")
+        return
+
     if run_type != "full":
         maybe_exit_positions(config)
         logger.debug("Skipping BUY-phase order placement on %s run (full only).", run_type)

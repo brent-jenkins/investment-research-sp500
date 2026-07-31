@@ -129,6 +129,24 @@ def test_analysis_only_run_type_skips_buy_phase(db_engine, v2_mocks, mocker):
     v2_mocks.place_market_order.assert_not_called()
 
 
+def test_pause_new_entries_blocks_buy_but_still_exits(db_engine, v2_mocks, mocker):
+    """trading212_invest.pause_new_entries is a temporary safety switch (see
+    brokers/trading212.py) -- it must block the BUY phase entirely, even on
+    a run_type='full' pass, while still running maybe_exit_positions()."""
+    from brokers.trading212 import maybe_place_orders
+
+    _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    v2_mocks.get_positions.return_value = []  # nothing open -- exit phase is a no-op but must run
+
+    cfg = _config()
+    cfg["trading212_invest"]["pause_new_entries"] = True
+    maybe_place_orders(cfg, run_type="full")
+
+    v2_mocks.place_market_order.assert_not_called()
+    v2_mocks.get_positions.assert_called()  # proves maybe_exit_positions() ran
+
+
 # ---------------------------------------------------------------------------
 # Entry gate — sig_on AND is_member AND not entry_blocked, all required
 # ---------------------------------------------------------------------------

@@ -170,6 +170,12 @@ backtest:
 trading212_invest:
   enabled: true
   live: false               # NEVER set true -- place_market_order() blocks it in code regardless
+  # TEMPORARY (2026-07-31) -- new BUY orders paused while a real pricing bug
+  # (get_instrument_price_gbp() never getting a live T212 quote) and a
+  # missing exception-isolation gap in the BUY loop are fixed and verified.
+  # Exits (maybe_exit_positions()) are NOT affected -- see brokers/trading212.py.
+  # Remove this key once the fix is deployed and verified.
+  pause_new_entries: true
   max_total_deployed: 0.5
   max_open_positions: 20
   # Hard ceiling GBP limit per order -- VaR sizing never exceeds this,
