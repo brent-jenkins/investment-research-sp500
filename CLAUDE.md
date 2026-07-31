@@ -951,9 +951,11 @@ validating one layer at a time rather than assuming complexity upfront:
   against known facts; **no discretionary exclusions** — TSLA, META, and
   GOOGL included from their real membership dates, reversing V1's original
   subjective "geopolitical risk" exclusion) plus 33 broad ETFs. Result: 14
-  of 16 historical blocks pass (CAGR ≥ S&P 500, drawdown ≤ 1.5× S&P's own,
-  no crisis-adjacent block materially loses money), on both train
-  (2007-2019) and test (2020-2026). Confirmed **not** a survivorship
+  of 16 historical blocks pass — the reconciled rule (see "Block pass/fail
+  formula reconciliation" below): strategy max drawdown no worse than
+  1.5× the S&P's own over the same window, AND strategy profit factor
+  `> 1.0` over the same window; no per-block CAGR-vs-S&P gate — on both
+  train (2007-2019) and test (2020-2026). Confirmed **not** a survivorship
   artifact — re-tested on the point-in-time-corrected universe specifically
   to rule this out, and the result held.
 - **Phase 2 (rejected)**: a separate, multiplicative danger/exposure gate
@@ -1050,6 +1052,155 @@ this stage's `data/database.py` addition. Stage 2 (shadow validation —
 running V2 alongside V1 in production, comparing what V2 *would* have
 traded against V1's real executions, without placing any V2 orders) and
 Stage 3 (cutover) are separate, not-yet-attempted future steps.
+
+### V2 Tier 1 findings re-derived with exact numbers (2026-07-31)
+
+Following the block pass/fail formula reconciliation and the new
+"Research reproducibility standard" (top of this file), two of the phased
+rebuild's findings that were originally recorded only as prose (their
+research code long since deleted, per this project's standing practice)
+were re-derived with exact numbers, since both are currently load-bearing:
+the crisis override runs in live production code, and the stocks/ETF and
+DAX findings back claims already sitting in the DD report and investor
+explainer. Phase 2 (rejected) and the VIX-spike crisis-override variant
+(also rejected) were deliberately **not** re-derived — neither informs
+anything currently live, and the re-derivation cost wasn't judged worth it
+for two already-rejected, non-load-bearing findings. They remain
+unrecoverable Tier 1 findings, by choice, not oversight.
+
+**Method.** Isolated research clone on the production server (own copy of
+`analysis/`, `data/`, `config.yaml`, and a copied — never the live —
+database file), read-only against that copy, zero writes to any
+production table, deleted after this section was written. Full
+2007-01-01 to 2026-07-30 window, all 73 production tickers (33 ETFs + 40
+stock candidates), identical signal/crisis-override/VaR-sizing/exit logic
+to `analysis/backtest.py`, identical 16-block boundaries
+(`make_blocks()`), identical reconciled pass/fail rule (`_block_passes()`:
+DD ≤ 1.5× benchmark AND PF > 1.0).
+
+**1. Phase 3 crisis override — baseline (no override) vs. with override,
+block by block.** A parallel `simulate_trades()` variant with the crisis
+override forced off (no CRISIS_EXIT, no entry-block) was run alongside the
+production path, both against the identical 73-ticker universe:
+
+| | With override (= production) | Without override (baseline) |
+|---|---|---|
+| Total trades | 12,046 | 12,098 |
+| Win rate | 44.11% | 43.81% |
+| Profit factor | 1.71 | 1.68 |
+| Sharpe | 0.565 | 0.547 |
+| Max drawdown | -25.45% | -40.78% |
+| CAGR | 11.31% | 11.17% |
+
+Raw crisis trigger (S&P single-day ≤ -7%) fired on exactly **7 days**
+across the full window, confirming the "fired on only 7 days" figure
+directly rather than by memory. Block-by-block, the override changes
+**exactly 2 of the 16 blocks** — all other 14 are byte-identical between
+the two runs (same trade count, PF, Sharpe, DD to the reported precision):
+
+| Block | Window | With override | Without override | S&P DD | Passes either way? |
+|---|---|---|---|---|---|
+| 1 (GFC-acute) | 2008-03-22→2009-06-12 | 297 trades, PF 0.78, DD -13.59%, CAGR -3.72% | 303 trades, PF 0.70, DD -16.43%, CAGR -5.75% | -52.58% | **No — fails on PF > 1.0 both ways** (0.78 and 0.70 are both < 1.0) |
+| 10 (COVID) | 2019-03-27→2020-06-16 | 857 trades, PF 1.55, DD -23.47%, CAGR 24.08% | 909 trades, PF 1.29, DD -40.78%, CAGR 15.33% | -33.92% | **Yes — passes either way** (DD ≤ 1.5×33.92%=50.88% and PF > 1.0 both hold in both runs) |
+
+This exactly reproduces the qualitative claim — "cost zero measured edge
+anywhere it didn't touch" (14/16 blocks byte-identical) and "did not clear
+the hard floor for the GFC-acute block" (PF stays below 1.0 with or
+without the override) — but sharpens one part of it: the override's
+effect on block 10 is a **real, substantial risk reduction** (max
+drawdown nearly halves, -40.78% → -23.47%; Sharpe nearly doubles, 0.295 →
+0.505) rather than a marginal one, and — a genuinely new observation not
+in the original prose — **the override changes zero blocks from fail to
+pass**: both blocks it touches (1 and 10) have the identical pass/fail
+verdict with or without it, so the headline "14/16 blocks pass" figure
+would be unchanged even with the override removed entirely. Its value is
+risk-quality inside an already-passing window (COVID), not the pass/fail
+tally. This is consistent with, not contradictory to, "partially useful,
+not adopted as a fix" — confirmed, not overturned, by the exact numbers.
+
+**2. Stocks-only vs. combined vs. ETF-only breakdown.** Same 2007-2026
+window, same signal/crisis logic, three ticker subsets:
+
+| | ETF-only (33) | Stocks-only (40) | Combined (73, = production) |
+|---|---|---|---|
+| Trades | 3,962 | 8,084 | 12,046 |
+| CAGR | 4.97% | 9.98% | 11.31% |
+| Max drawdown | -11.85% | -20.10% | -25.45% |
+| Annualised volatility (daily £ equity curve) | 2.89% | 4.30% | 4.85% |
+| Sharpe | 0.407 | 0.667 | 0.565 |
+| Profit factor | 1.67 | 1.72 | 1.71 |
+
+Adding the ETF sleeve to a stocks-only portfolio (stocks-only → combined):
+CAGR rises (+1.33pp, "adds real return" confirmed), max drawdown worsens
+(-20.10% → -25.45%, "higher drawdown" confirmed), annualised volatility
+rises (4.30% → 4.85%, "higher volatility" confirmed). One point is more
+precise than the original prose: Sharpe does not merely show "no
+consistent advantage" — it **falls**, 0.667 → 0.565, a real decline on
+this exact measure, not just a neutral wash. Directionally this sharpens
+rather than contradicts the original "portfolio-construction trade-off,
+not resolved here" framing.
+
+**3. DAX (European stocks-only) — re-derived with a real, exact, disclosed
+methodology gap; this result does NOT overturn the original finding.**
+A genuine point-in-time DAX constituent-membership dataset (matching the
+rigor of the `fja05680/sp500` source the US universe uses) could not be
+located via free sources in this session — confirmed by checking
+Wikipedia's own DAX article: its "Former DAX components" table is
+explicitly labelled a "Selected Key Changes" excerpt, not a complete
+reconstitution history (e.g. it lists almost no changes between
+2012-2024, which is not plausible for a 30-40-name index over 12 years).
+No usable free alternative was found. This re-derivation therefore uses
+**DAX's current 40 constituents' own available price history** (fetched
+live via yfinance, 2007-01-02 onward for 32 of 40; the remaining 8 phase
+in later per their real listing/spin-off dates, e.g. `DTG.DE` 2021-12-10,
+`ENR.DE` 2020-09-29) — **not** a point-in-time-corrected universe. This is
+a materially weaker methodology than the original claim ("using the same
+point-in-time discipline") and is explicitly, deliberately
+**survivorship-biased**: it only ever tests companies that are DAX
+members *today*, applied to their own past prices — precisely the
+confound the original US Phase 1 work explicitly tested for and ruled out
+("re-tested on the point-in-time-corrected universe specifically to rule
+this out") — a check this DAX re-derivation does **not** perform.
+
+Same signal/crisis-override logic (crisis trigger still keyed to the
+S&P's own ≥7% single-day decline, matching what the live system actually
+uses — not a DAX-specific trigger), benchmarked against `^GDAXI`:
+
+| | Strategy | DAX (`^GDAXI`) benchmark |
+|---|---|---|
+| Train (2007-2019) CAGR | 8.92% | 5.41% |
+| Train max drawdown | -21.01% | -54.77% |
+| Test (2020-2026) CAGR | 12.09% | 10.37% |
+| Test max drawdown | -15.45% | -38.78% |
+| Profit factor (train / test) | 1.47 / 1.45 | — |
+| Sharpe (train / test) | 0.519 / 0.468 | — |
+
+**Blocks passed: 12/16 (75%)** under the identical reconciled rule.
+
+**This is a real, exact, materially different number from "found no
+edge"** — not a rounding difference, and reported per the task's own
+instruction to stop rather than quietly reconcile. But it should **not**
+be read as evidence the original DAX conclusion was wrong: a strategy
+that only ever trades today's surviving DAX winners against their own
+historical prices is expected to look better than one correctly excluded
+from trading a company after it was removed from the index for
+underperforming (which is exactly the scenario point-in-time correction
+exists to prevent, and exactly what genuinely happened to at least
+`Continental`, `Metro`, `Hypo Real Estate`, and `Wirecard` per Wikipedia's
+own (incomplete) change log above). The apparent 12/16, CAGR-beats-
+benchmark result here is the expected symptom of the specific bias this
+re-derivation could not correct for, not independent confirmation of
+edge. **The original "no edge, confirmed not trivially portable" claim
+cannot be genuinely re-validated without a true point-in-time DAX
+membership dataset**, which was not obtainable via free sources in this
+session — this is now the honestly-recorded state of that finding,
+in place of the unrecoverable prior version, rather than a silently
+reconciled number.
+
+Not committed as a regression test — this is a one-off research
+reproduction (matching the original findings' own one-off nature), not
+new production logic; nothing in `brokers/`, `data/scheduler.py`, or
+`analysis/backtest.py` changed as a result of this section.
 
 ### V2 live execution and cutover (2026-07-31)
 
