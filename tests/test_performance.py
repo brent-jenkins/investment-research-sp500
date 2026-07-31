@@ -14,6 +14,7 @@ from sqlalchemy import text as sa_text
 
 from output.performance import (
     get_brief_cards,
+    get_crisis_status,
     get_pnl_rows,
     get_ticker_status,
     pnl_metrics_df,
@@ -315,3 +316,58 @@ def test_brief_cards_skips_ticker_with_no_open_position(db_engine, monkeypatch, 
 
     cfg = _config(mapping={"VOO": {"ticker": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     assert get_brief_cards(cfg, ticker_status_rows=[]) == []
+
+
+# ---------------------------------------------------------------------------
+# get_crisis_status
+# ---------------------------------------------------------------------------
+
+def test_crisis_status_empty_price_data_returns_empty(mocker):
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=pd.DataFrame())
+    assert get_crisis_status() == {}
+
+
+def test_crisis_status_calm_day_reports_no_override(mocker):
+    calm = _price_frame(60, 100.0, 0.001)  # steady small gains, no crisis day
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
+
+    status = get_crisis_status()
+    assert status["is_crisis_today"] is False
+    assert status["entry_blocked"] is False
+    assert status["threshold_pct"] == pytest.approx(-7.0)
+    assert status["today_return_pct"] is not None
+    assert status["distance_to_threshold_pp"] > 0
+
+
+def test_crisis_status_today_is_crisis_day(mocker):
+    dates = pd.bdate_range(end=pd.Timestamp("2026-07-30"), periods=30)
+    closes = [100.0] * 29 + [100.0 * 0.90]  # -10% on the last day
+    df = pd.DataFrame({
+        "date": dates, "open": closes, "high": closes, "low": closes, "close": closes,
+    })
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=df)
+
+    status = get_crisis_status()
+    assert status["is_crisis_today"] is True
+    assert status["entry_blocked"] is True
+    assert status["days_since_trigger"] == 0
+    assert status["last_trigger_date"] is not None
+
+
+def test_crisis_status_within_cooldown_after_trigger(mocker):
+    dates = pd.bdate_range(end=pd.Timestamp("2026-07-30"), periods=30)
+    closes = [100.0] * 25 + [90.0, 90.0, 90.0, 90.0, 90.0]
+    closes[25] = 90.0  # -10% trigger 4 trading days before the last row
+    df = pd.DataFrame({
+        "date": dates, "open": closes, "high": closes, "low": closes, "close": closes,
+    })
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=df)
+
+    status = get_crisis_status()
+    assert status["entry_blocked"] is True
+    assert status["is_crisis_today"] is False
+    assert status["days_since_trigger"] == 4

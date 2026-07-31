@@ -1436,6 +1436,132 @@ behaviour, cache refresh on every live read, and per-item exception
 isolation in both the BUY and exit loops (a simulated failure on one ticker
 must not prevent the next ticker in the same run from being processed).
 
+### Backtest page restored, re-validation, DD report, and Daily Briefing rebuild (2026-07-31)
+
+`analysis/backtest.py` (the vectorized simulation engine, `precompute_ticker`/
+`simulate_trades`/`run_candidate`/`compute_metrics_fixed`/`equity_curve_gbp`/
+`walk_forward_pf`, all renamed from `analysis/v2/backtest.py` during the V1
+removal and consolidation) had no UI page pointed at it any more — the old
+Robustness page that used to trigger and display backtest runs was deleted
+along with the rest of V1's `analysis/robustness.py`. Before building
+anything new on top of it, the engine itself needed re-proving: `get_max_holding_days()`
+was rewritten (now `analysis/universe.py:get_max_holding_days()`), sizing/
+execution code was consolidated, and most of the surrounding module names
+changed during the V1→V2 cutover — none of that had been re-validated against
+the original adopted result since.
+
+**Re-validation, run directly against production data via SSH** (local dev's
+DB only holds ^GSPC back to 2016-07-06; production holds it from 2007-01-03
+— see "Historical data extension" above). Full battery: momentum signal,
+crisis override, the current live point-in-time-gated universe, train
+(2007–2019) / test (2020–2026), all 16 blocks, concentration check,
+walk-forward. Confirmed **current live universe composition directly**
+(not assumed from before the refactor): 33 ETFs + 40 stock candidates = 73
+total candidates, 39/40 stock candidates genuinely S&P 500 members today
+(GOLD is the sole permanent non-member by design), 72 live-tradeable.
+
+**Result: 12,046 total trades (2007–2026). TRAIN CAGR 13.23%, TEST CAGR
+22.39%, 14/16 blocks pass, full-history concentration check negligible
+(11.31% raw vs 11.28% ex-best CAGR), walk-forward 82.1% (183/223 positive
+windows).** These closely match the numbers already on record in this file
+("V2 architecture — phased rebuild" and "V2 live execution and cutover"
+above: 14/16 blocks, TRAIN 13.22–13.29%, TEST 21.55–21.95%) — within the
+same tolerance this file's own prior reproducibility check accepted as
+ordinary live-database drift (more incremental EOD data accumulated since),
+not a regression.
+
+**Honest discrepancy, reported rather than smoothed over.** The aggregate
+14/16 count matches exactly, but the *specific two failing blocks* do not:
+this reproduction failed **Block 0** (2007-01-01–2008-03-22) and **Block 2**
+(2009-06-12–2010-09-02), whereas the prior record names "Block 1, Block
+2/GFC-acute" as the two failures — and this run's own Block 1
+(2008-03-22–2009-06-12, the actual acute crash window) **passes**
+(strategy CAGR -3.72% vs. S&P -25.30%, strategy max DD -13.59% vs. S&P
+-52.58%). Root cause, as far as it can be determined: the original
+per-block pass/fail formula lived only in a disposable research clone,
+deleted once its finding was adopted — this project's own standing
+practice for exploratory code (see the many "deleted after the finding
+below rather than left in the repo" notes throughout this file). What
+exists now (`analysis/validation.py`) is a reconstruction of that rule from
+this file's own prose ("strategy CAGR ≥ S&P's own, max drawdown ≤1.5× the
+S&P's own, no block loses more than 20% of capital"), not a byte-identical
+copy verified against the original. The underlying trade-simulation engine
+itself (signals, crisis override, universe gating, VaR sizing, exit
+priority) is unchanged and reproduces the same trade count/CAGR pattern —
+this is a reconstructed-pass/fail-rule discrepancy, not a trading-logic
+regression. Flagging this explicitly rather than treating "14/16 either
+way" as good enough, per this project's own reproducibility standard.
+
+**`analysis/validation.py`** is the new shared module — `run_full_validation(config, start, end)`
+and `universe_snapshot(as_of=None)` — used by both the Backtest page and the
+DD report generator, so neither can ever show a different number for the
+same run. `analysis/backtest.py` gained `compute_cost_sensitivity(trades,
+starting_capital, cost_bps_list)` (round-trip cost in bps subtracted from
+every trade's return, recomputed via the existing `compute_metrics_fixed()`
+— the corrected additive-£, exit-date-sorted methodology, never the old
+cumprod approach — see "Backtest equity-curve ordering bug" above).
+
+**Backtest page (`main.py:_render_backtest_page`)** — new sidebar page.
+Shows the live universe snapshot, a "Run Full Validated Battery" button
+(session-state cached — a full run takes roughly a minute), then TRAIN/TEST
+metrics vs. the real S&P 500 over the same windows, the full-history
+concentration check, the 16-block pass/fail table, the transaction-cost
+sensitivity table (0/10/25bps), walk-forward stats, the £ equity curve, and
+a "Generate Due Diligence Report (PDF)" trigger.
+
+**`analysis/dd_report.py`** — the new due diligence report, deliberately
+much shorter than V1's eleven-page `analysis/robustness.py` document (V2's
+story is one signal, one universe-gating rule, one rare-firing override, not
+six modules' worth of attribution panels). Generated live from
+`run_full_validation()`'s own result dict — never hand-written and left to
+go stale, the same principle the old report followed. Six sections:
+Executive Summary, Methodology, Validated Results (16-block table,
+concentration check, cost sensitivity, walk-forward, equity curve), and
+Known Limitations. Reuses `equity_curve_gbp()`'s corrected additive-£
+methodology throughout and the established `&amp;`-escaping rule for every
+`Paragraph()`-rendered "S&P" (see "Due diligence report accuracy fixes"
+above for the ReportLab entity-parsing bug this guards against — verified
+here too via `pypdf` text extraction, not just `doc.build()` succeeding).
+
+**Known limitations stated directly, not omitted**: (1) GFC-acute-scale
+crashes remain a known, accepted gap — the crisis override helps but can't
+rescue a position opened before a crash slow enough to build up before the
+≥7% trigger fires; (2) universe breadth is survivorship-exposed at the
+delisted/bankrupt level — point-in-time membership correction can't reach a
+company whose data no longer exists anywhere; (3) whether the edge
+generalizes beyond US mega-caps is unresolved, not disproven — one negative
+German (DAX) result on a thinner evidence base; (4) US concentration is a
+deliberate, currently-unaddressed choice, not an oversight.
+
+**Daily Briefing rebuild (`main.py:_render_briefing_page`)** — the old page
+was thin by necessity (V1's rich six-module output doesn't exist in V2's
+single-signal model). Added, on top of the existing regime/crisis badge and
+open-position cards: a **crisis-proximity strip** (today's actual S&P move
+vs. the -7% trigger, in percentage points of remaining room — not just an
+active/inactive flag; amber once within 2pp) via the new
+`output/performance.py:get_crisis_status()`; **entry date and current
+signal state** added directly to each open-position compact card (previously
+only ticker/day-count/P&L); a **full ticker eligibility/momentum table**
+covering every ticker in the live universe, not just open positions —
+promoted from a collapsed expander to default-open, with a "Held" marker
+column and sorted long-signal-first; and a **next membership refresh**
+countdown (21:15 UTC weekdays, reusing the existing `_next_run_for_time()`
+helper).
+
+Covered by `tests/test_validation.py` (pure `_cagr_dd_for_series()` cases,
+`universe_snapshot()` shape, and a mocked `run_full_validation()` exercising
+the train/test split and block wiring against small synthetic trades — a
+full production-scale run is a multi-minute operation validated via the SSH
+reproducibility check above, not replayed verbatim in the unit suite),
+`tests/test_dd_report.py` (well-formed PDF, the `&`-entity regression check,
+known-limitations and block-count text presence), new `tests/test_backtest.py`
+cases for `compute_cost_sensitivity()`, and new `tests/test_performance.py`
+cases for `get_crisis_status()` (calm day, active trigger day, mid-cooldown).
+
+No changes to any order-placement path (`brokers/trading212.py`,
+`data/scheduler.py`) — this task is read-only against price/signal data and
+UI-only in main.py.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

@@ -20,8 +20,8 @@ APScheduler>=3.10.4
 # TA-Lib>=0.4.29
 # ─────────────────────────────────────────────────────────────────────────────
 plotly>=5.19.0
-reportlab>=4.0.0  # Robustness page PDF export — analysis/robustness.py:generate_robustness_pdf()
-matplotlib>=3.8.0  # equity curve / exit-reason charts embedded in the PDF export above
+reportlab>=4.0.0  # Due diligence report PDF export — analysis/dd_report.py:generate_dd_report_pdf()
+matplotlib>=3.8.0  # equity curve chart embedded in the PDF export above
 python-dateutil>=2.9.0
 requests>=2.31.0
 pytz>=2024.1

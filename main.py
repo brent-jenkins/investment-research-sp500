@@ -33,7 +33,7 @@ from analysis.backtest import compute_metrics, equity_curve_gbp
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_price_df, pull_incremental
 from data.scheduler import start_scheduler
-from output.performance import get_brief_cards, get_pnl_rows, get_ticker_status, pnl_metrics_df
+from output.performance import get_brief_cards, get_crisis_status, get_pnl_rows, get_ticker_status, pnl_metrics_df
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -566,6 +566,17 @@ def _render_trade_card_compact(e: dict) -> None:
     asset_tag = html.escape(str(e.get("asset_type", "")))
     days_held = int(e.get("days_held") or 0)
 
+    entry_date_str = e.get("entry_date")
+    entry_disp = "—"
+    if entry_date_str:
+        try:
+            entry_disp = datetime.fromisoformat(str(entry_date_str)).strftime("%Y-%m-%d")
+        except Exception:
+            entry_disp = str(entry_date_str)[:10]
+
+    sig_on = e.get("current_sig_on")
+    sig_disp = "Long" if sig_on is True else ("Flat" if sig_on is False else "—")
+
     unreal_pnl_gbp = e.get("unreal_pnl_gbp")
     unreal_pct     = e.get("unreal_pct")
     if unreal_pnl_gbp is not None and unreal_pct is not None:
@@ -583,7 +594,8 @@ def _render_trade_card_compact(e: dict) -> None:
         f"border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:0.05em'>"
         f"{icon} {status}</span>"
         f"<strong style='font-size:0.92rem'>{ticker}</strong>"
-        f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held}</span>"
+        f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held} · Entered {entry_disp}</span>"
+        f"<span style='color:#8899AA;font-size:0.78rem'>Signal: {sig_disp}</span>"
         f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
         f"</div>",
         unsafe_allow_html=True,
@@ -611,6 +623,13 @@ def _get_closed_rows() -> list[dict]:
     """All reconstructed closed positions — thin wrapper around
     output/performance.py:get_pnl_rows()."""
     return get_pnl_rows()
+
+
+@st.cache_data(ttl=300)
+def _get_crisis_status() -> dict:
+    """Today's crisis-override proximity — thin cached wrapper around
+    output/performance.py:get_crisis_status()."""
+    return get_crisis_status()
 
 
 # ---------------------------------------------------------------------------
@@ -783,21 +802,43 @@ def _render_briefing_page(config: dict) -> None:
         "removal → ATR stop loss → momentum turning non-positive → max holding."
     )
 
-    with st.expander(f"Per-ticker status ({len(valid_rows)} tickers)"):
-        status_df = pd.DataFrame(valid_rows)
-        status_df["Type"] = status_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-        status_df["sig_on"] = status_df["sig_on"].map(lambda b: "Long" if b else "Flat")
-        status_df["is_member"] = status_df["is_member"].map(lambda b: "Yes" if b else "No")
-        status_df["momentum_pct"] = status_df["momentum_pct"].map(
-            lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
+    # --- Crisis override proximity ---------------------------------------
+    cs = _get_crisis_status()
+    if cs:
+        today_ret = cs.get("today_return_pct")
+        dist_pp = cs.get("distance_to_threshold_pp")
+        if cs.get("entry_blocked"):
+            since = cs.get("days_since_trigger")
+            remaining = max(0, cs.get("cooldown_days", 5) - since) if since is not None else None
+            cband, ctext = "#991b1b", (
+                f"🔴 Entry-block cooldown active — triggered {cs.get('last_trigger_date', '?')}"
+                + (f", {remaining} trading day(s) remaining" if remaining is not None else "")
+            )
+        elif today_ret is not None and dist_pp is not None and dist_pp <= 2.0:
+            cband, ctext = "#b45309", (
+                f"🟡 Approaching crisis threshold — today's S&P move {today_ret:+.2f}% "
+                f"({dist_pp:.2f}pp from the -7.0% trigger)"
+            )
+        else:
+            cband, ctext = "#16a34a", (
+                f"🟢 No crisis override active — today's S&P move "
+                f"{today_ret:+.2f}%" if today_ret is not None else "🟢 No crisis override active"
+            )
+        st.markdown(
+            f'<div style="border:1px solid {cband}44;border-radius:8px;padding:6px 14px;'
+            f'margin-bottom:10px;color:{cband};font-size:0.85rem;font-weight:600">{html.escape(ctext)}</div>',
+            unsafe_allow_html=True,
         )
-        status_df = status_df[["ticker", "Type", "sig_on", "momentum_pct", "is_member", "entry_blocked"]]
-        status_df.columns = ["Ticker", "Type", "Momentum", "12m Return", "Index Eligible", "Entry Blocked"]
-        st.dataframe(status_df, width="stretch", hide_index=True)
+
+    # --- Next scheduled membership refresh --------------------------------
+    next_refresh = _next_run_for_time(21, 15)
+    st.caption(f"Next S&P 500 membership refresh: {_fmt_uk(next_refresh, '%Y-%m-%d %H:%M')} "
+               f"(21:15 UTC weekdays, 15 minutes ahead of the EOD trading run)")
 
     st.divider()
     st.markdown("### Open Positions")
     open_cards = _get_open_cards(config)
+    held_tickers = {c.get("ticker") for c in open_cards}
     if not open_cards:
         st.info("No open positions.")
     else:
@@ -805,6 +846,28 @@ def _render_briefing_page(config: dict) -> None:
         for e in all_cards:
             _render_trade_card_compact(e)
         st.caption("Full position detail is on the **Performance** page.")
+
+    st.divider()
+    st.markdown(f"### Every Tracked Ticker — Eligibility & Momentum ({len(valid_rows)} tracked)")
+    st.caption(
+        "Every ticker in the live universe, not just open positions — momentum state, current "
+        "index eligibility, and crisis entry-block status. \"Held\" marks a position currently open."
+    )
+    with st.expander("Show full ticker table", expanded=True):
+        status_df = pd.DataFrame(valid_rows)
+        if not status_df.empty:
+            status_df = status_df.sort_values(by=["sig_on", "momentum_pct"], ascending=[False, False])
+        status_df["Held"] = status_df["ticker"].map(lambda t: "●" if t in held_tickers else "")
+        status_df["Type"] = status_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        status_df["sig_on"] = status_df["sig_on"].map(lambda b: "Long" if b else "Flat")
+        status_df["is_member"] = status_df["is_member"].map(lambda b: "Yes" if b else "No")
+        status_df["momentum_pct"] = status_df["momentum_pct"].map(
+            lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
+        )
+        status_df["entry_blocked"] = status_df["entry_blocked"].map(lambda b: "Yes" if b else "No")
+        status_df = status_df[["ticker", "Held", "Type", "sig_on", "momentum_pct", "is_member", "entry_blocked"]]
+        status_df.columns = ["Ticker", "Held", "Type", "Momentum", "12m Return", "Index Eligible", "Entry Blocked"]
+        st.dataframe(status_df, width="stretch", hide_index=True)
 
     _render_footer()
 
@@ -1596,6 +1659,181 @@ def _asset_type_map(config: dict) -> dict[str, str]:
     return asset_types
 
 
+def _block_pass_style(val) -> str:
+    return "color:#16a34a;font-weight:700" if val == "PASS" else "color:#dc2626;font-weight:700"
+
+
+def _render_backtest_page(config: dict) -> None:
+    """Trigger and view the full validated momentum + crisis-override
+    battery: train (2007-2019) / test (2020-2026) CAGR, 16 historical
+    blocks each checked against the real S&P 500 over the same window, a
+    concentration check (results excluding the single best trade), and
+    transaction-cost sensitivity. See analysis/validation.py for the exact
+    methodology and CLAUDE.md's "Live pricing bug, exception isolation, and
+    ETF mapping audit" / "V2 architecture" sections for validation history.
+    """
+    from analysis.validation import universe_snapshot
+
+    _render_page_wordmark("Backtest")
+    st.markdown("## Backtest")
+    st.caption(
+        "12-month momentum signal, point-in-time-gated universe, and the "
+        "≥7% single-day crisis override — the same engine that drives live "
+        "order placement (analysis/backtest.py), run over its full validated "
+        "2007-present history."
+    )
+
+    snap = universe_snapshot()
+    uc1, uc2, uc3 = st.columns(3)
+    uc1.metric("Candidate Universe", f"{snap['total_candidates']}",
+               f"{snap['etf_count']} ETFs + {snap['stock_candidate_count']} stocks")
+    uc2.metric("Live-Eligible Today", f"{snap['live_tradeable_count']}",
+               f"{snap['stock_member_count']}/{snap['stock_candidate_count']} stocks currently S&P members")
+    uc3.metric("Excluded Today", str(len(snap["non_members"])),
+               ", ".join(snap["non_members"]) or "none")
+
+    st.divider()
+
+    if st.button("Run Full Validated Battery (2007–present)", type="primary", key="run_full_validation"):
+        with st.spinner("Running the full battery across all tracked tickers — this can take a minute or two…"):
+            try:
+                from analysis.validation import run_full_validation
+                result = run_full_validation(config)
+                st.session_state["_validation_result"] = result
+                st.session_state["_validation_result_ts"] = datetime.utcnow().isoformat()
+            except Exception as exc:
+                st.error(f"Validation run failed: {exc}")
+
+    result = st.session_state.get("_validation_result")
+    if result is None:
+        st.info("Click the button above to run the battery. Reads live price history only — no writes.")
+        _render_footer()
+        return
+
+    _ts = st.session_state.get("_validation_result_ts")
+    if _ts:
+        st.caption(f"Last run: {_fmt_uk(datetime.fromisoformat(_ts))} · "
+                   f"{result['start']} → {result['end']} · "
+                   f"{result['n_tickers_with_data']}/{result['n_tickers_total']} tickers had usable data")
+
+    st.markdown("### Train / Test Split vs S&P 500")
+    tc1, tc2 = st.columns(2)
+    for col, label, m, sp in (
+        (tc1, "TRAIN (2007–2019)", result["train"], result.get("train_sp", {})),
+        (tc2, "TEST (2020–2026)", result["test"], result.get("test_sp", {})),
+    ):
+        with col:
+            st.markdown(f"**{label}**")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Trades", m.get("total_trades", 0))
+            r2.metric("CAGR", f"{m.get('cagr_pct', 0):+.2f}%",
+                      f"vs S&P {sp.get('cagr_pct', 0):+.2f}%" if sp.get("cagr_pct") is not None else None)
+            r3.metric("Max DD", f"{m.get('max_drawdown_pct', 0):.2f}%",
+                      f"vs S&P {sp.get('max_drawdown_pct', 0):.2f}%" if sp.get("max_drawdown_pct") is not None else None)
+            r4.metric("Win Rate", f"{m.get('win_rate', 0) * 100:.1f}%")
+
+    st.divider()
+    st.markdown("### Full History (2007–present) & Concentration Check")
+    fc1, fc2 = st.columns(2)
+    with fc1:
+        st.markdown("**All trades**")
+        raw = result["full_raw"]
+        st.caption(
+            f"{raw.get('total_trades', 0)} trades · CAGR {raw.get('cagr_pct', 0):+.2f}% · "
+            f"Max DD {raw.get('max_drawdown_pct', 0):.2f}% · Win rate {raw.get('win_rate', 0) * 100:.1f}% · "
+            f"Profit factor {raw.get('profit_factor', 0):.2f}"
+        )
+    with fc2:
+        st.markdown("**Excluding the single best trade** (concentration check)")
+        exb = result["full_ex_best"]
+        st.caption(
+            f"{exb.get('total_trades', 0)} trades · CAGR {exb.get('cagr_pct', 0):+.2f}% · "
+            f"Max DD {exb.get('max_drawdown_pct', 0):.2f}%"
+        )
+        _delta = raw.get("cagr_pct", 0) - exb.get("cagr_pct", 0)
+        st.caption(
+            f"CAGR drops {_delta:.2f}pp with the single best trade removed — "
+            + ("a broad, non-concentrated edge." if _delta < 2 else "some concentration in a handful of trades.")
+        )
+
+    st.divider()
+    st.markdown("### 16 Historical Blocks vs S&P 500")
+    st.caption(
+        f"**{result['n_blocks_pass']}/{result['n_blocks_total']} blocks pass** — strategy CAGR ≥ S&P 500's own "
+        "over the same window, max drawdown no worse than 1.5× the S&P's own, and no block loses more than "
+        "20% of starting capital."
+    )
+    blocks_df = pd.DataFrame(result["blocks"])
+    blocks_df["passed"] = blocks_df["passed"].map(lambda b: "PASS" if b else "FAIL")
+    blocks_show = blocks_df[["block", "start", "end", "n_trades", "strat_cagr", "strat_dd", "sp_cagr", "sp_dd", "passed"]].copy()
+    blocks_show.columns = ["Block", "Start", "End", "Trades", "Strategy CAGR %", "Strategy Max DD %", "S&P CAGR %", "S&P Max DD %", "Result"]
+    st.dataframe(
+        blocks_show.style.map(_block_pass_style, subset=["Result"]),
+        width="stretch", hide_index=True,
+    )
+
+    st.divider()
+    st.markdown("### Transaction-Cost Sensitivity")
+    st.caption("Round-trip cost (entry + exit) subtracted from every trade's return, full 2007–present history.")
+    cost_rows = []
+    for bps, m in sorted(result["cost_sensitivity"].items()):
+        cost_rows.append({
+            "Cost (bps, round-trip)": bps, "CAGR %": m.get("cagr_pct", 0),
+            "Max DD %": m.get("max_drawdown_pct", 0), "Win Rate %": round(m.get("win_rate", 0) * 100, 1),
+            "Profit Factor": m.get("profit_factor", 0),
+        })
+    st.dataframe(pd.DataFrame(cost_rows), width="stretch", hide_index=True)
+
+    st.divider()
+    st.markdown("### Walk-Forward (6-month rolling windows)")
+    wf = result["walk_forward"]
+    wc1, wc2, wc3 = st.columns(3)
+    wc1.metric("Windows Tested", wf.get("n_total", 0))
+    wc2.metric("Profitable Windows", wf.get("n_positive", 0))
+    wc3.metric("Success Rate", f"{wf.get('success_rate_pct', 0):.1f}%")
+
+    st.divider()
+    st.markdown("### Equity Curve (£, full history)")
+    _ec_df = pd.DataFrame(result["trades"])
+    if not _ec_df.empty:
+        _ec = equity_curve_gbp(_ec_df, starting_capital_gbp=result["starting_capital_gbp"])
+        if not _ec.empty:
+            _fig = go.Figure()
+            _fig.add_trace(go.Scatter(
+                x=_ec["date"], y=_ec["equity_gbp"], mode="lines", name="Portfolio (£)",
+                line=dict(color="#3b82f6", width=2),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                hovertemplate="%{x|%Y-%m-%d}<br>Equity: £%{y:,.0f}<extra></extra>",
+            ))
+            _fig.update_layout(
+                xaxis_title="Date", yaxis_title="Portfolio Value (£)",
+                height=360, margin=dict(l=0, r=0, t=20, b=0),
+            )
+            _apply_dark_theme(_fig)
+            st.plotly_chart(_fig, width="stretch")
+
+    st.divider()
+    st.markdown("### Download Due Diligence Report")
+    if st.button("Generate Due Diligence Report (PDF)", key="gen_dd_report"):
+        with st.spinner("Generating due diligence report…"):
+            try:
+                from analysis.dd_report import generate_dd_report_pdf
+                pdf_bytes = generate_dd_report_pdf(result, config)
+                st.session_state["_dd_report_pdf"] = pdf_bytes
+            except Exception as exc:
+                st.error(f"Report generation failed: {exc}")
+    if st.session_state.get("_dd_report_pdf"):
+        st.download_button(
+            "📄 Download Due Diligence Report (PDF)",
+            data=st.session_state["_dd_report_pdf"],
+            file_name="sp500invest_due_diligence_report.pdf",
+            mime="application/pdf",
+            key="dl_dd_report",
+        )
+
+    _render_footer()
+
+
 def _render_performance_page(config: dict) -> None:
     """Execution performance driven entirely by real T212 order fills — see
     "T212 P&L reconstruction" in CLAUDE.md. No simulated/paper trades."""
@@ -1759,11 +1997,12 @@ def main() -> None:
         """, unsafe_allow_html=True)
         st.divider()
 
-        _PAGES = ["Daily Briefing", "Charts", "Performance", "Status"]
+        _PAGES = ["Daily Briefing", "Charts", "Performance", "Backtest", "Status"]
         _PAGE_KEYS = {
             "Daily Briefing": "briefing",
             "Charts":         "charts",
             "Performance":    "performance",
+            "Backtest":       "backtest",
             "Status":         "status",
         }
         current_key = st.session_state.get("page", "briefing")
@@ -1803,6 +2042,10 @@ def main() -> None:
 
     if page_key == "performance":
         _render_performance_page(config)
+        return
+
+    if page_key == "backtest":
+        _render_backtest_page(config)
         return
 
     # Charts page

@@ -388,6 +388,33 @@ def full_metrics_fixed(trades: list[dict], starting_capital: float) -> dict:
             "ex_best": compute_metrics_fixed(ex_best_trades(trades), starting_capital)}
 
 
+def compute_cost_sensitivity(
+    trades: list[dict], starting_capital: float, cost_bps_list: tuple[int, ...] = (0, 10, 25),
+) -> dict[int, dict]:
+    """Re-run compute_metrics_fixed() with a round-trip transaction cost
+    (entry + exit, each cost_bps/10000 of position value) subtracted from
+    every trade's pnl_pct, for each cost level in cost_bps_list. 0 always
+    reproduces the uncosted result exactly; 10/25bps are the levels this
+    system's own due-diligence work has used elsewhere (e.g. the rejected
+    sector-rotation/mean-reversion MIXED-regime research)."""
+    results: dict[int, dict] = {}
+    if not trades:
+        for bps in cost_bps_list:
+            results[bps] = compute_metrics_fixed([], starting_capital)
+        return results
+
+    base_df = pd.DataFrame(trades)
+    for bps in cost_bps_list:
+        cost_frac = (bps / 10000.0) * 2  # entry + exit
+        df = base_df.copy()
+        df["pnl_pct"] = df["pnl_pct"] - cost_frac
+        if "pnl_gbp" in df.columns:
+            df["pnl_gbp"] = df["pnl_gbp"] - (df.get("position_gbp", 0) * cost_frac)
+        df["is_win"] = df["pnl_pct"] > 0
+        results[bps] = compute_metrics_fixed(df.to_dict("records"), starting_capital)
+    return results
+
+
 def walk_forward_pf(trades: list[dict], window_months: int = 6, step_months: int = 1) -> dict:
     if not trades:
         return {"n_total": 0, "n_positive": 0, "success_rate_pct": 0.0}

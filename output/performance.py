@@ -240,6 +240,51 @@ def get_brief_cards(
     return cards
 
 
+def get_crisis_status() -> dict:
+    """Today's crisis-override state plus how close the day's S&P 500 move
+    is to the -7% single-day trigger threshold — not just an active/inactive
+    flag. Returns {} if price data isn't available yet."""
+    from analysis import crisis
+    from data.ingestion import get_price_df
+
+    df = get_price_df("^GSPC", days=60)
+    if df.empty:
+        return {}
+    df = df.set_index("date")
+    df.index = pd.to_datetime(df.index)
+    close = df["close"].astype(float)
+    if len(close) < 2:
+        return {}
+
+    daily_return = close.pct_change()
+    today_return = float(daily_return.iloc[-1]) if pd.notna(daily_return.iloc[-1]) else None
+    latest_dt = close.index[-1]
+
+    is_crisis_today = crisis.is_crisis_day(close, latest_dt)
+    entry_blocked = crisis.is_entry_blocked(close, latest_dt)
+
+    raw = crisis.compute_raw_trigger(close)
+    trigger_dates = raw[raw].index
+    last_trigger_date = trigger_dates[-1].isoformat() if len(trigger_dates) else None
+    days_since_trigger = int((raw.index >= trigger_dates[-1]).sum() - 1) if len(trigger_dates) else None
+
+    distance_to_threshold_pct = (
+        (today_return - crisis.PRICE_GAP_THRESHOLD) * 100 if today_return is not None else None
+    )
+
+    return {
+        "as_of": latest_dt.isoformat(),
+        "today_return_pct": today_return * 100 if today_return is not None else None,
+        "threshold_pct": crisis.PRICE_GAP_THRESHOLD * 100,
+        "distance_to_threshold_pp": distance_to_threshold_pct,
+        "is_crisis_today": is_crisis_today,
+        "entry_blocked": entry_blocked,
+        "cooldown_days": crisis.ENTRY_BLOCK_COOLDOWN_DAYS,
+        "last_trigger_date": last_trigger_date,
+        "days_since_trigger": days_since_trigger,
+    }
+
+
 def get_pnl_rows() -> list[dict]:
     """All reconstructed closed positions, most recent first.
 

@@ -177,6 +177,39 @@ def test_make_blocks_returns_requested_count_contiguous():
         assert blocks[i][1] == blocks[i + 1][0]
 
 
+def test_compute_cost_sensitivity_empty_trades():
+    result = v2b.compute_cost_sensitivity([], 10000, cost_bps_list=(0, 10, 25))
+    assert set(result.keys()) == {0, 10, 25}
+    for m in result.values():
+        assert m["total_trades"] == 0
+
+
+def test_compute_cost_sensitivity_higher_cost_never_improves_return():
+    """A round-trip cost subtracted from every trade must never make the
+    same trade set look better -- CAGR/win-rate should be monotonically
+    non-increasing as cost_bps rises."""
+    trades = [
+        {"pnl_pct": 0.05, "pnl_gbp": 50.0, "position_gbp": 1000.0,
+         "entry_date": pd.Timestamp("2020-01-01"), "exit_date": pd.Timestamp("2020-02-01"), "is_win": True},
+        {"pnl_pct": -0.02, "pnl_gbp": -20.0, "position_gbp": 1000.0,
+         "entry_date": pd.Timestamp("2020-02-01"), "exit_date": pd.Timestamp("2020-03-01"), "is_win": False},
+        {"pnl_pct": 0.03, "pnl_gbp": 30.0, "position_gbp": 1000.0,
+         "entry_date": pd.Timestamp("2020-03-01"), "exit_date": pd.Timestamp("2020-04-01"), "is_win": True},
+    ]
+    result = v2b.compute_cost_sensitivity(trades, 10000, cost_bps_list=(0, 10, 25))
+    assert result[0]["total_pnl_gbp"] >= result[10]["total_pnl_gbp"] >= result[25]["total_pnl_gbp"]
+
+
+def test_compute_cost_sensitivity_can_flip_a_marginal_win_to_a_loss():
+    trades = [
+        {"pnl_pct": 0.001, "pnl_gbp": 1.0, "position_gbp": 1000.0,
+         "entry_date": pd.Timestamp("2020-01-01"), "exit_date": pd.Timestamp("2020-01-02"), "is_win": True},
+    ]
+    result = v2b.compute_cost_sensitivity(trades, 10000, cost_bps_list=(0, 25))
+    assert result[0]["total_trades"] == 1
+    assert result[25]["total_pnl_gbp"] < result[0]["total_pnl_gbp"]
+
+
 def test_run_candidate_uses_etf_tickers_set_to_decide_is_etf(mocker):
     """A ticker in v2_universe.ETF_TICKERS must be simulated with
     is_etf=True (no membership gating) even if a stray membership check
