@@ -934,6 +934,25 @@ def simulate_portfolio_compounding(
             else:
                 position_gbp = round(dynamic_max_position_gbp * 0.5, 2)
 
+            # Minimum-viable-order backstop -- added 2026-08-01 alongside the
+            # _var_position_size_core() clamp-ordering fix (see
+            # analysis/volatility.py's "CLAMP ORDER IS DELIBERATE" docstring
+            # note). This engine has no cash clamp (see this function's own
+            # docstring: no cash concept to clamp against), so it's the one
+            # path where the ceiling-wins fix can genuinely produce a
+            # position below min_position_gbp — a severely depleted
+            # current_balance whose dynamic_max_position_gbp has fallen
+            # below the floor. Previously that could only ever happen if the
+            # floor silently won (sizing ABOVE the intended ceiling, the bug
+            # this fix closes); now it's the ceiling correctly winning
+            # (sizing below the floor instead) -- this check is what stops a
+            # resulting degenerate, not-worth-the-order size from being
+            # admitted, mirroring the identical check already present in
+            # live's maybe_place_orders() and
+            # simulate_portfolio_compounding_mtm().
+            if not is_position_size_viable(position_gbp):
+                continue
+
             # Skip-and-continue capacity check -- evaluated against this
             # candidate's FULL, VaR-calibrated size, never shrunk to fit.
             would_deploy_pct = _would_deploy_pct(current_deployed, position_gbp, current_balance)

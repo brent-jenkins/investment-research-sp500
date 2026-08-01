@@ -72,6 +72,28 @@ def _var_position_size_core(
     max_position_gbp — max_position_gbp remains a hard ceiling regardless of
     how low volatility gets.
 
+    CLAMP ORDER IS DELIBERATE (fixed 2026-08-01 — see CLAUDE.md's "Live and
+    backtest consolidation audit" Item 2): the ceiling is applied LAST, after
+    the floor, so max_position_gbp always wins if the two ever conflict —
+    i.e. `min(max(position_gbp, min_position_gbp), max_position_gbp)`, not
+    `max(min_position_gbp, min(position_gbp, max_position_gbp))`. The
+    original floor-after-ceiling order let min_position_gbp silently override
+    max_position_gbp whenever a caller's own dynamic ceiling (e.g.
+    resolve_dynamic_max_position_gbp()'s account_value_gbp * per_trade_pct)
+    fell below min_position_gbp — a real, reachable condition in
+    analysis/backtest.py:simulate_portfolio_compounding() specifically (the
+    one caller of this function with no downstream cash clamp — see that
+    engine's own comment for the exact trigger band), where it could size a
+    position ABOVE what the account could actually support, directly
+    contradicting this docstring's own "hard ceiling ... regardless" claim.
+    With the ceiling applied last, if max_position_gbp ever falls below
+    min_position_gbp, the result correctly clamps to the (smaller) ceiling —
+    signalling "this account is too depleted to size even a normal minimum
+    order right now" — rather than silently exceeding it. A resulting
+    position below min_position_gbp in that case is expected to be caught
+    downstream by is_position_size_viable() (analysis/decision.py), the same
+    way every caller already filters a too-small order.
+
     Shared by brokers/trading212.py (the live-trading path, which reads
     price_data via get_price_df() relative to today) and
     analysis/backtest.py:simulate_trades() (which cannot use get_price_df()
@@ -90,8 +112,15 @@ def _var_position_size_core(
     if holding_var == 0:
         # No observed downside at all in the sample (e.g. a perfectly flat
         # series) — nothing to constrain against, so use the full ceiling.
+        # Already ceiling-wins-consistent with the ordering fix above: this
+        # returns max_position_gbp unconditionally, with no floor applied,
+        # so it can never exceed the ceiling even if max_position_gbp itself
+        # is below min_position_gbp.
         return max_position_gbp, daily_var, holding_var
 
     position_gbp = (account_value_gbp * max_risk_pct) / abs(holding_var)
-    position_gbp = max(min_position_gbp, min(position_gbp, max_position_gbp))
+    # Ceiling applied LAST -- see the docstring's "CLAMP ORDER IS DELIBERATE"
+    # note above for why this order (not floor-after-ceiling) is required
+    # for max_position_gbp to be a genuine hard ceiling in every case.
+    position_gbp = min(max(position_gbp, min_position_gbp), max_position_gbp)
     return round(position_gbp, 2), daily_var, holding_var

@@ -311,15 +311,69 @@ class Trading212Client:
 
         raise last_exc or RuntimeError("T212 request failed after 3 attempts")
 
+    def _parse_json(self, r: requests.Response, *, allow_empty: bool = False):
+        """Parse *r*'s JSON body. By the time this is ever called, _request()
+        has already confirmed a successful (< 400) HTTP status -- so an
+        unparseable body here is never itself evidence the underlying
+        action failed. Every one of Trading212Client's public methods
+        routes through this instead of a bare r.json() (2026-08-01 --
+        found systemic across the whole client during the "Live and
+        backtest consolidation audit", not unique to the one call site
+        originally flagged; see CLAUDE.md's audit section for the full
+        finding and the concrete bug this closes: _cancel_stale_weekend_
+        orders() treating a genuinely successful T212 cancellation as
+        FAILED purely because the DELETE response had an empty body).
+
+        allow_empty=True -- for ACTION endpoints (place_market_order(),
+        cancel_order()) where the HTTP status IS the success signal and
+        any JSON body is supplementary detail. T212's DELETE
+        /equity/orders/{id} commonly returns 200/204 with no body at all
+        (standard REST convention for DELETE) -- an empty or malformed
+        body here must never be treated as the action having failed. Falls
+        back to {} and logs at WARNING (loud, not silent -- the ambiguity
+        that no order/response detail such as an id could be captured is
+        real and worth an operator's attention, even though the action
+        itself is not treated as failed).
+
+        allow_empty=False (the default, every read endpoint -- account
+        summary, positions, instruments, order status, order history):
+        the JSON body IS the payload a caller actually needs, so an
+        unparseable body on a nominally-successful status is a genuine
+        anomaly and still raises -- but with a clear WARNING logged first
+        (status code + truncated raw body) so it's diagnosable as "T212
+        returned a malformed response", not an opaque, contextless
+        JSONDecodeError several call frames away from where it happened.
+        """
+        try:
+            return r.json()
+        except ValueError as exc:
+            raw = (r.text or "")[:200]
+            if allow_empty:
+                logger.warning(
+                    "T212 returned a successful (%s) response for %s with no "
+                    "parseable body -- treating the action itself as having "
+                    "succeeded (the HTTP status already confirms that), not "
+                    "as a failure, but no response detail (e.g. an order id) "
+                    "could be captured from this call. Body: %r",
+                    r.status_code, r.url, raw,
+                )
+                return {}
+            logger.warning(
+                "T212 returned an unparseable body on a successful (%s) "
+                "response from %s: %s. Body: %r",
+                r.status_code, r.url, exc, raw,
+            )
+            raise
+
     # ── public API methods ───────────────────────────────────────────────────
 
     def get_account_summary(self) -> dict:
         r = self._request("GET", "/equity/account/summary")
-        return r.json()
+        return self._parse_json(r)
 
     def get_positions(self) -> list:
         r = self._request("GET", "/equity/portfolio")
-        return r.json()
+        return self._parse_json(r)
 
     def get_position(self, ticker: str) -> Optional[dict]:
         """Return the open position dict for the given T212 ticker, or None."""
@@ -337,7 +391,7 @@ class Trading212Client:
             if datetime.utcnow() - fetched_at < _INSTRUMENTS_TTL:
                 return instruments
         r = self._request("GET", "/equity/metadata/instruments")
-        instruments = r.json()
+        instruments = self._parse_json(r)
         _instruments_cache[self.base_url] = (datetime.utcnow(), instruments)
         return instruments
 
@@ -357,16 +411,26 @@ class Trading212Client:
             raise ValueError("quantity must be non-zero")
         payload = {"ticker": ticker, "quantity": quantity}
         r = self._request("POST", "/equity/orders/market", json=payload)
-        return r.json()
+        # allow_empty=True -- the order was already accepted (HTTP status
+        # confirmed by _request() above) by the time we're parsing the
+        # body; a malformed/empty response here must never be reported as
+        # the order having failed. See _parse_json()'s own docstring.
+        return self._parse_json(r, allow_empty=True)
 
     def cancel_order(self, order_id: str) -> dict:
         r = self._request("DELETE", f"/equity/orders/{order_id}")
-        return r.json()
+        # allow_empty=True -- T212's DELETE commonly returns 200/204 with
+        # no body at all (standard REST convention). This is the exact
+        # call site that produced a real bug (see
+        # data/scheduler.py:_cancel_stale_weekend_orders(), which
+        # previously treated a genuinely successful cancellation as
+        # FAILED purely because this raised on the empty body).
+        return self._parse_json(r, allow_empty=True)
 
     def get_order(self, order_id: str) -> dict:
         """Fetch a single order by ID from the T212 API."""
         r = self._request("GET", f"/equity/orders/{order_id}")
-        return r.json()
+        return self._parse_json(r)
 
     def get_order_history(self, limit: int = 50) -> list:
         """Return the most recent resolved orders (with real fill data) from T212's history endpoint.
@@ -379,7 +443,7 @@ class Trading212Client:
         live position remains to estimate a price from (see poll_placed_orders()).
         """
         r = self._request("GET", "/equity/history/orders", params={"limit": limit})
-        data = r.json()
+        data = self._parse_json(r)
         return data.get("items", []) if isinstance(data, dict) else (data or [])
 
     @staticmethod

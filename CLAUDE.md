@@ -4921,7 +4921,8 @@ capacity path where both changes sit.
   checked directly and confirmed to assert on real call arguments, not a
   coincidental pass. **Flagged, not fixed** — adding proper coverage to
   shared sizing math this late in a long day's changes carries real risk
-  without dedicated review.
+  without dedicated review. **RESOLVED the same day — see "All three
+  flagged-not-fixed items resolved" below.**
 - **D (documentation accuracy)**: CLAUDE.md's own "Broker integration"
   summary called `get_instruments()`'s cache "24-hour" — stale; the
   actual code (`_INSTRUMENTS_TTL`) and this file's own later "Quantity
@@ -4943,7 +4944,9 @@ capacity path where both changes sit.
   fixed** — narrow trigger condition, and the same "don't touch shared
   sizing math without dedicated tests" caution as the Part C finding
   applies; the real fix is closing the Part C gap first, then revisiting
-  the clamp order with a test in hand.
+  the clamp order with a test in hand. **RESOLVED the same day — see
+  "All three flagged-not-fixed items resolved" below for the exact
+  trigger band and the fix.**
 - **E (second instance)**: the unguarded-`.json()` pattern already known
   at `cancel_order()` (documented elsewhere in this file as a known, open
   issue) is **systemic across `Trading212Client`**, not unique to that one
@@ -4956,7 +4959,8 @@ capacity path where both changes sit.
   returning an unparseable body would be logged and recorded as a
   **FAILED** order even if T212 actually filled it. **Flagged, not
   fixed** — touching the shared HTTP client layer without dedicated new
-  tests this late in the day carries real risk.
+  tests this late in the day carries real risk. **RESOLVED the same day —
+  see "All three flagged-not-fixed items resolved" below.**
 - **F (data-integrity fix consistency)**: the magnitude-outlier guard,
   amendment-conflict preference, and zero-guard (`analysis/market_cap.py`)
   are confirmed applied consistently at both real SEC-fetch call sites
@@ -4990,9 +4994,9 @@ capacity path where both changes sit.
 |---|---|---|---|
 | Live/backtest decision divergence | 2 (the original `is_position_size_viable` gap in the backtest engine, plus `_submit_pending_orders()`'s own hardcoded duplicate) | 2 | 0 |
 | Layer 1 scanner coverage | 1 keyword extended, 1 real hit caught, 1 legitimate exception documented | 1 | 0 |
-| Test coverage gap | 1 (`_var_position_size_core()` untested) | 0 | 1 |
+| Test coverage gap | 1 (`_var_position_size_core()` untested) | 1 *(same day, see below)* | 0 |
 | Documentation accuracy | 1 (stale cache-TTL claim) | 1 | 0 |
-| Silent/loud failure modes | 2 (floor-over-ceiling clamp order; systemic unguarded `.json()`) | 0 | 2 |
+| Silent/loud failure modes | 2 (floor-over-ceiling clamp order; systemic unguarded `.json()`) | 2 *(same day, see below)* | 0 |
 | Data-integrity fix consistency | confirmed consistent, 0 new gaps | — | — |
 | Flag-don't-delete | confirmed consistent, 0 new violations | — | — |
 | Dead code | 1 (`is_price_data_stale()`, overlaps the Part F finding) | 0 | 1 |
@@ -5008,17 +5012,109 @@ specific, non-generic reason — `simulate_portfolio()`'s frozen
 fixed-notional formula, live's real-API-sourced deployment check, the
 SQL-vs-Python priority ranking, and (newly documented this session)
 live's submission-time free-cash re-check — none of it is "nobody got
-around to it." What remains open is narrower and honestly stated: the
-`_var_position_size_core()` test-coverage gap (Part C) is the most
-foundational finding of the whole audit, since it's the one function
-every sizing path ultimately depends on and currently has no test of its
-own contract at all; the clamp-ordering and unguarded-`.json()` findings
-(Part E) are real, evidenced, and neither crashes anything today, but
-neither is provably safe either.
+around to it." **All three items originally left open here (the
+`_var_position_size_core()` test-coverage gap, the clamp-ordering bug,
+and the unguarded-`.json()` pattern) were resolved the same day — see
+"All three flagged-not-fixed items resolved" immediately below — closing
+every gap this audit found, not just the ones it fixed inline.**
 
 Full suite: 402 passing, confirmed again after every fix in this
 completed pass. Nothing pushed; committed locally only, per this
 session's standing practice.
+
+**All three flagged-not-fixed items resolved the same day, not left as
+known limitations.** Bears directly on live sizing/execution correctness,
+so deferring them wasn't judged acceptable once identified.
+
+- **Item 1 — `_var_position_size_core()` test coverage.** `tests/test_volatility.py`
+  (new, 17 tests) — the single function every sizing decision on both
+  sides depends on now has direct, thorough coverage: normal proportional
+  sizing, the ceiling binding, the floor binding, the exact floor-vs-
+  ceiling conflict this fix closes (see Item 2), a ceiling far below both
+  bounds, equal ceiling/floor, an exact boundary case, the zero-variance
+  early-return branch (both with a normal and a below-floor ceiling), an
+  absurdly inflated ceiling not distorting a normal result, a near-zero
+  floor, sqrt-of-time holding-period scaling (including the `holding_days=0`
+  edge case), confidence-level sensitivity, `pd.Series`-vs-`np.ndarray`
+  input equivalence, and rounding. All 17 passed on first run against the
+  already-fixed implementation.
+- **Item 2 — clamp ordering.** `analysis/volatility.py:_var_position_size_core()`
+  changed from `max(min_position_gbp, min(position_gbp, max_position_gbp))`
+  (floor applied last, could silently override the ceiling) to
+  `min(max(position_gbp, min_position_gbp), max_position_gbp)` (ceiling
+  applied last, always wins). **The third path's precise, concrete trigger
+  condition** (as requested, not just "theoretically possible"): with the
+  shipped defaults (`min_position_gbp=50`, `per_trade_pct=0.05`,
+  `max_deployed_pct=0.5`), the bug could only actually admit an
+  oversized trade in `simulate_portfolio_compounding()` — the current
+  default backtest engine — when its running `current_balance` fell into
+  the band `[£100, £1000)`: below £1000, `resolve_dynamic_max_position_gbp()`'s
+  output (`current_balance × per_trade_pct`) drops below the £50 floor,
+  triggering the conflict; below £100, the deployment-cap check
+  (`would_deploy_pct > max_deployed_pct`) independently catches and
+  rejects the resulting oversized position anyway, so the window where a
+  bad trade could actually slip through and be admitted was specifically
+  `£100 ≤ current_balance < £1000` — a materially depleted but not yet
+  drained account. `simulate_trades()` and `simulate_portfolio()` were
+  never exposed (`max_position_gbp` is a fixed £2,500 default in both, far
+  above the £50 floor, never dynamically derived). Live order placement
+  and `simulate_portfolio_compounding_mtm()` were already partially
+  protected by their downstream cash clamp
+  (`resolve_cash_constrained_position_gbp()`), which — being driven by
+  genuinely available cash, never inflated by anything upstream — would
+  usually shrink a floor-inflated size back down before it could exceed
+  what the account actually holds; `simulate_portfolio_compounding()` has
+  no such clamp (documented reason: no cash concept), which is exactly
+  why it was the one path with no second line of defence. Fixing the
+  shared function closes the gap on all four paths at once, by
+  construction — no per-path fix was needed. As a direct, necessary
+  consequence, `simulate_portfolio_compounding()` gained the same
+  `is_position_size_viable()` floor-of-viability check the other two
+  compounding-adjacent paths (live, MTM) already had — with the ceiling
+  now correctly able to win, a severely depleted account could otherwise
+  produce a position below `min_position_gbp` with nothing downstream to
+  filter it out; this mirrors the identical check already present
+  elsewhere rather than introducing a new pattern.
+- **Item 3 — unguarded `.json()` calls.** All seven `Trading212Client`
+  public methods (`get_account_summary`, `get_positions`, `get_instruments`,
+  `place_market_order`, `cancel_order`, `get_order`, `get_order_history`)
+  now route through one new shared method, `Trading212Client._parse_json(r,
+  allow_empty=False)`, applied consistently rather than re-patching just
+  the originally-flagged `cancel_order()` case. Two-tier handling: action
+  endpoints (`place_market_order`, `cancel_order`, `allow_empty=True`) —
+  where the HTTP status (already confirmed successful by `_request()`
+  before `_parse_json()` is ever called) IS the actual success signal —
+  return `{}` instead of raising on a malformed/empty body, logged at
+  WARNING so the ambiguity is visible without being misreported as a
+  failure; read endpoints (`allow_empty=False`, the default) still raise,
+  since the body there IS the payload a caller needs and silently
+  returning `{}` would risk a real account looking like it holds nothing.
+  This directly closes a real bug found during the audit, not a
+  hypothetical one: `data/scheduler.py:_cancel_stale_weekend_orders()`
+  calls `cancel_order()` and previously had no protection against T212's
+  DELETE endpoint returning 200/204 with no body (a standard REST
+  convention) — a genuinely successful cancellation would raise, be caught
+  by that function's own `except Exception`, and get logged/counted as a
+  failed cancellation while the order stayed `PLACED` in the DB
+  indefinitely, even though T212 had already cancelled it. `tests/test_t212_client.py`
+  (new, 13 tests) is the first coverage in this suite to exercise
+  `Trading212Client`'s real HTTP layer at all (every prior test mocked the
+  client's methods directly) — mocks `requests.request` itself so
+  `_request()`/`_parse_json()` genuinely run, covering: normal JSON on
+  every method (no regression), both action endpoints correctly returning
+  `{}` on a malformed/empty successful body instead of raising, every read
+  endpoint still raising on a malformed body (including confirming
+  `get_instruments()` never poisons its cache with a failed parse), and —
+  the end-to-end regression proof — `_cancel_stale_weekend_orders()`
+  itself, seeded with a real stale `PLACED` order and a mocked empty-body
+  204 response, correctly recording `CANCELLED` rather than leaving the
+  order stuck `PLACED` with a false error logged.
+
+Full suite: 432 passing (402 + 17 + 13, all new tests passing on first
+run against the already-implemented fixes). All three items are genuinely
+resolved — not documented as accepted/known limitations — verified by
+tests that exercise the real fixed code paths, not just asserted fixed.
+Nothing pushed; committed locally only.
 
 ### Broker integration — Trading212 Invest
 
