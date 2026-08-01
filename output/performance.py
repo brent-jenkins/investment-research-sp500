@@ -109,6 +109,7 @@ def get_brief_cards(
     import json
     import os
 
+    from analysis.decision import evaluate_exit_reason
     from analysis.universe import get_max_holding_days
 
     if not (os.environ.get("T212_API_KEY", "") and os.environ.get("T212_API_SECRET", "")):
@@ -203,21 +204,28 @@ def get_brief_cards(
         is_member = live_status.get("is_member")
         crisis_now = live_status.get("crisis_now")
 
-        # Exit precedence -- must exactly match brokers/trading212.py's
-        # maybe_exit_positions(), which itself mirrors
-        # analysis/backtest.py:simulate_trades() exactly.
-        if crisis_now:
-            status = "CRISIS EXIT"
-        elif not is_etf and is_member is False:
-            status = "INDEX REMOVAL"
-        elif stop_price is not None and current_price > 0 and current_price <= stop_price:
-            status = "STOP LOSS"
-        elif sig_on is False:
-            status = "SIGNAL OFF"
-        elif days_held >= max_hold:
-            status = "MAX HOLDING"
-        else:
-            status = "ON TRACK"
+        # Exit precedence -- the single shared implementation
+        # (analysis/decision.py:evaluate_exit_reason()), the same function
+        # brokers/trading212.py's maybe_exit_positions() and every backtest
+        # engine call. This is a display-only recomputation (no order is
+        # placed here) but it must classify a position identically to the
+        # live exit check, or the UI could show "ON TRACK" for a position
+        # that's actually about to be closed. `current_price > 0` guards
+        # against a zero/missing live quote incorrectly reading as a
+        # STOP_LOSS breach (0 <= any positive stop_price) -- passed as
+        # price=None in that case so the shared function's own "unknown,
+        # don't trigger" handling applies.
+        price_for_stop_check = current_price if current_price > 0 else None
+        exit_reason = evaluate_exit_reason(
+            is_member=is_member, crisis_now=crisis_now,
+            price=price_for_stop_check, stop_price=stop_price, sig_on=sig_on,
+            holding_days=days_held, max_holding_days=max_hold,
+        )
+        status = {
+            "CRISIS_EXIT": "CRISIS EXIT", "INDEX_REMOVAL": "INDEX REMOVAL",
+            "STOP_LOSS": "STOP LOSS", "SIGNAL_OFF": "SIGNAL OFF",
+            "MAX_HOLDING": "MAX HOLDING",
+        }.get(exit_reason, "ON TRACK")
 
         status_priority = {
             "CRISIS EXIT": 4, "INDEX REMOVAL": 3, "STOP LOSS": 3,

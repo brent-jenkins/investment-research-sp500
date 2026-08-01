@@ -20,6 +20,7 @@ import pandas as pd
 
 from analysis import crisis, signals
 from analysis import universe
+from analysis.decision import evaluate_exit_reason, passes_entry_gate
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
 from data.ingestion import get_price_df
@@ -273,7 +274,7 @@ def simulate_trades(
         blocked_now = bool(entry_blocked.loc[dt])
 
         if open_trade is None:
-            if not sig_on or not is_member or blocked_now:
+            if not passes_entry_gate(sig_on=sig_on, is_member=is_member, entry_blocked=blocked_now):
                 continue
             direction = "LONG"
             stop, stop_distance_pct = _resolve_entry_stop(direction, price, atr, config)
@@ -298,20 +299,17 @@ def simulate_trades(
         stop_price = open_trade["stop_price"]
         holding_days = (dt - open_trade["entry_date"]).days
 
-        exit_reason = None
-        exit_price = price
-
-        if crisis_now:
-            exit_reason = "CRISIS_EXIT"
-        elif not is_member:
-            exit_reason = "INDEX_REMOVAL"
-        elif price <= stop_price:
-            exit_reason = "STOP_LOSS"
-            exit_price = stop_price
-        elif not sig_on:
-            exit_reason = "SIGNAL_OFF"
-        elif holding_days >= max_hold:
-            exit_reason = "MAX_HOLDING"
+        # Exit priority — the single shared implementation
+        # (analysis/decision.py:evaluate_exit_reason()), also called by
+        # brokers/trading212.py, simulate_portfolio(),
+        # simulate_portfolio_compounding(), and output/performance.py. See
+        # CLAUDE.md's "Live/backtest decision-logic parity" section.
+        exit_reason = evaluate_exit_reason(
+            is_member=is_member, crisis_now=crisis_now, price=price,
+            stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
+            max_holding_days=max_hold,
+        )
+        exit_price = stop_price if exit_reason == "STOP_LOSS" else price
 
         if exit_reason:
             pnl_pct = (exit_price - entry_price) / entry_price
@@ -543,19 +541,14 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
             stop_price = ot["stop_price"]
             holding_days = (dt - ot["entry_date"]).days
 
-            exit_reason = None
-            exit_price = price
-            if crisis_now:
-                exit_reason = "CRISIS_EXIT"
-            elif not is_member:
-                exit_reason = "INDEX_REMOVAL"
-            elif price <= stop_price:
-                exit_reason = "STOP_LOSS"
-                exit_price = stop_price
-            elif not sig_on:
-                exit_reason = "SIGNAL_OFF"
-            elif holding_days >= st["max_hold"]:
-                exit_reason = "MAX_HOLDING"
+            # Shared exit-priority function — see simulate_trades()'s
+            # identical comment above.
+            exit_reason = evaluate_exit_reason(
+                is_member=is_member, crisis_now=crisis_now, price=price,
+                stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
+                max_holding_days=st["max_hold"],
+            )
+            exit_price = stop_price if exit_reason == "STOP_LOSS" else price
 
             if exit_reason:
                 pnl_pct = (exit_price - entry_price) / entry_price
@@ -575,22 +568,18 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
 
         # Phase B — entries. Gather today's eligible candidates (flat BEFORE
         # today — see flat_before_today above; signal on, member, not
-        # crisis-blocked), sort by priority, admit while the shared caps
-        # allow.
+        # crisis-blocked, via the shared entry-gate function), sort by
+        # priority, admit while the shared caps allow.
         candidates: list[str] = []
         for ticker in flat_before_today:
             st = per_ticker[ticker]
             row = st["rows"][dt]
             sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
-            if not sig_on:
-                continue
             is_member = st["is_etf"] or universe.is_member(
                 ticker, dt.date() if hasattr(dt, "date") else dt
             )
-            if not is_member:
-                continue
             blocked_now = bool(st["entry_blocked"].loc[dt])
-            if blocked_now:
+            if not passes_entry_gate(sig_on=sig_on, is_member=is_member, entry_blocked=blocked_now):
                 continue
             candidates.append(ticker)
 
@@ -836,15 +825,13 @@ def simulate_portfolio_compounding(
             st = per_ticker[ticker]
             row = st["rows"][dt]
             sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
-            if not sig_on:
-                continue
             is_member = st["is_etf"] or universe.is_member(
                 ticker, dt.date() if hasattr(dt, "date") else dt
             )
-            if not is_member:
-                continue
             blocked_now = bool(st["entry_blocked"].loc[dt])
-            if blocked_now:
+            # Shared entry-gate function — see simulate_trades()'s identical
+            # comment above.
+            if not passes_entry_gate(sig_on=sig_on, is_member=is_member, entry_blocked=blocked_now):
                 continue
             momentum_val = row.get("momentum")
             momentum_val = float(momentum_val) if pd.notna(momentum_val) else float("-inf")
@@ -945,19 +932,14 @@ def simulate_portfolio_compounding(
             stop_price = ot["stop_price"]
             holding_days = (dt - ot["entry_date"]).days
 
-            exit_reason = None
-            exit_price = price
-            if crisis_now:
-                exit_reason = "CRISIS_EXIT"
-            elif not is_member:
-                exit_reason = "INDEX_REMOVAL"
-            elif price <= stop_price:
-                exit_reason = "STOP_LOSS"
-                exit_price = stop_price
-            elif not sig_on:
-                exit_reason = "SIGNAL_OFF"
-            elif holding_days >= st["max_hold"]:
-                exit_reason = "MAX_HOLDING"
+            # Shared exit-priority function — see simulate_trades()'s
+            # identical comment above.
+            exit_reason = evaluate_exit_reason(
+                is_member=is_member, crisis_now=crisis_now, price=price,
+                stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
+                max_holding_days=st["max_hold"],
+            )
+            exit_price = stop_price if exit_reason == "STOP_LOSS" else price
 
             if exit_reason:
                 pnl_pct = (exit_price - entry_price) / entry_price

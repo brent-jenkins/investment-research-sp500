@@ -74,6 +74,7 @@ import pandas as pd
 import requests
 
 from analysis import crisis, signals, universe
+from analysis.decision import evaluate_exit_reason, passes_entry_gate
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
 from data.ingestion import get_price_df
@@ -1412,19 +1413,18 @@ def maybe_exit_positions(config: dict) -> None:
             max_hold = get_max_holding_days(ticker, config)
             holding_days = (datetime.utcnow() - entry_date).days if entry_date else 0
 
-            # Exit priority — must match analysis/backtest.py:simulate_trades()
-            # exactly: crisis > index-removal > stop-loss > signal-off > max-holding.
-            exit_reason = None
-            if state["crisis_now"]:
-                exit_reason = "CRISIS_EXIT"
-            elif not state["is_etf"] and not state["is_member"]:
-                exit_reason = "INDEX_REMOVAL"
-            elif stop_price is not None and state["price"] <= stop_price:
-                exit_reason = "STOP_LOSS"
-            elif not state["sig_on"]:
-                exit_reason = "SIGNAL_OFF"
-            elif holding_days >= max_hold:
-                exit_reason = "MAX_HOLDING"
+            # Exit priority — the single shared implementation
+            # (analysis/decision.py:evaluate_exit_reason()), also called by
+            # every backtest engine in analysis/backtest.py and by
+            # output/performance.py's display path. See CLAUDE.md's
+            # "Live/backtest decision-logic parity" section for why this is
+            # a shared function rather than an independently hand-written
+            # copy of the same if/elif chain.
+            exit_reason = evaluate_exit_reason(
+                is_member=state["is_member"], crisis_now=state["crisis_now"],
+                price=state["price"], stop_price=stop_price, sig_on=state["sig_on"],
+                holding_days=holding_days, max_holding_days=max_hold,
+            )
 
             if exit_reason is None:
                 continue
@@ -1594,9 +1594,14 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             if state is None:
                 continue
 
-            # Entry gate — must match simulate_trades()'s open_trade-is-None
-            # branch exactly: sig_on AND is_member AND not blocked_now.
-            if not state["sig_on"] or not state["is_member"] or state["entry_blocked"]:
+            # Entry gate — the single shared implementation
+            # (analysis/decision.py:passes_entry_gate()), also called by
+            # every backtest engine's open_trade-is-None branch. See
+            # CLAUDE.md's "Live/backtest decision-logic parity" section.
+            if not passes_entry_gate(
+                sig_on=state["sig_on"], is_member=state["is_member"],
+                entry_blocked=state["entry_blocked"],
+            ):
                 continue
 
             if t212_ticker in positions_by_t212:
