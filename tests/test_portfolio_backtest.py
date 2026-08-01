@@ -4,6 +4,15 @@ run_candidate()/simulate_trades() (left completely unchanged; this is an
 additional, selectable mode -- see CLAUDE.md's "Portfolio-capped backtest
 engine" section for the full design writeup).
 
+Also covers analysis/backtest.py:simulate_portfolio_compounding() -- the
+genuinely compounding two-parameter mode added the same day (see this
+file's "Compounding mode" section below and CLAUDE.md's "Compounding
+portfolio backtest" section for the full design writeup). Both engines
+share the same day-by-day walk structure; simulate_portfolio() stays fixed-
+notional throughout (sizes/caps against backtest.starting_capital_gbp,
+never against a moving balance) while simulate_portfolio_compounding()
+tracks and sizes against a genuinely moving current_balance.
+
 All synthetic data, no DB/network -- matches this project's self-contained
 test-suite convention (see tests/test_backtest.py for the pattern this file
 follows).
@@ -295,3 +304,277 @@ def test_max_total_deployed_never_binds_when_generous(mocker):
     day0 = pd.Timestamp("2020-01-01").date()
     day0_entrants = {t["ticker"] for t in trades if t["entry_date"] == day0}
     assert day0_entrants == {"VOO", "GLD", "SLV"}
+
+
+# ---------------------------------------------------------------------------
+# 4. Compounding mode (simulate_portfolio_compounding) -- added 2026-08-01
+# ---------------------------------------------------------------------------
+
+def _fallback_position(balance: float, per_trade_pct: float) -> float:
+    """Mirrors simulate_portfolio_compounding()'s own <60-day-history
+    fallback formula exactly (round(dynamic_max_position_gbp * 0.5, 2),
+    where dynamic_max_position_gbp = current_balance * per_trade_pct) --
+    used by tests below to compute an *expected* position size from first
+    principles rather than hardcoding a number that would silently rot if
+    the formula's rounding behaviour ever changed."""
+    return round(balance * per_trade_pct * 0.5, 2)
+
+
+def _compounding_config(max_open_positions=999999):
+    import copy
+    cfg = copy.deepcopy(_CONFIG)
+    cfg["trading212_invest"]["max_open_positions"] = max_open_positions
+    cfg["trading212_invest"]["max_total_deployed"] = 999.0  # unused by compounding mode
+    return cfg
+
+
+def test_compounding_winning_first_trade_grows_a_later_entrys_position_size(mocker):
+    """Ticker A wins big and closes before ticker B ever becomes a
+    candidate. B's own entry has < 60 days of its own price history (it
+    just sat flat/off since day 0), so its position size is computed via
+    the same <60-day fallback for both the compounding and (hypothetical)
+    fixed-notional case -- isolating the ONLY variable that can explain a
+    difference: which balance the fallback's own dynamic_max_position_gbp
+    was computed against. Confirms it is the GROWN balance (starting
+    capital + A's realised profit), not the starting notional."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 200
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+
+    starting_capital = 10000.0
+    per_trade_pct = 0.05
+
+    # A: signal on days 0-9, off from day 10 -- exits via SIGNAL_OFF on day
+    # 10 at close=200 (entry close=100) -- a clean +100% winner.
+    sig_a = pd.Series([True] * 10 + [False] * (n - 10), index=dates)
+    close_a = pd.Series([100.0 + i * 10.0 for i in range(n)], index=dates)
+    frame_a = pd.DataFrame({"close": close_a, "atr": pd.Series([1.0] * n, index=dates), "signal": sig_a})
+
+    # B: flat/signal-off through day 11, signal on from day 12 onward --
+    # becomes a candidate only after A has already fully closed (day 10).
+    sig_b = pd.Series([False] * 12 + [True] * (n - 12), index=dates)
+    close_b = pd.Series([50.0] * n, index=dates)  # flat -- no stop-loss risk
+    frame_b = pd.DataFrame({"close": close_b, "atr": pd.Series([0.01] * n, index=dates), "signal": sig_b})
+
+    cached = [{"ticker": "A_WINNER", "frame": frame_a}, {"ticker": "B_LATER", "frame": frame_b}]
+    cfg = _compounding_config()
+    trades = v2b.simulate_portfolio_compounding(cached, cfg, _flat_gspc(n), per_trade_pct, 0.90)
+
+    trade_a = next(t for t in trades if t["ticker"] == "A_WINNER")
+    trade_b = next(t for t in trades if t["ticker"] == "B_LATER")
+
+    expected_pos_a = _fallback_position(starting_capital, per_trade_pct)
+    assert trade_a["position_gbp"] == pytest.approx(expected_pos_a)
+    assert trade_a["pnl_pct"] == pytest.approx(1.0)  # (200-100)/100
+    expected_pnl_gbp_a = expected_pos_a * 1.0
+    assert trade_a["pnl_gbp"] == pytest.approx(expected_pnl_gbp_a)
+
+    balance_after_a = starting_capital + expected_pnl_gbp_a
+    expected_pos_b = _fallback_position(balance_after_a, per_trade_pct)
+
+    # The genuinely compounding expectation must differ from what a
+    # fixed-notional engine would have produced -- otherwise this test
+    # wouldn't actually distinguish the two behaviours.
+    assert expected_pos_b != expected_pos_a
+    assert trade_b["position_gbp"] == pytest.approx(expected_pos_b)
+
+
+def test_compounding_losing_first_trade_shrinks_a_later_entrys_position_size(mocker):
+    """Mirror image of the winning case above -- ticker A loses (via a
+    SIGNAL_OFF exit at a lower close, not a stop-loss, so the loss isn't
+    capped at the stop distance), and ticker B's later position size must
+    reflect the SHRUNK balance."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 200
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+
+    starting_capital = 10000.0
+    per_trade_pct = 0.05
+
+    # A: signal on days 0-9, off from day 10. ATR large enough that the
+    # stop sits far below the exit price, so this exits via SIGNAL_OFF
+    # (not STOP_LOSS) at close=60 -- a -40% loss.
+    sig_a = pd.Series([True] * 10 + [False] * (n - 10), index=dates)
+    close_a_vals = [100.0 - i * 4.0 for i in range(10)] + [60.0] * (n - 10)
+    close_a = pd.Series(close_a_vals, index=dates)
+    frame_a = pd.DataFrame({"close": close_a, "atr": pd.Series([50.0] * n, index=dates), "signal": sig_a})
+
+    sig_b = pd.Series([False] * 12 + [True] * (n - 12), index=dates)
+    close_b = pd.Series([50.0] * n, index=dates)
+    frame_b = pd.DataFrame({"close": close_b, "atr": pd.Series([0.01] * n, index=dates), "signal": sig_b})
+
+    cached = [{"ticker": "A_LOSER", "frame": frame_a}, {"ticker": "B_LATER", "frame": frame_b}]
+    cfg = _compounding_config()
+    trades = v2b.simulate_portfolio_compounding(cached, cfg, _flat_gspc(n), per_trade_pct, 0.90)
+
+    trade_a = next(t for t in trades if t["ticker"] == "A_LOSER")
+    trade_b = next(t for t in trades if t["ticker"] == "B_LATER")
+
+    assert trade_a["exit_reason"] == "SIGNAL_OFF"
+    expected_pos_a = _fallback_position(starting_capital, per_trade_pct)
+    assert trade_a["position_gbp"] == pytest.approx(expected_pos_a)
+    assert trade_a["pnl_pct"] == pytest.approx(-0.4)  # (60-100)/100
+
+    expected_pnl_gbp_a = expected_pos_a * -0.4
+    balance_after_a = starting_capital + expected_pnl_gbp_a
+    assert balance_after_a < starting_capital
+
+    expected_pos_b = _fallback_position(balance_after_a, per_trade_pct)
+    assert expected_pos_b != expected_pos_a
+    assert trade_b["position_gbp"] == pytest.approx(expected_pos_b)
+
+
+def test_compounding_deployment_cap_denominator_uses_grown_balance_not_starting_capital(mocker):
+    """After A's big win grows the balance, a THIRD candidate (C) is
+    admitted under max_deployed_pct only because the cap's denominator is
+    the grown balance -- with a max_deployed_pct set precisely so that a
+    (buggy) fixed-starting-capital denominator would have blocked C, while
+    the correct grown-balance denominator admits it. This is a genuine
+    regression guard: reverting the denominator to starting_capital would
+    flip this test from pass to fail."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 200
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+
+    starting_capital = 10000.0
+    per_trade_pct = 0.05
+
+    sig_a = pd.Series([True] * 10 + [False] * (n - 10), index=dates)
+    close_a = pd.Series([100.0 + i * 10.0 for i in range(n)], index=dates)
+    frame_a = pd.DataFrame({"close": close_a, "atr": pd.Series([1.0] * n, index=dates), "signal": sig_a})
+
+    sig_bc = pd.Series([False] * 12 + [True] * (n - 12), index=dates)
+    frame_b = pd.DataFrame({
+        "close": pd.Series([50.0] * n, index=dates),
+        "atr": pd.Series([0.01] * n, index=dates), "signal": sig_bc,
+    })
+    frame_c = pd.DataFrame({
+        "close": pd.Series([80.0] * n, index=dates),
+        "atr": pd.Series([0.01] * n, index=dates), "signal": sig_bc,
+    })
+
+    cached = [
+        {"ticker": "A_WINNER", "frame": frame_a},
+        {"ticker": "B_CAND", "frame": frame_b},
+        {"ticker": "C_CAND", "frame": frame_c},
+    ]
+
+    expected_pos_a = _fallback_position(starting_capital, per_trade_pct)  # 250.0
+    balance_after_a = starting_capital + expected_pos_a * 1.0             # 10250.0
+    expected_pos_b = _fallback_position(balance_after_a, per_trade_pct)   # 256.25
+
+    ratio_if_fixed_denominator = expected_pos_b / starting_capital        # 0.025625
+    ratio_if_compounding_denominator = expected_pos_b / balance_after_a   # 0.025 exactly
+    assert ratio_if_compounding_denominator < ratio_if_fixed_denominator, "fixture sanity check"
+
+    max_deployed_pct = (ratio_if_fixed_denominator + ratio_if_compounding_denominator) / 2
+
+    cfg = _compounding_config()
+    trades = v2b.simulate_portfolio_compounding(cached, cfg, _flat_gspc(n), per_trade_pct, max_deployed_pct)
+
+    day12 = pd.Timestamp("2020-01-13").date()
+    day12_entrants = {t["ticker"] for t in trades if t["entry_date"] == day12}
+    assert "B_CAND" in day12_entrants
+    assert "C_CAND" in day12_entrants, (
+        "C should be admitted because the deployment cap's denominator is the "
+        "GROWN balance (10250), not the fixed starting capital (10000) -- "
+        f"max_deployed_pct={max_deployed_pct:.6f} sits strictly between the two "
+        "possible ratios by construction"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Emergent position count -- no explicit count cap in compounding mode
+# ---------------------------------------------------------------------------
+
+def test_compounding_mode_has_no_explicit_position_count_cap(mocker):
+    """10 tickers, all signal-on from day 0, tiny per_trade_pct (so each
+    position is small relative to the account) and a generous
+    max_deployed_pct -- all 10 should be admitted concurrently. Crucially,
+    config sets trading212_invest.max_open_positions=2 (deliberately low)
+    to prove compounding mode genuinely never reads/enforces that key at
+    all -- position count is purely an emergent consequence of
+    per_trade_pct and max_deployed_pct together."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 100
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    cached = [
+        {
+            "ticker": f"STOCK_{i}",
+            "frame": pd.DataFrame({
+                "close": pd.Series([100.0] * n, index=dates),
+                "atr": pd.Series([0.01] * n, index=dates),
+                "signal": pd.Series([True] * n, index=dates),
+            }),
+        }
+        for i in range(10)
+    ]
+
+    cfg = _compounding_config(max_open_positions=2)  # deliberately low -- must be ignored
+    trades = v2b.simulate_portfolio_compounding(cached, cfg, _flat_gspc(n), per_trade_pct=0.01, max_deployed_pct=0.5)
+
+    assert _reconstruct_max_concurrent(trades) >= 10, (
+        "expected all 10 small positions to be admitted concurrently -- "
+        "max_open_positions=2 in config must NOT be enforced by compounding mode"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Graceful handling of a non-positive balance
+# ---------------------------------------------------------------------------
+
+def test_compounding_handles_balance_reaching_negative_without_crashing_or_guessing(mocker):
+    """A deliberately pathological single trade (an extreme per_trade_pct
+    combined with a crisis-forced exit at a synthetic, deeply negative
+    close price -- not a realistic market scenario, constructed purely to
+    exercise the current_balance <= 0 defensive path) drives the account
+    balance negative. Confirms: (a) no exception is raised, (b) a second
+    ticker whose signal turns on well after the crisis cooldown has
+    cleared is NEVER entered, because Phase B is skipped entirely once the
+    balance is non-positive, and (c) the pathological ticker itself never
+    re-enters either."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 60
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+
+    # Z: entry day 0. per_trade_pct=2.0 (deliberately > 1.0) makes the
+    # <60-day-history fallback size the ENTIRE current balance into this
+    # one position (dynamic_max_position_gbp = balance * 2.0; fallback =
+    # dynamic_max * 0.5 = balance * 1.0).
+    sig_z = pd.Series([True] * n, index=dates)
+    close_z_vals = [100.0] + [-50.0] * (n - 1)  # day 1 close crashes to a synthetic negative
+    close_z = pd.Series(close_z_vals, index=dates)
+    frame_z = pd.DataFrame({"close": close_z, "atr": pd.Series([1.0] * n, index=dates), "signal": sig_z})
+
+    # Y: flat/off until well after the crisis cooldown (trigger day + 5
+    # trading days) clears, so if entries were still gated only by the
+    # crisis block (not the balance check), Y would normally enter here.
+    sig_y = pd.Series([False] * 20 + [True] * (n - 20), index=dates)
+    frame_y = pd.DataFrame({
+        "close": pd.Series([50.0] * n, index=dates),
+        "atr": pd.Series([0.01] * n, index=dates), "signal": sig_y,
+    })
+
+    cached = [{"ticker": "Z_PATHOLOGICAL", "frame": frame_z}, {"ticker": "Y_LATER", "frame": frame_y}]
+
+    # gspc: a single >=7% decline on day 1 forces Z's crisis exit that day.
+    gspc_vals = [100.0 + i * 0.01 for i in range(n)]
+    gspc_vals[1] = gspc_vals[0] * 0.90  # -10% single day
+    gspc = pd.Series(gspc_vals, index=dates)
+
+    cfg = _compounding_config()
+    trades = v2b.simulate_portfolio_compounding(cached, cfg, gspc, per_trade_pct=2.0, max_deployed_pct=0.9)
+
+    z_trades = [t for t in trades if t["ticker"] == "Z_PATHOLOGICAL"]
+    assert len(z_trades) == 1
+    assert z_trades[0]["exit_reason"] == "CRISIS_EXIT"
+    assert z_trades[0]["pnl_gbp"] < -10000.0, "fixture sanity check -- loss must exceed starting capital"
+
+    y_trades = [t for t in trades if t["ticker"] == "Y_LATER"]
+    assert y_trades == [], (
+        "Y must never enter -- once the balance goes non-positive, Phase B is "
+        "skipped entirely for every subsequent day, regardless of the crisis "
+        "cooldown having long since cleared"
+    )
+    # No further Z re-entry either.
+    assert len(z_trades) == 1

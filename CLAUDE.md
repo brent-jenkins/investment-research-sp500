@@ -3504,6 +3504,357 @@ universe.py`'s curated-40 roster, and every scheduler/broker file are
 unchanged; only `analysis/backtest.py`, `analysis/validation.py`, and the
 new test file are new, uncommitted local changes pending review.
 
+### Present-day market-cap ranking bias in the universe-broadening studies — investigated, not fixed (2026-08-01)
+
+Both "V2 stock universe broadening" and "V2 moderate stock universe
+expansion (top-100/150 by market cap)" above rank all ~503 point-in-time-
+eligible S&P 500 candidates by **today's (2026) market cap** — a single,
+static ranking applied uniformly across the entire 2007-2026 backtest
+window. This is a second, subtler instance of the exact hindsight-bias
+class the point-in-time *membership* correction already fixed once (see
+"V2 architecture — phased rebuild, Stage 1" above) — one layer deeper:
+not "was this company a member at the time" but "was this company
+genuinely *large* at the time." Investigated for feasibility of a proper
+fix and for how much it actually taints the findings already on record.
+Investigation only — no backtest, universe, or config change made.
+
+**Part 1 — historical point-in-time market-cap data: feasible, not free
+of gaps.** No ready-made historical market-cap-ranking dataset exists
+(checked directly: `fja05680/sp500`, the same source already used for
+membership windows, has no market-cap or index-weight dimension, and no
+sibling dataset from the same author or elsewhere adds one). The
+components to reconstruct it are free and were verified live, not
+assumed:
+
+- **SEC EDGAR's XBRL company-concept API**
+  (`data.sec.gov/api/xbrl/companyconcept/{CIK}/dei/EntityCommonStockSharesOutstanding.json`,
+  free, no key, requires only a compliant `User-Agent` header — a plain
+  `curl` succeeds where an unheadered `WebFetch` gets a 403) returns a
+  company's full quarterly shares-outstanding history in one call, sourced
+  from actual 10-Q/10-K cover-page disclosures. Verified against a known
+  fact rather than trusted blind: NVDA's own series shows shares
+  outstanding jumping 623M→2.50B (**4.01×**) exactly at the July 2021 4:1
+  split, and 2.46B→24.53B (**9.97×**) exactly at the June 2024 10:1
+  split — both dates and ratios match the real corporate actions.
+- **Gap: real structured coverage only starts ~2009, not 2007.** The
+  SEC's XBRL mandate phased in by filer size — worldwide public float
+  ≥$5B (essentially this project's own target universe) had to start
+  filing structured data mid-2009; smaller filers not until mid-2011.
+  NVDA's own earliest structured record is 2009-01-25/2009-08-17
+  depending on tag. **2007–mid-2009 (~13% of the 19-year backtest window)
+  has no free structured source** — only unstructured pre-XBRL filing
+  text, which would need scraping rather than a clean API call.
+- `yfinance.get_shares_full()` was checked and ruled out as the primary
+  source — confirmed via its own GitHub issue tracker to be annual-only
+  (not quarterly) with documented duplicate-value bugs on some tickers
+  and undocumented per-ticker depth, not something to build 2007-era
+  figures on.
+- **Scope to build it**: map ~500 candidates to CIKs via SEC's free
+  `company_tickers.json`, pull one `companyconcept` call per ticker
+  (~500 calls, minutes at SEC's ~10 req/sec polite limit), forward-fill
+  each ticker's quarterly shares-outstanding between filing dates, and
+  join against price history already stored in `price_data` to get
+  `market_cap(ticker, date) = price(date) × shares_outstanding_as_of(date)`
+  at any historical date, point-in-time correct by construction. Estimated
+  **1-3 days of engineering** for the 2009-2026 core; the pre-2009 stretch
+  is a separate, smaller, optional add-on (or can be excluded from any
+  cap-based cutoff, which is defensible — it's the shortest and least
+  AI-boom-distorted segment of the window anyway). Paid institutional
+  sources (Sharadar via Nasdaq Data Link, CRSP, Compustat) exist and would
+  also work, but are unnecessary given SEC EDGAR covers this for free.
+
+**Part 2 — materiality: real, not a footnote.** Real historical year-end
+market-cap figures (stockanalysis.com, cross-checked against the
+underlying page data) were pulled for the 8 "named winner" tickers the
+broadening/expansion sections credit with driving their reported CAGR
+uplift:
+
+| Ticker | 2007 | 2015 | 2019 | 2025 | Pattern |
+|---|---:|---:|---:|---:|---|
+| LRCX | $5.8B | $12.6B | $42.4B | $215.0B | mid-cap through 2018, mega-cap only from 2019 |
+| MU | $5.5B | $15.4B | $59.7B | $321.2B | cyclical mid-cap through 2018, durably mega-cap only since ~2024 |
+| KLAC | $8.8B | $10.8B | $28.1B | $159.7B | mid-cap through 2018, mega-cap only in the last ~3 years |
+| STX | $13.6B | $11.0B | $15.6B | $58.8B | never plausibly top-100-caliber before ~2025 |
+| PWR | $4.5B | $3.1B | $5.8B | $62.9B | small-cap for essentially all of 2007-2019, ~10x in 5 years on AI-data-center buildout |
+| CTAS | $5.3B | $9.8B | $27.8B | $75.6B | steady compounder, no discontinuous jump |
+| ORLY | $3.7B | $25.0B | $33.2B | $77.0B | steady compounder, no discontinuous jump |
+| AZO | $7.6B | $22.4B | $28.1B | $56.2B | steady compounder, no discontinuous jump |
+
+Against today's own top-100 floor (~$119-121B, per the expansion study's
+own figures): **5 of the 8 named winners — LRCX, MU, KLAC, STX, PWR —
+were 1-2 orders of magnitude below that for most of 2007-2019**, only
+becoming genuinely large-cap in the last 2-6 years, concentrated in the
+2023-2026 AI/semicap-equipment supercycle — the same shape as NVDA's own
+trajectory ($7-18B through 2007-2015, mega-cap only from ~2017), just
+landing on different tickers. The top-100 study's own text names 4 of
+these (MU rank 13, LRCX rank 32, KLAC rank 47, STX rank 58) among the
+tickers it credits with the reported CAGR uplift (13.23%→17.84% train,
+22.39%→33.27% test, uncapped engine) — this isn't incidental exposure,
+it's the specific mechanism the headline number rests on. CTAS/ORLY/AZO,
+by contrast, were already solidly large/mid-cap well before the test
+period — a much milder version of the same issue. NVDA itself is not a
+named contributor in these studies — it sits inside the hand-curated 40
+(picked by sector-coverage/liquidity criteria, not by any market-cap
+ranking), and its trades are reported unchanged across every universe-size
+variant, so this specific bias doesn't touch NVDA's own figures here even
+though the underlying mechanism is identical.
+
+**A partial, unrelated mitigant already on record — stated for
+completeness, not as a reason to discount the finding.** "Portfolio-capped
+validation findings" above independently found that once real
+`max_open_positions`/`max_total_deployed` caps are modelled, the CAGR
+uplift from widening the universe mostly evaporates anyway (trade count
+barely moves: 2,187→2,246→2,245 across curated-40/top-100/top-150) — so
+the specific claim this ranking bias would most inflate is already flagged
+as not practically actionable, for an unrelated reason. That doesn't clean
+up the PF/Sharpe/win-rate comparisons presented as the trustworthy side of
+the same studies, though — those are still partly built on these same
+tickers' pre-mega-cap years, when their liquidity, volatility regime, and
+investor base were meaningfully different from today.
+
+**Conclusion.** The "V2 stock universe broadening" and "V2 moderate stock
+universe expansion" sections' reported upside should be read with this
+caveat attached, not treated as a settled result — the tickers most
+responsible for their headline gains are also the tickers most exposed to
+this exact bias. A proper fix (point-in-time market-cap ranking, 1-3 days
+per the scope above) has not been built; until it is, treat "top-100/150
+by market cap" in this codebase's history as "top-100/150 by **2026**
+market cap, applied retroactively," not a genuine point-in-time
+ranking — the same caveat this file already states plainly for every
+other in-sample finding per the Research reproducibility standard.
+
+Investigation only, no research clone created or deleted — all evidence
+above (SEC EDGAR live queries, stockanalysis.com market-cap series) was
+gathered directly against public sources, not a local backtest run.
+Nothing in `analysis/`, `config.yaml`, or any scheduler/broker file
+changed as a result.
+
+### Compounding portfolio backtest (2026-08-01)
+
+**Part A — confirmed, not a live-trading gap.** `simulate_portfolio()`
+(the shared-account cap-enforcement mode added earlier the same day —
+see "Portfolio-capped backtest engine" above) shares `current_open`/
+`current_deployed` running state across tickers, but sizes and cap-checks
+every entry against the **fixed** `backtest.starting_capital_gbp`
+constant throughout its whole run — it never compounds. Read directly
+before building anything further: `brokers/trading212.py`'s live path
+already compounds correctly, by construction — `maybe_place_orders()`
+(the decide phase, line ~1508) and `_submit_pending_orders()` (the
+submission phase, line ~1694) both call `client.get_account_summary()`
+fresh on every invocation and pass `total_val = float(summary.get(
+"totalValue", 0) or 0)` — T212's real, current account balance — directly
+into `_var_position_size_core()` as `account_value_gbp`. There is no
+notional reference figure anywhere on the live path to go stale; it asks
+the broker what the account is actually worth right now, every time. **The
+compounding gap that follows is backtest-methodology-only.**
+
+**Mechanism.** `analysis/backtest.py:simulate_portfolio_compounding(
+tickers_cache, config, gspc_close, per_trade_pct, max_deployed_pct)` is a
+third, additional, selectable simulation mode — `run_candidate()`/
+`simulate_trades()` and `simulate_portfolio()` are both left completely
+unchanged. Reuses `simulate_portfolio()`'s exact structural skeleton
+(day-by-day merged walk, Phase A exits before Phase B entries, the
+"flat before today's exits are processed" same-day-no-reentry rule, the
+ETF-before-stock-then-input-order entry priority) and its exact per-
+ticker exit/stop/crisis logic verbatim. Two parameters replace the old
+three (`max_position_gbp` flat-£, `max_open_positions` count,
+`max_total_deployed` %):
+
+- `per_trade_pct` — the VaR sizing ceiling for a new entry, as a fraction
+  of the **current** (not starting) balance:
+  `dynamic_max_position_gbp = current_balance * per_trade_pct`, fed into
+  the unmodified `_var_position_size_core()` formula (`account_value_gbp`
+  is also `current_balance`).
+- `max_deployed_pct` — blocks further entries once `current_deployed /
+  current_balance >= max_deployed_pct` — a compounding denominator,
+  unlike `simulate_portfolio()`'s fixed one.
+
+No `max_open_positions` cap at all — position count is an **emergent**
+consequence of `per_trade_pct` and `max_deployed_pct` together (roughly
+`max_deployed_pct / per_trade_pct` positions at full deployment), not a
+third, independently-enforced rule. `current_balance` updates the moment
+each Phase A exit is processed (`pnl_gbp` added immediately), so a later
+same-day exit/entry sees the balance already moved; Phase B itself never
+changes `current_balance` (only `current_deployed`), so it is stable
+across the whole of one day's candidate-admission loop. A non-positive
+`current_balance` on any day skips Phase B entirely for that day (no
+exception, no divide-by-zero, no guessed size) — Phase A always still
+runs. Wired into `analysis/validation.py:run_full_validation(...,
+per_trade_pct=None, max_deployed_pct_compounding=None)` — both `None`
+(the default) reproduces every existing caller's behaviour unchanged;
+supplying both switches the engine to `simulate_portfolio_compounding()`,
+taking priority over `portfolio_mode` if both were somehow passed
+together (the three simulation engines are mutually exclusive, not
+stackable).
+
+Covered by 5 new tests in `tests/test_portfolio_backtest.py` (11 total in
+that file after this addition): a winning first trade demonstrably grows
+a later, independent ticker's position size (and the reverse for a
+losing first trade); the deployment cap's denominator is provably the
+grown balance, not the starting notional (constructed so a fixed-
+denominator bug would flip the test from pass to fail); no explicit
+position-count cap exists even when `trading212_invest.max_open_positions`
+is configured low (10 tiny positions open concurrently against a
+configured cap of 2); and a deliberately pathological single trade (an
+extreme `per_trade_pct` combined with a crisis-forced exit at a
+synthetic, deeply negative close) drives the balance negative with no
+exception and confirms every later candidate is cleanly skipped. Full
+local suite: 231 passed (226 pre-existing + 5 new).
+
+**Sweep — 20 combinations, full grid, no reduction needed** (each run
+completes in ~9-14s once the 73-ticker cache is precomputed once and
+reused — the expensive part is identical across every combo). Isolated
+server-side clone (`/root/compounding_sweep_clone`, own copied DB,
+deleted after this section was drafted), `start=2007-01-01,
+end=2026-07-30` — the identical window every other V2 validation figure
+in this file uses. `per_trade_pct ∈ {2%, 3%, 5%, 7%, 10%}`,
+`max_deployed_pct ∈ {50%, 65%, 75%, 90%}`:
+
+| per_trade | max_deployed | Trades | TRAIN CAGR | TRAIN DD | TRAIN PF | TEST CAGR | TEST DD | TEST PF | Blocks | Failing blocks | WF % | Max concurrent |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2% | 50% | 5,446 | 5.52% | -12.00% | 1.62 | 14.44% | -13.89% | 1.86 | 13/16 | 0,1,12 | 83.9 | 27 |
+| 2% | 65% | 7,355 | 7.64% | -16.38% | 1.63 | 22.67% | -28.08% | 1.86 | 13/16 | 0,1,12 | 82.1 | 35 |
+| 2% | 75% | 8,680 | 9.08% | -22.06% | 1.64 | 27.77% | -37.56% | 1.81 | 10/16 | 0,1,12,13,14,15 | 81.6 | 41 |
+| 2% | 90% | 10,336 | 11.00% | -30.05% | 1.68 | 34.70% | -53.07% | 1.77 | 9/16 | 0,1,9,12,13,14,15 | 81.6 | 49 |
+| 3% | 50% | 3,353 | 3.92% | -12.06% | 1.48 | 11.53% | -10.69% | 1.89 | 13/16 | 0,1,12 | 79.4 | 23 |
+| 3% | 65% | 4,572 | 6.70% | -18.90% | 1.60 | 19.26% | -23.62% | 1.91 | 13/16 | 0,1,12 | 82.1 | 29 |
+| 3% | 75% | 5,511 | 8.24% | -22.20% | 1.61 | 25.68% | -36.08% | 1.91 | 12/16 | 0,1,12,15 | 83.9 | 33 |
+| 3% | 90% | 6,803 | 10.24% | -31.25% | 1.62 | 33.41% | -54.32% | 1.86 | 9/16 | 0,1,8,9,12,13,14 | 82.5 | 38 |
+| **5%** | **50%** | **2,180** | **3.27%** | **-11.57%** | **1.46** | **9.85%** | **-12.81%** | **1.90** | **14/16** | **0,1** | **83.4** | **20** |
+| 5% | 65% | 2,812 | 5.20% | -18.24% | 1.52 | 15.79% | -21.38% | 1.92 | 13/16 | 0,1,12 | 80.7 | 26 |
+| 5% | 75% | 3,272 | 6.31% | -22.23% | 1.53 | 19.89% | -23.93% | 1.92 | 12/16 | 0,1,8,12 | 81.2 | 30 |
+| 5% | 90% | 4,043 | 8.16% | -33.36% | 1.56 | 25.71% | -46.74% | 1.88 | 8/16 | 0,1,7,8,9,12,13,15 | 79.8 | 34 |
+| 7% | 50% | 1,804 | 2.81% | -13.90% | 1.39 | 7.60% | -15.97% | 1.71 | 13/16 | 0,1,12 | 76.7 | 18 |
+| 7% | 65% | 2,305 | 4.51% | -19.63% | 1.50 | 14.97% | -22.05% | 2.03 | 13/16 | 0,1,12 | 82.1 | 24 |
+| 7% | 75% | 2,672 | 5.64% | -21.36% | 1.51 | 17.85% | -22.72% | 1.96 | 13/16 | 0,1,12 | 80.7 | 27 |
+| 7% | 90% | 3,268 | 6.56% | -26.83% | 1.45 | 24.43% | -28.11% | 2.02 | 10/16 | 0,1,8,12,13,15 | 79.4 | 32 |
+| 10% | 50% | 1,563 | 1.59% | -14.11% | 1.23 | 6.11% | -14.53% | 1.68 | 12/16 | 0,1,9,12 | 70.9 | 16 |
+| 10% | 65% | 2,079 | 3.34% | -18.21% | 1.36 | 11.79% | -15.44% | 1.90 | 12/16 | 0,1,9,12 | 78.9 | 22 |
+| 10% | 75% | 2,393 | 4.09% | -20.00% | 1.39 | 14.18% | -22.35% | 1.91 | 13/16 | 0,1,12 | 79.4 | 25 |
+| 10% | 90% | 2,890 | 5.50% | -24.89% | 1.43 | 20.23% | -28.78% | 1.93 | 12/16 | 0,1,8,12 | 77.6 | 30 |
+
+`0,1` are the canonical failing blocks the uncapped, non-compounding
+`run_candidate()` baseline also fails (GFC pre-crash and GFC-acute — see
+"Block pass/fail formula reconciliation" above); every combo above fails
+at least those two, and only `per_trade=5%, max_deployed=50%` fails
+**exactly** those two and no others — the sole combination in the grid
+that reproduces the established 14/16 failure pattern precisely rather
+than adding new casualties. Sharpe ratios (not shown in the table above,
+in the raw sweep JSON): highest test Sharpe in the grid is `2%/65%`
+(train 0.506, test 0.600); `5%/50%` sits mid-pack (train 0.335, test
+0.554).
+
+**£ growth vs. buy-and-hold S&amp;P 500, same starting £50,000, same
+train/test windows every other V2 figure in this file uses** (S&amp;P:
+£114,033 TRAIN, £114,149 TEST — unchanged across every row, since the
+benchmark leg is independent of these parameters): only the loosest
+`max_deployed_pct` settings (75-90%, at every `per_trade_pct`) clear the
+S&amp;P bar in TRAIN; every 50-65% setting underperforms buy-and-hold in
+£ terms in **both** windows (e.g. `5%/50%`: £73,961 TRAIN / £92,643 TEST
+vs. £114,033 / £114,149 S&amp;P). This mirrors, and is roughly the same
+order of magnitude as, the fixed-notional `simulate_portfolio()` real-cap
+result already on record above (£72,839 TRAIN / £73,901 TEST under
+`max_open=20, max_deployed=50%`) — tightly-capped realistic sizing
+underperforms passive S&amp;P exposure in £ terms under both the fixed
+and the compounding engine; only materially looser deployment recovers
+outright £ outperformance, and only at the cost of drawdown and fewer
+passing blocks (75-90% settings drop to 8-10/16 blocks, adding failures
+in blocks 7-9 and 13-15 beyond the canonical 0/1).
+
+**Part D — VaR-differentiation check, three candidates**, each
+instrumented to record the uncapped VaR-desired size
+(`(current_balance × max_risk_pct) / abs(holding_var)`) against the
+dynamic cap (`current_balance × per_trade_pct` at time of entry) for
+every VaR-priced entry (fallback-path entries, <60 days of prior history,
+excluded — they were never VaR-sized to begin with):
+
+| Combo | VaR-priced entries | Capped | Capped % |
+|---|---|---|---|
+| **A: 5% / 50%** (14/16 blocks, canonical failure pattern) | 2,180 | 1,457 | **66.8%** |
+| B: 2% / 50% (best CAGR-to-DD ratio) | 5,446 | 5,405 | **99.2%** |
+| C: 2% / 65% (highest test Sharpe) | 7,355 | 7,310 | **99.4%** |
+
+**B and C do not fix the flat-cap distortion — they reproduce it almost
+exactly, just at a different number.** At `per_trade_pct=2%`, the ceiling
+sits so far below what 1% `max_risk_pct` VaR sizing wants for most
+tickers that capping is near-universal (99%+) and largely **undifferentiated
+by volatility** — even genuinely volatile names (AMD 97-98%, SOXX
+98%, TSLA 100%) get capped almost as often as calm ones (GLD, IEF, TLT,
+XLP, XLU all 100%). Position sizing under B/C is effectively dictated by
+the flat percentage, not the risk model — the same structural problem the
+original flat-£2,500-cap investigation found, just parameterised
+differently.
+
+**A shows genuine, partial differentiation.** At `per_trade_pct=5%`,
+overall capping drops to 66.8% and spreads across a real range: 0% for
+`NVDA`/`AMD`, 8.7% `SLV`, 14.3% `NEM`, 20% `SOXX`, 33.3% `AMZN`/`FXI`,
+40-44% `JPM`/`KBE`/`CAT` — clear volatility-linked differentiation absent
+from B/C. But the calmest names in the universe — `IEF`, `TIP`, `LQD`,
+`MUB` (bonds), `COST`, `JNJ`, `WMT` (staples), plus several other
+low-beta names (`CVX`, `LLY`, `MRK`, `LIN`, `DIS`, `RTX`, `XOM`) — are
+still capped **100% of the time**, identical in kind to the original
+flat-£ finding (`WMT`/`COST`/`JNJ`/`PG` all 100% capped there too). A
+spot-check at `per_trade_pct=10%` (not one of the three graded
+candidates, run only to confirm the trend) drops overall capping to
+20.3%, with capping now concentrated almost exclusively in fixed-income
+names (`MUB` 100%, `TIP` 95.5%, `LQD` 95.2%, `IEF` 93.7%, `EMB` 91.4%,
+`HYG` 74.6%) while most equities show 0%.
+
+**Answer: partially, not fully — and the fix is continuous, not binary.**
+Raising `per_trade_pct` relative to `max_risk_pct` genuinely reduces and
+differentiates capping (66.8% at 5% → 20.3% at 10%), but at every level
+tested, the lowest-volatility bond/staple names remain capped at or near
+100% — a percentage-of-balance ceiling cannot fully escape this while
+`max_risk_pct` (1%) stays fixed, because VaR sizing structurally wants
+*more* £ exposure, not less, as volatility falls. The distortion shrinks
+continuously as the ceiling loosens; it never fully disappears within the
+tested range, and loosening it (as the sweep table above shows) trades
+directly against drawdown and block-pass count.
+
+**Recommendation: `per_trade_pct=5%, max_deployed_pct=50%` is the
+combination worth adopting, if any — with real reservations, not an
+unqualified endorsement.** It uniquely reproduces the established 14/16-
+block, exactly-blocks-0-and-1 failure pattern (every other combo in the
+grid adds new failing blocks beyond that canonical pair), sits at or near
+the lowest drawdown in its own per_trade_pct bracket (TRAIN -11.57%, TEST
+-12.81%), and shows the clearest genuine VaR-driven size differentiation
+of the three graded candidates (66.8% capped, spread 0-100% by
+volatility, vs. B/C's near-uniform 99%+). Max concurrent positions at
+this setting is **20** — meaningfully more diversified across
+simultaneous names than the fixed-notional real-cap mode's implicit
+concentration, and comfortably inside what the crisis override (a single
+force-exit-everything circuit breaker on a ≥7% S&amp;P single-day
+decline) can act on cleanly in one day; a config admitting 40-50
+concurrent positions (the 75-90% deployment settings) would mean a crisis
+day forces a much larger simultaneous liquidation, with correspondingly
+more slippage/execution risk the backtest itself cannot model.
+
+The reservations: (1) TRAIN/TEST CAGR (3.27%/9.85%) is real but modest —
+both windows underperform buy-and-hold S&amp;P 500 in £ terms, matching
+the fixed-notional real-cap finding already on record above, so this is
+not a "beats the market" result under realistic caps in either engine;
+(2) the calmest, most defensive names in the universe are still sized
+almost entirely by the flat ceiling rather than genuine risk-scaling —
+the VaR formula's own volatility-awareness is largely inert for bonds and
+staples at this setting, exactly as it was under the flat-£ cap; (3) nothing
+here re-derives `max_risk_pct` itself (held fixed throughout this sweep at
+the existing config default) — a joint sweep of `max_risk_pct` alongside
+`per_trade_pct` might resolve the bond/staple saturation more cleanly
+than raising `per_trade_pct` alone, and was not attempted here. If return
+is prioritised over drawdown/block-count/diversification, the sweep table
+shows a continuum of looser alternatives (up to `2%/90%`'s 34.70%
+TRAIN CAGR) — none of which preserve the canonical block-failure pattern
+or this candidate's concurrent-position discipline.
+
+Investigation clone (`/root/compounding_sweep_clone`) deleted only after
+this section's figures were captured; production confirmed unaffected —
+`git status` clean on the live checkout (HEAD unchanged at the same
+commit throughout), production DB checksum unchanged, both systemd
+services' `ActiveEnterTimestamp` unchanged throughout. `analysis/backtest.py`,
+`analysis/validation.py`, and `tests/test_portfolio_backtest.py`
+remain new, uncommitted local changes pending review, alongside this
+section.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

@@ -631,6 +631,268 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
     return trades
 
 
+def simulate_portfolio_compounding(
+    tickers_cache: list,
+    config: dict,
+    gspc_close: pd.Series,
+    per_trade_pct: float,
+    max_deployed_pct: float,
+) -> list[dict]:
+    """Shared-account portfolio simulation, identical in structure to
+    simulate_portfolio() (added 2026-08-01, same day) EXCEPT the account
+    balance genuinely compounds and both caps are expressed as a percentage
+    of that live, moving balance rather than a fixed notional constant.
+    simulate_portfolio()/run_candidate()/simulate_trades() are all left
+    completely unchanged -- this is a third, additional, selectable mode.
+
+    Confirmed before building this (see CLAUDE.md's "Compounding portfolio
+    backtest" section for the full writeup): simulate_portfolio() shares
+    capital across tickers via current_open/current_deployed running state,
+    but sizes and cap-checks everything against the FIXED
+    backtest.starting_capital_gbp constant throughout -- it never
+    compounds. Live trading (brokers/trading212.py) already compounds
+    correctly by construction, since it queries T212's real, current
+    account balance (client.get_account_summary()["totalValue"]) fresh on
+    every sizing call rather than using any notional reference figure --
+    the compounding gap is backtest-methodology-only. This function closes
+    that gap for backtest research.
+
+    Two parameters replace the old three (max_position_gbp flat-£,
+    max_open_positions count, max_total_deployed %) -- both passed in
+    directly rather than read from config, since they are the swept
+    parameters this mode exists to study:
+
+    - per_trade_pct: the VaR sizing ceiling for a single new entry, as a
+      fraction of the CURRENT (not starting) balance --
+      max_position_gbp_dynamic = current_balance * per_trade_pct, fed into
+      the exact same _var_position_size_core() formula every other path in
+      this codebase uses (account_value_gbp also = current_balance).
+    - max_deployed_pct: blocks further entries once
+      current_deployed / current_balance >= max_deployed_pct (a compounding
+      denominator, unlike simulate_portfolio()'s fixed one).
+
+    No max_open_positions cap at all -- position count is an EMERGENT
+    consequence of per_trade_pct and max_deployed_pct together (roughly
+    1/per_trade_pct positions at full deployment), not a third,
+    independently-enforced rule. Reuses simulate_portfolio()'s exact
+    structural skeleton (day-by-day merged walk, Phase A exits before
+    Phase B entries, the "flat before today's exits are processed"
+    same-day-no-reentry rule, the ETF-before-stock-then-input-order entry
+    priority) and its exact per-ticker exit/stop/crisis logic verbatim --
+    see that function's own docstring for the full semantics; only the
+    balance/sizing/cap mechanics described above differ.
+
+    current_balance is updated the moment each Phase A exit is processed
+    (trade["pnl_gbp"] added immediately) -- so a later same-day exit sees
+    the balance already updated by an earlier one, and Phase B's entries
+    that day are sized against the day's ENDING balance, after all of
+    today's exits. Phase B itself never changes current_balance (only
+    current_deployed, the cost-basis bookkeeping) -- entries realise no
+    P&L at the moment they're opened -- so it is stable across the whole
+    of a single day's candidate-admission loop.
+
+    Graceful handling of a non-positive balance (a real possibility here
+    that the fixed-notional modes above can never hit): if current_balance
+    <= 0 on any day, Phase B (new entries) is skipped entirely for that day
+    -- there is nothing meaningful to size a position against -- while
+    Phase A (exits) always still runs normally. No exception, no divide-by-
+    zero, no guessed position size.
+    """
+    var_cfg = config.get("trading212_invest", {})
+    starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
+    var_confidence = float(var_cfg.get("var_confidence", 0.95))
+    var_lookback = int(var_cfg.get("var_lookback_days", 252))
+    max_risk_pct = float(var_cfg.get("max_risk_pct", 0.01))
+    min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
+
+    per_ticker: dict[str, dict] = {}
+    events: list[tuple] = []
+
+    for idx, cached in enumerate(tickers_cache):
+        if cached is None:
+            continue
+        ticker = cached["ticker"]
+        frame = cached["frame"]
+        if frame is None or frame.empty:
+            continue
+        is_etf = ticker in universe.ETF_TICKERS
+        close_series = frame["close"].astype(float)
+
+        raw_crisis = crisis.compute_raw_trigger(gspc_close).reindex(frame.index).ffill().fillna(False)
+        entry_blocked = crisis.extend_trigger(raw_crisis).reindex(frame.index).ffill().fillna(False)
+
+        priority_rank = (0 if is_etf else 1, idx)
+        per_ticker[ticker] = {
+            "frame": frame,
+            "rows": frame.to_dict("index"),
+            "is_etf": is_etf,
+            "close_series": close_series,
+            "raw_crisis": raw_crisis,
+            "entry_blocked": entry_blocked,
+            "max_hold": get_max_holding_days(ticker, config),
+            "priority_rank": priority_rank,
+            "open_trade": None,
+        }
+        for dt in frame.index:
+            events.append((dt, priority_rank, ticker))
+
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    trades: list[dict] = []
+    current_balance = starting_capital
+    current_deployed = 0.0
+
+    i = 0
+    n_events = len(events)
+    while i < n_events:
+        dt = events[i][0]
+        j = i
+        day_tickers: list[str] = []
+        while j < n_events and events[j][0] == dt:
+            day_tickers.append(events[j][2])
+            j += 1
+
+        flat_before_today = {t for t in day_tickers if per_ticker[t]["open_trade"] is None}
+
+        # Phase A — exits. current_balance is updated immediately as each
+        # trade closes, so later same-day exits/entries see the grown (or
+        # shrunk) balance.
+        for ticker in day_tickers:
+            st = per_ticker[ticker]
+            ot = st["open_trade"]
+            if ot is None:
+                continue
+            row = st["rows"][dt]
+            price = float(row["close"])
+            sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
+            is_member = st["is_etf"] or universe.is_member(
+                ticker, dt.date() if hasattr(dt, "date") else dt
+            )
+            crisis_now = bool(st["raw_crisis"].loc[dt])
+
+            entry_price = ot["entry_price"]
+            stop_price = ot["stop_price"]
+            holding_days = (dt - ot["entry_date"]).days
+
+            exit_reason = None
+            exit_price = price
+            if crisis_now:
+                exit_reason = "CRISIS_EXIT"
+            elif not is_member:
+                exit_reason = "INDEX_REMOVAL"
+            elif price <= stop_price:
+                exit_reason = "STOP_LOSS"
+                exit_price = stop_price
+            elif not sig_on:
+                exit_reason = "SIGNAL_OFF"
+            elif holding_days >= st["max_hold"]:
+                exit_reason = "MAX_HOLDING"
+
+            if exit_reason:
+                pnl_pct = (exit_price - entry_price) / entry_price
+                pnl_gbp = ot["position_gbp"] * float(pnl_pct)
+                trades.append({
+                    "ticker": ticker, "direction": "LONG",
+                    "entry_date": ot["entry_date"].date() if hasattr(ot["entry_date"], "date") else ot["entry_date"],
+                    "exit_date": dt.date() if hasattr(dt, "date") else dt,
+                    "entry_price": entry_price, "exit_price": float(exit_price),
+                    "exit_reason": exit_reason, "pnl_pct": float(pnl_pct),
+                    "position_gbp": ot["position_gbp"], "pnl_gbp": pnl_gbp,
+                    "stop_distance_pct": ot["stop_distance_pct"],
+                    "holding_days": holding_days, "is_win": pnl_pct > 0,
+                    "balance_at_exit_gbp": round(current_balance + pnl_gbp, 2),
+                })
+                current_deployed -= ot["position_gbp"]
+                current_balance += pnl_gbp
+                st["open_trade"] = None
+
+        # Phase B — entries, only when there is a positive balance to size
+        # against. current_balance does not change within Phase B itself
+        # (only current_deployed does), so it is safe to read it once for
+        # the whole of today's candidate-admission loop.
+        if current_balance > 0:
+            candidates: list[str] = []
+            for ticker in flat_before_today:
+                st = per_ticker[ticker]
+                row = st["rows"][dt]
+                sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
+                if not sig_on:
+                    continue
+                is_member = st["is_etf"] or universe.is_member(
+                    ticker, dt.date() if hasattr(dt, "date") else dt
+                )
+                if not is_member:
+                    continue
+                blocked_now = bool(st["entry_blocked"].loc[dt])
+                if blocked_now:
+                    continue
+                candidates.append(ticker)
+
+            candidates.sort(key=lambda t: per_ticker[t]["priority_rank"])
+
+            for ticker in candidates:
+                if current_balance <= 0:
+                    break
+                if (current_deployed / current_balance) >= max_deployed_pct:
+                    break
+
+                st = per_ticker[ticker]
+                row = st["rows"][dt]
+                price = float(row["close"])
+                atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
+                stop, stop_distance_pct = _resolve_entry_stop("LONG", price, atr, config)
+
+                dynamic_max_position_gbp = current_balance * per_trade_pct
+
+                close_series = st["close_series"]
+                prior_closes = close_series.loc[close_series.index < dt].tail(var_lookback + 1)
+                log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
+                if len(log_returns) >= _MIN_VAR_RETURNS:
+                    position_gbp, _dv, _hv = _var_position_size_core(
+                        log_returns, current_balance, dynamic_max_position_gbp, st["max_hold"],
+                        var_confidence, max_risk_pct, min_position_gbp,
+                    )
+                else:
+                    position_gbp = round(dynamic_max_position_gbp * 0.5, 2)
+
+                st["open_trade"] = {
+                    "ticker": ticker, "direction": "LONG", "entry_date": dt, "entry_price": price,
+                    "stop_price": stop, "stop_distance_pct": stop_distance_pct, "position_gbp": position_gbp,
+                }
+                current_deployed += position_gbp
+
+        i = j
+
+    # End of data — close every still-open position at its own ticker's
+    # last available row, mirroring simulate_portfolio()'s own END_OF_DATA
+    # exit (balance updated for completeness/symmetry, though nothing reads
+    # it after this point).
+    for ticker, st in per_ticker.items():
+        ot = st["open_trade"]
+        if ot is None:
+            continue
+        frame = st["frame"]
+        last = frame.iloc[-1]
+        exit_p = float(last["close"])
+        pnl_pct = (exit_p - ot["entry_price"]) / ot["entry_price"]
+        pnl_gbp = ot["position_gbp"] * float(pnl_pct)
+        hd = (frame.index[-1] - ot["entry_date"]).days
+        trades.append({
+            "ticker": ticker, "direction": "LONG",
+            "entry_date": ot["entry_date"].date() if hasattr(ot["entry_date"], "date") else ot["entry_date"],
+            "exit_date": frame.index[-1].date(),
+            "entry_price": ot["entry_price"], "exit_price": exit_p,
+            "exit_reason": "END_OF_DATA", "pnl_pct": float(pnl_pct),
+            "position_gbp": ot["position_gbp"], "pnl_gbp": pnl_gbp,
+            "stop_distance_pct": ot["stop_distance_pct"],
+            "holding_days": hd, "is_win": pnl_pct > 0,
+            "balance_at_exit_gbp": round(current_balance + pnl_gbp, 2),
+        })
+        current_balance += pnl_gbp
+
+    return trades
+
+
 def ex_best_trades(trades: list[dict]) -> list[dict]:
     if not trades:
         return []
