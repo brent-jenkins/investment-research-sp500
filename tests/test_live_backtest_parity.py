@@ -107,7 +107,7 @@ def _config(ticker: str, t212_ticker: str, is_etf: bool, *, max_holding_days: in
             "max_holding_days": max_holding_days,
             "stock_max_holding_days": stock_max_holding_days,
         },
-        "backtest": {"atr_stop_multiplier": atr_stop_multiplier, "max_holding_days": 30,
+        "backtest": {"atr_stop_multiplier": atr_stop_multiplier, "fallback_max_holding_days": 30,
                      "starting_capital_gbp": 10000},
         "signals": {"atr_period": 14},
     }
@@ -425,8 +425,83 @@ def test_exit_parity_index_removal(db_engine, mocker, monkeypatch):
         return pd.Timestamp(check_date) < removal_date
 
     mocker.patch("analysis.universe.is_member", side_effect=_is_member_side_effect)
+    # get_max_holding_days() dispatches on real STOCK_MEMBERSHIP membership,
+    # not on live-execution registration -- PXSTOCK needs a STOCK_MEMBERSHIP
+    # entry (any window; is_member() itself is separately mocked above) so
+    # it actually resolves to the stock branch below, not the fallback.
+    mocker.patch("analysis.universe.STOCK_MEMBERSHIP", {"PXSTOCK": []})
     # A generous stock max-holding so MAX_HOLDING can never preempt the
     # index-removal trigger this scenario is actually testing.
     cfg = _config(ticker, t212_ticker, is_etf=False, stock_max_holding_days=500)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=False,
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="INDEX_REMOVAL")
+
+
+# ---------------------------------------------------------------------------
+# ATR stop-multiplier parity -- config.yaml's backtest.atr_stop_multiplier
+# comment claims live order placement reads this exact key ("matches live
+# system"). Verified structurally rather than trusted: both call sites
+# import and call the SAME analysis.volatility._resolve_entry_stop()
+# function object, so there is no separate live-side copy of this formula
+# that could silently diverge.
+# ---------------------------------------------------------------------------
+
+def test_resolve_entry_stop_is_the_single_shared_implementation():
+    """Live (brokers/trading212.py) and the backtest engine
+    (analysis/backtest.py) must both import the identical function object
+    from analysis/volatility.py -- not two independently-written
+    expressions of the same formula that happen to agree today but could
+    quietly drift apart."""
+    import analysis.volatility as vol
+    import analysis.backtest as bt
+    import brokers.trading212 as t212
+
+    assert t212._resolve_entry_stop is vol._resolve_entry_stop
+    assert bt._resolve_entry_stop is vol._resolve_entry_stop
+
+
+def test_entry_parity_stop_price_uses_configured_atr_multiplier_not_a_hardcoded_default(
+    db_engine, parity_mocks, mocker,
+):
+    """The PENDING row's own stop_price (queued by live's decide phase) must
+    equal entry_price * (1 - stop_distance_pct/100) using the SAME
+    stop_distance_pct the backtest engine independently computes for the
+    identical entry -- checked at a non-default multiplier too, so a
+    hardcoded 2.0 in either engine (rather than a genuine read of
+    backtest.atr_stop_multiplier) would make this fail."""
+    from brokers.trading212 import maybe_place_orders
+
+    ticker, t212_ticker = "PXETF", "PXETF_EQ"
+    frame = _flat_then_jump_frame(jump=0.05)
+    gspc = _calm_gspc_frame(310)
+    mocker.patch("analysis.universe.ETF_TICKERS", ("PXETF",))
+    _mock_price_data(mocker, {ticker: frame, "^GSPC": gspc})
+
+    gspc_close = gspc.set_index("date")["close"].astype(float)
+    gspc_close.index = pd.to_datetime(gspc_close.index)
+
+    seen_stops = {}
+    for multiplier in (2.0, 4.5):
+        with db_engine.begin() as conn:
+            conn.execute(sa_text("DELETE FROM pending_orders"))
+
+        cfg = _config(ticker, t212_ticker, is_etf=True, atr_stop_multiplier=multiplier)
+
+        backtest_trade = _run_backtest_and_get_first_trade(frame, gspc_close, ticker, cfg, is_etf=True)
+        expected_stop = backtest_trade["entry_price"] * (1 - backtest_trade["stop_distance_pct"] / 100.0)
+
+        maybe_place_orders(cfg, run_type="full")
+        rows = _pending_rows(db_engine, ticker)
+        assert len(rows) == 1
+        live_stop = rows[0]["stop_price"]
+
+        assert live_stop == pytest.approx(expected_stop, rel=1e-6), (
+            f"multiplier={multiplier}: live stop_price {live_stop} != "
+            f"backtest-derived {expected_stop}"
+        )
+        seen_stops[multiplier] = live_stop
+
+    # And the two multipliers must genuinely produce different stop prices --
+    # otherwise this whole comparison would pass even against a hardcoded
+    # constant that ignored config entirely.
+    assert seen_stops[2.0] != pytest.approx(seen_stops[4.5])

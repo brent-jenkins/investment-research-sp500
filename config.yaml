@@ -184,12 +184,29 @@ backtest:
   # across a whole run rather than growing/shrinking the way a real account
   # would.
   starting_capital_gbp: 50000
-  atr_stop_multiplier: 2.0       # stop loss = entry +/- N x ATR (matches live system)
-  # Fallback max holding days -- analysis/universe.py:get_max_holding_days()
-  # uses this only for a ticker with no trading212_invest.instrument_mapping
-  # entry (e.g. a ticker only ever exercised inside a backtest, not currently
-  # live-traded).
-  max_holding_days: 30
+  # atr_stop_multiplier -- read directly by analysis/volatility.py:
+  # _resolve_entry_stop(), the single shared function both live order
+  # placement (brokers/trading212.py) and every backtest engine
+  # (analysis/backtest.py) call for entry-stop sizing -- there is no
+  # separate live-side copy of this value anywhere, so this key IS what
+  # live uses, not a number that merely happens to match it. Verified
+  # structurally, not just asserted in this comment -- see
+  # tests/test_live_backtest_parity.py's atr_stop_multiplier parity tests.
+  atr_stop_multiplier: 2.0       # stop loss = entry +/- N x ATR
+  # fallback_max_holding_days -- analysis/universe.py:get_max_holding_days()
+  # uses this ONLY for a ticker that is in neither ETF_TICKERS nor
+  # STOCK_MEMBERSHIP (analysis/universe.py) at all -- i.e. not part of the
+  # real, tracked universe, such as an ad-hoc ticker exercised only inside
+  # a one-off backtest research study. Deliberately NOT named
+  # `max_holding_days` -- that name collides with trading212_invest's own
+  # max_holding_days below (the real, live-governing 90-day ETF value) and
+  # this fallback's value (30) coincidentally matching the real stock
+  # figure made that collision easy to misread as intentional. A ticker
+  # that IS part of the real universe (ETF_TICKERS / STOCK_MEMBERSHIP)
+  # always gets its correct 90/30 split via that categorization directly,
+  # regardless of whether it also has a live-execution `instruments:` entry
+  # yet -- see get_max_holding_days()'s own docstring.
+  fallback_max_holding_days: 30
 
 # Live execution config for the momentum + crisis-override system -- see
 # CLAUDE.md's "V2 architecture -- phased rebuild" section for the full

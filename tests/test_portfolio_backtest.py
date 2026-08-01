@@ -26,7 +26,7 @@ from analysis import universe as v2u
 _CONFIG = {
     "signals": {"atr_period": 14},
     "backtest": {
-        "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0, "max_holding_days": 30,
+        "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0, "fallback_max_holding_days": 30,
     },
     "trading212_invest": {
         "var_confidence": 0.95, "var_lookback_days": 252, "max_risk_pct": 0.01,
@@ -926,7 +926,7 @@ def test_simulate_portfolio_frees_capacity_the_moment_one_tickers_data_ends(mock
     frame_b = _delisting_frame(900, start="2020-01-01")
     cached = [{"ticker": "TICKA", "frame": frame_a}, {"ticker": "TICKB", "frame": frame_b}]
     cfg = _config_with_caps(max_open=1, max_deployed=999.0)
-    cfg["backtest"]["max_holding_days"] = 1000  # longer than either ticker's own data span
+    cfg["backtest"]["fallback_max_holding_days"] = 1000  # longer than either ticker's own data span
 
     trades = v2b.simulate_portfolio(cached, cfg, _flat_gspc(900, start="2020-01-01"))
 
@@ -965,7 +965,7 @@ def test_simulate_portfolio_compounding_frees_capacity_the_moment_one_tickers_da
     frame_b = _delisting_frame(900, start="2020-01-01")
     cached = [{"ticker": "TICKA", "frame": frame_a}, {"ticker": "TICKB", "frame": frame_b}]
     cfg = _compounding_config()
-    cfg["backtest"]["max_holding_days"] = 1000
+    cfg["backtest"]["fallback_max_holding_days"] = 1000
     # per_trade_pct=0.3 -> each fallback-sized position is 15% of balance.
     # max_deployed_pct=0.2 sits strictly between one position (15%, fits)
     # and two simultaneous positions (30%, does not) -- so TICKB is

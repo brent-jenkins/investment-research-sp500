@@ -67,7 +67,7 @@ def _config(mapping=None, enabled=True) -> dict:
             "max_risk_pct": 0.01,
             "min_position_gbp": 50,
         },
-        "backtest": {"atr_stop_multiplier": 2.0, "max_holding_days": 30},
+        "backtest": {"atr_stop_multiplier": 2.0, "fallback_max_holding_days": 30},
         "signals": {"atr_period": 14},
     }
 
@@ -358,6 +358,163 @@ def test_decide_phase_queues_regardless_of_deployed_cap(db_engine, v2_mocks, moc
 
     v2_mocks.place_market_order.assert_not_called()
     assert len(_pending_rows(db_engine, status="PENDING")) == 5
+
+
+# ---------------------------------------------------------------------------
+# Asset-class trading switches (2026-08-01) -- etf_trading_enabled /
+# stock_trading_enabled gate ENTRY CANDIDACY itself (checked before any
+# signal is even computed), a strictly earlier/broader cut than
+# etf_submission_enabled / stock_submission_enabled below, which only ever
+# gate the final broker-submission step for a decision that's already been
+# computed and queued. Both live here (brokers/trading212.py) and the
+# backtest engine (analysis/validation.py, see tests/test_validation.py)
+# read the identical shared function -- analysis.decision.is_asset_class_
+# enabled() -- so neither can silently diverge on which asset classes are
+# even considered. See CLAUDE.md's "Clean, independent ETF/stock trading
+# switches" section.
+# ---------------------------------------------------------------------------
+
+def test_etf_trading_disabled_excludes_etf_candidacy_but_leaves_stocks_untouched(db_engine, v2_mocks, mocker):
+    """Disabling ETF candidacy must mean an otherwise-qualifying ETF is
+    never queued, while a stock candidate in the SAME run is queued exactly
+    as if the ETF didn't exist in the universe at all."""
+    from brokers.trading212 import maybe_place_orders
+
+    _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={
+        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+    })
+    cfg["trading212_invest"]["etf_trading_enabled"] = False
+    maybe_place_orders(cfg, run_type="full")
+
+    tickers_queued = {r["ticker"] for r in _pending_rows(db_engine, status="PENDING")}
+    assert tickers_queued == {"AAPL"}  # ETF excluded entirely, stock unaffected
+
+
+def test_stock_trading_disabled_excludes_stock_candidacy_but_leaves_etfs_untouched(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import maybe_place_orders
+
+    _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={
+        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+    })
+    cfg["trading212_invest"]["stock_trading_enabled"] = False
+    maybe_place_orders(cfg, run_type="full")
+
+    tickers_queued = {r["ticker"] for r in _pending_rows(db_engine, status="PENDING")}
+    assert tickers_queued == {"VOO"}  # stock excluded entirely, ETF unaffected
+
+
+def test_disabled_asset_class_never_reaches_signal_computation(db_engine, v2_mocks, mocker):
+    """The candidacy gate must be checked BEFORE _ticker_state() -- no price
+    data read, no signal computed at all -- for a disabled asset class, not
+    merely filtered out afterward once the work has already been done."""
+    from brokers.trading212 import maybe_place_orders
+
+    frame = _bullish_frame()
+    requested_tickers = []
+
+    def _fake_get_price_df(ticker, days=8000):
+        requested_tickers.append(ticker)
+        return frame.copy()
+
+    mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg["trading212_invest"]["etf_trading_enabled"] = False
+    maybe_place_orders(cfg, run_type="full")
+
+    assert "VOO" not in requested_tickers  # never even read price data for it
+    assert len(_pending_rows(db_engine, status="PENDING")) == 0
+
+
+def test_decide_phase_calls_the_shared_asset_class_gate(db_engine, v2_mocks, mocker):
+    """Proves maybe_place_orders() genuinely delegates to
+    analysis.decision.is_asset_class_enabled() per ticker rather than
+    re-deriving the same config lookup inline -- the same guarantee
+    tests/test_validation.py checks on the backtest side, so both call
+    sites are provably wired to one shared implementation, not two
+    independently hand-written copies that could quietly drift apart."""
+    import brokers.trading212 as t212mod
+    from brokers.trading212 import maybe_place_orders
+
+    spy = mocker.spy(t212mod, "is_asset_class_enabled")
+    _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config()  # default mapping: VOO (ETF) + AAPL (stock)
+    maybe_place_orders(cfg, run_type="full")
+
+    assert spy.call_count == 2  # once per ticker in the mapping
+    seen_is_etf = {call.kwargs["is_etf"] for call in spy.call_args_list}
+    assert seen_is_etf == {True, False}
+    for call in spy.call_args_list:
+        assert call.kwargs["config"] is cfg
+
+
+def test_trading_enabled_with_submission_disabled_is_a_coherent_shadow_state(db_engine, v2_mocks, mocker):
+    """etf_trading_enabled=True (the default) alongside
+    etf_submission_enabled=False (also the shipped default) is a
+    deliberate, coherent state, not a contradiction: decisions are still
+    computed, momentum-ranked, and queued for audit/research, but never
+    reach the broker while submission stays off."""
+    from brokers.trading212 import maybe_place_orders, submit_pending_etf_orders
+
+    _mock_price_data(mocker, {"VOO": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    # Neither etf_trading_enabled nor etf_submission_enabled set explicitly
+    # -- defaults are True / False respectively.
+    maybe_place_orders(cfg, run_type="full")
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1  # candidacy ran, decision queued
+
+    n = submit_pending_etf_orders(cfg)
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1  # still queued, untouched
+
+
+def test_trading_disabled_overrides_submission_enabled_true(db_engine, v2_mocks, mocker):
+    """etf_trading_enabled=False must win over an explicit
+    etf_submission_enabled=True -- a decision that was never a real
+    candidate must never be submitted regardless of the narrower flag. Any
+    row queued before trading was disabled is left pending, not resolved."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True)
+    cfg = _submission_config(etf_enabled=True)  # would otherwise submit
+    cfg["trading212_invest"]["etf_trading_enabled"] = False
+
+    n = submit_pending_etf_orders(cfg)
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1  # left untouched, not resolved
+
+
+def test_stock_trading_disabled_overrides_stock_submission_enabled(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=float(frame["close"].iloc[-1]))
+    _mock_price_data(mocker, {"AAPL": frame})
+    cfg = _submission_config(stock_enabled=True)
+    cfg["trading212_invest"]["stock_trading_enabled"] = False
+
+    n = submit_pending_stock_orders(cfg)
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1
 
 
 # ---------------------------------------------------------------------------

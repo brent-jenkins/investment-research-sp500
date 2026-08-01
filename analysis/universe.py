@@ -205,15 +205,36 @@ def is_member(ticker: str, check_date: date) -> bool:
 def get_max_holding_days(ticker: str, config: dict) -> int:
     """Return the max holding days for *ticker*, matching live automation limits.
 
-    Dispatches on the ticker's is_etf flag in the top-level `instruments:`
-    section (config.yaml, consolidated 2026-07-31 from watchlist.trading +
-    trading212_invest.instrument_mapping — see CLAUDE.md's "Unified
-    instrument structure" section) — ETFs get trading212_invest.max_holding_days
-    (e.g. 90 — no leverage/swap costs, held longer), stocks get
-    trading212_invest.stock_max_holding_days (e.g. 30 — higher idiosyncratic
-    risk than an ETF). A ticker not found in `instruments:` at all (shouldn't
-    happen in practice — this is only ever called for tickers in that
-    section) falls back to backtest.max_holding_days.
+    is_etf is resolved from the universe's OWN categorization — ETF_TICKERS
+    / STOCK_MEMBERSHIP, the same registration-independent distinction
+    _ticker_state() (brokers/trading212.py) uses to compute is_etf for the
+    momentum signal — never from whether *ticker* happens to have a
+    live-execution `instruments:` entry yet (config.yaml, consolidated
+    2026-07-31 from watchlist.trading + trading212_invest.instrument_mapping
+    — see CLAUDE.md's "Unified instrument structure" section). Those are two
+    independent questions: "is this ticker currently wired for live
+    execution" vs. "is this ticker a stock or an ETF." Today the two happen
+    to coincide exactly (every ETF_TICKERS/STOCK_MEMBERSHIP ticker has an
+    `instruments:` entry and vice versa), which is why dispatching on
+    `instruments:` used to look correct — but a future universe-broadening
+    change (see CLAUDE.md's "V2 stock universe broadening" /  "moderate
+    stock universe expansion" sections) can add a new ETF_TICKERS or
+    STOCK_MEMBERSHIP candidate before it's wired into `instruments:` for
+    live trading, and that candidate must still get its real 90/30
+    treatment rather than silently falling through to the flat
+    fallback_max_holding_days default — which only ever happened to be
+    correct for stock candidates by coincidence (30 matches the real stock
+    value), never for a hypothetical unregistered ETF candidate (which
+    would have wrongly gotten 30 instead of 90).
+
+    ETFs get trading212_invest.max_holding_days (e.g. 90 — no leverage/swap
+    costs, held longer); stocks get trading212_invest.stock_max_holding_days
+    (e.g. 30 — higher idiosyncratic risk than an ETF). A ticker in neither
+    category — not tracked by the universe at all (e.g. an ad-hoc research
+    ticker exercised only inside a one-off backtest study, never part of
+    the real ETF sleeve or stock pool) — falls back to
+    backtest.fallback_max_holding_days, since there is no real
+    categorization to dispatch on.
 
     This is the single source of truth for per-asset holding limits, used
     by simulate_trades() (analysis/backtest.py) and the live exit checks /
@@ -221,17 +242,13 @@ def get_max_holding_days(ticker: str, config: dict) -> int:
     limits always agree for the same ticker.
     """
     t212_cfg = config.get("trading212_invest", {})
-    default = int(config.get("backtest", {}).get("max_holding_days", 30))
+    fallback = int(config.get("backtest", {}).get("fallback_max_holding_days", 30))
 
-    mapping = config.get("instruments") or {}
-    entry = mapping.get(ticker)
-    if entry is None:
-        return default
-
-    is_etf = bool(entry.get("is_etf", False)) if isinstance(entry, dict) else False
-    if is_etf:
-        return int(t212_cfg.get("max_holding_days", default))
-    return int(t212_cfg.get("stock_max_holding_days", default))
+    if ticker in ETF_TICKERS:
+        return int(t212_cfg.get("max_holding_days", fallback))
+    if ticker in STOCK_MEMBERSHIP:
+        return int(t212_cfg.get("stock_max_holding_days", fallback))
+    return fallback
 
 
 # ---------------------------------------------------------------------------

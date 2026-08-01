@@ -200,3 +200,72 @@ def test_refresh_merges_known_ticker_rename(db_engine, mocker):
     assert v2u.is_member("META", date(2018, 1, 1))
     assert v2u.is_member("META", date(2023, 1, 1))
     assert v2u.is_member("META", date(2026, 7, 31))
+
+
+# ---------------------------------------------------------------------------
+# get_max_holding_days() -- is_etf must be resolved from the universe's own
+# ETF_TICKERS / STOCK_MEMBERSHIP categorization, never from whether a
+# ticker happens to have a live-execution `instruments:` entry yet. Today
+# ETF_TICKERS/STOCK_MEMBERSHIP and `instruments:` happen to match exactly
+# (every current ticker has both), which is what let a registration-based
+# dispatch look correct -- but a future universe-broadening candidate can
+# exist in ETF_TICKERS/STOCK_MEMBERSHIP before it's ever wired into
+# `instruments:` for live trading, and must still get its real 90/30
+# treatment rather than the flat fallback.
+# ---------------------------------------------------------------------------
+
+def _holding_days_config(**t212_overrides) -> dict:
+    cfg = {
+        "instruments": {},  # deliberately empty -- nothing registered for live execution
+        "trading212_invest": {"max_holding_days": 90, "stock_max_holding_days": 30},
+        "backtest": {"fallback_max_holding_days": 7},
+    }
+    cfg["trading212_invest"].update(t212_overrides)
+    return cfg
+
+
+def test_get_max_holding_days_unregistered_etf_candidate_gets_etf_treatment(mocker):
+    """A candidate in ETF_TICKERS with NO `instruments:` entry at all must
+    still get the real 90-day ETF backstop, not the flat fallback -- proves
+    is_etf is resolved from ETF_TICKERS, not from live-execution
+    registration."""
+    mocker.patch.object(v2u, "ETF_TICKERS", ("NEWETF",))
+    assert v2u.get_max_holding_days("NEWETF", _holding_days_config()) == 90
+
+
+def test_get_max_holding_days_unregistered_stock_candidate_gets_stock_treatment(mocker):
+    """Same guarantee for a candidate in STOCK_MEMBERSHIP with no
+    `instruments:` entry -- must get the 30-day stock backstop, not the
+    flat fallback."""
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"NEWSTOCK": []})
+    assert v2u.get_max_holding_days("NEWSTOCK", _holding_days_config()) == 30
+
+
+def test_get_max_holding_days_ignores_a_stale_instruments_entry(mocker):
+    """A ticker WITH an `instruments:` entry whose own is_etf flag disagrees
+    with its real ETF_TICKERS categorization must still be dispatched by
+    the real categorization -- `instruments:` registration is no longer
+    consulted for this decision at all, so a stale/wrong flag there can't
+    silently produce the wrong holding limit."""
+    mocker.patch.object(v2u, "ETF_TICKERS", ("REALETF",))
+    cfg = _holding_days_config()
+    cfg["instruments"] = {"REALETF": {"is_etf": False, "t212_instrument_id": "X", "currency": "USD"}}
+    assert v2u.get_max_holding_days("REALETF", cfg) == 90  # real ETF treatment, not the stale flag
+
+
+def test_get_max_holding_days_truly_untracked_ticker_uses_fallback(mocker):
+    """A ticker in neither ETF_TICKERS nor STOCK_MEMBERSHIP -- e.g. an
+    ad-hoc ticker only ever exercised inside a one-off backtest research
+    study -- has no real categorization to dispatch on, so it correctly
+    falls back to backtest.fallback_max_holding_days."""
+    mocker.patch.object(v2u, "ETF_TICKERS", ())
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {})
+    assert v2u.get_max_holding_days("RESEARCH_ONLY_TICKER", _holding_days_config()) == 7
+
+
+def test_get_max_holding_days_fallback_defaults_to_30_when_config_key_absent(mocker):
+    """fallback_max_holding_days itself defaults to 30 when absent from
+    config entirely -- matches the function's own hardcoded default."""
+    mocker.patch.object(v2u, "ETF_TICKERS", ())
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {})
+    assert v2u.get_max_holding_days("UNKNOWN_TICKER", {}) == 30
