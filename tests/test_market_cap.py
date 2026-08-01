@@ -161,7 +161,11 @@ def test_fetch_concept_prefixes_cik_with_CIK(mocker):
 
 
 def test_fetch_shares_outstanding_returns_empty_when_no_tag_resolves(mocker):
+    # _fetch_company_facts is mocked explicitly (not left to fall through to a
+    # real SEC request) so this test stays self-contained -- the suite must
+    # never make a live network call, per CLAUDE.md's "Running tests" contract.
     mocker.patch.object(mc, "_fetch_concept", return_value=None)
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=None)
     rows, tag_used = mc.fetch_shares_outstanding("0000000001")
     assert rows == []
     assert tag_used is None
@@ -699,3 +703,404 @@ def test_market_cap_end_to_end_respects_filing_lag(db_engine):
     # £10 price = £10,000 -- not 1100 x 10 = £11,000, which would use the
     # not-yet-public Q3 figure.
     assert mc.market_cap("AAPL", date(2020, 10, 15)) == 10000.0
+
+
+# ---------------------------------------------------------------------------
+# companyfacts fallback -- the real, live-verified gap (2026-08-01)
+#
+# The three tags in SHARES_TAGS were never the problem: SEC's per-concept
+# companyconcept endpoint is simply unreliable. For 27 of the 44
+# previously-unresolvable S&P 500 candidates (KO, WFC, ABT, AMT, CB, COF,
+# CTAS, ...) it returns HTTP 200 with an EMPTY units.shares array for a tag
+# that companyfacts, for the identical CIK and identical tag, serves in full
+# (KO: dei:EntityCommonStockSharesOutstanding, 71 rows in companyfacts vs 0
+# from companyconcept). Reproduced in a clean, unloaded environment, so it is
+# a genuine SEC-side endpoint inconsistency, not rate-limiting.
+#
+# Why the pre-existing tests did not catch this: they all mock _fetch_concept
+# directly, so they exercise the fallback CHAIN LOGIC but never the endpoint's
+# real behaviour -- and, critically, they model a missing tag as None, which
+# collapses SEC's genuine 404 ("concept absent") and its 200-with-empty-array
+# ("concept present, no rows returned") into the same value. The production
+# code collapsed them the same way, so the tests agreed with the bug.
+# ---------------------------------------------------------------------------
+
+def test_companyfacts_fallback_resolves_when_every_concept_tag_is_empty(mocker):
+    """The real KO/WFC case: every companyconcept tag yields nothing, but
+    companyfacts has full history for the very first tag."""
+    facts = {
+        "dei": {
+            "EntityCommonStockSharesOutstanding": {
+                "units": {"shares": [
+                    {"end": "2012-07-23", "val": 2250961597, "filed": "2012-07-26"},
+                    {"end": "2012-10-22", "val": 4485161506, "filed": "2012-10-25"},
+                ]}
+            }
+        }
+    }
+    mocker.patch.object(mc, "_fetch_concept", return_value=None)
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=facts)
+
+    rows, tag_used = mc.fetch_shares_outstanding("0000021344")  # KO's real CIK
+
+    assert tag_used == "dei:EntityCommonStockSharesOutstanding (companyfacts)"
+    assert [r["val"] for r in rows] == [2250961597, 4485161506]
+
+
+def test_companyconcept_200_with_empty_array_falls_through_like_a_404(mocker):
+    """SEC returns 200-with-empty-units for many real filers. _fetch_concept
+    surfaces that as an empty list; it must fall through to the next tag and
+    ultimately to companyfacts exactly as a hard 404 does -- this specific
+    conflation is what hid the gap in the first place."""
+    facts = {"us-gaap": {"CommonStockSharesIssued": {"units": {"shares": [
+        {"end": "2020-12-31", "val": 555, "filed": "2021-01-15"},
+    ]}}}}
+    # [] is what a 200-with-empty-shares response yields, not None.
+    mocker.patch.object(mc, "_fetch_concept", return_value=[])
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=facts)
+
+    rows, tag_used = mc.fetch_shares_outstanding("0000072971")
+
+    assert tag_used == "us-gaap:CommonStockSharesIssued (companyfacts)"
+    assert rows == [{"end": "2020-12-31", "val": 555, "filed": "2021-01-15"}]
+
+
+def test_companyfacts_is_not_consulted_when_a_concept_tag_has_data(mocker):
+    """Strict fallback chain: companyfacts is an extra step AFTER the existing
+    three tags, never a reordering of them. A filer that already resolves via
+    companyconcept must not incur a second, much larger request."""
+    mocker.patch.object(
+        mc, "_fetch_concept",
+        return_value=[{"end": "2020-01-01", "val": 1000, "filed": "2020-01-15"}],
+    )
+    facts_spy = mocker.patch.object(mc, "_fetch_company_facts")
+
+    rows, tag_used = mc.fetch_shares_outstanding("0000320193")
+
+    assert tag_used == "dei:EntityCommonStockSharesOutstanding"  # no suffix
+    assert rows
+    facts_spy.assert_not_called()
+
+
+def test_companyfacts_path_respects_shares_tags_order(mocker):
+    """When companyfacts carries more than one of the three tags, the same
+    SHARES_TAGS precedence applies as on the companyconcept path."""
+    facts = {
+        "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+            {"end": "2021-01-01", "val": 111, "filed": "2021-02-01"}]}}},
+        "us-gaap": {"CommonStockSharesOutstanding": {"units": {"shares": [
+            {"end": "2021-01-01", "val": 999, "filed": "2021-02-01"}]}}},
+    }
+    mocker.patch.object(mc, "_fetch_concept", return_value=None)
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=facts)
+
+    rows, tag_used = mc.fetch_shares_outstanding("0000000002")
+
+    assert tag_used == "dei:EntityCommonStockSharesOutstanding (companyfacts)"
+    assert rows[0]["val"] == 111
+
+
+def test_companyfacts_path_applies_earliest_filed_dedup(mocker):
+    """The restatement rule (keep the EARLIEST-filed value per period_end)
+    is shared by both paths via _dedupe_earliest_filed() -- it must not be
+    silently skipped on the companyfacts path."""
+    facts = {"dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+        {"end": "2021-12-31", "val": 662121000, "filed": "2022-02-02"},
+        {"end": "2021-12-31", "val": 13242000000, "filed": "2022-10-26"},
+    ]}}}}
+    mocker.patch.object(mc, "_fetch_concept", return_value=None)
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=facts)
+
+    rows, _ = mc.fetch_shares_outstanding("0001652044")
+
+    assert len(rows) == 1
+    assert rows[0]["val"] == 662121000  # pre-split original, not the restatement
+
+
+def test_companyfacts_failure_is_isolated_and_returns_empty(mocker):
+    """A companyfacts request blowing up must degrade to 'no data', never
+    propagate -- matching this module's existing per-tag failure isolation."""
+    mocker.patch.object(mc, "_fetch_concept", return_value=None)
+    mocker.patch.object(mc, "_fetch_company_facts", side_effect=RuntimeError("SEC 500"))
+
+    rows, tag_used = mc.fetch_shares_outstanding("0000000003")
+
+    assert rows == []
+    assert tag_used is None
+
+
+# ---------------------------------------------------------------------------
+# Predecessor-CIK fallback -- the real XOM case (verified live 2026-08-01)
+# ---------------------------------------------------------------------------
+
+def test_predecessor_cik_resolves_after_holdco_reorganisation(mocker):
+    """SEC now maps ticker XOM to 'ExxonMobil Holdings Corp' (CIK 0002115436,
+    first filing 2026-07-01, zero XBRL shares history) following a July 2026
+    holding-company reorganisation; the predecessor 'EXXON MOBIL CORP'
+    (CIK 0000034088, which filed Form 25-NSE on 2026-07-02) holds the real
+    history this module needs."""
+    hist = [{"end": "2026-03-31", "val": 4144947162, "filed": "2026-05-04"}]
+
+    def fake_concept(cik, taxonomy, tag):
+        if cik == "0000034088" and (taxonomy, tag) == ("dei", "EntityCommonStockSharesOutstanding"):
+            return hist
+        return None
+
+    mocker.patch.object(mc, "_fetch_concept", side_effect=fake_concept)
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=None)
+
+    rows, tag_used = mc.fetch_shares_outstanding("0002115436")
+
+    assert rows == hist
+    assert "predecessor CIK 0000034088" in tag_used
+    assert tag_used.startswith("dei:EntityCommonStockSharesOutstanding")
+
+
+def test_predecessor_lookup_only_fires_for_known_successor_ciks(mocker):
+    """An unknown CIK with no data must NOT trigger a speculative second
+    lookup -- the map is a deliberate, hand-verified list, not an inferred
+    rule (see PREDECESSOR_CIKS' own docstring)."""
+    concept = mocker.patch.object(mc, "_fetch_concept", return_value=None)
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=None)
+
+    rows, tag_used = mc.fetch_shares_outstanding("0000000009")
+
+    assert rows == []
+    assert tag_used is None
+    # exactly the three SHARES_TAGS attempts, no retry against another CIK
+    assert concept.call_count == len(mc.SHARES_TAGS)
+
+
+def test_fetch_company_facts_strips_CIK_prefix_and_404s_cleanly(mocker):
+    """companyfacts' URL already embeds the literal 'CIK' prefix, so a
+    caller passing an already-prefixed value must not produce 'CIKCIK...'."""
+    resp = mocker.Mock()
+    resp.status_code = 404
+    spy = mocker.patch.object(mc.requests, "get", return_value=resp)
+
+    assert mc._fetch_company_facts("CIK0000021344") is None
+
+    url = spy.call_args[0][0]
+    assert "CIK0000021344.json" in url
+    assert "CIKCIK" not in url
+
+
+def test_non_positive_share_counts_are_dropped(mocker):
+    """Real filings carry stray 0 share-count rows (verified live: HBAN
+    2011-03-31, KO 2009-10-23, RCL 2012-02-27, VRSK 2012-04-27). Because
+    shares_outstanding_as_of() forward-fills, one 0 would zero out market cap
+    from that filing until the next one -- ranking a mega-cap below peers."""
+    raw = [
+        {"end": "2009-07-24", "val": 2317441658, "filed": "2009-07-30"},
+        {"end": "2009-10-23", "val": 0, "filed": "2009-10-29"},
+        {"end": "2010-01-22", "val": 2318000000, "filed": "2010-01-28"},
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept",
+        side_effect=lambda c, tax, tag: raw if tax == "dei" else None,
+    )
+    rows, _ = mc.fetch_shares_outstanding("0000021344")
+    assert [r["end"] for r in rows] == ["2009-07-24", "2010-01-22"]
+    assert all(r["val"] > 0 for r in rows)
+
+
+def test_negative_share_count_is_dropped(mocker):
+    mocker.patch.object(
+        mc, "_fetch_concept",
+        side_effect=lambda c, tax, tag: (
+            [{"end": "2020-01-01", "val": -5, "filed": "2020-02-01"}] if tax == "dei" else None
+        ),
+    )
+    mocker.patch.object(mc, "_fetch_company_facts", return_value=None)
+    rows, tag_used = mc.fetch_shares_outstanding("0000000004")
+    assert rows == []
+    assert tag_used is None
+
+
+# ---------------------------------------------------------------------------
+# Same-period amendment preference -- the real WFC 2023-07-21 defect
+#
+# _dedupe_earliest_filed() keeps the EARLIEST-filed value per period_end,
+# which is correct for RESTATEMENTS (GOOGL's split) but picks the filer's
+# ERROR over the filer's own correction when the later filing is an
+# amendment of the SAME period. Found via a systemic scan of all 487
+# resolved S&P 500 candidates: 14 real conflicts across 13 tickers.
+# ---------------------------------------------------------------------------
+
+def _row(end, val, filed, form, fy, fp):
+    return {"end": end, "val": val, "filed": filed, "form": form, "fy": fy, "fp": fp}
+
+
+def test_same_period_amendment_supersedes_erroneous_original(mocker):
+    """The real WFC case: the original Q2-2023 10-Q (filed 2023-08-01)
+    reported 1,823,028,137; WFC's own 10-Q/A three days later corrected it to
+    3,658,783,337, which fits between the neighbouring quarters."""
+    raw = [
+        _row("2023-04-21", 3752223519, "2023-05-02", "10-Q", 2023, "Q1"),
+        _row("2023-07-21", 1823028137, "2023-08-01", "10-Q", 2023, "Q2"),
+        _row("2023-07-21", 3658783337, "2023-08-04", "10-Q/A", 2023, "Q2"),
+        _row("2023-10-20", 3631639714, "2023-10-31", "10-Q", 2023, "Q3"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0000072971")
+    got = {r["end"]: r["val"] for r in rows}
+    assert got["2023-07-21"] == 3658783337
+
+
+def test_same_day_amendment_still_supersedes(mocker):
+    """ROST 2010-11-18 and BSX 2013-04-30 both filed the 10-Q and its 10-Q/A
+    on the SAME DAY -- a strict filed-date > comparison silently left both on
+    the erroneous original, so the comparison must be >=."""
+    raw = [
+        _row("2010-08-01", 120457145, "2010-09-01", "10-Q", 2011, "Q1"),
+        _row("2010-11-18", 19084540, "2010-12-08", "10-Q", 2011, "Q2"),
+        _row("2010-11-18", 119084540, "2010-12-08", "10-Q/A", 2011, "Q2"),
+        _row("2011-02-01", 117599994, "2011-03-01", "10-Q", 2011, "Q3"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0000745732")
+    got = {r["end"]: r["val"] for r in rows}
+    assert got["2010-11-18"] == 119084540
+
+
+def test_cross_period_amendment_does_not_override_restatement(mocker):
+    """PPG 2014-12-31: a 10-K/A filed in 2018 (a DIFFERENT fiscal period)
+    reports exactly 2x -- its real 2:1 split restated for comparability, NOT
+    a correction. Earliest-filed must still win, or this silently applies a
+    split years before it happened. This is what the (fy, fp) guard protects."""
+    raw = [
+        _row("2014-12-31", 135982283, "2015-02-19", "10-K", 2014, "FY"),
+        _row("2014-12-31", 271964566, "2018-06-28", "10-K/A", 2017, "FY"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0000079879")
+    assert rows[0]["val"] == 135982283
+
+
+def test_latest_amendment_wins_when_a_period_is_amended_twice(mocker):
+    raw = [
+        _row("2020-06-30", 100, "2020-07-01", "10-Q", 2020, "Q2"),
+        _row("2020-06-30", 200, "2020-07-05", "10-Q/A", 2020, "Q2"),
+        _row("2020-06-30", 300, "2020-07-09", "10-Q/A", 2020, "Q2"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0000000010")
+    assert rows[0]["val"] == 300
+
+
+def test_amendment_matching_the_original_value_changes_nothing(mocker):
+    raw = [
+        _row("2020-06-30", 500_000_000, "2020-07-01", "10-Q", 2020, "Q2"),
+        _row("2020-06-30", 500_000_000, "2020-07-05", "10-Q/A", 2020, "Q2"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0000000011")
+    assert len(rows) == 1 and rows[0]["val"] == 500_000_000
+
+
+# ---------------------------------------------------------------------------
+# Magnitude-outlier guard -- distinct from the zero/negative guard, which
+# cannot catch these because the values are WRONG rather than absent.
+# ---------------------------------------------------------------------------
+
+def _plain(end, val, filed):
+    return {"end": end, "val": val, "filed": filed, "form": "10-Q", "fy": 2012, "fp": "Q1"}
+
+
+def test_unit_scale_outlier_is_dropped(mocker):
+    """The real ORCL/AMD/MAR signature: a single row 1e6 too large. Because
+    shares_outstanding_as_of() forward-fills, keeping it would poison market
+    cap for every date until the next filing."""
+    raw = [
+        _plain("2012-01-01", 4_000_000_000, "2012-02-01"),
+        _plain("2012-04-01", 4_100_000_000, "2012-05-01"),
+        _plain("2012-07-01", 4_819_056_000_000_000, "2012-08-01"),  # 1e6 too big
+        _plain("2012-10-01", 4_200_000_000, "2012-11-01"),
+        _plain("2013-01-01", 4_300_000_000, "2013-02-01"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0001341439")
+    assert [r["end"] for r in rows] == ["2012-01-01", "2012-04-01", "2012-10-01", "2013-01-01"]
+
+
+def test_truncated_outlier_is_dropped(mocker):
+    """The real CRM/LH/ICE signature: a truncated or placeholder value."""
+    raw = [
+        _plain("2012-01-01", 700_000_000, "2012-02-01"),
+        _plain("2012-04-01", 134, "2012-05-01"),  # truncated
+        _plain("2012-07-01", 720_000_000, "2012-08-01"),
+        _plain("2012-10-01", 730_000_000, "2012-11-01"),
+        _plain("2013-01-01", 740_000_000, "2013-02-01"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0001108524")
+    assert 134 not in [r["val"] for r in rows]
+    assert len(rows) == 4
+
+
+def test_real_stock_splits_are_never_dropped_as_outliers(mocker):
+    """NVDA's genuine 4:1 then 10:1 splits reach 40.25x its own series median
+    -- the largest real ratio in the whole 487-ticker universe. The threshold
+    must clear that comfortably or the guard would destroy real data."""
+    raw = [
+        _plain("2020-01-01", 610_000_000, "2020-02-01"),
+        _plain("2021-01-01", 620_000_000, "2021-02-01"),
+        _plain("2021-10-01", 2_500_000_000, "2021-11-01"),   # 4:1 split
+        _plain("2024-01-01", 2_460_000_000, "2024-02-01"),
+        _plain("2024-10-01", 24_530_000_000, "2024-11-01"),  # 10:1 split
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0001045810")
+    assert len(rows) == 5
+    assert 24_530_000_000 in [r["val"] for r in rows]
+
+
+def test_outlier_guard_skipped_for_short_series(mocker):
+    """The real PSKY case (n=3, median 1,000): with too few rows the median is
+    not robust and the test INVERTS, flagging the one genuine value. Below
+    _OUTLIER_MIN_ROWS the check is skipped entirely."""
+    raw = [
+        _plain("2025-01-01", 1_000, "2025-02-01"),
+        _plain("2025-06-01", 1_000, "2025-07-01"),
+        _plain("2025-11-05", 1_071_666_977, "2025-12-01"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0000000012")
+    assert 1_071_666_977 in [r["val"] for r in rows]
+    assert len(rows) == 3
+
+
+def test_outlier_guard_never_returns_an_empty_series(mocker):
+    """If a skewed median would drop everything, return the raw rows rather
+    than nothing -- the caller should see real data, not silence."""
+    rows_in = [{"end": f"2020-0{i}-01", "val": 10 ** (i + 3), "filed": f"2020-0{i}-15"}
+               for i in range(1, 6)]
+    out = mc._drop_magnitude_outliers(list(rows_in), "0000000013")
+    assert out
+
+
+def test_amendment_correction_runs_before_the_outlier_guard(mocker):
+    """MAR 2010-04-09 is BOTH an amendment conflict and a 1e6 outlier. Order
+    matters: correcting it first preserves the real value; running the outlier
+    guard first would discard the period entirely."""
+    raw = [
+        _row("2010-01-01", 358_522_350, "2010-02-01", "10-Q", 2010, "Q1"),
+        _row("2010-04-09", 361_332_043_000_000, "2010-04-23", "10-Q", 2010, "Q2"),
+        _row("2010-04-09", 361_332_043, "2010-04-28", "10-Q/A", 2010, "Q2"),
+        _row("2010-07-01", 362_811_812, "2010-08-01", "10-Q", 2010, "Q3"),
+        _row("2010-10-01", 363_000_000, "2010-11-01", "10-Q", 2010, "Q4"),
+    ]
+    mocker.patch.object(
+        mc, "_fetch_concept", side_effect=lambda c, tax, tag: raw if tax == "dei" else None)
+    rows, _ = mc.fetch_shares_outstanding("0001048286")
+    got = {r["end"]: r["val"] for r in rows}
+    assert got["2010-04-09"] == 361_332_043  # corrected, not dropped

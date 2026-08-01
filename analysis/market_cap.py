@@ -67,6 +67,7 @@ results for the study's full candidate pool, not assumed from these four
 tickers alone.
 """
 import logging
+import statistics
 import time
 from datetime import date, datetime
 from typing import Optional
@@ -82,6 +83,7 @@ logger = logging.getLogger(__name__)
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/{cik}/{taxonomy}/{tag}.json"
+_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
 # SEC requires a compliant User-Agent identifying the requester -- verified
 # live 2026-08-01 that an unheadered request is refused; this follows SEC's
@@ -106,6 +108,31 @@ SHARES_TAGS: list[tuple[str, str]] = [
     ("us-gaap", "CommonStockSharesOutstanding"),
     ("us-gaap", "CommonStockSharesIssued"),
 ]
+
+# Predecessor (pre-reorganisation) CIKs, keyed by the CURRENT CIK that SEC's
+# company_tickers.json now resolves the ticker to. A holding-company
+# reorganisation creates a genuinely NEW SEC filer that inherits the ticker
+# but none of the predecessor's XBRL history, so the ticker resolves to an
+# entity with essentially no filings -- and this module's whole purpose is
+# historical, point-in-time reconstruction, which needs the predecessor.
+#
+# Deliberately an explicit, per-company, live-verified map rather than an
+# inferred rule: mirroring analysis/universe.py's own _KNOWN_TICKER_RENAMES
+# precedent. Auto-guessing a predecessor from a name match would be exactly
+# the kind of unprincipled company-specific inference this project's
+# research standard warns against, so each entry is verified by hand and
+# recorded with the evidence that justified it.
+#
+# Verified live 2026-08-01:
+#   XOM -- SEC now maps ticker XOM to ExxonMobil Holdings Corp
+#   (CIK 0002115436, first filing 2026-07-01, 27 filings, zero XBRL shares
+#   history). The predecessor EXXON MOBIL CORP (CIK 0000034088) filed a
+#   Form 25-NSE (notification of delisting) on 2026-07-02 -- the classic
+#   holdco-reorganisation signature -- and carries the full history
+#   (dei:EntityCommonStockSharesOutstanding, 68 rows).
+PREDECESSOR_CIKS: dict[str, str] = {
+    "0002115436": "0000034088",  # ExxonMobil Holdings Corp -> Exxon Mobil Corp
+}
 
 _cik_cache: Optional[dict[str, str]] = None
 _shares_cache: dict[str, list[tuple[date, float]]] = {}
@@ -178,19 +205,254 @@ def _fetch_concept(cik: str, taxonomy: str, tag: str) -> Optional[list[dict]]:
     return data.get("units", {}).get("shares", [])
 
 
+def _is_amendment(row: dict) -> bool:
+    """True if *row* came from an amended filing (10-Q/A, 10-K/A, ...)."""
+    return str(row.get("form") or "").strip().upper().endswith("/A")
+
+
+def _dedupe_earliest_filed(raw: list[dict]) -> list[dict]:
+    """One row per `end` (period_end) date.
+
+    Default rule: keep the EARLIEST-FILED value -- see this module's docstring
+    for why (a later filing can RESTATE an earlier period's share count, most
+    visibly across a stock split; the earliest-filed value is what was
+    genuinely true, and knowable, as of that period_end date).
+
+    Exception -- SAME-PERIOD AMENDMENTS: if a later filing is an amendment
+    (form ending "/A") of the SAME fiscal period (same fy AND fp) as the
+    earliest-filed row, the amendment wins. An amendment of the same period is
+    the filer CORRECTING ITS OWN ERROR, which is categorically different from
+    a later period's filing restating an earlier balance for comparability.
+    Earliest-filed is right for the restatement case and WRONG for the
+    correction case, and `form` + (fy, fp) is what separates them.
+
+    Verified live 2026-08-01 against real SEC data across all 487 resolved
+    S&P 500 candidates -- 14 real conflicts across 13 tickers, e.g.:
+      - WFC 2023-07-21: original 10-Q (filed 2023-08-01) reported
+        1,823,028,137; the filer's own 10-Q/A three days later (2023-08-04)
+        corrected it to 3,658,783,337, which fits smoothly between the
+        neighbouring quarters (3,752,223,519 -> 3,631,639,714). Confirmed by
+        reading BOTH real filing cover pages, not inferred from the JSON.
+      - MAR 2010-04-09: 361,332,043,000,000 corrected to 361,332,043 (a
+        literal 1e6 unit error).
+      - ROST 2010-11-18: 19,084,540 corrected to 119,084,540 (dropped digit).
+      - ZTS 2019-08-02: 24,333,301 corrected to 477,557,942.
+
+    The filed-date comparison is >=, not >, deliberately: a filer can file the
+    correction on the SAME DAY as the original. Two of the 14 real conflicts
+    do exactly that (ROST 2010-11-18 and BSX 2013-04-30, each with the 10-Q
+    and its 10-Q/A both filed the same day), and a strict > silently left both
+    on the erroneous original. >= also makes the outcome deterministic in that
+    case, rather than depending on which same-dated row the earliest-filed
+    min() happened to encounter first in the raw feed.
+
+    The (fy, fp) equality requirement is load-bearing, not defensive: two of
+    the 14 conflicts found (BF.B 2017-04-30, PPG 2014-12-31) are amendments
+    filed YEARS later from a DIFFERENT fiscal period -- genuine retroactive
+    restatements (PPG's is exactly 2x, its real 2:1 split). Those must keep
+    the earliest-filed value, and this guard is what ensures they do.
+
+    Deliberately NOT keyed on SEC's own `frame` field, which looks like a
+    natural "canonical value" signal but is not: verified live that SEC
+    assigns frame CY2021Q4I to GOOGL's RESTATED post-split 13,242,000,000,
+    so a frame-based rule would silently reverse the documented,
+    intentional GOOGL behaviour this function exists to protect.
+
+    Extracted so the companyconcept and companyfacts paths below share ONE
+    implementation of this rule rather than two copies that could drift --
+    the same "exactly one implementation of any given decision" principle
+    CLAUDE.md's live/backtest parity invariant already establishes.
+    """
+    best_by_end: dict[str, dict] = {}
+    chosen_raw: dict[str, dict] = {}
+    for row in raw:
+        end = row.get("end")
+        val = row.get("val")
+        filed = row.get("filed") or "9999-99-99"  # missing filed date sorts last, never wins a tie
+        # A non-positive share count is never a valid fact. Real filings do
+        # contain them (verified live 2026-08-01: HBAN 2011-03-31, KO
+        # 2009-10-23, RCL 2012-02-27, VRSK 2012-04-27 each carry a single 0
+        # row) -- and because shares_outstanding_as_of() forward-fills, one
+        # stray 0 would silently zero out market cap for every date from that
+        # filing until the next one, ranking a mega-cap below every peer.
+        if not end or val is None or float(val) <= 0:
+            continue
+        cur = best_by_end.get(end)
+        if cur is None or filed < cur["filed"]:
+            best_by_end[end] = {"end": end, "val": val, "filed": filed}
+            # Keep the ORIGINATING raw row too: the deduped dict above is
+            # deliberately narrow ({end, val, filed} -- the shape callers and
+            # tests expect), but the same-period amendment check below needs
+            # this row's own fy/fp, which that narrow shape does not carry.
+            chosen_raw[end] = row
+    # Same-period amendment override -- see this function's own docstring.
+    by_end: dict[str, list[dict]] = {}
+    for row in raw:
+        end = row.get("end")
+        val = row.get("val")
+        if not end or val is None or float(val) <= 0 or end not in best_by_end:
+            continue
+        by_end.setdefault(end, []).append(row)
+
+    for end, group in by_end.items():
+        chosen = best_by_end[end]
+        chosen_src = chosen_raw.get(end, {})
+        amendments = [
+            r for r in group
+            if _is_amendment(r)
+            and r.get("fy") == chosen_src.get("fy")
+            and r.get("fp") == chosen_src.get("fp")
+            and (r.get("filed") or "9999-99-99") >= chosen["filed"]
+        ]
+        if not amendments:
+            continue
+        # Most recent correction wins if a period was amended more than once.
+        latest = max(amendments, key=lambda r: r.get("filed") or "0000-00-00")
+        if float(latest["val"]) == float(chosen["val"]):
+            continue
+        logger.info(
+            "market_cap: period_end %s superseded by same-period amendment (%s filed %s): "
+            "%s -> %s (original %s filed %s).",
+            end, latest.get("form"), latest.get("filed"),
+            f'{float(chosen["val"]):,.0f}', f'{float(latest["val"]):,.0f}',
+            chosen_src.get("form"), chosen.get("filed"),
+        )
+        best_by_end[end] = {"end": end, "val": latest["val"], "filed": latest["filed"]}
+
+    return sorted(best_by_end.values(), key=lambda r: r["end"])
+
+
+# A row whose value is more than this multiple of the series' own median (or
+# less than its reciprocal) is treated as a data defect, not a corporate
+# action. Chosen empirically, not guessed -- see _drop_magnitude_outliers().
+_OUTLIER_MEDIAN_MULTIPLE = 100.0
+
+# Below this many observations a median is not robust enough to test against;
+# the check is skipped entirely rather than risk inverting (see the function's
+# own docstring for the real tickers that motivated this).
+_OUTLIER_MIN_ROWS = 5
+
+
+def _drop_magnitude_outliers(rows: list[dict], cik: str = "") -> list[dict]:
+    """Drop rows whose share count is implausible by orders of magnitude
+    relative to the series' OWN median -- a defect class the zero/negative
+    guard cannot catch, because these values are wrong rather than absent.
+
+    Why this is needed at all, and why it is separate from the amendment fix
+    above: a systemic scan of all 487 resolved S&P 500 candidates (live SEC
+    data, 2026-08-01) found 45 spike-and-revert anomalies across 32 tickers.
+    Only a minority were ever amended by the filer, so the amendment rule
+    alone leaves most of them in place. The dominant signatures are unit-scale
+    errors and truncation, e.g.:
+      - ORCL 2012-09-17: 4,819,056,000,000,000 vs a ~4.09e9 median (1e6 too big)
+      - AMD  2012-07-27:   707,555,106,000,000 vs a ~9.87e8 median
+      - QCOM 2011-10-31:     1,680,984,426,000 vs a ~1.47e9 median (1e3 too big)
+      - CRM  2011-04-30:                   134 vs a ~7.27e8 median (truncated)
+      - ICE  2013-08-05 / CSX 2011-04-01:    1 (placeholder)
+    Because shares_outstanding_as_of() forward-fills, a single retained 1e6
+    error would poison market cap for every date from that filing until the
+    next one -- ranking the affected company as the largest in the world.
+
+    Rows are DROPPED, not corrected: unlike the amendment case there is no
+    authoritative corrected value to substitute, so the honest action is to
+    fall back to forward-filling the last good filing. This mirrors the
+    zero-guard's existing drop-and-forward-fill behaviour.
+
+    The 100x threshold was chosen empirically from the real distribution, not
+    picked for roundness. Sweeping it across all 487 tickers, the flagged set
+    is EXACTLY THE SAME (68 rows / 44 tickers) anywhere from 50x to 200x --
+    a genuine gap in the data, so the result is insensitive to the precise
+    value. It also clears every real corporate action by a wide margin: the
+    largest genuine value/median ratio among this module's own documented
+    split tickers is NVDA at 40.25x (its real 4:1 and 10:1 splits combined),
+    with GOOGL's 20:1 split at 18.82x and TSLA at 22.87x -- all well inside
+    100x, and none flagged.
+
+    Skipped entirely for series shorter than _OUTLIER_MIN_ROWS, where the
+    median is not robust and the test can INVERT -- flagging the one good row
+    instead of the bad ones. Real cases found: PSKY (n=3, median 1,000, whose
+    single genuine 1,071,666,977 row would otherwise be flagged) and FOX/FOXA
+    (n=1, whole series is a placeholder `1`).
+    """
+    if len(rows) < _OUTLIER_MIN_ROWS:
+        return rows
+    values = [float(r["val"]) for r in rows]
+    median = statistics.median(values)
+    if median <= 0:
+        return rows
+
+    hi = median * _OUTLIER_MEDIAN_MULTIPLE
+    lo = median / _OUTLIER_MEDIAN_MULTIPLE
+    kept, dropped = [], []
+    for r in rows:
+        v = float(r["val"])
+        (dropped if (v > hi or v < lo) else kept).append(r)
+
+    for r in dropped:
+        logger.warning(
+            "market_cap: dropping implausible shares-outstanding row for CIK %s -- "
+            "period_end %s value %s is %.1fx the series median (%s); treated as a "
+            "filing/unit defect, not a corporate action. Forward-filling the prior "
+            "good filing instead.",
+            cik or "?", r.get("end"), f'{float(r["val"]):,.0f}',
+            float(r["val"]) / median, f"{median:,.0f}",
+        )
+    # Never return an empty series purely because the median was itself skewed
+    # by a majority-bad series -- if everything would be dropped, keep the
+    # original rows and let the caller see the raw data rather than nothing.
+    return kept if kept else rows
+
+
+def _fetch_company_facts(cik: str) -> Optional[dict]:
+    """Full companyfacts payload for *cik* -- every XBRL concept the filer
+    has ever reported, across all taxonomies, in ONE request.
+
+    Exists because SEC's per-concept companyconcept endpoint is not reliable:
+    verified live 2026-08-01 that for a large set of real filers (KO, WFC,
+    ABT, AMT, CB, ... 27 of the 44 previously-unresolvable S&P 500
+    candidates) it returns HTTP 200 with an EMPTY `units.shares` array for a
+    tag that companyfacts, for the identical CIK and identical tag, returns
+    full history for (KO: dei:EntityCommonStockSharesOutstanding, 71 rows).
+    Reproduced in a clean, unloaded environment, so this is a genuine
+    endpoint inconsistency on SEC's side, not rate-limiting or a transient.
+    """
+    sec_cik = cik[3:] if cik.upper().startswith("CIK") else cik
+    resp = requests.get(_FACTS_URL.format(cik=sec_cik), headers=_headers(), timeout=60)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json().get("facts", {})
+
+
+def _shares_from_facts(facts: dict, taxonomy: str, tag: str) -> list[dict]:
+    """Rows for one taxonomy:tag out of an already-fetched companyfacts
+    payload, in the same shape _fetch_concept() returns."""
+    return facts.get(taxonomy, {}).get(tag, {}).get("units", {}).get("shares", []) or []
+
+
 def fetch_shares_outstanding(cik: str) -> tuple[list[dict], Optional[str]]:
     """Try each tag in SHARES_TAGS in order against *cik*; return
     (rows, tag_used) for the first tag that returns any data.
 
-    rows is deduped to one row per `end` (period_end) date, keeping the
-    EARLIEST-FILED value for that date -- see this module's own docstring
-    for why (a later filing can restate an earlier period's share count,
-    most visibly across a stock split; the earliest-filed value is what
-    was genuinely true, and knowable, as of that period_end date).
+    Resolution order -- a strict fallback chain, each step tried only when
+    every earlier step yielded nothing:
+      1. companyconcept, each tag in SHARES_TAGS order (the original path).
+      2. companyfacts, re-checking the SAME tags in the SAME order. The tag
+         set is unchanged -- this step exists because the ENDPOINT, not the
+         tag list, was the gap: companyconcept returns 200-with-empty for
+         many real filers whose data companyfacts serves in full (see
+         _fetch_company_facts()'s own docstring for the live evidence).
+         tag_used is suffixed " (companyfacts)" so the provenance of every
+         stored row is visible in market_cap_history.source.
+      3. If *cik* is a known post-reorganisation successor entity
+         (PREDECESSOR_CIKS), retry the whole chain against the predecessor
+         CIK, which is where the historical filings actually live.
 
-    Returns ([], None) if no tag in SHARES_TAGS returns any data for this
-    CIK -- callers treat this as "no XBRL shares-outstanding history
-    available for this company," not an error.
+    rows is deduped to one row per `end` (period_end) date, keeping the
+    EARLIEST-FILED value for that date -- see _dedupe_earliest_filed().
+
+    Returns ([], None) if nothing resolves -- callers treat this as "no XBRL
+    shares-outstanding history available for this company," not an error.
     """
     for taxonomy, tag in SHARES_TAGS:
         try:
@@ -200,24 +462,43 @@ def fetch_shares_outstanding(cik: str) -> tuple[list[dict], Optional[str]]:
             raw = None
         if not raw:
             continue
-
-        best_by_end: dict[str, dict] = {}
-        for row in raw:
-            end = row.get("end")
-            val = row.get("val")
-            filed = row.get("filed") or "9999-99-99"  # missing filed date sorts last, never wins a tie
-            if not end or val is None:
-                continue
-            cur = best_by_end.get(end)
-            if cur is None or filed < cur["filed"]:
-                best_by_end[end] = {"end": end, "val": val, "filed": filed}
-
-        if best_by_end:
-            rows = sorted(best_by_end.values(), key=lambda r: r["end"])
+        rows = _drop_magnitude_outliers(_dedupe_earliest_filed(raw), cik)
+        if rows:
             return rows, f"{taxonomy}:{tag}"
 
-    return [], None
+    # 2. companyfacts fallback -- same tags, more reliable endpoint.
+    try:
+        facts = _fetch_company_facts(cik)
+    except Exception as exc:
+        logger.warning("market_cap: companyfacts fetch failed for CIK %s -- %s", cik, exc)
+        facts = None
+    if facts:
+        for taxonomy, tag in SHARES_TAGS:
+            raw = _shares_from_facts(facts, taxonomy, tag)
+            if not raw:
+                continue
+            rows = _drop_magnitude_outliers(_dedupe_earliest_filed(raw), cik)
+            if rows:
+                logger.info(
+                    "market_cap: CIK %s resolved via companyfacts (%s:%s, %d rows) after "
+                    "companyconcept returned nothing for every tag.",
+                    cik, taxonomy, tag, len(rows),
+                )
+                return rows, f"{taxonomy}:{tag} (companyfacts)"
 
+    # 3. Known post-reorganisation successor -- retry against the predecessor.
+    bare = cik[3:] if cik.upper().startswith("CIK") else cik
+    predecessor = PREDECESSOR_CIKS.get(bare)
+    if predecessor:
+        logger.info(
+            "market_cap: CIK %s has no XBRL shares history; retrying against known "
+            "predecessor CIK %s (holding-company reorganisation).", cik, predecessor,
+        )
+        rows, tag_used = fetch_shares_outstanding(predecessor)
+        if rows:
+            return rows, f"{tag_used} (predecessor CIK {predecessor})"
+
+    return [], None
 
 def stored_cik(ticker: str) -> Optional[str]:
     """The CIK already stored against *ticker* in market_cap_history, if
