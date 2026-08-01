@@ -1123,6 +1123,29 @@ def test_mtm_depreciation_frees_capacity_versus_cost_basis(mocker):
     assert not any(t["ticker"] == "A_DECLINES" and t["exit_date"] == day20 for t in trades_mtm)
 
 
+def test_mtm_skips_a_degenerate_sub_minimum_position_after_cash_clamp(mocker):
+    """Found missing 2026-08-01 during the live/backtest consolidation
+    audit: the cash clamp (resolve_cash_constrained_position_gbp()) was
+    ported from live the same day as the mark-to-market fix, but live's
+    OWN corresponding is_position_size_viable() backstop was not --
+    meaning a thin-cash scenario could silently open a degenerate,
+    near-worthless position here that live would have correctly skipped
+    entirely. Forces resolve_cash_constrained_position_gbp() to return a
+    value below the viability floor for a specific ticker and confirms it
+    is never admitted -- deterministic and direct, rather than hunting
+    for emergent starting-capital/per_trade_pct values that happen to
+    produce a sub-£10 position naturally."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    mocker.patch("analysis.backtest.resolve_cash_constrained_position_gbp", return_value=5.0)
+    n = 40
+    cached = [{"ticker": "SOLO", "frame": _frame(n)}]
+    cfg = _compounding_config()
+
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    assert trades == [], "A position sized below the viability floor by the cash clamp must never be admitted"
+
+
 def test_mtm_still_open_position_never_realises_pnl_into_cash(mocker):
     """A's unrealized loss must reduce its own mark-to-market contribution
     to current_deployed/current_balance without ever touching cash or

@@ -59,6 +59,12 @@ DECISION_SIGNAL_KEYWORDS = (
     "sig_on", "is_member", "entry_blocked",
     "exit_reason", "holding_days", "max_holding", "max_hold",
     "stop_price", "crisis_now",
+    # Added 2026-08-01 during the full consolidation audit -- the original
+    # vocabulary above would not have caught _submit_pending_orders()'s
+    # hardcoded `if position_gbp < 10:` (a real, fixed divergence from the
+    # shared is_position_size_viable() -- see analysis/decision.py and
+    # CLAUDE.md's "Live and backtest consolidation audit" section).
+    "position_gbp",
 )
 
 # (file name, line number) pairs for comparisons already reviewed and
@@ -117,6 +123,19 @@ _WHITELISTED_SOURCE_SNIPPETS: tuple[tuple[str, str, str], ...] = (
         "different capacity-mutation bookkeeping), not because the "
         "comparison itself could diverge -- CLAUDE.md 'Live/backtest "
         "deployment-cap parity' section",
+    ),
+    (
+        "trading212.py",
+        "position_gbp > free_cash",
+        "live's submission-time free-cash affordability re-check inside "
+        "_submit_pending_orders() -- genuinely live-only: free cash can have "
+        "been consumed by other orders placed between decide-time and this "
+        "asset class's own submission window, a real-time state the backtest "
+        "has no equivalent for (no separate decide/submit phases, no "
+        "intervening orders from a different asset class). Structurally "
+        "different from resolve_cash_constrained_position_gbp()'s decide-time "
+        "25%-of-cash sizing clamp, which both sides do share -- CLAUDE.md "
+        "'Live and backtest consolidation audit' section",
     ),
 )
 

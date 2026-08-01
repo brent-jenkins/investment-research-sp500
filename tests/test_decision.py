@@ -8,6 +8,7 @@ themselves are correct in isolation.
 from analysis.decision import (
     evaluate_exit_reason,
     is_asset_class_enabled,
+    is_position_size_viable,
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
@@ -186,6 +187,13 @@ def test_resolve_cash_constrained_position_gbp_binds_when_position_exceeds_cash_
 
 def test_resolve_cash_constrained_position_gbp_no_effect_when_comfortably_under_cash_fraction():
     assert resolve_cash_constrained_position_gbp(500, 5_000, cash_fraction=0.25) == 500
+
+
+def test_is_position_size_viable_rejects_below_threshold_accepts_at_or_above():
+    assert is_position_size_viable(9.99) is False
+    assert is_position_size_viable(10.0) is True
+    assert is_position_size_viable(10.01) is True
+    assert is_position_size_viable(0.5) is False
 
 
 def test_resolve_cash_constrained_position_gbp_is_never_inflated_by_unrealized_gains():

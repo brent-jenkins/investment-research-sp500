@@ -77,6 +77,7 @@ from analysis import crisis, signals, universe
 from analysis.decision import (
     evaluate_exit_reason,
     is_asset_class_enabled,
+    is_position_size_viable,
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
@@ -1683,7 +1684,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             # calls, rather than staying an independent inline min().
             position_gbp = resolve_cash_constrained_position_gbp(position_gbp, free_cash)
 
-            if position_gbp < 10:
+            if not is_position_size_viable(position_gbp):
                 logger.debug("%s: sized position (£%.2f) below minimum viable order — skipping.",
                              ticker, position_gbp)
                 continue
@@ -1886,7 +1887,7 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
             # explicitly rejects -- see CLAUDE.md's "Trade prioritization
             # and capacity-allocation engine" section).
             position_gbp = row["position_gbp"] or 0.0
-            if position_gbp < 10:
+            if not is_position_size_viable(position_gbp):
                 logger.warning("%s (%s): degenerate position size (£%.2f) — leaving pending.",
                                 ticker, t212_ticker, position_gbp)
                 continue

@@ -196,6 +196,43 @@ def resolve_dynamic_max_position_gbp(
     return min(account_value_gbp * per_trade_pct, absolute_max_position_gbp)
 
 
+def is_position_size_viable(position_gbp: float, min_viable_order_gbp: float = 10.0) -> bool:
+    """True if position_gbp is large enough to be worth actually placing,
+    after every other sizing clamp (VaR's own min_position_gbp floor,
+    resolve_dynamic_max_position_gbp()'s ceiling,
+    resolve_cash_constrained_position_gbp()'s cash clamp) has already run.
+
+    A genuinely distinct concept from min_position_gbp (the VaR formula's
+    own internal floor, default £50, enforced BEFORE any cash clamp):
+    min_position_gbp guarantees the *risk-based* sizing never asks for
+    less than a sensible amount, but resolve_cash_constrained_position_gbp()
+    can still shrink that down further, AFTER the VaR floor already ran,
+    if the account's real available cash is thin — e.g. a £75 VaR-sized
+    entry against only £20 of free cash clamps to £5. This is the final
+    backstop that catches a resulting order too small to be worth
+    submitting at all.
+
+    Found missing from the mark-to-market backtest engine 2026-08-01,
+    during the live/backtest consolidation audit that followed the same
+    day's deployment-cap parity fix: live order placement
+    (brokers/trading212.py:maybe_place_orders()) already had this exact
+    check (a hardcoded `if position_gbp < 10: skip`, predating today), but
+    when the cash clamp was ported into
+    simulate_portfolio_compounding_mtm() as part of that fix, this
+    corresponding backstop was not — meaning the backtest engine could
+    silently open a degenerate, near-worthless position (e.g. a few
+    pence) in a thin-cash scenario that live would correctly skip
+    entirely. Exactly the class of divergence this project's structural
+    parity work exists to catch; found by manual audit rather than
+    Layer 1's mechanical scanner, since a MISSING check (nothing to flag
+    as duplicated) is a different failure shape than a duplicated one —
+    see CLAUDE.md's "Live and backtest consolidated into one decision
+    engine" section for the fuller discussion of what Layer 1 can and
+    cannot catch.
+    """
+    return position_gbp >= min_viable_order_gbp
+
+
 def resolve_cash_constrained_position_gbp(position_gbp: float, available_cash_gbp: float, cash_fraction: float = 0.25) -> float:
     """A second, independent bound on a single entry's size: never more
     than cash_fraction of REAL, currently available (uninvested) cash —

@@ -4798,11 +4798,233 @@ Full suite: 393 passing (5 new since the deployment-cap fix above: 3 in
 `test_decision_logic_placement.py`, 2 in
 `test_comprehensive_replay_parity.py`).
 
+### Live and backtest consolidation audit (2026-08-01)
+
+Direct follow-up, framed explicitly as the primary goal rather than one
+item among several: today found **five** separate instances of live and
+backtest diverging on decisions meant to be identical (exit priority,
+entry gate, `is_etf` dispatch, deployment-cap tracking, mark-to-market
+sizing) — not five unrelated bugs, one architectural problem showing up
+five times, because live and backtest have never actually been one
+system with two front doors. This section tracks the audit whose goal is
+ending that: consolidating entry, exit, sizing, capacity, and priority
+ranking into a single decision engine, with live and backtest reduced to
+thin adapters differing only in where they get data from and what they
+do with the result.
+
+**First finding, Part A (manual mapping, not caught by Layer 1's own
+mechanical scanner) — a genuinely missing check, not a duplicated one.**
+Layer 1 scans for decision-shaped logic living *outside*
+`analysis/decision.py` — it has no way to flag a decision that's
+*missing* from one side entirely, since there's nothing duplicated to
+detect. Manual line-by-line comparison of `maybe_place_orders()` against
+`simulate_portfolio_compounding_mtm()` found exactly this shape: live has
+always had `if position_gbp < 10: skip` immediately after its
+cash-availability clamp — a backstop against a degenerate, near-worthless
+order surviving every other sizing step. When
+`resolve_cash_constrained_position_gbp()` was ported into the
+mark-to-market backtest engine as part of the same day's earlier fix
+(see "Mark-to-market unbounded compounding defect" above), this
+corresponding floor was not — meaning a thin-cash scenario could have
+silently opened a degenerate position in the backtest that live would
+have correctly skipped. Fixed the same way as every other consolidation
+today: `analysis/decision.py:is_position_size_viable(position_gbp,
+min_viable_order_gbp=10.0)`, called identically by both
+`brokers/trading212.py` and `simulate_portfolio_compounding_mtm()` (the
+original cost-basis engine doesn't need it — its VaR floor,
+`min_position_gbp`, is never followed by anything that could shrink a
+position further, since it has no cash clamp). Verified with a
+deterministic test that forces the cash clamp to return a sub-floor value
+and confirms the candidate is never admitted (chasing an emergent
+scenario naturally producing a sub-£10 position via starting-capital/
+per_trade_pct tuning proved unreliable — the direct, mocked approach is
+the same lesson already learned earlier the same day building
+`test_comprehensive_replay_parity.py`'s injected-bug proof).
+
+**This finding is itself evidence for the audit's own thesis**: Layer 1
+and Layer 2, built the same day specifically to catch this class of
+divergence, together caught a *duplicated* decision (the earlier
+`_would_deploy_pct` computation) but neither is shaped to catch a
+*missing* one — this gap was found only by deliberately re-reading both
+functions side by side, the exact "someone happening to check that
+specific piece closely enough" failure mode the whole audit exists to
+stop relying on. Whether this points to a genuine Layer 1 extension (a
+checklist of decisions known to exist on one side, verified present on
+the other) is an open question for this audit's own conclusion, not
+resolved here.
+
+Full suite: 402 passing (2 new) at this checkpoint.
+
+**Part A/B completion — the rest of the decision inventory, mapped and
+verified.** Every remaining entry/exit/sizing/ceiling/clamp decision in
+`brokers/trading212.py` and every one of `analysis/backtest.py`'s four
+engines (`simulate_trades`, `simulate_portfolio`,
+`simulate_portfolio_compounding`, `simulate_portfolio_compounding_mtm`)
+was checked against `analysis/decision.py`'s six functions
+(`evaluate_exit_reason`, `passes_entry_gate`, `is_asset_class_enabled`,
+`resolve_dynamic_max_position_gbp`, `resolve_cash_constrained_position_gbp`,
+`is_position_size_viable`) — every live decision now routes through the
+shared module; every backtest engine either does too, or has a specific,
+individually-reviewed reason it can't (documented inline in Layer 1's
+whitelist, see below).
+
+**A second real, live divergence found — not caught by the Part A finding
+above, only by re-checking every call site of the fix that finding
+produced.** `_submit_pending_orders()` (the live submission phase) had its
+own hardcoded `if position_gbp < 10:` — the literal duplicate of the exact
+check `is_position_size_viable()` was built to unify, sitting one call
+site away from where the fix had already been applied
+(`maybe_place_orders()`'s decide phase). Not yet diverged in value, but
+exactly the "two hand-written copies merely supposed to agree" shape this
+whole audit exists to close — a future change to the £10 floor would have
+silently not applied at submission time. **Fixed**: now calls
+`is_position_size_viable(position_gbp)` directly, matching the decide
+phase exactly.
+
+**Layer 1's scanner extended, and immediately proved itself on real code.**
+`DECISION_SIGNAL_KEYWORDS` (`tests/test_decision_logic_placement.py`)
+gained `"position_gbp"` — absent from the original vocabulary, which is
+why the divergence above wasn't caught mechanically. Running the extended
+scanner immediately surfaced a second hit, `_submit_pending_orders()`'s
+`position_gbp > free_cash` — investigated and confirmed as a genuine,
+reviewable exception (see the new `_WHITELISTED_SOURCE_SNIPPETS` entry):
+a live-only, submission-time affordability re-check against free cash that
+may have been consumed by other orders between decide-time and this asset
+class's own submission window — a real-time state the backtest has no
+equivalent for, structurally different from
+`resolve_cash_constrained_position_gbp()`'s decide-time 25%-of-cash sizing
+clamp (which both sides genuinely do share). One extension, one real bug
+caught, one legitimate exception documented — confirming the "extend
+Layer 1 when a new decision class is found missing, not just when one is
+found duplicated" approach the earlier finding's own open question raised.
+
+**Part B re-confirmed**: Layer 2 (`tests/test_comprehensive_replay_parity.py`)
+re-run after both fixes above — both tests, including the
+deliberately-injected-bug proof, still pass. No new replay scenario was
+needed — the existing multi-ticker walk already exercises the sizing/
+capacity path where both changes sit.
+
+**Parts C–H — one finding per issue, evidence-based:**
+
+- **C (test quality)**: `analysis/volatility.py:_var_position_size_core()`
+  — the one function every sizing decision on both live and backtest
+  ultimately funnels through — has **zero direct unit tests** anywhere
+  (confirmed via `grep` across `tests/*.py`: no matches outside its own
+  definition; only exercised indirectly through integration tests). This
+  is the most foundational test-coverage gap found in the audit and is
+  the likely reason the Part E clamp-ordering finding below went
+  uncaught. Checked specifically for siblings of the membership-window
+  bug (a test asserting behaviour that contradicts documented intent) and
+  the 44-companies bug (a test mocking a real dependency wholesale in a
+  way that never exercises real behaviour) — none found; the closest
+  candidate, `test_full_position_size_never_shrunk_to_fit_free_cash`, was
+  checked directly and confirmed to assert on real call arguments, not a
+  coincidental pass. **Flagged, not fixed** — adding proper coverage to
+  shared sizing math this late in a long day's changes carries real risk
+  without dedicated review.
+- **D (documentation accuracy)**: CLAUDE.md's own "Broker integration"
+  summary called `get_instruments()`'s cache "24-hour" — stale; the
+  actual code (`_INSTRUMENTS_TTL`) and this file's own later "Quantity
+  sizing note" section both correctly say 1 hour (reduced once this cache
+  became the source of live sizing prices, not just static metadata). The
+  summary sentence was never updated when that fix shipped. **Fixed**
+  (see the corrected sentence a few paragraphs above this section).
+- **E (silent vs. loud failure)**: `_var_position_size_core()`'s clamp
+  order is `max(min_position_gbp, min(position_gbp, max_position_gbp))`
+  — the £50 floor applies **after** the ceiling, so if a dynamic ceiling
+  (`resolve_dynamic_max_position_gbp()`'s output) ever drops below £50 (a
+  severely depleted account, ~98%+ drawdown), the floor silently
+  overrides the ceiling — contradicting the function's own docstring
+  ("max_position_gbp remains a hard ceiling regardless of how low
+  volatility gets"). Live and the MTM backtest engine both have a
+  secondary defence (the cash clamp) that would likely catch this in
+  practice before it matters; `simulate_portfolio_compounding()`
+  (the current default engine, no cash clamp) does not. **Flagged, not
+  fixed** — narrow trigger condition, and the same "don't touch shared
+  sizing math without dedicated tests" caution as the Part C finding
+  applies; the real fix is closing the Part C gap first, then revisiting
+  the clamp order with a test in hand.
+- **E (second instance)**: the unguarded-`.json()` pattern already known
+  at `cancel_order()` (documented elsewhere in this file as a known, open
+  issue) is **systemic across `Trading212Client`**, not unique to that one
+  method — `get_order()`, `get_account_summary()`, `get_positions()`,
+  `get_instruments()`, and `place_market_order()` all call `r.json()`
+  directly with no local guard. Currently contained (every real caller
+  wraps its own call in try/except, so nothing crashes a whole run), but
+  none of these calls can distinguish "malformed/empty response body"
+  from "genuine business failure" — a successful `place_market_order()`
+  returning an unparseable body would be logged and recorded as a
+  **FAILED** order even if T212 actually filled it. **Flagged, not
+  fixed** — touching the shared HTTP client layer without dedicated new
+  tests this late in the day carries real risk.
+- **F (data-integrity fix consistency)**: the magnitude-outlier guard,
+  amendment-conflict preference, and zero-guard (`analysis/market_cap.py`)
+  are confirmed applied consistently at both real SEC-fetch call sites
+  (`companyconcept` primary path and `companyfacts` fallback), not just
+  the path originally tested — checked by reading both call sites
+  directly. Separately: `is_price_data_stale()` (same module) is fully
+  implemented with 6 passing unit tests and a clearly documented purpose,
+  but has **zero call sites anywhere in production code** — not consulted
+  by `analysis/universe.py`'s ranking/eligibility logic or anywhere else.
+  Real infrastructure, currently inert. **Flagged** (also counted under
+  Part H's dead-code finding below — same item, not double work).
+- **G (flag-don't-delete consistency)**: no new violations found. The
+  three existing `DELETE FROM` sites (`universe_membership` full
+  reconciliation-refresh, `system_metadata`, the `price_data` bad-row
+  cleanup) are each either an already-reviewed, documented exception or a
+  legitimate derived-data refresh cycle (delete-then-reinsert on a fresh
+  source pull), not a discarded decision or event.
+  `_drop_magnitude_outliers()` dropping genuinely-wrong SEC rows with no
+  authoritative correction available is a reasoned exception mirroring the
+  pre-existing `price_data` NULL-row precedent, not a violation of this
+  philosophy — the philosophy is about decisions/events, not garbage
+  data. **Checked, nothing to fix.**
+- **H (general quality)**: `is_price_data_stale()` (same finding as Part F
+  above) is confirmed genuinely dead via full-repo grep — no caller
+  anywhere. **Flagged.** The systemic unguarded-`.json()` pattern (Part E,
+  second instance) is also a Part H finding under the same evidence.
+
+**Summary table:**
+
+| Area | Found | Fixed | Flagged only |
+|---|---|---|---|
+| Live/backtest decision divergence | 2 (the original `is_position_size_viable` gap in the backtest engine, plus `_submit_pending_orders()`'s own hardcoded duplicate) | 2 | 0 |
+| Layer 1 scanner coverage | 1 keyword extended, 1 real hit caught, 1 legitimate exception documented | 1 | 0 |
+| Test coverage gap | 1 (`_var_position_size_core()` untested) | 0 | 1 |
+| Documentation accuracy | 1 (stale cache-TTL claim) | 1 | 0 |
+| Silent/loud failure modes | 2 (floor-over-ceiling clamp order; systemic unguarded `.json()`) | 0 | 2 |
+| Data-integrity fix consistency | confirmed consistent, 0 new gaps | — | — |
+| Flag-don't-delete | confirmed consistent, 0 new violations | — | — |
+| Dead code | 1 (`is_price_data_stale()`, overlaps the Part F finding) | 0 | 1 |
+
+**Closing assessment.** Live and backtest genuinely share one decision
+engine now, provably — every entry, exit, sizing-ceiling, cash-clamp, and
+viability-floor decision routes through `analysis/decision.py`; Layer 1's
+extended mechanical scan and Layer 2's full-replay test both pass clean,
+and the mapping was independently re-derived by hand (not just read from
+a prior claim) as part of this audit. Every decision still expressed as
+two separate pieces of code is individually reviewed and recorded with a
+specific, non-generic reason — `simulate_portfolio()`'s frozen
+fixed-notional formula, live's real-API-sourced deployment check, the
+SQL-vs-Python priority ranking, and (newly documented this session)
+live's submission-time free-cash re-check — none of it is "nobody got
+around to it." What remains open is narrower and honestly stated: the
+`_var_position_size_core()` test-coverage gap (Part C) is the most
+foundational finding of the whole audit, since it's the one function
+every sizing path ultimately depends on and currently has no test of its
+own contract at all; the clamp-ordering and unguarded-`.json()` findings
+(Part E) are real, evidenced, and neither crashes anything today, but
+neither is provably safe either.
+
+Full suite: 402 passing, confirmed again after every fix in this
+completed pass. Nothing pushed; committed locally only, per this
+session's standing practice.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
 
-**`Trading212Client`** — thin HTTP wrapper around the T212 Invest REST API (base URL switches between `demo.trading212.com` and `live.trading212.com` based on `live` flag). Authentication is HTTP Basic Auth over `T212_API_KEY:T212_API_SECRET`. All requests use `_request()` which retries up to 3 times with exponential back-off; HTTP 429 (rate-limited) gets a longer wait. On 4xx errors `_request()` reads the response body and includes it in the raised `HTTPError` message, so the T212 rejection reason is visible in error emails and the `error_message` column of `t212_invest_orders`. Methods: `get_account_summary()`, `get_positions()`, `get_instruments()` (24-hour module-level cache), `place_market_order(ticker, quantity)` (raises `RuntimeError` if `live=True` — live trading is hard-blocked), `cancel_order(order_id)`.
+**`Trading212Client`** — thin HTTP wrapper around the T212 Invest REST API (base URL switches between `demo.trading212.com` and `live.trading212.com` based on `live` flag). Authentication is HTTP Basic Auth over `T212_API_KEY:T212_API_SECRET`. All requests use `_request()` which retries up to 3 times with exponential back-off; HTTP 429 (rate-limited) gets a longer wait. On 4xx errors `_request()` reads the response body and includes it in the raised `HTTPError` message, so the T212 rejection reason is visible in error emails and the `error_message` column of `t212_invest_orders`. Methods: `get_account_summary()`, `get_positions()`, `get_instruments()` (module-level cache, `_INSTRUMENTS_TTL` — reduced from 24 hours to 1 hour once this cache also became the source of live sizing prices, not just static metadata; see "Quantity sizing note" below), `place_market_order(ticker, quantity)` (raises `RuntimeError` if `live=True` — live trading is hard-blocked), `cancel_order(order_id)`.
 
 **Exit timing — `maybe_exit_t212_positions(config)` / `maybe_exit_stock_positions(config)`.** Exits are no longer tied to the EOD run. Each function closes any open position (ETF / stock respectively) whose signal or holding period calls for exit — trigger priority: immediate SELL/STRONG_SELL signal → confirmed NEUTRAL (after `signals.reversal_confirmation_runs` × 3h) → backstop time limit (`max_holding_days`, when `time_limit_as_backstop: true`) — and is called from two places:
 

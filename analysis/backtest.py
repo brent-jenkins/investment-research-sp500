@@ -22,6 +22,7 @@ from analysis import crisis, signals
 from analysis import universe
 from analysis.decision import (
     evaluate_exit_reason,
+    is_position_size_viable,
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
@@ -1274,6 +1275,21 @@ def simulate_portfolio_compounding_mtm(
             # before this fix -- see CLAUDE.md's "Mark-to-market unbounded
             # compounding defect" section.
             position_gbp = resolve_cash_constrained_position_gbp(position_gbp, cash)
+
+            # Minimum-viable-order backstop -- matches live's identical
+            # check in maybe_place_orders(), added here 2026-08-01 (found
+            # missing during the live/backtest consolidation audit that
+            # followed the same day's mark-to-market fix: the cash clamp
+            # immediately above was ported from live that same day, but
+            # this corresponding floor was not, meaning a thin-cash
+            # scenario could previously have opened a degenerate,
+            # near-worthless position here that live would have correctly
+            # skipped). A non-viable candidate is simply passed over, same
+            # skip-and-continue treatment as a capacity miss below -- not
+            # recorded as a rejection, mirroring live's plain `continue`
+            # (no pending_orders row is ever written for it there either).
+            if not is_position_size_viable(position_gbp):
+                continue
 
             would_deploy_pct = _would_deploy_pct(current_deployed, position_gbp, current_balance)
             if would_deploy_pct > max_deployed_pct:
