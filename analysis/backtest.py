@@ -338,6 +338,299 @@ def run_candidate(tickers_cache: list, config: dict, gspc_close: pd.Series) -> l
     return all_trades
 
 
+# ---------------------------------------------------------------------------
+# Portfolio-capped simulation (added 2026-08-01) — a shared-account mode
+# selectable alongside run_candidate()/simulate_trades() above, which are
+# left completely unchanged. See CLAUDE.md's "Portfolio-capped backtest
+# engine" section for the full design writeup and the live-code priority
+# rule this was derived from (brokers/trading212.py's decide-then-submit
+# pipeline: maybe_place_orders() / _submit_pending_orders() /
+# _load_pending_orders()).
+# ---------------------------------------------------------------------------
+
+def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series) -> list[dict]:
+    """Walk every ticker together in one shared chronological pass, enforcing
+    trading212_invest.max_open_positions / max_total_deployed as a single
+    cap shared across the whole universe — the cross-ticker portfolio
+    constraint run_candidate()/simulate_trades() do not model at all (every
+    ticker there is simulated fully independently against the same notional
+    starting_capital_gbp baseline).
+
+    Per-ticker signal/exit/stop/VaR-sizing math is byte-identical to
+    simulate_trades() — only entries are additionally gated by shared
+    portfolio state. Priority rule, derived from brokers/trading212.py's
+    live decide-then-submit pipeline (see that module's maybe_place_orders()
+    / _submit_pending_orders() / _load_pending_orders()): on any given day,
+    (1) ETFs are prioritised before stocks (mirroring the live 07:00-UTC
+    ETF-submission-before-13:30-UTC-stock-submission ordering), then (2)
+    within each group, tickers are prioritised in the order they appear in
+    *tickers_cache* (mirroring config.yaml's `instruments:` dict insertion
+    order, which the live decide phase iterates and the live submit phase's
+    `ORDER BY decided_at ASC` ties break by — both alphabetical in the
+    current config.yaml, which is also the order analysis.universe.ALL_TICKERS
+    already produces). A cap binding stops admitting further candidates for
+    THE REST OF THAT DAY entirely (mirrors _submit_pending_orders()'s
+    `break`, not a per-candidate `continue`) — both max_open_positions and
+    max_total_deployed only ever get more binding as more orders are
+    admitted within a single day's pass, so break/continue are equivalent
+    for max_open_positions, but matter for max_total_deployed's "already at
+    / over cap BEFORE this candidate" check (see below).
+
+    Deliberate simplifications (stated explicitly, not silently):
+
+    1. `account_value_gbp` for VaR sizing stays the fixed notional
+       `backtest.starting_capital_gbp` — never compounding, identical to
+       run_candidate()/simulate_trades(). This isolates the comparison to
+       *only* the cap-enforcement difference; it deliberately does not also
+       make the account compound (a second, separate change).
+    2. `max_total_deployed` is checked as "is deployed capital already at or
+       over the cap BEFORE this candidate's own size is added" — not "would
+       admitting this candidate push deployed capital over the cap" — this
+       exactly mirrors _submit_pending_orders()'s own check order (cap
+       checked at the top of the loop using the running total from
+       *previously admitted* orders only, before this iteration's order is
+       priced in), including that a single admitted order CAN push the
+       running total past the cap; the next candidate is what actually gets
+       blocked. See CLAUDE.md's "V2 first-cycle deployment cap overshoot"
+       section for the live incident this check shape was built to prevent.
+    3. Deployed capital is tracked as the sum of admitted trades' own
+       committed `position_gbp` (cost basis at entry, incremented on entry
+       and decremented by the same amount on exit) — not a continuous
+       mark-to-market valuation the way T212's live `investments.currentValue`
+       is. The backtest has no per-day valuation of every open position
+       across tickers to mirror that field exactly; cost-basis bookkeeping
+       is the defensible approximation.
+    4. A candidate rejected by either cap on a given day is simply not
+       entered that day — it is NOT queued/deferred the way a live PENDING
+       row is retried at the next submission window. It becomes a fresh
+       candidate again on any later day its signal is still on and it still
+       has no open position — the closest daily-resolution analogue of the
+       live retry behaviour, since this engine has no sub-daily submission
+       windows to defer within.
+    5. Exits for every ticker are processed before any entries are
+       considered, for every day in the walk, so a position closing today
+       can free capacity for a DIFFERENT ticker's entry the same day.
+       However — mirroring simulate_trades()'s own per-ticker control flow
+       exactly, where the `open_trade is None` entry check is evaluated
+       once per row, using the state as of before that row is processed —
+       a ticker can never exit and re-enter on the same day itself: entry
+       candidacy each day is restricted to tickers already flat BEFORE
+       today's exits are processed, not tickers a same-day exit just
+       freed up. A position that closes today becomes entry-eligible again
+       starting its own next trading day at the earliest.
+
+    `max_position_gbp` is enforced exactly as before, inside
+    _var_position_size_core() itself — unaffected by any of the above.
+    """
+    bt_cfg = config.get("backtest", {})
+    var_cfg = config.get("trading212_invest", {})
+    starting_capital = float(bt_cfg.get("starting_capital_gbp", 10000))
+    var_confidence = float(var_cfg.get("var_confidence", 0.95))
+    var_lookback = int(var_cfg.get("var_lookback_days", 252))
+    max_risk_pct = float(var_cfg.get("max_risk_pct", 0.01))
+    min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
+    max_position_gbp = float(var_cfg.get("max_position_gbp", 500))
+    max_open_positions = int(var_cfg.get("max_open_positions", 999))
+    max_total_deployed = float(var_cfg.get("max_total_deployed", 999.0))
+
+    # Per-ticker precomputation — identical inputs/derivations to
+    # simulate_trades()'s own per-ticker setup, just stored so the merged
+    # day-by-day walk below can address any ticker's row for any of its own
+    # trading days in O(1).
+    per_ticker: dict[str, dict] = {}
+    events: list[tuple] = []  # (date, priority_rank, ticker)
+
+    for idx, cached in enumerate(tickers_cache):
+        if cached is None:
+            continue
+        ticker = cached["ticker"]
+        frame = cached["frame"]
+        if frame is None or frame.empty:
+            continue
+        is_etf = ticker in universe.ETF_TICKERS
+        close_series = frame["close"].astype(float)
+
+        raw_crisis = crisis.compute_raw_trigger(gspc_close).reindex(frame.index).ffill().fillna(False)
+        entry_blocked = crisis.extend_trigger(raw_crisis).reindex(frame.index).ffill().fillna(False)
+
+        priority_rank = (0 if is_etf else 1, idx)  # ETFs first, then input order within group
+        per_ticker[ticker] = {
+            "frame": frame,
+            "rows": frame.to_dict("index"),
+            "is_etf": is_etf,
+            "close_series": close_series,
+            "raw_crisis": raw_crisis,
+            "entry_blocked": entry_blocked,
+            "max_hold": get_max_holding_days(ticker, config),
+            "priority_rank": priority_rank,
+            "open_trade": None,
+        }
+        for dt in frame.index:
+            events.append((dt, priority_rank, ticker))
+
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    trades: list[dict] = []
+    current_open = 0
+    current_deployed = 0.0
+
+    i = 0
+    n_events = len(events)
+    while i < n_events:
+        dt = events[i][0]
+        j = i
+        day_tickers: list[str] = []
+        while j < n_events and events[j][0] == dt:
+            day_tickers.append(events[j][2])
+            j += 1
+
+        # Snapshot which tickers were flat BEFORE today's exits are
+        # processed — only these are entry-eligible today. This mirrors
+        # simulate_trades()'s own per-ticker control flow exactly: its
+        # `if open_trade is None:` entry check is evaluated once, at the
+        # top of a row's processing, using the state as of before that row
+        # — a position that exits ON this row falls through to `continue`
+        # to the NEXT row without ever re-checking entry on the same row.
+        # A ticker can therefore never exit and re-enter on the same day;
+        # without this snapshot, Phase B below would (incorrectly) treat a
+        # position Phase A just closed today as an entry candidate today,
+        # which simulate_trades() never allows and would break exact
+        # equivalence with run_candidate() whenever caps don't bind.
+        flat_before_today = {t for t in day_tickers if per_ticker[t]["open_trade"] is None}
+
+        # Phase A — exits, every ticker with an open trade whose today's row
+        # exists. Frees current_open/current_deployed for Phase B below.
+        for ticker in day_tickers:
+            st = per_ticker[ticker]
+            ot = st["open_trade"]
+            if ot is None:
+                continue
+            row = st["rows"][dt]
+            price = float(row["close"])
+            sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
+            is_member = st["is_etf"] or universe.is_member(
+                ticker, dt.date() if hasattr(dt, "date") else dt
+            )
+            crisis_now = bool(st["raw_crisis"].loc[dt])
+
+            entry_price = ot["entry_price"]
+            stop_price = ot["stop_price"]
+            holding_days = (dt - ot["entry_date"]).days
+
+            exit_reason = None
+            exit_price = price
+            if crisis_now:
+                exit_reason = "CRISIS_EXIT"
+            elif not is_member:
+                exit_reason = "INDEX_REMOVAL"
+            elif price <= stop_price:
+                exit_reason = "STOP_LOSS"
+                exit_price = stop_price
+            elif not sig_on:
+                exit_reason = "SIGNAL_OFF"
+            elif holding_days >= st["max_hold"]:
+                exit_reason = "MAX_HOLDING"
+
+            if exit_reason:
+                pnl_pct = (exit_price - entry_price) / entry_price
+                trades.append({
+                    "ticker": ticker, "direction": "LONG",
+                    "entry_date": ot["entry_date"].date() if hasattr(ot["entry_date"], "date") else ot["entry_date"],
+                    "exit_date": dt.date() if hasattr(dt, "date") else dt,
+                    "entry_price": entry_price, "exit_price": float(exit_price),
+                    "exit_reason": exit_reason, "pnl_pct": float(pnl_pct),
+                    "position_gbp": ot["position_gbp"], "pnl_gbp": ot["position_gbp"] * float(pnl_pct),
+                    "stop_distance_pct": ot["stop_distance_pct"],
+                    "holding_days": holding_days, "is_win": pnl_pct > 0,
+                })
+                current_open -= 1
+                current_deployed -= ot["position_gbp"]
+                st["open_trade"] = None
+
+        # Phase B — entries. Gather today's eligible candidates (flat BEFORE
+        # today — see flat_before_today above; signal on, member, not
+        # crisis-blocked), sort by priority, admit while the shared caps
+        # allow.
+        candidates: list[str] = []
+        for ticker in flat_before_today:
+            st = per_ticker[ticker]
+            row = st["rows"][dt]
+            sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
+            if not sig_on:
+                continue
+            is_member = st["is_etf"] or universe.is_member(
+                ticker, dt.date() if hasattr(dt, "date") else dt
+            )
+            if not is_member:
+                continue
+            blocked_now = bool(st["entry_blocked"].loc[dt])
+            if blocked_now:
+                continue
+            candidates.append(ticker)
+
+        candidates.sort(key=lambda t: per_ticker[t]["priority_rank"])
+
+        for ticker in candidates:
+            # Cap check FIRST, using state as of before this candidate — see
+            # simplification (2) above. Binding either cap stops the rest of
+            # today's candidates entirely (mirrors _submit_pending_orders()'s
+            # `break`).
+            if current_open >= max_open_positions:
+                break
+            if starting_capital > 0 and (current_deployed / starting_capital) >= max_total_deployed:
+                break
+
+            st = per_ticker[ticker]
+            row = st["rows"][dt]
+            price = float(row["close"])
+            atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
+            stop, stop_distance_pct = _resolve_entry_stop("LONG", price, atr, config)
+
+            close_series = st["close_series"]
+            prior_closes = close_series.loc[close_series.index < dt].tail(var_lookback + 1)
+            log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
+            if len(log_returns) >= _MIN_VAR_RETURNS:
+                position_gbp, _dv, _hv = _var_position_size_core(
+                    log_returns, starting_capital, max_position_gbp, st["max_hold"],
+                    var_confidence, max_risk_pct, min_position_gbp,
+                )
+            else:
+                position_gbp = round(max_position_gbp * 0.5, 2)
+
+            st["open_trade"] = {
+                "ticker": ticker, "direction": "LONG", "entry_date": dt, "entry_price": price,
+                "stop_price": stop, "stop_distance_pct": stop_distance_pct, "position_gbp": position_gbp,
+            }
+            current_open += 1
+            current_deployed += position_gbp
+
+        i = j
+
+    # End of data — close every still-open position at its own ticker's
+    # last available row, mirroring simulate_trades()'s own END_OF_DATA exit.
+    for ticker, st in per_ticker.items():
+        ot = st["open_trade"]
+        if ot is None:
+            continue
+        frame = st["frame"]
+        last = frame.iloc[-1]
+        exit_p = float(last["close"])
+        pnl_pct = (exit_p - ot["entry_price"]) / ot["entry_price"]
+        hd = (frame.index[-1] - ot["entry_date"]).days
+        trades.append({
+            "ticker": ticker, "direction": "LONG",
+            "entry_date": ot["entry_date"].date() if hasattr(ot["entry_date"], "date") else ot["entry_date"],
+            "exit_date": frame.index[-1].date(),
+            "entry_price": ot["entry_price"], "exit_price": exit_p,
+            "exit_reason": "END_OF_DATA", "pnl_pct": float(pnl_pct),
+            "position_gbp": ot["position_gbp"], "pnl_gbp": ot["position_gbp"] * float(pnl_pct),
+            "stop_distance_pct": ot["stop_distance_pct"],
+            "holding_days": hd, "is_win": pnl_pct > 0,
+        })
+
+    return trades
+
+
 def ex_best_trades(trades: list[dict]) -> list[dict]:
     if not trades:
         return []

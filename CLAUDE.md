@@ -2902,6 +2902,608 @@ Left as-is since it's outside this fix's literal scope and materially
 lower urgency; worth revisiting alongside any future universe-tracking
 work.
 
+### V2 stock universe broadening — researched, not adopted (2026-08-01)
+
+Tested whether broadening `analysis/universe.py:STOCK_MEMBERSHIP` from the
+curated 40 to a mechanically-selected, much larger real S&P 500 candidate
+pool helps, hurts, or dilutes the validated result. Run in an isolated
+server-side clone with its own copied DB, per this project's standing
+research-clone discipline — deleted after this section was written, per
+that same standing practice (see the many "deleted after the finding
+below" precedents throughout this file). **This section exists specifically
+to satisfy the "Research reproducibility standard" at the top of this
+file** — the exact formula and numbers below are the permanent record now
+that the disposable implementation is gone.
+
+**Universe construction — exact, mechanical rule.** Source: the same
+`fja05680/sp500` CSV `analysis/universe.py` already uses. Candidate
+inclusion rule: `is_included(ticker) := ticker has ≥1 membership window
+overlapping [2007-01-01, 2026-06-30] AND ticker is a genuine S&P 500
+member in the source's own final row (dated 2026-06-30)` — i.e. restricted
+to real, *currently-active* constituents, not the full historical roster
+including long-delisted names. This is a mechanical, non-discretionary
+cutoff (no stock-picking), chosen because most of the excluded names are
+long-delisted/bankrupt/renamed-away and would either fail yfinance
+resolution or risk resolving to an unrelated company that later reused the
+same ticker symbol.
+
+| Step | Count |
+|---|---|
+| Unique raw symbols anywhere in the source CSV (1996-01-02→2026-06-30) | 1,206 |
+| Symbols with ≥1 window overlapping [2007-01-01, 2026-06-30] | 929 |
+| Of those, currently active as of the source's 2026-06-30 row (the cutoff) | 503 |
+| Overlap with the existing curated-40 `STOCK_MEMBERSHIP` | 39 of 40 (`GOLD` excluded — correctly, never a real member) |
+| New candidates needing a fresh price fetch | 464 |
+| Fetch outcome (`backfill_price_history`, 2007-01-01→present) | 464/464 wrote ≥1 row, 0 fetch failures |
+| Excluded for insufficient history (`precompute_ticker()`'s own <300-row gate) | 3 (`FDXF`, `HONA`, `Q`) |
+| **Final broadened universe** | **500 stocks + 33 unchanged ETFs = 533 tickers** |
+
+Dot-tickers converted for yfinance (`BRK.B`→`BRK-B`, `BF.B`→`BF-B`); no
+further rename-merging beyond the existing `_KNOWN_TICKER_RENAMES` (FB→META)
+was attempted for the 464 new candidates — a stated, not exhaustively
+verified, limitation. A company removed from the S&P 500 before
+2026-06-30 (business decline, acquisition) is excluded even if it would
+have contributed real in-window history — a direct consequence of the
+"currently active" cutoff, not an oversight.
+
+**Baseline reproduction, exact match (trusted before comparing further):**
+unmodified clone, `run_full_validation(config, start=2007-01-01,
+end=2026-07-30)` reproduced the already-documented figures exactly — 12,046
+trades, TRAIN CAGR 13.23%, TEST CAGR 22.39%, 14/16 blocks (fail: blocks 0
+& 1), walk-forward 82.1% (183/223), concentration 11.31%/11.28%, £ growth
+train £227,036/£114,033 (strategy/S&P), test £188,662/£114,149.
+
+**Full comparison — curated-40 (73 tickers total) vs. broadened (533),
+same pinned `end=2026-07-30`, identical config/signal/crisis-override:**
+
+| Metric | Curated-40 | Broadened | Direction |
+|---|---|---|---|
+| Total trades | 12,046 | 79,731 | 6.6× |
+| TRAIN CAGR | 13.23% | 28.07% | higher (see caveat below) |
+| TEST CAGR | 22.39% | 52.76% | higher (see caveat below) |
+| TRAIN profit factor | 1.68 | 1.57 | **lower** |
+| TEST profit factor | 1.74 | 1.51 | **lower** |
+| TEST Sharpe | 0.576 | 0.507 | **lower** |
+| Full-history PF (raw) | 1.71 | 1.54 | **lower** |
+| Cost-sensitivity PF at 0/10/25bps | 1.71/1.55/1.34 | 1.54/1.40/1.21 | lower at every level |
+| Per-block PF, worse in broadened vs. curated | — | **13 of 16 blocks** | see per-block table below |
+| Concentration (full raw vs. ex-best CAGR) | 11.31% vs 11.28% | 21.20% vs 21.20% | negligible either way |
+| Walk-forward success rate | 82.1% (183/223) | 83.0% (185/223) | marginally higher |
+| Blocks passed / 16 (`_block_passes()`, unchanged formula) | 14/16 | **0/16** | **not a trading-quality signal — see caveat** |
+
+Per-block profit factor (0-indexed, matching `make_blocks()`'s own
+indexing): Block 0: 0.10→0.27, Block 1: 0.78→0.59, Block 2: 1.34→1.37,
+Block 3: 1.43→1.39, Block 4: 2.37→2.13, Block 5: 2.31→2.09, Block 6:
+1.92→1.75, Block 7: 1.48→1.31, Block 8: 2.93→2.32, Block 9: 1.37→1.22,
+Block 10: 1.55→1.37, Block 11: 2.71→2.24, Block 12: 1.05→1.11, Block 13:
+1.91→1.40, Block 14: 1.63→1.51, Block 15: 2.33→1.81 — only blocks 0, 2, and
+12 improve; the other 13 decline, confirming the full-history PF drop is
+broad-based, not one bad window.
+
+**Position-cap caveat — why "0/16 blocks pass" is not a real finding.**
+`analysis/backtest.py:run_candidate()`/`simulate_trades()` enforce **no**
+cross-ticker cap at all (`trading212_invest.max_open_positions`=20,
+`max_total_deployed`=0.5 exist only in live order placement, never in the
+backtest) — every ticker is simulated independently against the same
+shared *notional* `starting_capital_gbp` (£50,000) baseline. This was
+already a known limitation at 73 tickers; at 533 it becomes severe, since
+many more tickers can hold simultaneous positions with no aggregate
+ceiling, driving `max_drawdown_pct` (computed as £ drawdown ÷ the fixed
+£50,000 baseline) to implausible values (-154.78% to -325.22%) a real,
+capped account could never reach. `_block_passes()`'s `dd ≤ 1.5 × sp_dd`
+leg fails on every block purely because of this uncapped-exposure
+artifact — **not** because the underlying trades got worse. Read the
+profit-factor/Sharpe/walk-forward/cost-sensitivity figures above as the
+trustworthy basis for the verdict below; do not read the block-pass count
+as one.
+
+**Trade composition — does broadening trade the same names, or genuinely
+different ones?** Of 79,731 broadened-run trades: 3,962 in the unchanged
+ETF sleeve (£73,025.73 total pnl_gbp), 8,084 in the curated-40 stocks
+(£242,671.86 — byte-identical to the baseline run, since their data and
+membership windows are unchanged), 67,685 in the 459 newly-traded
+candidates (£1,412,167.20). Top-15-by-profit new names: MU, PWR, ORLY,
+STX, AZO, CTAS, LRCX, KLAC — large, liquid, well-known S&P constituents,
+not micro-caps or junk (the "currently active" cutoff mechanically
+excludes anything below full S&P 500 membership). Bottom-15-by-profit are
+also all new names (CSGP, MRVL, DOW, NCLH, LVS, PPL, ERIE, AMCR, MRNA,
+DXCM, WY, AES, APO, SMCI, CRL) — skewing toward more volatile/story-stock
+names the original curation implicitly avoided, though not by any rule
+stated at curation time.
+
+**Verdict: dilution, not amplification — and not a data-quality
+artifact.** Profit factor and Sharpe decline consistently (full-history PF
+1.71→1.54, TEST Sharpe 0.576→0.507, worse at every transaction-cost level,
+worse in 13/16 individual blocks) — these are per-trade win/loss
+statistics, not subject to the position-cap distortion above, so this is a
+real signal. The trade-composition data rules out "it's just noise from
+bad data": the new profitable names (MU, PWR, ORLY, STX, AZO, CTAS, LRCX,
+KLAC) are genuine, liquid large-caps, not junk — so this isn't survivorship
+or data-availability contamination. The mechanism is simply that the
+12-month-momentum signal, applied to ~7× more real S&P 500 names, produces
+a somewhat lower average edge per trade than the curated 40's specific
+selection, while also pulling in a long tail of lower-quality names (SMCI,
+MRNA, NCLH, LVS, DOW) that further drag on aggregate quality without
+erasing the gains from the strong new additions. The curated 40 was chosen
+for sector coverage/liquidity/risk-flag reasons, not backtested
+performance (see "Adding assets to the watchlist" below for its own
+selection rationale) — this study finds it happens to also land on
+modestly higher trade-quality names than the broader mechanical S&P 500
+roster does under this exact signal. **Not adopted**: broadening would
+need either a genuine portfolio-level cap inside the backtest engine (to
+make the drawdown/block-pass comparison trustworthy) and/or a quality
+filter beyond raw index membership (the role the original curation was
+implicitly already playing) before it would be worth revisiting.
+
+Not committed as a regression test or config change — a one-off research
+reproduction, matching this project's own established pattern for
+rejected-sleeve studies (see "Sector-rotation MIXED-regime sleeve" and
+"Mean-reversion MIXED-regime sleeve" above). Nothing in `analysis/`,
+`brokers/`, `data/scheduler.py`, or `config.yaml` changed as a result.
+
+### V2 moderate stock universe expansion (top-100/150 by market cap) — researched, not adopted (2026-08-01)
+
+Direct follow-up to the full 500-stock broadening study immediately
+above, testing whether a moderate expansion — top 100 by current market
+cap, and separately top 150 — captures the genuine upside that study
+found (Micron, O'Reilly, Lam Research, AutoZone, Cintas, Seagate, KLA,
+Quanta Services) without the dilution its long tail of weak constituents
+caused. Same isolated-clone discipline; this time the research clone was
+deliberately kept until the full report below was drafted, then deleted
+— satisfying this file's "Research reproducibility standard" without the
+after-the-fact remediation the prior study needed.
+
+**Universe construction.** Regenerated the prior study's exact 503-candidate
+pool (`is_included(ticker) := window overlaps [2007-01-01, 2026-06-30] AND
+active in the source's 2026-06-30 final row`, same `fja05680/sp500` CSV) —
+reproduced identically (1,206 raw symbols → 929 overlapping → 503
+currently-active). Ranked by current market cap (`yfinance
+Ticker.fast_info.market_cap`, fetched 2026-08-01, 503/503 succeeded).
+Top-100 floor: $121.1B (VRTX). Top-150 floor: $85.0B (CMCSA). Top-100 is a
+strict subset of top-150.
+
+**Curated-40 coverage — a genuine surprise, flagged as instructed:**
+**ADBE and NEM both fall outside the top-100** by current market cap
+(ranks 119/$99.5B and 120/$98.7B) despite being long-standing curated-40
+members — edged out by ~20 names in the $100-130B band. Both are inside
+top-150 (no curated-40 ticker falls outside top-150). So top-100's
+"curated-40 sleeve" is actually only 37 of 39 real members; top-150
+carries the full 39. New candidates needing a price backfill: 63 (top-100)
+/ 111 (top-150, superset); 111/111 fetched successfully, 0 failures, and
+unlike the full-500 study, 0 tickers were excluded for insufficient
+history in either run (133/133 and 183/183) — market-cap-ranked names are
+uniformly long-established. Ranking by *today's* market cap to pick a
+2007-2026 backtest universe uses present-day information for historical
+inclusion — the same hindsight-adjacent characteristic the prior study's
+"currently active" cutoff already carried, not a new flaw here.
+
+**Baseline reproduction, exact match:** unmodified clone reproduced
+12,046 trades / TRAIN CAGR 13.23% / TEST CAGR 22.39% / 14/16 blocks (fail
+0 & 1) / walk-forward 82.1% (183/223) — trusted before comparing further.
+
+**Full comparison, `end=2026-07-30` throughout, trustworthy per-trade
+metrics (not subject to the shared-notional-baseline distortion below):**
+
+| Metric | Curated-40 (73) | Top-100 (133) | Top-150 (183) |
+|---|---|---|---|
+| Total trades | 12,046 | 22,803 | 30,784 |
+| Train / Test win rate | 44.68% / 43.22% | 45.91% / 44.15% | 46.31% / 44.78% |
+| Train / Test PF | 1.68 / 1.74 | 1.62 / 1.74 | 1.61 / 1.73 |
+| Full-history PF | 1.71 | 1.67 | 1.66 |
+| Train / Test Sharpe | 0.568 / 0.576 | 0.570 / 0.609 | 0.581 / 0.622 |
+| Cost-sensitivity PF (0/10/25bps) | 1.71/1.55/1.34 | 1.67/1.52/1.32 | 1.66/1.51/1.31 |
+| Walk-forward success rate | 82.1% (183/223) | 82.5% (184/223) | 83.4% (186/223) |
+
+Sharpe, win rate, and walk-forward success rate all **modestly improve**
+as the universe widens 40→100→150; full-history PF drifts down only
+mildly (1.71→1.67→1.66) — a materially gentler pattern than the full
+500-stock study's PF collapse to 1.54 with a 13/16-block decline.
+
+**Distorted-by-the-same-known-artifact metrics, reported for completeness
+only — do not treat as trustworthy:** Train/Test CAGR 13.23%/22.39% →
+17.60%/33.10% (top-100) → 20.17%/38.73% (top-150); Full max DD -25.45% →
+-50.72% → -67.92%; blocks passed/16: 14 → 3 → 1. Cause confirmed
+identical to the full-500 study: `run_candidate()`/`simulate_trades()`
+still enforce no cross-ticker cap, so every added ticker's independent
+position sizes against the same shared £50,000 notional baseline. **New
+this round — the drawdown/PF legs of `_block_passes()` were decomposed
+separately**: profit factor alone clears >1.0 on the *identical* 14 of 16
+blocks in all three universes (only blocks 0 and 1 fail on PF, always);
+every block that flips pass→fail between curated-40 and top-100/150 does
+so purely on the drawdown leg (`dd_ok`), never on `pf_ok`. This directly
+confirms — not just asserts — that the block-pass-count collapse is an
+artifact of the missing portfolio cap, not a trading-quality signal, at
+any universe size tested so far.
+
+**Trade composition — the core question.** Of the prior study's 8 named
+winners (MU, LRCX, KLAC, STX, PWR, CTAS, ORLY, AZO): **4 captured in
+top-100** (MU rank 13, LRCX 32, KLAC 47, STX 58), **5 in top-150** (+PWR,
+rank 117) — CTAS/ORLY/AZO (ranks 156/175/242) remain excluded even at
+top-150, simply not large-cap enough by current market cap despite strong
+trading performance. Of the prior study's 15 named weak performers
+(SMCI, MRNA, NCLH, LVS, DOW, PPL, ERIE, AMCR, DXCM, WY, AES, APO, CRL,
+MRVL, CSGP): **14 of 15 excluded from top-150 entirely** (ranks
+177-498) — the sole exception, MRVL (rank 73, $168.3B), is inside
+top-100/150 and is indeed a small net loser there too (3 trades,
+-£658.02). Actual trade-level results: top-100's 63 new (non-curated-40)
+tickers traded 11,142 times for **+£283,219.04**, 61/63 net positive;
+top-150's 110 new tickers traded 18,738 times for **+£483,266.47**,
+106/110 net positive. Market-cap ranking is a real, if imperfect, quality
+proxy — it reliably excludes the identified weak tail but also excludes
+several genuine winners that simply aren't large-cap enough, and lets one
+genuine large-cap loser (MRVL) through anyway.
+
+**Verdict: a real but modest sweet spot — gentle dilution with a
+favourable risk-adjusted trade-off, not an outright improvement over the
+curated-40, and not an escape from the position-cap distortion.** Closer
+to "capture the winners" than to "closer to 40" on the composition
+evidence and on Sharpe/win-rate/walk-forward, but full-history PF does
+still drift down (1.71→1.66) — dilution begins well before 500 stocks,
+just far more gently than at full scale. **Not adopted**: the same
+missing prerequisite as the full-500 study — a genuine cross-ticker
+portfolio cap inside the backtest engine — would be needed before the
+drawdown/block-pass side of this comparison could be trusted at any
+universe size above the curated-40's own 73-ticker scope, and before
+either expansion would be worth adopting outright rather than treating as
+research.
+
+Not committed as a regression test or config change — nothing in
+`analysis/`, `brokers/`, `data/scheduler.py`, or `config.yaml` changed as
+a result. Clone (`/root/v2_universe100_study`) deleted only after this
+section's figures were fully drafted; production DB and both systemd
+services confirmed untouched throughout (spot-checked zero new-ticker
+rows in production, `git status` clean, service `ActiveEnterTimestamp`
+unchanged across the task).
+
+### Position-sizing caps (`max_position_gbp`/`max_open_positions`/`max_total_deployed`) — binding-frequency investigation (2026-08-01)
+
+Investigation only, no config or code change. Asks two separate
+questions about the three caps in the same VaR-sizing bundle inherited
+unmodified from V1 into V2's `trading212_invest` section: (1) was any of
+the three ever actually backtested/tuned, as distinct from
+`var_confidence`/`var_lookback_days`/`max_risk_pct`, the other part of
+the same sizing formula; (2) across the real validated backtest, how
+often does each one actually bind (turn away a candidate/reduce a
+position) versus sit unused as a rare backstop.
+
+**Step 1 — never tested, confirmed directly from the record, not
+inferred.** Every mention of `max_position_gbp`/`max_open_positions`/
+`max_total_deployed` anywhere in this file is either descriptive of the
+mechanism, or (see "V2 stock universe broadening" and "V2 moderate stock
+universe expansion" above) a note that the backtest engine doesn't
+enforce two of the three at all. `git log --all -p -- config.yaml`
+confirms the current V2 values were set by direct judgment at the V1→V2
+cutover, not a sweep — the commit's own inline comment states this
+plainly: `max_open_positions: 20  # broader universe than either V1 path
+(73 tickers vs 33/37) — a higher ceiling than V1's 10, still far below
+"unlimited"`. V1's own history shows the same pattern one level further
+back — `max_position_gbp` moved 500→200 (ETF→stock split) and
+`max_open_positions` 10→5→10 across V1's lifetime purely via inline
+reasoning comments, never a documented before/after backtest comparison
+of one value against another. **None of the three has ever been swept,
+compared, or backtested against an alternative, in either V1 or V2's
+history.**
+
+**Step 2 — methodology.** Single instrumented run against the current
+live 73-ticker universe (curated-40 + 33 ETFs), `start=2007-01-01,
+end=2026-07-30` (same window as every V2 validation to date), using
+production data already in the DB — no new price fetch needed. Isolated
+clone (`/root/cap-binding-study`, own copied DB, deleted immediately
+after these figures were captured), `simulate_trades()`'s exact entry/
+exit/sizing logic reproduced verbatim with three additions: (a) the raw,
+pre-cap VaR position size — `raw_position_gbp = (starting_capital ×
+max_risk_pct) / abs(holding_var)`, i.e. `_var_position_size_core()`'s own
+formula before its `max(min_position_gbp, min(x, max_position_gbp))`
+step — recorded alongside the actual (capped) `position_gbp` on every
+trade; (b) an event-sweep over every trade's `(entry_date, exit_date,
+position_gbp)` across all 73 tickers, incrementing/decrementing a running
+open-position count and running deployed-£ total at each entry/exit, to
+reconstruct concurrent exposure through time; (c) for every entry event
+specifically, the running count/total *immediately before* that entry is
+added, to measure how often the cap would already have been at or over
+its limit at the moment a new candidate wanted in. Sanity check: this run
+reproduced **exactly 12,046 trades**, matching the documented baseline —
+trusted before reporting further.
+
+Config values in effect: `starting_capital_gbp=£50,000`,
+`max_open_positions=20`, `max_total_deployed=0.5` (=£25,000),
+`max_position_gbp=£2,500`, `var_confidence=0.95`, `var_lookback_days=252`,
+`max_risk_pct=0.01`, `min_position_gbp=£50`.
+
+**Results — all three bind constantly, not rarely:**
+
+| Cap | Metric | Result |
+|---|---|---|
+| `max_open_positions=20` | Days concurrent open positions > 20 | **4,097 / 4,401 (93.09%)** |
+| | Max concurrent open positions ever reached | **70** (3.5× the cap) |
+| | Entries where the cap was already ≥20 at the moment of entry | **11,483 / 12,046 (95.33%)** |
+| `max_total_deployed=0.5` (£25,000) | Days deployed capital > cap | **4,268 / 4,401 (96.98%)** |
+| | Max concurrent deployed capital ever reached | **£168,708.16 (337.4% of account)** |
+| | Max / avg overage on a binding day | **£143,708.16 / £89,996.73** |
+| | Entries where deployed capital was already ≥cap at the moment of entry | **11,860 / 12,046 (98.46%)** |
+| `max_position_gbp=£2,500` | Trades where raw VaR size exceeded the cap before capping | **9,417 / 12,046 (78.18%)** |
+| | Trades using the <60-sample fallback (not true VaR sizing) | 0 / 12,046 (0.00%) |
+| | Median / mean / max raw-size-vs-cap ratio, capped trades only | **1.58× / 1.81× / 10.98×** |
+| | ETF trades capped | 2,627 / 3,962 (66.30%) |
+| | Stock trades capped | **6,790 / 8,084 (83.99%)** |
+
+`max_open_positions` and `max_total_deployed` are, on this 73-ticker
+universe, effectively **always** binding once the strategy has been
+running a while, not occasional backstops — the uncapped-per-ticker
+demand routinely runs to 3-7× either ceiling (this reuses the same
+"no cross-ticker portfolio cap in `run_candidate()`/`simulate_trades()`"
+fact already documented in the two universe-broadening studies above;
+this investigation is the first to quantify exactly how far uncapped
+demand actually runs past the live caps rather than just noting the caps
+aren't modelled). `max_position_gbp` binds on close to 4 in 5 trades
+overall, and **literally 100% of trades in the least-volatile curated-40
+names** (WMT, COST, JNJ, PG all 100% capped; TMO/CVX/LLY/HD/MRK all
+>94%) — for these tickers the £2,500 flat ceiling is the position size
+in practice, and VaR sizing's own volatility-scaling has no effect on
+them at all. The mechanism: a low-volatility stock has a small
+`holding_var`, and `position_gbp = risk_budget / |holding_var|` grows
+*larger*, not smaller, as volatility falls — so it's the calmest, not the
+most volatile, names that hit the ceiling hardest. ETFs bind less often
+than stocks (66.30% vs 83.99%) despite typically being lower-volatility
+baskets — the `√holding_days` term in `_var_position_size_core()`'s
+square-root-of-time scaling largely explains this: ETFs carry a 90-day
+`max_holding_days` vs stocks' 30-day, so `√90≈9.49` vs `√30≈5.48` scales
+their `holding_var` up more than their lower daily volatility scales it
+down, more than offsetting the effect low volatility has on its own.
+
+**Recommendation.** All three caps clear the "worth a full, properly
+train/test-validated re-tuning round" bar Tasks 10-13 established for
+`max_holding_days` — the opposite conclusion from a "rare backstop not
+worth the effort." Unlike an occasional-backstop parameter, all three
+here are essentially *always* the binding constraint under real VaR
+demand on this exact universe: `max_open_positions`/`max_total_deployed`
+cap ~95-98% of entries at the moment they fire, and `max_position_gbp`
+caps ~78% of all trades outright (100% for several of the curated-40's
+calmest, most liquid names). Because the caps bind this pervasively, the
+*live* portfolio's real trade selection and sizing is currently being
+shaped far more by these three fixed numbers than by the VaR formula
+they sit on top of — a genuine re-tuning study here has much more
+practical leverage than the same exercise would on a parameter that
+rarely engages. Any such study would need the same missing prerequisite
+already identified in both universe-broadening sections above — a
+genuine cross-ticker portfolio simulation inside the backtest engine (the
+current `run_candidate()`/`simulate_trades()` has none) — since without
+it, changing any of these three caps cannot be backtested faithfully:
+today's per-ticker-independent engine has no way to show what a
+different cap would actually have allowed or blocked in a shared
+account. Not attempted here — this section is Step 1/Step 2 only, no
+parameter change proposed or made.
+
+Investigation clone (`/root/cap-binding-study`) deleted only after these
+figures were captured; production DB confirmed to have no trace of the
+clone (`investment_research_capstudy` table absent from the production
+file), `git status` clean on the live checkout, both systemd services'
+`ActiveEnterTimestamp` unchanged throughout.
+
+### Portfolio-capped backtest engine (2026-08-01)
+
+Direct follow-up to the binding-frequency investigation immediately above,
+which found `max_open_positions`/`max_total_deployed` bind on 93-98% of
+days/entries even on the current 73-ticker universe under the existing
+uncapped engine — meaning every backtest figure this file has published to
+date (the "Current baseline" callout, every V2 phased-rebuild/validation
+number, both universe-broadening studies) was generated by an engine that
+never modelled the one constraint shaping live trade selection the most.
+This section adds the missing mechanism as **permanent, tested,
+production code** (not a disposable research clone — a departure from
+every other backtest study in this file) and reports what it found on
+first real use.
+
+**Mechanism.** `analysis/backtest.py:simulate_portfolio(tickers_cache,
+config, gspc_close)` walks every ticker together in one shared
+chronological pass, enforcing `trading212_invest.max_open_positions` /
+`max_total_deployed` as a single cap shared across the whole universe —
+the cross-ticker constraint `run_candidate()`/`simulate_trades()` (left
+completely unchanged; this is an additional, selectable mode) never
+modelled at all, since every ticker there is simulated fully independently
+against the same notional `starting_capital_gbp` baseline. Per-ticker
+signal/exit/stop/VaR-sizing math is byte-identical to `simulate_trades()`
+— only entries are additionally gated by shared portfolio state.
+
+**Priority rule**, derived by reading `brokers/trading212.py`'s live
+decide-then-submit pipeline directly (`maybe_place_orders()` /
+`_submit_pending_orders()` / `_load_pending_orders()`), not assumed: on
+any given day, (1) ETFs are prioritised before stocks — mirroring the
+live 07:00 UTC ETF-submission-before-13:30-UTC-stock-submission ordering
+— then (2) within each group, tickers are prioritised in the order they
+appear in `tickers_cache` — mirroring config.yaml's `instruments:` dict
+insertion order, which the live decide phase iterates and the live submit
+phase's `ORDER BY decided_at ASC` ties break by (both alphabetical in the
+current config.yaml, which is also the order
+`analysis.universe.ALL_TICKERS` already produces). A cap binding stops
+admitting further candidates for the rest of that day entirely (mirrors
+`_submit_pending_orders()`'s `break`, not a per-candidate `continue`).
+
+**Deliberate simplifications, stated explicitly, not silently:**
+1. `account_value_gbp` for VaR sizing stays the fixed notional
+   `backtest.starting_capital_gbp` — never compounding, identical to the
+   uncapped engine — isolating the comparison to *only* the cap-enforcement
+   difference, not a second change (a compounding account).
+2. `max_total_deployed` is checked as "already at/over the cap BEFORE this
+   candidate's own size is added" — not "would admitting this candidate
+   push deployed capital over the cap" — exactly mirroring
+   `_submit_pending_orders()`'s own check order: a single admitted order
+   CAN push the running total past the cap; the next candidate is what
+   actually gets blocked (see "V2 first-cycle deployment cap overshoot"
+   above for the live incident this check shape was built to prevent).
+3. Deployed capital is tracked as the sum of admitted trades' own
+   committed `position_gbp` (cost basis at entry, incremented on entry,
+   decremented by the same amount on exit) — not a continuous
+   mark-to-market valuation the way T212's live
+   `investments.currentValue` is; the backtest has no per-day valuation of
+   every open position across tickers to mirror that field exactly.
+4. A candidate rejected by either cap on a given day is simply not
+   entered that day (skip, not queue/defer) — the closest daily-resolution
+   analogue of a live `PENDING` row being retried at the next submission
+   window, since this engine has no sub-daily submission windows to defer
+   within.
+5. A ticker can never exit and re-enter on the same day — mirroring
+   `simulate_trades()`'s own per-ticker control flow exactly, where the
+   `open_trade is None` entry check is evaluated once per row, using the
+   state as of before that row. Entry candidacy each day is restricted to
+   tickers already flat *before* that day's exits are processed — a
+   position a same-day exit just freed is not eligible to re-claim its own
+   slot until its own next trading day.
+
+`max_position_gbp` is enforced exactly as before, inside
+`_var_position_size_core()` itself — unaffected by any of the above.
+
+Wired into `analysis/validation.py:run_full_validation(..., portfolio_mode:
+bool = False)` — `False` (the default) reproduces every existing caller's
+behaviour unchanged (the Backtest page, `analysis/dd_report.py`); `True`
+swaps `run_candidate()` for `simulate_portfolio()`, with every other step
+(train/test split, blocks, walk-forward, cost sensitivity, £ growth)
+unchanged.
+
+Covered by `tests/test_portfolio_backtest.py` (6 tests): `max_open_
+positions` never exceeded plus the ETF-before-stock and input-order
+priority rule (including the same-day-re-entry edge case above, where the
+ticker that vacates a slot is *not* who reclaims it), `max_total_deployed`
+blocking an entry independently of position count (and a generous-cap
+control case confirming the block is genuinely caused by the cap), and —
+the critical regression guard — `simulate_portfolio()` with both caps set
+arbitrarily high reproduces `run_candidate()`'s trade list exactly (same
+tickers, dates, prices, exit reasons, sizes, `pnl_pct`), both on synthetic
+fixtures (with and without a crisis-override event) and re-confirmed
+against real 2007-2026 production data (see below) — proving the new mode
+introduces zero behavioural change when its caps don't bind.
+
+### Portfolio-capped validation findings (2026-08-01)
+
+Real caps (`max_open_positions=20`, `max_total_deployed=0.5`,
+`max_position_gbp=2500` — the live `trading212_invest` config values), run
+against an isolated server-side clone (own copied DB, deleted after this
+section was drafted — see cleanup note below), `start=2007-01-01,
+end=2026-07-30`, the identical window/signal/crisis-override every other
+V2 validation figure in this file uses.
+
+**Sanity check — confirmed exact on real production data, not just
+synthetic fixtures.** `simulate_portfolio()` with both caps set
+arbitrarily high (`max_open_positions=999999`, `max_total_deployed=999.0`)
+reproduces `run_candidate()`'s real 73-ticker result exactly: 12,046
+trades, TRAIN CAGR 13.23%, TEST CAGR 22.39%, 14/16 blocks — every reported
+metric byte-identical between the two engines.
+
+**The critical result — real caps on the 73-ticker (curated-40 + 33 ETF)
+universe:**
+
+| Metric | Uncapped (existing baseline) | Real caps (`max_open=20`, `max_deployed=50%`) |
+|---|---|---|
+| Total trades | 12,046 | **2,187** (-81.8%) |
+| TRAIN CAGR | 13.23% | **3.14%** |
+| TEST CAGR | 22.39% | **6.13%** |
+| TRAIN profit factor | 1.68 | 1.49 |
+| TEST profit factor | 1.74 | 1.87 |
+| Full-history PF | 1.71 | 1.64 |
+| TRAIN max drawdown | -25.45% | -9.57% |
+| TEST max drawdown | -25.26% | -8.48% |
+| Blocks passed / 16 | 14 | **13** (block 12 flips pass→fail; blocks 0 & 1 fail either way) |
+| Walk-forward success rate | 82.1% (183/223) | 81.6% (182/223) |
+| Cost-sensitivity PF (0/10/25bps) | 1.71/1.55/1.34 | 1.64/1.47/1.27 |
+| TRAIN £50,000 → | £227,036 strategy vs £114,033 S&amp;P | **£72,839** strategy vs £114,033 S&amp;P |
+| TEST £50,000 → | £188,662 strategy vs £114,149 S&amp;P | **£73,901** strategy vs £114,149 S&amp;P |
+
+**Under real portfolio caps, the strategy underperforms buy-and-hold
+S&amp;P 500 in £ terms in both windows** — the reverse of every previously
+published comparison in this file, all of which used the uncapped engine.
+PF/Sharpe/walk-forward hold up reasonably well under the caps (PF even
+improves slightly in TEST, 1.74→1.87), but CAGR collapses to roughly a
+quarter of its uncapped value: with only 20 concurrent slots and 50% of a
+fixed-notional account available, the large majority of what the uncapped
+engine treated as independent, fully-funded opportunities are simply never
+taken. This is not a defect in the new mechanism — the huge-caps sanity
+check above proves `simulate_portfolio()` reproduces the uncapped baseline
+exactly when caps don't bind — it is the first genuine measurement of what
+the live account's own configured caps do to this strategy's realistic
+return, as opposed to the per-ticker-independent approximation every
+number in this file predates.
+
+**Top-100 / top-150 universes re-run under the identical real caps**, using
+the same market-cap-ranked construction as "V2 moderate stock universe
+expansion" above (freshly regenerated the same day — 503/503 candidates,
+top-100 floor $118.8B, top-150 floor $82.8B, both close to but not
+identical to that section's own floors, as expected from ordinary
+intra-day market-cap drift; new-candidate counts matched exactly: 63 for
+top-100, 111 for top-150). Uncapped reproduction first, as a trust check
+(both closely match the already-documented figures — top-100: 23,144
+trades / TRAIN 17.84% / TEST 33.27% / full PF 1.68, vs. the documented
+22,803 / 17.60% / 33.10% / 1.67; top-150: 31,131 / 20.32% / 38.92% / 1.67,
+vs. the documented 30,784 / 20.17% / 38.73% / 1.66) — before trusting the
+new, real-cap figures:
+
+| Metric | Curated-40 (73, capped) | Top-100 (133, capped) | Top-150 (183, capped) |
+|---|---|---|---|
+| Total trades | 2,187 | 2,246 | 2,245 |
+| TRAIN / TEST CAGR | 3.14% / 6.13% | 2.64% / 5.73% | 2.42% / 5.96% |
+| TRAIN / TEST profit factor | 1.49 / 1.87 | 1.40 / 1.77 | 1.33 / 1.84 |
+| TRAIN / TEST win rate | — (not captured this run) | 36.0% / 37.2% | 35.5% / 37.9% |
+| TRAIN / TEST Sharpe | — (not captured this run) | 0.300 / 0.493 | 0.260 / 0.520 |
+| Full-history PF | 1.64 | 1.54 | 1.51 |
+| TRAIN / TEST max drawdown | -9.57% / -8.48% | -16.68% / -9.37% | -20.68% / -8.99% |
+| Blocks passed / 16 | 13 (0, 1, 12 fail) | 14 (0, 1 fail) | 14 (0, 1 fail) |
+| Walk-forward success rate | 81.6% (182/223) | 78.5% (175/223) | 79.8% (178/223) |
+| Cost-sensitivity PF (0/10/25bps) | 1.64/1.47/1.27 | 1.54/1.39/1.20 | 1.51/1.37/1.18 |
+
+**The total trade count is almost completely flat across all three
+universe sizes (2,187 → 2,246 → 2,245) despite the candidate pool growing
+from 73 to 183 tickers (2.5×)** — direct, quantified confirmation that
+`max_open_positions`/`max_total_deployed` are the dominant constraint on
+trade count once real caps are applied, not universe breadth. A wider
+universe mainly changes *which* 20-or-so slots get filled at any given
+time (more candidates competing for the same fixed capacity), not *how
+many* total positions the strategy can ever hold. Widening the universe
+under real caps buys a small, genuine improvement on two fronts — full
+PF/CAGR trend the "expected" direction relative to the trade-quality
+findings already on record (this remains gentle dilution, matching the
+top-100/150 uncapped study's own verdict, not reversed by capping) — and,
+new here, **the block-pass count actually improves under caps as the
+universe widens** (73-ticker capped: 13/16, failing blocks 0, 1, *and*
+12; both 100/150-ticker capped runs: 14/16, only 0 and 1 fail, matching
+the uncapped baseline's own two failures) — more candidates competing for
+the same 20 slots gives the portfolio a better chance of finding a
+qualifying trade in the one block (12) that the narrower 73-ticker
+universe couldn't clear under real caps.
+
+**Does the real-cap picture change the PF/Sharpe-only verdict already on
+record? Materially, yes — but not in a direction that overturns the
+"gentle dilution, real but modest sweet spot" conclusion; it sharpens what
+that conclusion is actually worth in practice.** Under the uncapped
+engine, widening from curated-40 to top-100/150 looked like a return
+question (CAGR climbing sharply, 13.23%→17.84%/20.32%, alongside a mild PF
+drift) with an admittedly-untrustworthy drawdown/block-pass side. Under
+real caps, that entire CAGR story is moot — trade count barely moves, so
+there is no meaningful extra return to capture from widening the universe
+at all; a real account with these caps would place essentially the same
+number of trades whether pointed at 73 or 183 candidates. What widening
+*does* still buy under real caps is a modest, genuine derisking (the
+extra block clears) and a slightly-worse full-history PF/win-rate profile
+(the same gentle-dilution signal already on record) — i.e. the *return*
+argument for widening the universe evaporates once portfolio caps are
+modelled honestly, while the *dilution* argument survives essentially
+unchanged. This is the first time either has been checked with a genuine
+cross-ticker cap in the loop.
+
+Both the top-100/150 studies above used a fresh, independently-refetched
+market-cap ranking (not reused from the earlier, now-deleted research
+clone) — see the exact figures above for how closely the two reproductions
+matched despite the independent refetch, the same kind of ordinary
+day-to-day drift already documented and accepted in this file's other
+reproducibility checks.
+
+Server-side clone (`/root/portfolio-cap-study`) deleted only after this
+section's figures were fully drafted; production DB and both systemd
+services confirmed untouched throughout (see cleanup note in the task
+report this section was written from). Not committed as a config or
+live-execution change — `trading212_invest`'s live caps, `analysis/
+universe.py`'s curated-40 roster, and every scheduler/broker file are
+unchanged; only `analysis/backtest.py`, `analysis/validation.py`, and the
+new test file are new, uncommitted local changes pending review.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
