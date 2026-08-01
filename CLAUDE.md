@@ -4217,6 +4217,77 @@ committed as a config change — `trading212_invest.per_trade_pct`/
 compounding two-parameter scheme" above; this task only changed the
 ADMISSION LOGIC layered on top of those two numbers.
 
+### Market-cap data infrastructure — deployed, not wired to live trading (2026-08-01)
+
+**`analysis/market_cap.py` (point-in-time market-cap reconstruction from
+SEC EDGAR) and its `market_cap_history` table are now deployed to
+production and populated with real data — this is a data-infrastructure
+deploy only, and does not change what live trading does in any way.**
+Shipped alongside three edge-case fixes found while building and
+stress-testing this module (`analysis/signals.py`'s momentum calendar-gap
+guard, `analysis/backtest.py`'s `END_OF_DATA` capacity-release fix, and
+`market_cap.py`'s own `filed_date`-not-`period_end_date` look-ahead-bias
+fix — commit `eaeb90e`, deployed 2026-08-01 12:24 UTC, no blackout window
+active at deploy time, both services restarted together).
+
+**Confirmed zero live consumers before deploying, not assumed.**
+`grep -rn "market_cap\|MarketCapHistory"` across the whole repository
+returns exactly five hits: the module itself, its own test file, the
+`MarketCapHistory` model definition in `data/database.py`, this
+documentation, and `tests/conftest.py`'s standard DB-fixture patching.
+Nothing in `brokers/`, `data/scheduler.py`, `main.py`,
+`analysis/decision.py`, `analysis/backtest.py`'s simulation engines,
+`analysis/validation.py`, `analysis/confluence.py`, or `analysis/regime.py`
+references either the module or the table. **No live order-placement
+decision, no backtest/validation figure reported anywhere else in this
+file, and no UI page reads from this data — it exists, and nothing
+consumes it yet.** Whether/how to wire a market-cap-ranked universe into
+anything live is a separate, not-yet-made decision; nothing in this
+deploy should be read as having made it.
+
+**Production data, backfilled the same day, verified against real
+production price/filing data (not the disposable research clone this
+mirrors):** the same 503-candidate pool construction rule already
+documented under "V2 stock universe broadening" (`is_included(ticker) :=
+window overlaps [2007-01-01, 2026-06-30] AND active in the source's
+2026-06-30 final row`) reproduced **503 candidates** from a fresh fetch of
+the same `fja05680/sp500` CSV. `backfill_shares_outstanding()` against all
+503 resolved **459** (**25,573** total quarterly shares-outstanding rows,
+`period_end_date` spanning 2007-12-31 → 2026-07-30) and left **44**
+genuinely unresolvable under every tag in `SHARES_TAGS` — `ABNB`, `ABT`,
+`AMT`, `BG`, `CB`, `COF`, `CTAS`, `CTSH`, `DASH`, `EL`, `ERIE`, `FDXF`,
+`FTV`, `GLW`, `GRMN`, `HBAN`, `HCA`, `HONA`, `HRL`, `HUM`, `INCY`, `IQV`,
+`KO`, `LEN`, `LII`, `MAS`, `META`, `MKC`, `PFG`, `RCL`, `RL`, `SLB`,
+`SPGI`, `STZ`, `SWKS`, `TKO`, `TTD`, `UHS`, `VLTO`, `VRSK`, `WELL`, `WFC`,
+`XOM`, `XYZ` — an exact match, count-for-count, against the figures
+already recorded under "V2 stock universe broadening" and "V2 moderate
+stock universe expansion" above, and including every large, well-known
+name (`META`, `XOM`, `KO`, `WFC`, `SPGI`, `HCA`, `HUM`, `CTAS`) previously
+cited as confirmed non-resolvers. Spot-checked directly against production
+data before trusting it: `NVDA`'s stored shares-outstanding jumps
+623,000,000 → 2,500,000,000 exactly at its real July 2021 4:1 split
+(`period_end_date` 2021-05-21 → 2021-08-13, `filed_date` 2021-05-26 →
+2021-08-20) — the identical 4.01× figure already verified in the research
+clone, now reproduced against genuinely live production data.
+
+**Deploy discipline, same standard as every production change today.**
+Full local test suite (334, including two unrelated, deliberately
+left-uncommitted `tests/test_execution.py` additions from earlier work)
+passed before push; the pre-push hook re-ran it server-side-bound and
+passed again before the push was allowed through. Deploy landed inside no
+blackout window (`06:45–07:15`, `13:15–14:00`, `21:00–22:00` UTC weekdays,
+`09:45–10:15` UTC Sundays — checked directly against `deploy.sh`'s actual
+blackout logic, not assumed from this file's own known-stale schedule
+table; the deploy also landed on a Saturday, when no scheduled job other
+than the 60-second dispatcher fires at all). Production DB backed up
+(`database/investment_research_pre_marketcap_backfill_20260801_122518.db`)
+before the backfill wrote a single row. Both `investment-research` and
+`investment-research-scheduler` confirmed restarted together
+(`ActiveEnterTimestamp` identical on both, 2026-08-01 12:24:54 UTC) — the
+new table was created automatically by `init_db()`'s
+`Base.metadata.create_all()` on that restart, no manual migration needed
+since this is a wholly new table, not an `ALTER TABLE` on an existing one.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
