@@ -409,6 +409,112 @@ def test_explicit_compounding_params_override_config_and_take_priority_over_port
     assert result["engine_used"] == "compounding_explicit"
 
 
+# ---------------------------------------------------------------------------
+# Asset-class trading switches (2026-08-01) -- etf_trading_enabled /
+# stock_trading_enabled must filter the CANDIDATE universe itself, before
+# any engine's tickers_cache is built, using the identical shared function
+# (analysis.decision.is_asset_class_enabled()) brokers/trading212.py's live
+# decide phase checks -- see tests/test_execution.py's
+# test_decide_phase_calls_the_shared_asset_class_gate for the live-side
+# half of this same guarantee. See CLAUDE.md's "Clean, independent
+# ETF/stock trading switches" section.
+# ---------------------------------------------------------------------------
+
+def _candidate_universe_setup(mocker):
+    v2u.seed_baseline_membership()
+    gspc_dates = pd.date_range("2015-01-01", "2026-07-30", freq="D")
+    gspc_df = pd.DataFrame({
+        "date": gspc_dates, "close": [100.0 * (1.0002 ** i) for i in range(len(gspc_dates))],
+    })
+    mocker.patch("analysis.validation.get_price_df", return_value=gspc_df)
+    requested: list = []
+
+    def _fake_precompute(ticker, config):
+        requested.append(ticker)
+        return None
+
+    mocker.patch("analysis.validation.precompute_ticker", side_effect=_fake_precompute)
+    mocker.patch("analysis.validation.run_candidate", return_value=[])
+    return requested
+
+
+def test_default_candidate_universe_includes_every_ticker(db_engine, mocker):
+    """No trading212_invest keys at all -- both switches default True, so
+    the candidate pool is exactly analysis.universe.ALL_TICKERS, unchanged
+    from before this feature existed."""
+    requested = _candidate_universe_setup(mocker)
+
+    result = v2v.run_full_validation(
+        {"backtest": {}}, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        uncapped=True,
+    )
+
+    assert set(requested) == set(v2u.ALL_TICKERS)
+    assert result["n_tickers_total"] == len(v2u.ALL_TICKERS)
+    assert result["etf_trading_enabled"] is True
+    assert result["stock_trading_enabled"] is True
+
+
+def test_etf_trading_disabled_excludes_etfs_from_candidate_universe(db_engine, mocker):
+    """A disabled ETF class must never even be precompute_ticker()'d --
+    genuinely excluded from candidacy, not merely filtered out of the
+    result afterward -- while every stock candidate is completely
+    unaffected."""
+    requested = _candidate_universe_setup(mocker)
+
+    config = {"backtest": {}, "trading212_invest": {"etf_trading_enabled": False}}
+    result = v2v.run_full_validation(
+        config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"), uncapped=True,
+    )
+
+    assert set(requested) == set(v2u.STOCK_MEMBERSHIP.keys())
+    assert not (set(requested) & set(v2u.ETF_TICKERS))  # never even requested
+    assert result["n_tickers_total"] == len(v2u.STOCK_MEMBERSHIP)
+    assert result["etf_trading_enabled"] is False
+    assert result["stock_trading_enabled"] is True
+
+
+def test_stock_trading_disabled_excludes_stocks_from_candidate_universe(db_engine, mocker):
+    requested = _candidate_universe_setup(mocker)
+
+    config = {"backtest": {}, "trading212_invest": {"stock_trading_enabled": False}}
+    result = v2v.run_full_validation(
+        config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"), uncapped=True,
+    )
+
+    assert set(requested) == set(v2u.ETF_TICKERS)
+    assert not (set(requested) & set(v2u.STOCK_MEMBERSHIP.keys()))
+    assert result["n_tickers_total"] == len(v2u.ETF_TICKERS)
+    assert result["etf_trading_enabled"] is True
+    assert result["stock_trading_enabled"] is False
+
+
+def test_run_full_validation_calls_the_same_shared_gate_function_as_live(db_engine, mocker):
+    """Proves run_full_validation() genuinely delegates to
+    analysis.decision.is_asset_class_enabled() per ticker -- the identical
+    function brokers/trading212.py's decide phase calls (see
+    tests/test_execution.py's
+    test_decide_phase_calls_the_shared_asset_class_gate) -- rather than
+    re-deriving the same config lookup independently. This is the
+    backtest-side half of the live/backtest parity guarantee for this
+    feature."""
+    import analysis.validation as validation_module
+
+    spy = mocker.spy(validation_module, "is_asset_class_enabled")
+    _candidate_universe_setup(mocker)
+
+    config = {"backtest": {}, "trading212_invest": {"etf_trading_enabled": False}}
+    v2v.run_full_validation(
+        config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"), uncapped=True,
+    )
+
+    # Two summary calls (etf_trading_enabled / stock_trading_enabled) plus
+    # one per ticker in the full universe while building the candidate list.
+    assert spy.call_count == 2 + len(v2u.ALL_TICKERS)
+    for call in spy.call_args_list:
+        assert call.kwargs["config"] is config
+
+
 def test_run_full_validation_no_trades_all_blocks_fail_gracefully(db_engine, mocker):
     v2u.seed_baseline_membership()
     gspc_dates = pd.date_range("2015-01-01", "2026-07-30", freq="D")

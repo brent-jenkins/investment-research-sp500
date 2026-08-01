@@ -5,7 +5,7 @@ placement, all three backtest engines, and the display-only Daily Briefing
 path) is actually wired to these functions, not just that the functions
 themselves are correct in isolation.
 """
-from analysis.decision import evaluate_exit_reason, passes_entry_gate
+from analysis.decision import evaluate_exit_reason, is_asset_class_enabled, passes_entry_gate
 
 
 def _exit(**overrides):
@@ -97,3 +97,45 @@ def test_entry_gate_fails_on_unknown_inputs():
     assert passes_entry_gate(sig_on=None, is_member=True, entry_blocked=False) is False
     assert passes_entry_gate(sig_on=True, is_member=None, entry_blocked=False) is False
     assert passes_entry_gate(sig_on=True, is_member=True, entry_blocked=None) is False
+
+
+# ---------------------------------------------------------------------------
+# is_asset_class_enabled
+# ---------------------------------------------------------------------------
+
+def test_asset_class_enabled_defaults_true_with_no_config_keys():
+    """A config predating this feature (no etf_trading_enabled /
+    stock_trading_enabled keys at all) must behave exactly as before --
+    both asset classes enabled by default."""
+    cfg = {"trading212_invest": {}}
+    assert is_asset_class_enabled(is_etf=True, config=cfg) is True
+    assert is_asset_class_enabled(is_etf=False, config=cfg) is True
+
+
+def test_asset_class_enabled_defaults_true_with_no_trading212_invest_section_at_all():
+    assert is_asset_class_enabled(is_etf=True, config={}) is True
+    assert is_asset_class_enabled(is_etf=False, config={}) is True
+
+
+def test_etf_trading_disabled_does_not_affect_stock_trading():
+    cfg = {"trading212_invest": {"etf_trading_enabled": False}}
+    assert is_asset_class_enabled(is_etf=True, config=cfg) is False
+    assert is_asset_class_enabled(is_etf=False, config=cfg) is True  # unaffected -- no key set for stocks
+
+
+def test_stock_trading_disabled_does_not_affect_etf_trading():
+    cfg = {"trading212_invest": {"stock_trading_enabled": False}}
+    assert is_asset_class_enabled(is_etf=False, config=cfg) is False
+    assert is_asset_class_enabled(is_etf=True, config=cfg) is True  # unaffected -- no key set for ETFs
+
+
+def test_both_asset_classes_can_be_independently_disabled_at_once():
+    cfg = {"trading212_invest": {"etf_trading_enabled": False, "stock_trading_enabled": False}}
+    assert is_asset_class_enabled(is_etf=True, config=cfg) is False
+    assert is_asset_class_enabled(is_etf=False, config=cfg) is False
+
+
+def test_both_asset_classes_explicitly_true_is_the_same_as_absent():
+    cfg = {"trading212_invest": {"etf_trading_enabled": True, "stock_trading_enabled": True}}
+    assert is_asset_class_enabled(is_etf=True, config=cfg) is True
+    assert is_asset_class_enabled(is_etf=False, config=cfg) is True

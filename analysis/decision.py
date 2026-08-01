@@ -88,3 +88,62 @@ def passes_entry_gate(
     data.
     """
     return sig_on is True and is_member is True and entry_blocked is False
+
+
+def is_asset_class_enabled(*, is_etf: bool, config: dict) -> bool:
+    """True if NEW-ENTRY CANDIDACY is enabled for this asset class (ETF vs
+    stock) — read identically by live order placement's decide phase
+    (brokers/trading212.py:maybe_place_orders()) and by the backtest
+    engine's candidate-universe construction
+    (analysis/validation.py:run_full_validation()), so neither can silently
+    diverge on which asset classes are even considered. See CLAUDE.md's
+    "Clean, independent ETF/stock trading switches" section for the
+    incident this closes — every prior comparison isolating ETF vs. stock
+    performance needed a bespoke, hand-rolled research-clone setup each
+    time, and at least one such comparison was run inconsistently without
+    anyone noticing until it was directly checked.
+
+    Reads two config keys from `config["trading212_invest"]`, both
+    defaulting True (backwards compatible — a config predating this
+    feature behaves exactly as before):
+      - etf_trading_enabled
+      - stock_trading_enabled
+
+    Candidacy only — never exits. A ticker whose asset class is disabled
+    here is never even evaluated as an entry candidate (no signal
+    computed, no VaR sizing done, no pending_orders row ever written,
+    and — for the backtest — never included in the ticker universe passed
+    to any simulation engine at all), so the OTHER asset class's momentum
+    ranking and capacity allocation are completely unaffected by it, the
+    same as if the disabled class had been removed from the tradeable
+    universe entirely. An already-open position in a disabled asset class
+    must still be monitored for its normal exit conditions
+    (stop-loss/signal-off/crisis/max-holding) exactly as before — this
+    mirrors the existing "only ever gate entries, never exits" principle
+    already followed by allowed_entry_regimes (analysis/regime.py, V1) and
+    trading212_invest.pause_new_entries (brokers/trading212.py) — so
+    neither maybe_exit_positions() nor any engine's own exit/Phase-A logic
+    ever calls this function.
+
+    Deliberately a strictly earlier, broader cut than the existing
+    etf_submission_enabled / stock_submission_enabled flags
+    (brokers/trading212.py's own submission-stage gate): those two only
+    ever gate the final "place the order with the broker" step for a
+    decision that has ALREADY been computed and queued into
+    pending_orders. Setting an asset class's *_trading_enabled to False
+    means it is never even considered a candidate in the first place.
+    Setting *_trading_enabled True while leaving the matching
+    *_submission_enabled False is a deliberate, coherent state, not a
+    contradiction: decisions are still computed, momentum-ranked, and
+    queued (visible in pending_orders for audit/research) but never reach
+    the broker — this is the "shadow / dry-run" state ETF trading has
+    been in since 2026-07-31, pending live verification of the
+    exchange-timed submission mechanism (see CLAUDE.md's "Exchange-aware
+    order submission" section). *_trading_enabled False is the stronger,
+    upstream cut and takes priority — brokers/trading212.py's submission
+    functions treat it as a master override that skips submission
+    regardless of the matching *_submission_enabled value.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    key = "etf_trading_enabled" if is_etf else "stock_trading_enabled"
+    return bool(t212_cfg.get(key, True))

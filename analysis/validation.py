@@ -43,6 +43,7 @@ from typing import Optional
 import pandas as pd
 
 from analysis import universe
+from analysis.decision import is_asset_class_enabled
 from analysis.backtest import (
     compute_cost_sensitivity,
     compute_metrics_fixed,
@@ -269,8 +270,25 @@ def run_full_validation(
     gspc_close_full = gspc_df["close"].astype(float)
     gspc_close = gspc_close_full[(gspc_close_full.index >= start) & (gspc_close_full.index <= end)]
 
+    # Asset-class candidacy gate — the identical shared function
+    # (analysis.decision.is_asset_class_enabled()) brokers/trading212.py's
+    # live decide phase checks before ever queuing a decision. Filtering
+    # the ticker universe HERE, before any engine's tickers_cache is even
+    # built, is what makes every downstream engine (run_candidate(),
+    # simulate_portfolio(), simulate_portfolio_compounding()) respect the
+    # switch identically with no per-engine change needed — a disabled
+    # asset class is never a candidate for any of them, exactly as if it
+    # had been removed from analysis.universe.ALL_TICKERS entirely. See
+    # CLAUDE.md's "Clean, independent ETF/stock trading switches" section.
+    etf_trading_enabled = is_asset_class_enabled(is_etf=True, config=config)
+    stock_trading_enabled = is_asset_class_enabled(is_etf=False, config=config)
+    candidate_tickers = [
+        t for t in universe.ALL_TICKERS
+        if is_asset_class_enabled(is_etf=t in universe.ETF_TICKERS, config=config)
+    ]
+
     caches = []
-    for ticker in universe.ALL_TICKERS:
+    for ticker in candidate_tickers:
         c = precompute_ticker(ticker, config)
         if c is not None:
             c = slice_ticker(c, start, end)
@@ -344,7 +362,14 @@ def run_full_validation(
         "per_trade_pct": effective_per_trade_pct,
         "max_deployed_pct": effective_max_deployed_pct,
         "universe": universe_snapshot(),
-        "n_tickers_with_data": n_ok, "n_tickers_total": len(universe.ALL_TICKERS),
+        # n_tickers_total reflects the CANDIDATE pool actually attempted for
+        # this run (after the etf_trading_enabled/stock_trading_enabled
+        # gate below) -- equal to len(universe.ALL_TICKERS) whenever both
+        # switches are at their default (True), so this is a no-op change
+        # for every config predating this feature.
+        "n_tickers_with_data": n_ok, "n_tickers_total": len(candidate_tickers),
+        "etf_trading_enabled": etf_trading_enabled,
+        "stock_trading_enabled": stock_trading_enabled,
         "total_trades": len(all_trades),
         "train": train_metrics, "test": test_metrics,
         "train_sp": {"cagr_pct": train_sp_cagr, "max_drawdown_pct": train_sp_dd},

@@ -74,7 +74,7 @@ import pandas as pd
 import requests
 
 from analysis import crisis, signals, universe
-from analysis.decision import evaluate_exit_reason, passes_entry_gate
+from analysis.decision import evaluate_exit_reason, is_asset_class_enabled, passes_entry_gate
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
 from data.ingestion import get_price_df
@@ -1590,6 +1590,18 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         # through this try/except exactly as before; only a genuine
         # unhandled exception is caught here.
         try:
+            # Asset-class candidacy gate — the single shared implementation
+            # (analysis/decision.py:is_asset_class_enabled()), also read by
+            # analysis/validation.py:run_full_validation() when it builds
+            # the backtest engine's own ticker universe. Checked BEFORE
+            # _ticker_state() (no signal computed, no DB price read) so a
+            # disabled asset class is genuinely never considered a
+            # candidate at all — not merely filtered out afterward. See
+            # CLAUDE.md's "Clean, independent ETF/stock trading switches"
+            # section.
+            if not is_asset_class_enabled(is_etf=ticker in universe.ETF_TICKERS, config=config):
+                continue
+
             state = _ticker_state(ticker, config, gspc_close)
             if state is None:
                 continue
@@ -1726,6 +1738,26 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     label = "ETF" if is_etf else "stock"
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
+        return 0
+
+    # Candidacy master override — the same shared
+    # analysis.decision.is_asset_class_enabled() the decide phase
+    # (maybe_place_orders()) checks before ever queuing a decision. This is
+    # a STRONGER, upstream cut than the submission-only flag_key check
+    # immediately below: *_trading_enabled=False means "as if this asset
+    # class didn't exist in the universe at all" — including any decision
+    # that was already queued under an earlier config (left untouched,
+    # neither submitted nor resolved, so nothing is lost if trading is
+    # re-enabled later). In steady state this is moot (the decide phase
+    # already stops queuing new rows once its asset class is disabled), but
+    # it matters for any row queued before the switch was flipped off.
+    if not is_asset_class_enabled(is_etf=is_etf, config=config):
+        trading_key = "etf_trading_enabled" if is_etf else "stock_trading_enabled"
+        logger.info(
+            "%s trading disabled entirely (trading212_invest.%s) — skipping submission "
+            "(any pending %s decisions are left untouched, not resolved).",
+            label, trading_key, label.lower(),
+        )
         return 0
 
     flag_key = "etf_submission_enabled" if is_etf else "stock_submission_enabled"
