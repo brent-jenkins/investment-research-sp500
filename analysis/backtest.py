@@ -175,10 +175,19 @@ def equity_curve_gbp(df: pd.DataFrame, starting_capital_gbp: float = 10000.0) ->
 # ---------------------------------------------------------------------------
 
 def precompute_ticker(ticker: str, config: dict) -> Optional[dict]:
-    """Load a ticker's full available price history and compute its ATR
-    and momentum signal. Membership is looked up per-date at simulation
-    time (not baked in here) so a live universe.py refresh is always
-    reflected without needing to re-run this step."""
+    """Load a ticker's full available price history and compute its ATR,
+    momentum signal, and raw momentum value. Membership is looked up
+    per-date at simulation time (not baked in here) so a live universe.py
+    refresh is always reflected without needing to re-run this step.
+
+    `momentum` (added 2026-08-01) is the same continuous trailing-12-month
+    return `signals.compute_momentum_series()` always computed internally
+    to derive the boolean `signal` column — now also kept on its own, since
+    `simulate_portfolio_compounding()`'s priority ranking needs a genuine
+    strength/confidence measure, not just the on/off `signal` column. The
+    two older engines (`simulate_trades()`/`simulate_portfolio()`) ignore
+    this column entirely; adding it here is additive and harmless for them.
+    """
     df = get_price_df(ticker, days=8000)
     if df.empty or len(df) < 300:
         return None
@@ -190,9 +199,10 @@ def precompute_ticker(ticker: str, config: dict) -> Optional[dict]:
     low = df["low"].astype(float)
 
     atr_s = _atr(high, low, close, config["signals"]["atr_period"])
+    momentum_s = signals.compute_momentum_series(close)
     sig = signals.compute_signal_series(close)
 
-    frame = pd.DataFrame({"close": close, "atr": atr_s, "signal": sig})
+    frame = pd.DataFrame({"close": close, "atr": atr_s, "signal": sig, "momentum": momentum_s})
     return {"ticker": ticker, "frame": frame}
 
 
@@ -653,7 +663,8 @@ def simulate_portfolio_compounding(
     gspc_close: pd.Series,
     per_trade_pct: float,
     max_deployed_pct: float,
-) -> list[dict]:
+    collect_rejections: bool = False,
+):
     """Shared-account portfolio simulation, identical in structure to
     simulate_portfolio() (added 2026-08-01, same day) EXCEPT the account
     balance genuinely compounds and both caps are expressed as a percentage
@@ -683,9 +694,11 @@ def simulate_portfolio_compounding(
       max_position_gbp_dynamic = current_balance * per_trade_pct, fed into
       the exact same _var_position_size_core() formula every other path in
       this codebase uses (account_value_gbp also = current_balance).
-    - max_deployed_pct: blocks further entries once
-      current_deployed / current_balance >= max_deployed_pct (a compounding
-      denominator, unlike simulate_portfolio()'s fixed one).
+    - max_deployed_pct: the capacity ceiling a candidate's FULL position
+      must fit under to be admitted -- see "Trade prioritization and
+      capacity-allocation engine" (2026-08-01) below for how admission
+      actually works; this is no longer a simple "stop once at/over the
+      cap" break.
 
     No max_open_positions cap at all -- position count is an EMERGENT
     consequence of per_trade_pct and max_deployed_pct together (roughly
@@ -693,10 +706,10 @@ def simulate_portfolio_compounding(
     independently-enforced rule. Reuses simulate_portfolio()'s exact
     structural skeleton (day-by-day merged walk, Phase A exits before
     Phase B entries, the "flat before today's exits are processed"
-    same-day-no-reentry rule, the ETF-before-stock-then-input-order entry
-    priority) and its exact per-ticker exit/stop/crisis logic verbatim --
-    see that function's own docstring for the full semantics; only the
-    balance/sizing/cap mechanics described above differ.
+    same-day-no-reentry rule) and its exact per-ticker exit/stop/crisis
+    logic verbatim -- see that function's own docstring for the full
+    semantics; only the balance/sizing/cap/priority mechanics described
+    here differ.
 
     current_balance is updated the moment each Phase A exit is processed
     (trade["pnl_gbp"] added immediately) -- so a later same-day exit sees
@@ -713,6 +726,52 @@ def simulate_portfolio_compounding(
     -- there is nothing meaningful to size a position against -- while
     Phase A (exits) always still runs normally. No exception, no divide-by-
     zero, no guessed position size.
+
+    **Trade prioritization and capacity-allocation engine (2026-08-01)** --
+    replaces the confirmed-arbitrary `(0 if is_etf else 1, idx)` priority
+    rule (ETF-group-then-config-order) with signal strength, and replaces
+    "stop admitting the instant the cap binds" with skip-and-continue. Built
+    to mirror brokers/trading212.py's live submission logic exactly (see
+    that module's `_load_pending_orders()` / `_submit_pending_orders()` and
+    CLAUDE.md's own "Trade prioritization and capacity-allocation engine"
+    section for the full design writeup and live-code cross-reference):
+
+    1. **Priority is signal strength (trailing 12-month momentum,
+       descending), never position size.** These are deliberately
+       independent questions -- "is this worth doing" vs. "can we fit it."
+       Each day, ETF candidates and stock candidates are ranked SEPARATELY
+       by that day's own `momentum` value (the `precompute_ticker()`
+       column, NaN sorting last) -- never combined into one cross-asset-
+       class list. ETF candidates are still evaluated as a full group
+       before any stock candidate, but this is temporal sequencing that
+       mirrors live's two physically separate submission jobs (ETF
+       always submits at 07:00 UTC, stocks always at 13:30 UTC -- an ETF
+       candidate can never lose out to a same-day stock candidate in live
+       execution, so the backtest must not let that happen either), not a
+       priority judgement that ETFs matter more than stocks.
+    2. **Skip-and-continue, never resize-to-fit.** Each candidate's FULL
+       VaR-calibrated `position_gbp` is computed first; if
+       `(current_deployed + position_gbp) / current_balance` would exceed
+       `max_deployed_pct`, the candidate is rejected at its full intended
+       size (never shrunk) and the walk continues to the NEXT candidate in
+       momentum order -- a smaller, lower-priority candidate may still fit
+       even where a larger, higher-priority one didn't.
+    3. Every rejected candidate is recorded (ticker, date, is_etf,
+       momentum, the position_gbp it would have taken, and the account
+       state at the moment of rejection) if `collect_rejections=True` --
+       default `False` preserves this function's original `list[dict]`
+       return signature for every existing caller
+       (`analysis/validation.py`, the compounding sweep). When
+       `collect_rejections=True`, the return value is instead
+       `(trades, rejections)`.
+    4. Capacity is evaluated against `current_balance`/`current_deployed`,
+       the same in-memory running state already described above -- reset
+       fresh at the start of a real production run from precomputed price
+       history, never a cross-run tracked total. This is the backtest
+       mirror of live's "read the account's real, current state once per
+       job" design (see brokers/trading212.py's `_submit_pending_orders()`
+       docstring) -- there is no equivalent of "yesterday's leftover
+       capacity" to accidentally carry over, by construction.
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -737,26 +796,122 @@ def simulate_portfolio_compounding(
         raw_crisis = crisis.compute_raw_trigger(gspc_close).reindex(frame.index).ffill().fillna(False)
         entry_blocked = crisis.extend_trigger(raw_crisis).reindex(frame.index).ffill().fillna(False)
 
-        priority_rank = (0 if is_etf else 1, idx)
+        # idx here is purely a stable, deterministic tiebreaker for
+        # iteration/event ordering -- it no longer determines ADMISSION
+        # priority (that's momentum, computed fresh per day in Phase B
+        # below). Kept as (is_etf group, idx) so day_tickers construction
+        # stays deterministic run to run.
+        event_rank = (0 if is_etf else 1, idx)
         per_ticker[ticker] = {
             "frame": frame,
             "rows": frame.to_dict("index"),
             "is_etf": is_etf,
+            "idx": idx,
             "close_series": close_series,
             "raw_crisis": raw_crisis,
             "entry_blocked": entry_blocked,
             "max_hold": get_max_holding_days(ticker, config),
-            "priority_rank": priority_rank,
             "open_trade": None,
         }
         for dt in frame.index:
-            events.append((dt, priority_rank, ticker))
+            events.append((dt, event_rank, ticker))
 
     events.sort(key=lambda e: (e[0], e[1]))
 
     trades: list[dict] = []
+    rejections: list[dict] = []
     current_balance = starting_capital
     current_deployed = 0.0
+
+    def _admit_group(group_tickers: list[str], dt, current_deployed: float) -> float:
+        """Rank *group_tickers* by that day's momentum (strongest first),
+        walk skip-and-continue against remaining capacity. Returns the
+        updated current_deployed. Mutates per_ticker[...]["open_trade"] and
+        appends to trades/rejections (both closed over from the enclosing
+        scope) -- current_balance is read-only here, never mutated (see
+        this function's own docstring: Phase B never changes the balance,
+        only current_deployed)."""
+        candidates: list[tuple[str, float]] = []
+        for ticker in group_tickers:
+            st = per_ticker[ticker]
+            row = st["rows"][dt]
+            sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
+            if not sig_on:
+                continue
+            is_member = st["is_etf"] or universe.is_member(
+                ticker, dt.date() if hasattr(dt, "date") else dt
+            )
+            if not is_member:
+                continue
+            blocked_now = bool(st["entry_blocked"].loc[dt])
+            if blocked_now:
+                continue
+            momentum_val = row.get("momentum")
+            momentum_val = float(momentum_val) if pd.notna(momentum_val) else float("-inf")
+            candidates.append((ticker, momentum_val))
+
+        # Strongest momentum first; a NaN/missing momentum value (should
+        # not happen for a real signal-on row, but defensive) sorts last
+        # via the -inf substitute above, same as SQLite's NULLS LAST
+        # convention _load_pending_orders() relies on live. `idx` (each
+        # ticker's original input-list position) is a deterministic
+        # LAST-RESORT tiebreak only -- reached only on a genuine momentum
+        # tie (two tickers with the exact same trailing-12m return, or both
+        # missing momentum entirely) -- needed because group_tickers is
+        # built from a Python set (flat_before_today) whose own iteration
+        # order is not guaranteed stable across runs/processes; without
+        # this, a tie would silently resolve via that nondeterministic
+        # order instead. This is not a re-introduction of the old
+        # ETF-then-config-order priority rule -- it only ever breaks a real
+        # tie in the actual priority metric (momentum), never overrides it.
+        candidates.sort(key=lambda c: (-c[1], per_ticker[c[0]]["idx"]))
+
+        for ticker, momentum_val in candidates:
+            if current_balance <= 0:
+                break
+
+            st = per_ticker[ticker]
+            row = st["rows"][dt]
+            price = float(row["close"])
+            atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
+            stop, stop_distance_pct = _resolve_entry_stop("LONG", price, atr, config)
+
+            dynamic_max_position_gbp = current_balance * per_trade_pct
+            close_series = st["close_series"]
+            prior_closes = close_series.loc[close_series.index < dt].tail(var_lookback + 1)
+            log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
+            if len(log_returns) >= _MIN_VAR_RETURNS:
+                position_gbp, _dv, _hv = _var_position_size_core(
+                    log_returns, current_balance, dynamic_max_position_gbp, st["max_hold"],
+                    var_confidence, max_risk_pct, min_position_gbp,
+                )
+            else:
+                position_gbp = round(dynamic_max_position_gbp * 0.5, 2)
+
+            # Skip-and-continue capacity check -- evaluated against this
+            # candidate's FULL, VaR-calibrated size, never shrunk to fit.
+            would_deploy_pct = (current_deployed + position_gbp) / current_balance
+            if would_deploy_pct > max_deployed_pct:
+                if collect_rejections:
+                    rejections.append({
+                        "ticker": ticker, "date": dt.date() if hasattr(dt, "date") else dt,
+                        "is_etf": st["is_etf"], "momentum": momentum_val,
+                        "position_gbp": position_gbp,
+                        "would_deploy_pct": round(would_deploy_pct, 4),
+                        "max_deployed_pct": max_deployed_pct,
+                        "current_deployed_gbp": round(current_deployed, 2),
+                        "current_balance_gbp": round(current_balance, 2),
+                        "reason": "REJECTED_CAPACITY",
+                    })
+                continue
+
+            st["open_trade"] = {
+                "ticker": ticker, "direction": "LONG", "entry_date": dt, "entry_price": price,
+                "stop_price": stop, "stop_distance_pct": stop_distance_pct, "position_gbp": position_gbp,
+            }
+            current_deployed += position_gbp
+
+        return current_deployed
 
     i = 0
     n_events = len(events)
@@ -823,59 +978,18 @@ def simulate_portfolio_compounding(
                 st["open_trade"] = None
 
         # Phase B — entries, only when there is a positive balance to size
-        # against. current_balance does not change within Phase B itself
-        # (only current_deployed does), so it is safe to read it once for
-        # the whole of today's candidate-admission loop.
+        # against. Two sequential group passes -- ETF candidates fully
+        # ranked and admitted first, THEN stock candidates against
+        # whatever capacity remains -- mirroring live's physically separate
+        # ETF (07:00 UTC) / stock (13:30 UTC) submission jobs exactly (see
+        # this function's own docstring, point 1). current_balance does not
+        # change within Phase B itself (only current_deployed does), so
+        # it's safe to read once for the whole of today's two passes.
         if current_balance > 0:
-            candidates: list[str] = []
-            for ticker in flat_before_today:
-                st = per_ticker[ticker]
-                row = st["rows"][dt]
-                sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
-                if not sig_on:
-                    continue
-                is_member = st["is_etf"] or universe.is_member(
-                    ticker, dt.date() if hasattr(dt, "date") else dt
-                )
-                if not is_member:
-                    continue
-                blocked_now = bool(st["entry_blocked"].loc[dt])
-                if blocked_now:
-                    continue
-                candidates.append(ticker)
-
-            candidates.sort(key=lambda t: per_ticker[t]["priority_rank"])
-
-            for ticker in candidates:
-                if current_balance <= 0:
-                    break
-                if (current_deployed / current_balance) >= max_deployed_pct:
-                    break
-
-                st = per_ticker[ticker]
-                row = st["rows"][dt]
-                price = float(row["close"])
-                atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
-                stop, stop_distance_pct = _resolve_entry_stop("LONG", price, atr, config)
-
-                dynamic_max_position_gbp = current_balance * per_trade_pct
-
-                close_series = st["close_series"]
-                prior_closes = close_series.loc[close_series.index < dt].tail(var_lookback + 1)
-                log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
-                if len(log_returns) >= _MIN_VAR_RETURNS:
-                    position_gbp, _dv, _hv = _var_position_size_core(
-                        log_returns, current_balance, dynamic_max_position_gbp, st["max_hold"],
-                        var_confidence, max_risk_pct, min_position_gbp,
-                    )
-                else:
-                    position_gbp = round(dynamic_max_position_gbp * 0.5, 2)
-
-                st["open_trade"] = {
-                    "ticker": ticker, "direction": "LONG", "entry_date": dt, "entry_price": price,
-                    "stop_price": stop, "stop_distance_pct": stop_distance_pct, "position_gbp": position_gbp,
-                }
-                current_deployed += position_gbp
+            etf_group = [t for t in flat_before_today if per_ticker[t]["is_etf"]]
+            stock_group = [t for t in flat_before_today if not per_ticker[t]["is_etf"]]
+            current_deployed = _admit_group(etf_group, dt, current_deployed)
+            current_deployed = _admit_group(stock_group, dt, current_deployed)
 
         i = j
 
@@ -906,6 +1020,8 @@ def simulate_portfolio_compounding(
         })
         current_balance += pnl_gbp
 
+    if collect_rejections:
+        return trades, rejections
     return trades
 
 

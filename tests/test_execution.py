@@ -119,19 +119,19 @@ def _pending_rows(engine, status=None) -> list:
 
 
 def _seed_pending_order(engine, *, ticker, t212_ticker, is_etf, decided_price=100.0,
-                         position_gbp=500.0, status="PENDING", currency="USD"):
+                         position_gbp=500.0, status="PENDING", currency="USD", momentum_pct=0.05):
     with engine.begin() as conn:
         conn.execute(sa_text("""
             INSERT INTO pending_orders
                 (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
                  position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
             VALUES (:ticker, :t212_ticker, :is_etf, :currency, :now, :decided_price,
-                    :position_gbp, 0.05, :stop_price, 0.02, :status, :now)
+                    :position_gbp, :momentum_pct, :stop_price, 0.02, :status, :now)
         """), {
             "ticker": ticker, "t212_ticker": t212_ticker, "is_etf": is_etf,
             "currency": currency, "now": datetime.utcnow().isoformat(),
             "decided_price": decided_price, "position_gbp": position_gbp,
-            "stop_price": decided_price * 0.9, "status": status,
+            "stop_price": decided_price * 0.9, "status": status, "momentum_pct": momentum_pct,
         })
 
 
@@ -690,7 +690,11 @@ def test_no_position_count_cap_many_open_positions_do_not_block_submission(db_en
 def test_max_total_deployed_stops_submission_partway(db_engine, v2_mocks, mocker):
     """5 pending ETF decisions, cold start (0% deployed), max_total_deployed
     =0.15 with each order sizing to £500 (10 qty x £50 mocked price) against
-    a £10,000 account (5% each) -- must stop after the 3rd, 3 still PENDING."""
+    a £10,000 account (5% each) -- 3 fit, 2 do not. Skip-and-continue
+    (2026-08-01) means the loop still walks every candidate rather than
+    stopping the run the instant the cap binds -- the 2 that don't fit are
+    marked REJECTED_CAPACITY, not left PENDING (see CLAUDE.md's "Trade
+    prioritization and capacity-allocation engine" section)."""
     from brokers.trading212 import submit_pending_etf_orders
 
     v2_mocks.get_positions.return_value = []
@@ -701,7 +705,11 @@ def test_max_total_deployed_stops_submission_partway(db_engine, v2_mocks, mocker
     n = submit_pending_etf_orders(_submission_config(max_deployed=0.15, etf_enabled=True))
 
     assert n == 3
-    assert len(_pending_rows(db_engine, status="PENDING")) == 2
+    assert len(_pending_rows(db_engine, status="PENDING")) == 0
+    rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rejected) == 2
+    for row in rejected:
+        assert row["resolution_note"] is not None and "deploy" in row["resolution_note"].lower()
 
 
 def test_uncapped_submission_still_places_every_pending_row(db_engine, v2_mocks, mocker):
@@ -1381,3 +1389,193 @@ def test_t212_error_email_disabled_does_not_consume_the_cooldown(db_engine, mock
     _send_t212_error_email("error while disabled", _email_config(enabled=False))
 
     assert get_metadata_str(_T212_ERROR_EMAIL_LAST_SENT_KEY) is None
+
+
+# ---------------------------------------------------------------------------
+# Trade prioritization and capacity-allocation engine (2026-08-01) -- see
+# CLAUDE.md's "Trade prioritization and capacity-allocation engine" section
+# for the full design writeup and the analysis/backtest.py mirror.
+# ---------------------------------------------------------------------------
+
+def test_submission_ranks_by_momentum_descending_not_decided_at(db_engine, v2_mocks, mocker):
+    """Priority is signal strength (momentum_pct, descending), not decide
+    order -- seed three rows with momentum deliberately out of decided_at
+    order and confirm orders are actually placed strongest-first."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    frame = _bullish_frame()
+    close = float(frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"WEAK": frame, "MEDIUM": frame, "STRONG": frame})
+    # Decided in WEAK, STRONG, MEDIUM order -- momentum ranking must
+    # override this entirely.
+    _seed_pending_order(db_engine, ticker="WEAK", t212_ticker="WEAK_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.02)
+    _seed_pending_order(db_engine, ticker="STRONG", t212_ticker="STRONG_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.30)
+    _seed_pending_order(db_engine, ticker="MEDIUM", t212_ticker="MEDIUM_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.15)
+
+    n = submit_pending_etf_orders(_submission_config(max_deployed=1.0, etf_enabled=True))
+
+    assert n == 3
+    placed_order = [c.args[0] for c in v2_mocks.place_market_order.call_args_list]
+    assert placed_order == ["STRONG_EQ", "MEDIUM_EQ", "WEAK_EQ"]
+
+
+def test_skip_and_continue_admits_smaller_lower_priority_candidate_past_a_rejected_larger_higher_priority_one(
+    db_engine, v2_mocks, mocker,
+):
+    """A large, HIGH-momentum candidate that doesn't fit remaining capacity
+    is rejected, and the walk continues to a smaller, LOWER-momentum
+    candidate that fits -- proving admission genuinely continues past a
+    miss rather than stopping (the old break-on-first-miss behaviour)."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    frame = _bullish_frame()
+    close = float(frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"BIG_STRONG": frame, "SMALL_WEAK": frame})
+    _seed_pending_order(db_engine, ticker="BIG_STRONG", t212_ticker="BIG_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.30, position_gbp=9000.0)
+    _seed_pending_order(db_engine, ticker="SMALL_WEAK", t212_ticker="SMALL_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.02, position_gbp=200.0)
+
+    # v2_mocks' account: totalValue=10,000, investments.currentValue=0.0 --
+    # BIG_STRONG (£9,000) alone would deploy 90%, comfortably over a 50% cap;
+    # SMALL_WEAK (£200) alone deploys only 2%, comfortably under it.
+    n = submit_pending_etf_orders(_submission_config(max_deployed=0.5, etf_enabled=True))
+
+    assert n == 1
+    placed_tickers = [c.args[0] for c in v2_mocks.place_market_order.call_args_list]
+    assert placed_tickers == ["SMALL_EQ"], (
+        "the smaller, lower-priority candidate must still be admitted after "
+        "the larger, higher-priority one is rejected for not fitting"
+    )
+    rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rejected) == 1 and rejected[0]["ticker"] == "BIG_STRONG"
+    assert len(_pending_rows(db_engine, status="SUBMITTED")) == 1
+
+
+def test_rejected_capacity_note_has_reconstructable_detail(db_engine, v2_mocks, mocker):
+    """A REJECTED_CAPACITY row's resolution_note must state the actual
+    numbers (would-be deployed %, cap, position size, already-invested,
+    total account value) needed to independently verify the rejection was
+    correct after the fact -- not just a bare status flip."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    frame = _bullish_frame()
+    close = float(frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"TOO_BIG": frame})
+    _seed_pending_order(db_engine, ticker="TOO_BIG", t212_ticker="TOOBIG_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.10, position_gbp=6000.0)
+
+    submit_pending_etf_orders(_submission_config(max_deployed=0.5, etf_enabled=True))
+
+    rows = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rows) == 1
+    note = rows[0]["resolution_note"]
+    assert note is not None
+    for expected_fragment in ("60.0%", "50%", "6000.00", "10000.00"):
+        assert expected_fragment in note, f"expected {expected_fragment!r} in note: {note!r}"
+
+
+def test_full_position_size_never_shrunk_to_fit_free_cash(db_engine, v2_mocks, mocker):
+    """The full, VaR-calibrated position_gbp is used for sizing the order --
+    never resized down to a fraction of free cash (2026-08-01; the old
+    `min(position_gbp, free_cash * 0.25)` line this replaces was itself a
+    resize-to-fit, the exact anti-pattern this design explicitly rejects).
+    A candidate whose full size exceeds free cash is REJECTED_CAPACITY
+    instead, never silently shrunk and submitted anyway."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    frame = _bullish_frame()
+    close = float(frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"AFFORDABLE": frame})
+    _seed_pending_order(db_engine, ticker="AFFORDABLE", t212_ticker="AFFORD_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.10, position_gbp=800.0)
+
+    # v2_mocks' free cash is £5,000 (see the v2_mocks fixture) -- £800 fits
+    # comfortably and must be sized at its FULL £800, not shrunk to
+    # free_cash * 0.25 (£1,250, which would coincidentally still be >= 800
+    # here -- the real proof is in the get_quantity_for_gbp call args below,
+    # not just that submission succeeded).
+    n = submit_pending_etf_orders(_submission_config(max_deployed=1.0, etf_enabled=True))
+
+    assert n == 1
+    call = v2_mocks.get_quantity_for_gbp.call_args
+    assert call.args[1] == pytest.approx(800.0), (
+        f"expected the full £800 position size to be passed to sizing, got {call.args[1]}"
+    )
+
+
+def test_oversized_position_exceeding_free_cash_is_rejected_capacity_not_shrunk(db_engine, v2_mocks, mocker):
+    """A candidate whose full position_gbp exceeds available free cash is
+    marked REJECTED_CAPACITY and skipped -- never silently shrunk to fit."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    frame = _bullish_frame()
+    close = float(frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"TOO_MUCH_CASH": frame})
+    # v2_mocks' free cash is £5,000 -- this position exceeds it outright.
+    _seed_pending_order(db_engine, ticker="TOO_MUCH_CASH", t212_ticker="TOOMUCH_EQ", is_etf=True,
+                        decided_price=close, momentum_pct=0.10, position_gbp=8000.0)
+
+    n = submit_pending_etf_orders(_submission_config(max_deployed=1.0, etf_enabled=True))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rows) == 1
+    assert "free cash" in rows[0]["resolution_note"].lower()
+
+
+def test_stock_job_sees_capacity_already_consumed_by_etf_job_via_live_state(db_engine, v2_mocks, mocker):
+    """Capacity checks read the real, live, current T212 account state at
+    the moment EACH job runs -- never a tracked/projected running total
+    (design point 4). This is what naturally resolves the ETF/stock
+    cross-job timing question: simulate the ETF job (07:00 UTC) running
+    first and consuming capacity, then update the MOCKED account state to
+    reflect what T212 would now genuinely report (as a real API would),
+    and confirm the stock job (13:30 UTC), reading that fresh state, sees
+    the ETF job's consumption -- not a stale figure from before it ran."""
+    from brokers.trading212 import submit_pending_etf_orders, submit_pending_stock_orders
+
+    etf_frame = _bullish_frame()
+    stock_frame = _bullish_frame()
+    etf_close = float(etf_frame["close"].iloc[-1])
+    stock_close = float(stock_frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"BIG_ETF": etf_frame, "STOCK_CAND": stock_frame})
+
+    _seed_pending_order(db_engine, ticker="BIG_ETF", t212_ticker="BIGETF_EQ", is_etf=True,
+                        decided_price=etf_close, momentum_pct=0.10, position_gbp=4000.0)
+    _seed_pending_order(db_engine, ticker="STOCK_CAND", t212_ticker="STOCKCAND_US_EQ", is_etf=False,
+                        decided_price=stock_close, momentum_pct=0.10, position_gbp=2000.0)
+
+    cfg = _submission_config(max_deployed=0.5, etf_enabled=True, stock_enabled=True)
+
+    # ETF job: cold start, £10,000 total, 0 invested -- £4,000 (40%) fits
+    # under the 50% cap.
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0, "cash": {"availableToTrade": 10_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    n_etf = submit_pending_etf_orders(cfg)
+    assert n_etf == 1
+    v2_mocks.place_market_order.assert_called_once()
+
+    # Stock job runs later -- the mock now reflects what T212 would
+    # genuinely report AFTER the ETF job's fill (invested rose to £4,000).
+    # A stale/tracked total from before the ETF job ran would incorrectly
+    # still show 0% deployed and admit the stock candidate; the real,
+    # freshly-read 40%-deployed state leaves only 10% (£1,000) of headroom
+    # under the 50% cap -- not enough for the £2,000 stock candidate.
+    v2_mocks.place_market_order.reset_mock()
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0, "cash": {"availableToTrade": 6_000.0},
+        "investments": {"currentValue": 4_000.0},
+    }
+    n_stock = submit_pending_stock_orders(cfg)
+
+    assert n_stock == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rejected) == 1 and rejected[0]["ticker"] == "STOCK_CAND"

@@ -3990,6 +3990,208 @@ system's real behaviour match its own validated research rather than
 continuing to run on parameters nobody had actually re-derived since V1,
 not a claim that 5%/50% is a fully solved, final answer.
 
+### Trade prioritization and capacity-allocation engine (2026-08-01)
+
+Direct follow-up to "Live execution switched to the compounding
+two-parameter scheme" immediately above — that work closed the sizing/cap
+gap between live and backtest but left the entry-ADMISSION ORDER exactly
+as it always was: `priority_rank = (0 if is_etf else 1, idx)` — ETF group
+first, then whatever order tickers happen to appear in `config.yaml`'s
+`instruments:` dict. Confirmed-arbitrary, never designed, the same failure
+mode that produces a rule like this in the first place: implement whatever
+is easiest, not what's actually intended. This section replaces it with a
+properly reasoned design, adopted live the same day it was built —
+identical build-validate-deploy sequence as the portfolio-cap and
+compounding work.
+
+**Design, as agreed before building anything:**
+
+1. **Priority is by signal confidence/strength, not position size** — two
+   deliberately independent questions ("is this worth doing" vs. "can we
+   fit it"). Signal strength = `momentum_pct`, the continuous trailing-12-
+   month return already computed for every entry (this system is long-only
+   and only ever enters when momentum > 0, so higher momentum is
+   unambiguously "a stronger positive trend," with no sign-direction
+   ambiguity to resolve). Nothing new to compute — `brokers/trading212.py`
+   was already storing this on every `pending_orders` row
+   (`_queue_pending_order(..., momentum_pct=...)`); it just wasn't being
+   used to rank anything.
+2. **Skip-and-continue, not resize-to-fit.** A candidate that doesn't fit
+   remaining capacity is skipped — the walk continues to the NEXT candidate
+   in priority order (a smaller, lower-priority one may still fit) — rather
+   than either stopping entirely (the old `break` behaviour) or shrinking
+   the candidate's own size to fit (a real, separate bug this task's
+   investigation found and fixed — see point 4 below).
+3. **`REJECTED_CAPACITY` status, never deleted** — a proposed-but-
+   unadmitted candidate is fully recorded (same auditability principle as
+   `SKIPPED_PRICE_MOVED`), with enough detail to reconstruct the decision
+   afterward: ticker, date, is_etf, momentum, the position_gbp it would
+   have taken, the would-be deployed fraction, the configured cap, and the
+   account state at the moment of rejection.
+4. **Capacity checks against real, live, current T212 account state at the
+   moment each job runs — never a tracked/projected running total.** This
+   was already how `_submit_pending_orders()` worked (one fresh
+   `client.get_account_summary()` call at the top of each job, matching
+   the compounding-sizing design above) and needed no new mechanism — it's
+   what naturally resolves the ETF/stock cross-job timing question: the
+   stock job (13:30 UTC) reads T212's actual current state, which already
+   reflects whatever the ETF job (07:00 UTC) placed earlier that day.
+
+**A real, related bug found and fixed while implementing point 2.**
+`_submit_pending_orders()`'s existing `position_gbp = min(row["position_gbp"],
+free_cash * 0.25)` line was itself a resize-to-fit — silently shrinking a
+VaR-calibrated position down to a quarter of free cash, exactly the
+anti-pattern design point 2 rejects. Removed: the full, intended
+`position_gbp` is now used unconditionally; a candidate whose full size
+exceeds free cash is `REJECTED_CAPACITY` (a new, second rejection reason
+alongside the deployment-cap one), never silently shrunk and submitted
+anyway.
+
+**Live mechanism (`brokers/trading212.py`):**
+- `_load_pending_orders()` now reads `ORDER BY momentum_pct DESC,
+  decided_at ASC` (the second key a deterministic tiebreak for a genuine
+  momentum tie, not a re-introduction of decide-order priority) instead of
+  `ORDER BY decided_at ASC` — still called separately per asset class (two
+  distinct scheduled jobs, LSE-hours vs. NYSE-hours), so ETF and stock
+  candidates are never ranked against each other in one list; each job
+  ranks only its own asset class's candidates. SQLite's default NULL
+  ordering puts an unknown-momentum candidate last in the DESC sort,
+  matching this project's existing NULLS-LAST convention elsewhere.
+- `_submit_pending_orders()`'s loop no longer has a single top-of-loop cap
+  check that `break`s the whole run. Each candidate's FULL position_gbp is
+  computed, then checked against both `max_total_deployed` (would this
+  candidate's own full size push deployed capital over the cap?) and free
+  cash (does its full size exceed what's actually available?) — a miss on
+  either resolves the row to `REJECTED_CAPACITY` with a detailed note and
+  `continue`s to the next candidate; nothing stops the run early any more
+  except a genuine order failure or exhausted free cash below the £10
+  sanity floor.
+
+**Backtest mechanism (`analysis/backtest.py:simulate_portfolio_compounding()`,
+still the exact function `run_full_validation()` defaults to) — built to
+mirror the live mechanism exactly, per this task's own explicit
+requirement, not a parallel implementation that could drift:**
+- `precompute_ticker()` now also stores a `momentum` column (the same
+  `signals.compute_momentum_series()` already used internally to derive
+  the boolean `signal` column) — additive, harmless for the two older
+  engines that ignore it.
+- **ETF/stock combined-vs-separate ranking, decided and stated
+  explicitly, as asked.** Kept SEPARATE — one full ETF-candidate pass
+  (ranked by that day's own momentum, descending) fully admitted before
+  any stock candidate is even considered, exactly mirroring live's two
+  physically separate submission jobs. This is temporal sequencing, not a
+  priority judgement that ETFs matter more: live cannot combine them (an
+  ETF candidate submits at 07:00 UTC regardless of what any stock
+  candidate looks like at 13:30 UTC), so a backtest that combined them
+  into one cross-asset-class list would systematically model something
+  live can never do, breaking the "same path as live" requirement this
+  task explicitly re-stated. Implemented via a nested `_admit_group()`
+  helper (rank-then-skip-and-continue), called once for the day's ETF
+  group then once for the stock group, sharing the same running
+  `current_balance`/`current_deployed` state across both calls — so the
+  stock pass sees exactly whatever capacity the ETF pass already
+  consumed, same as live.
+- `collect_rejections: bool = False` (new parameter, default preserves the
+  original `list[dict]` return signature for every existing caller —
+  `analysis/validation.py`, the compounding sweep) — when `True`, returns
+  `(trades, rejections)` instead, `rejections` carrying the identical
+  fields the live `REJECTED_CAPACITY` note does.
+- **A real determinism bug found and fixed while building this**:
+  `flat_before_today` (the day's entry-candidate pool) is a Python `set`,
+  whose iteration order is not guaranteed stable. Under the OLD fixed
+  `(is_etf, idx)` priority tuple this never mattered (idx is unique per
+  ticker, so ties were structurally impossible) — under momentum-based
+  ranking, a genuine tie (or, in a test fixture, several tickers all
+  missing a momentum column) now CAN occur, and would otherwise resolve via
+  that nondeterministic set order. Fixed by adding each ticker's original
+  input-list `idx` as a deterministic last-resort tiebreak in
+  `_admit_group()`'s sort key — reached only on a true momentum tie, never
+  overriding a real priority difference.
+
+**Verified three ways, matching this project's standing discipline:**
+- **Full local suite passes (248 tests)** — new coverage: live submission
+  order genuinely follows momentum descending regardless of decide order;
+  skip-and-continue admits a smaller, lower-priority candidate after a
+  larger, higher-priority one is rejected (both live and backtest); every
+  `REJECTED_CAPACITY` record is self-consistent (recomputing
+  `would_deploy_pct` from the stored `current_deployed_gbp`/
+  `current_balance_gbp`/`position_gbp` matches the stored value and
+  genuinely exceeds the cap); the full-position-size-never-shrunk fix,
+  both the affordable case (full size used, not shrunk to `free_cash *
+  0.25`) and the oversized case (`REJECTED_CAPACITY`, not silently
+  resized); the ETF-then-stock live-state test (simulates the ETF job
+  consuming capacity, updates the mocked account state to what T212 would
+  genuinely report afterward, confirms the stock job's own fresh read sees
+  that consumption — proving capacity is read live per job, not tracked
+  across jobs); and the volatility-fairness comparison below.
+- **A bare `run_full_validation(config)` call, run against real 2007-2026
+  production data in an isolated server clone (deleted only after these
+  figures were captured, production untouched), produced real, materially
+  improved figures** — see the table below. Both legacy explicit overrides
+  (`uncapped=True`, `portfolio_mode=True`) reproduced their own
+  already-published figures exactly on the same data, confirming this
+  change is correctly scoped to priority/capacity logic only.
+- **The volatility-fairness question — measured directly, not assumed.**
+  A synthetic 2x2 grid (low/high volatility x low/high momentum, 4 tickers
+  per cell) all becoming candidates on the same day under a binding
+  capacity constraint, compared against a reconstructed break-on-first-miss
+  counterfactual computed from the exact same run's own data (not a second,
+  potentially-drifting simulation): low-volatility (large-allocation)
+  candidates were admitted at the same rate under both strategies in this
+  test (1 of 8 either way — a single large position can consume half the
+  entire capacity budget on its own, a structural limit no admission
+  ordering can change), but high-volatility (small-allocation) candidates
+  were admitted at DOUBLE the rate under skip-and-continue (6 of 8) versus
+  break (3 of 8), since skip-and-continue keeps using leftover capacity
+  break would have abandoned at the first miss. **Honest answer: skip-and-
+  continue does not resolve the structural size disadvantage for large,
+  calm names — that remains a mathematically unavoidable consequence of
+  capacity constraints — but it substantially improves overall capital
+  utilization and fairness for smaller trades, and never admits fewer
+  large-allocation candidates than break would have (proven directly: the
+  break-admitted low-vol set is always a subset of the skip-continue-
+  admitted one).**
+
+**Real production-data comparison, `start=2007-01-01, end=2026-07-30`,
+same window/config every V2 figure in this file uses:**
+
+| Metric | Old design (alphabetical priority, break-on-first-miss) | New design (momentum priority, skip-and-continue) |
+|---|---|---|
+| Total trades | 2,180 | 1,851 |
+| TRAIN CAGR / DD / PF | 3.27% / -11.57% / 1.46 | 4.25% / -11.42% / 1.57 |
+| TEST CAGR / DD / PF | 9.85% / -12.81% / 1.90 | 14.03% / -11.59% / 2.06 |
+| Blocks passed / 16 | 14 (fail 0, 1) | 14 (fail 0, 1) — identical pair |
+| Walk-forward | 83.4% (186/223) | 79.4% (177/223) |
+| TRAIN £50,000 → | £73,961 (vs £114,033 S&amp;P) | £82,985 (vs £114,033 S&amp;P) |
+| TEST £50,000 → | £92,643 (vs £114,149 S&amp;P) | **£118,380 (vs £114,149 S&amp;P)** |
+
+**Fewer, better trades, on every risk-adjusted metric — and the TEST
+window now genuinely beats buy-and-hold S&amp;P 500 in £ terms for the
+first time under any capped/compounding configuration measured this
+session.** TRAIN CAGR/PF both improve and drawdown is essentially
+unchanged; TEST CAGR/PF both improve materially. Walk-forward success rate
+is the one metric that's lower (79.4% vs 83.4%) — a genuinely mixed
+signal worth stating plainly rather than only reporting the positive
+numbers: fewer, more selective admissions apparently produced a small
+number of additional losing 6-month windows even as the aggregate
+train/test figures improved. Reservations already on record for the
+underlying 5%/50% parameter choice itself (both windows still don't beat
+the market outright on a fully risk-neutral view, the calmest names are
+still ceiling-dominated) are unaffected by this change and still apply —
+this section improves HOW candidates are chosen and fit within the
+existing 5%/50% budget, it does not re-examine whether 5%/50% itself is
+the right budget.
+
+Server-side verification clone (`/root/priority-capacity-verify`) deleted
+only after every figure above was captured; production DB and both
+systemd services confirmed untouched throughout (same verification method
+as every prior study today — `git status` clean, service
+`ActiveEnterTimestamp` unchanged from before this task began). Not
+committed as a config change — `trading212_invest.per_trade_pct`/
+`max_total_deployed` are unchanged from "Live execution switched to the
+compounding two-parameter scheme" above; this task only changed the
+ADMISSION LOGIC layered on top of those two numbers.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

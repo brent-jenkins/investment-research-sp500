@@ -994,7 +994,31 @@ def _has_pending_order(ticker: str) -> bool:
 
 
 def _load_pending_orders(is_etf: bool) -> list:
-    """PENDING rows for one asset class, oldest decision first."""
+    """PENDING rows for one asset class, ranked by signal strength — strongest
+    trailing-12-month momentum first (2026-08-01, replaces the confirmed-
+    arbitrary decided_at-then-config-order priority rule — see CLAUDE.md's
+    "Trade prioritization and capacity-allocation engine" section). Priority
+    ("is this worth doing") and position size ("can we fit it") are
+    deliberately independent questions: this function only ever answers the
+    first — the caller (_submit_pending_orders()) walks rows in this order
+    and decides fit separately, per candidate, against live capacity.
+
+    Only ever called separately per asset class (ETF submission and stock
+    submission are two distinct scheduled jobs, LSE-hours vs NYSE-hours) —
+    so ETF and stock candidates are never ranked against each other in one
+    list; each job ranks only its own asset class's candidates. This
+    mirrors the live submission timing exactly (ETFs always submit before
+    stocks, since the ETF job's own 07:00 UTC window is earlier in the day
+    than the stock job's 13:30 UTC window), not a priority judgement that
+    one asset class matters more — see the backtest engine's identical
+    two-pass-per-day structure in analysis/backtest.py:
+    simulate_portfolio_compounding() for the same reasoning applied there.
+
+    SQLite's default NULL ordering puts a NULL momentum_pct (should not
+    happen for a real queued entry, but defensively) last in a DESC sort —
+    an unknown-strength candidate is deprioritised, never crashes or wins
+    priority by accident.
+    """
     from sqlalchemy import text as sa_text
     from data.database import get_engine
     eng = get_engine()
@@ -1004,7 +1028,7 @@ def _load_pending_orders(is_etf: bool) -> list:
                    position_gbp, momentum_pct, stop_price, var_pct
             FROM pending_orders
             WHERE status = 'PENDING' AND is_etf = :is_etf
-            ORDER BY decided_at ASC
+            ORDER BY momentum_pct DESC, decided_at ASC
         """), {"is_etf": is_etf}).mappings().all()
     return [dict(r) for r in rows]
 
@@ -1665,12 +1689,32 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     Applies, in order: an enabled/paused gate specific to this asset class
     (etf_submission_enabled / stock_submission_enabled — see CLAUDE.md for
     why ETF submission ships paused), a price-sanity check per row against
-    the price recorded at decide time, then the max_total_deployed /
-    free-cash caps the old immediate-submission design enforced — just
-    applied here, against the account's live state at submission time,
-    instead of at decide time. No position-count cap (2026-08-01) — see
-    CLAUDE.md's "Live execution switched to the compounding two-parameter
-    scheme" section for why max_open_positions was retired.
+    the price recorded at decide time, then a capacity fit check against
+    max_total_deployed / free cash. No position-count cap (2026-08-01) —
+    see CLAUDE.md's "Live execution switched to the compounding
+    two-parameter scheme" section for why max_open_positions was retired.
+
+    Capacity is skip-and-continue, not resize-to-fit (2026-08-01, see
+    CLAUDE.md's "Trade prioritization and capacity-allocation engine"
+    section): a candidate that doesn't fit remaining capacity — at its
+    FULL, VaR-calibrated position_gbp, never shrunk — is marked
+    REJECTED_CAPACITY and the loop moves on to the next candidate in
+    priority (momentum) order, since a smaller lower-priority trade may
+    still fit even where a larger higher-priority one didn't. This
+    replaces two things the pre-2026-08-01 version did that both
+    contradicted this principle: a hard `break` the instant deployment hit
+    its cap (stranding every remaining candidate regardless of size), and
+    silently shrinking position_gbp to `free_cash * 0.25` — a real
+    resize-to-fit that quietly broke the VaR-calibrated size sizing was
+    supposed to guarantee.
+
+    total_val/invested/free_cash are read ONCE, from the account's real,
+    live state, at the top of this run — never a cross-job tracked or
+    projected total. This is what makes the ETF-then-stock timing question
+    resolve itself: the stock job (13:30 UTC) reads T212's actual current
+    state, which already reflects whatever the ETF job (07:00 UTC) placed
+    earlier that day, the same way VaR sizing already reads live balance
+    rather than a stale figure.
 
     Never raises. Returns the number of orders actually placed.
     """
@@ -1738,20 +1782,6 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     submitted = 0
 
     for row in pending:
-        # Cap enforcement — same shape as the BUY loop used before this
-        # change, just against submission-time account state. A cap binding
-        # here stops the run entirely; every row not yet reached stays
-        # PENDING and is retried at the next submission window rather than
-        # being marked skipped or lost. No position-count cap (2026-08-01)
-        # — see CLAUDE.md's "Live execution switched to the compounding
-        # two-parameter scheme" section; count is now an emergent
-        # consequence of per_trade_pct (maybe_place_orders()'s sizing
-        # ceiling) and max_total_deployed below, together.
-        if total_val > 0 and (invested / total_val) >= max_deployed_pct:
-            logger.info("%.0f%% deployed (limit %.0f%%) — stopping %s submission.",
-                        (invested / total_val) * 100, max_deployed_pct * 100, label)
-            break
-
         ticker = row["ticker"]
         t212_ticker = row["t212_ticker"]
 
@@ -1790,10 +1820,37 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 _resolve_pending(row["id"], "SKIPPED_PRICE_MOVED", note=note)
                 continue
 
-            position_gbp = min(row["position_gbp"] or 0.0, free_cash * 0.25)
+            # Full, VaR-calibrated position_gbp -- never shrunk to fit
+            # whatever capacity happens to remain (2026-08-01; the old
+            # `min(position_gbp, free_cash * 0.25)` line this replaces was
+            # itself a resize-to-fit, exactly the pattern this design
+            # explicitly rejects -- see CLAUDE.md's "Trade prioritization
+            # and capacity-allocation engine" section).
+            position_gbp = row["position_gbp"] or 0.0
             if position_gbp < 10:
-                logger.warning("Insufficient free cash (£%.2f) — stopping %s submission.", free_cash, label)
-                break
+                logger.warning("%s (%s): degenerate position size (£%.2f) — leaving pending.",
+                                ticker, t212_ticker, position_gbp)
+                continue
+
+            # Capacity fit check -- skip-and-continue, not resize-to-fit.
+            # Checked against this candidate's FULL size; a miss here marks
+            # REJECTED_CAPACITY and moves on to the next (lower-priority,
+            # momentum-ranked) candidate rather than stopping the run --
+            # see this function's own docstring for the full rationale.
+            deployed_after_pct = (invested + position_gbp) / total_val if total_val > 0 else 0.0
+            if total_val > 0 and deployed_after_pct > max_deployed_pct:
+                note = (
+                    f"would deploy {deployed_after_pct:.1%} of account (limit {max_deployed_pct:.0%}) -- "
+                    f"position £{position_gbp:.2f}, already invested £{invested:.2f} of £{total_val:.2f}"
+                )
+                logger.info("Skipping %s (%s) — %s", ticker, t212_ticker, note)
+                _resolve_pending(row["id"], "REJECTED_CAPACITY", note=note)
+                continue
+            if position_gbp > free_cash:
+                note = f"position £{position_gbp:.2f} exceeds available free cash £{free_cash:.2f}"
+                logger.info("Skipping %s (%s) — %s", ticker, t212_ticker, note)
+                _resolve_pending(row["id"], "REJECTED_CAPACITY", note=note)
+                continue
 
             quantity = client.get_quantity_for_gbp(
                 t212_ticker, position_gbp, research_ticker=ticker,
