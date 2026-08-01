@@ -5,7 +5,13 @@ placement, all three backtest engines, and the display-only Daily Briefing
 path) is actually wired to these functions, not just that the functions
 themselves are correct in isolation.
 """
-from analysis.decision import evaluate_exit_reason, is_asset_class_enabled, passes_entry_gate
+from analysis.decision import (
+    evaluate_exit_reason,
+    is_asset_class_enabled,
+    passes_entry_gate,
+    resolve_cash_constrained_position_gbp,
+    resolve_dynamic_max_position_gbp,
+)
 
 
 def _exit(**overrides):
@@ -139,3 +145,57 @@ def test_both_asset_classes_explicitly_true_is_the_same_as_absent():
     cfg = {"trading212_invest": {"etf_trading_enabled": True, "stock_trading_enabled": True}}
     assert is_asset_class_enabled(is_etf=True, config=cfg) is True
     assert is_asset_class_enabled(is_etf=False, config=cfg) is True
+
+
+# ---------------------------------------------------------------------------
+# resolve_dynamic_max_position_gbp() / resolve_cash_constrained_position_gbp()
+# -- the shared sizing-ceiling fix for the mark-to-market unbounded
+# compounding defect (2026-08-01, see CLAUDE.md's "Mark-to-market unbounded
+# compounding defect" section). Direct, deterministic tests on the actual
+# mechanism -- a synthetic multi-year backtest scenario (see
+# tests/test_portfolio_backtest.py's own scale test) genuinely cannot
+# reproduce the full magnitude of the original production-scale defect
+# (which involved dozens of simultaneously-appreciating tickers compounding
+# against each other over thousands of trades) within a fast unit test, so
+# these direct tests on the formula itself are the reliable, unambiguous
+# regression guard for the actual fix -- not a substitute for the
+# production-scale re-verification this fix was built to unblock.
+# ---------------------------------------------------------------------------
+
+def test_resolve_dynamic_max_position_gbp_uses_percentage_when_under_ceiling():
+    assert resolve_dynamic_max_position_gbp(10_000, 0.05, 1_000_000) == 500.0
+
+
+def test_resolve_dynamic_max_position_gbp_caps_at_absolute_ceiling_when_account_value_is_inflated():
+    """The exact failure mode found 2026-08-01: account_value_gbp inflated
+    by unrealized appreciation on an unrelated open position must never
+    translate into an uncapped sizing ceiling for a brand new entry."""
+    absurdly_inflated_account_value = 1e60
+    assert resolve_dynamic_max_position_gbp(absurdly_inflated_account_value, 0.05, 1_000_000) == 1_000_000
+
+
+def test_resolve_dynamic_max_position_gbp_boundary_exactly_at_ceiling():
+    # per_trade_pct * account_value lands EXACTLY on the ceiling -- must
+    # not be pushed either side of it by a boundary/off-by-one error.
+    assert resolve_dynamic_max_position_gbp(20_000_000, 0.05, 1_000_000) == 1_000_000
+
+
+def test_resolve_cash_constrained_position_gbp_binds_when_position_exceeds_cash_fraction():
+    assert resolve_cash_constrained_position_gbp(10_000, 5_000, cash_fraction=0.25) == 1_250.0
+
+
+def test_resolve_cash_constrained_position_gbp_no_effect_when_comfortably_under_cash_fraction():
+    assert resolve_cash_constrained_position_gbp(500, 5_000, cash_fraction=0.25) == 500
+
+
+def test_resolve_cash_constrained_position_gbp_is_never_inflated_by_unrealized_gains():
+    """The specific structural reason this clamp closes most of the
+    exposure even before the absolute ceiling above does: available_cash_gbp
+    must reflect only genuine, realised, spendable cash -- confirmed here
+    simply by the function never looking at anything BUT the two arguments
+    it's given, so a caller passing a real, unrealized-gains-free cash
+    figure (as both live and the mark-to-market backtest engine now do)
+    gets a clamp that's structurally immune to this defect's root cause,
+    regardless of how inflated a separate account_value_gbp figure
+    elsewhere becomes."""
+    assert resolve_cash_constrained_position_gbp(1e60, 1_000, cash_fraction=0.25) == 250.0

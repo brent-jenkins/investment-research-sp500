@@ -26,7 +26,7 @@ None of these three was caught by a test — the test suite at the time tested e
 
 **What was reviewed and left duplicated, on purpose, with the reason recorded rather than silently accepted:**
 - **Candidate priority ranking** (momentum descending, tie-break by insertion order) is expressed once in SQL (`brokers/trading212.py:_load_pending_orders()`: `ORDER BY momentum_pct DESC, decided_at ASC`) and once in Python (`analysis/backtest.py:simulate_portfolio_compounding()`'s `_admit_group()`: `sort(key=lambda c: (-c[1], idx))`). These cannot literally share one function — one runs as a database query, the other as an in-memory sort over a day's candidate list — so this is accepted, reviewed duplication of a simple rule, not overlooked duplication. Both sides are covered by their own tests asserting momentum-descending order (`tests/test_execution.py`, `tests/test_portfolio_backtest.py`).
-- **The deployment-cap arithmetic** (`_submit_pending_orders()`'s `deployed_after_pct > max_deployed_pct` vs. `simulate_portfolio_compounding()`'s `would_deploy_pct > max_deployed_pct`) is functionally the identical check but was left as two call sites rather than extracted, since `simulate_portfolio()` (the frozen, historical, explicit-override-only engine behind "Portfolio-capped validation findings") deliberately uses a *different*, simpler formula (checked before the candidate's own size is added, not after) that must never be touched for reproducibility reasons — extracting a shared helper risked either destabilizing that frozen engine or producing a helper with a parameter no one call site actually needs. Reviewed and left as-is; revisit if a fourth call site for this exact check is ever added.
+- **The deployment-cap arithmetic — this claim was WRONG, corrected 2026-08-01.** This bullet originally read: "`_submit_pending_orders()`'s `deployed_after_pct > max_deployed_pct` vs. `simulate_portfolio_compounding()`'s `would_deploy_pct > max_deployed_pct` is functionally the identical check but was left as two call sites rather than extracted... reviewed and left as-is." That verdict checked only that both sides used the same comparison operator and threshold — it never checked that both sides' `invested`/`deployed` numerator meant the same thing. They didn't: live's `deployed_after_pct` uses `invested = summary["investments"]["currentValue"]`, T212's genuine mark-to-market valuation of open positions; `simulate_portfolio_compounding()`'s `current_deployed` was pure cost basis — the sum of each open position's original entry-time `position_gbp`, never adjusted for any unrealized gain or loss for as long as the position stayed open. A winning position never "grew" for capacity purposes under the old backtest engine; a losing one never "shrank." This is exactly the class of divergence `tests/test_live_backtest_parity.py` was built to catch — but that suite's scope was `analysis/decision.py`'s two functions only (`evaluate_exit_reason`/`passes_entry_gate`); deployment-cap logic was never in its test matrix at all, so it was never positioned to catch this regardless of the review above. See "Live/backtest deployment-cap parity" below for the full investigation, the fix (`analysis/backtest.py:simulate_portfolio_compounding_mtm()`, a genuinely mark-to-market engine kept alongside the original cost-basis one, selectable via `analysis.validation.run_full_validation(..., mark_to_market=True)`), and which of today's validated findings needed re-verification as a result. The underlying reason two call sites exist at all (rather than one shared function) is unchanged and still correct: `simulate_portfolio()` deliberately uses a different, simpler, frozen formula for reproducibility reasons unrelated to this bug — extracting a shared helper still risks destabilizing that frozen engine. What was wrong was calling the two REMAINING sites (live's real submission check, backtest's compounding-mode check) "functionally identical" without verifying it.
 - **`analysis/universe.py` (`is_member`, `get_max_holding_days`), `analysis/signals.py` (`compute_signal_series`), `analysis/crisis.py` (`is_crisis_day`/`is_entry_blocked`/`compute_raw_trigger`/`extend_trigger`), and `analysis/volatility.py` (`_atr`, `_resolve_entry_stop`, `_var_position_size_core`)** were already single, shared implementations before this task — confirmed during the audit, not assumed. No changes were needed to any of them.
 
 **The enforcement mechanism — `tests/test_live_backtest_parity.py`, part of the standard suite, not a one-off check.** Unlike every other test in this suite (which tests live or the backtest engine in isolation), this file drives **both real code paths** — `brokers/trading212.py`'s actual `maybe_place_orders()`/`maybe_exit_positions()` and `analysis/backtest.py`'s actual `simulate_trades()` — against byte-identical synthetic price history, and asserts they reach the identical decision: 4 entry scenarios (fires when all three conditions hold; blocked by signal, by crisis, by non-membership) and 5 exit scenarios (one per priority level: `CRISIS_EXIT`, `STOP_LOSS`, `SIGNAL_OFF`, `MAX_HOLDING`, `INDEX_REMOVAL`), each constructed so exactly one trigger fires and the others are deliberately kept out of range. Only the Trading212 HTTP client and the DB/price-data read layer are mocked; every decision-making function itself runs for real on both sides. `tests/test_decision.py` separately unit-tests `analysis/decision.py`'s two functions directly (priority ordering, `None`-tolerance) — that is not a substitute for the parity test, since a shared function only protects against drift if every call site is actually wired to it; the parity test is what catches a call site that quietly stops calling the shared function or passes it the wrong argument, which a unit test on the function in isolation cannot.
@@ -4381,6 +4381,422 @@ Covered by `tests/test_ingestion.py:test_init_db_does_not_delete_non_watchlist_t
 what the old purge would have deleted) is confirmed to survive a real
 `init_db()` call unchanged. Full suite (381 tests, +1 from this change)
 passes.
+
+### Live/backtest deployment-cap parity (2026-08-01) — a fourth instance of the top-of-file invariant, found the same day
+
+**Confirmed: `simulate_portfolio_compounding()`'s deployment-cap tracking
+was cost-basis; live trading's was genuine mark-to-market — a real
+divergence, not a documentation slip.** Live (`brokers/trading212.py:
+_submit_pending_orders()`) reads `invested = summary["investments"][
+"currentValue"]` straight from T212's account summary — the broker's own
+real, current valuation of every open position, reflecting whatever
+unrealized gain or loss it currently carries. The backtest engine's
+`current_deployed` was the running sum of each open position's *original*
+`position_gbp` at entry, decremented by that same original figure on
+exit (`current_deployed -= ot["position_gbp"]`) — never once adjusted for
+how far the position's price had actually moved while it stayed open. A
+position that had genuinely doubled in value still only ever "counted"
+at its entry cost for capacity purposes; a position that had halved
+still counted at full original cost too. `current_balance` (what
+`per_trade_pct` sizing is measured against) had the identical gap — it
+only ever moved on a *realised* exit, never reflecting a still-open
+position's unrealized P&L, unlike T212's real `totalValue`.
+
+**Why the existing parity suite didn't catch this — checked directly,
+not assumed.** `tests/test_live_backtest_parity.py`'s entire test matrix
+covers exactly two functions: `evaluate_exit_reason()` and
+`passes_entry_gate()` in `analysis/decision.py` (4 entry scenarios, 5 exit
+scenarios). Deployment-cap/capacity logic was never in its scope at
+all — not a gap in coverage of something it was trying to test, but a
+decision that was never on its list to test in the first place. Separately,
+the "Live/backtest decision-logic parity" audit at the top of this file
+*did* review the deployment-cap duplication specifically the same day and
+explicitly decided to leave it as two call sites (see the corrected
+bullet above) — but justified that decision by confirming the two sides
+used the same comparison operator and threshold, never checking that
+both sides' underlying `invested`/`deployed` numerator meant the same
+thing. Structural similarity was verified; semantic equivalence wasn't.
+
+**The fix — `analysis/backtest.py:simulate_portfolio_compounding_mtm()`,
+a new, separately-callable engine kept alongside the original, not a
+silent replacement.** Every result validated against the original
+cost-basis `simulate_portfolio_compounding()` before this fix stays
+exactly reproducible — that engine is completely unchanged, matching the
+established "frozen engine, new one added alongside it" pattern
+`simulate_portfolio()`/`run_candidate()` already set. The new engine
+tracks cash and mark-to-market position value SEPARATELY, mirroring
+T212's own `cash.availableToTrade` + `investments.currentValue` =
+`totalValue` split: `cash` moves only on realised entry/exit transactions
+(decreases by `position_gbp` on entry, increases by `position_gbp +
+pnl_gbp` on exit); every open position's current value is recomputed on
+demand as `position_gbp * (last_known_price / entry_price)`;
+`current_balance` (`cash` + sum of all open positions' current value) and
+`current_deployed` (that same sum alone) are both recomputed fresh once
+per day, after that day's exits and before that day's entries — stable
+across a single day's ETF-then-stock admission passes for the same
+reason the cost-basis engine's own `current_balance` already was (moving
+cash into an equally-valued new position doesn't change total account
+value at the instant of entry). Wired into
+`analysis.validation.run_full_validation(..., mark_to_market=True)` —
+`False` by default, so nothing changes unless a caller opts in, and the
+returned dict's `deployment_basis` field (`"cost_basis"` /
+`"mark_to_market"`) makes which accounting basis produced any given
+result explicit rather than inferred from `engine_used` alone.
+
+**Verified to actually diverge in the correct direction, both ways, not
+just built and trusted.** Two unit tests construct a still-*open*
+position (never exited, so any capacity difference can only come from how
+its unrealized value is or isn't counted) and check the admission
+decision on a candidate's very first eligible day — deliberately not
+"ever admitted across the whole run," since a run's own final-day
+`END_OF_DATA` force-close realises P&L before that same day's entries are
+considered, which would converge both engines and mask the exact thing
+being tested. With a position that had doubled in value while still
+open, the cost-basis engine admits a waiting candidate that the
+mark-to-market engine correctly rejects (the doubled position now counts
+for more capacity); with a position that had roughly halved, the reverse
+holds (the mark-to-market engine correctly admits a candidate the
+cost-basis engine still rejects). A third test confirms a still-open
+position's unrealized loss never touches `cash` or produces a trade
+record — unrealized P&L is not realised P&L.
+
+Covered by 4 new tests in `tests/test_portfolio_backtest.py`
+(appreciation reduces capacity, depreciation frees it, unrealized P&L
+never leaks into cash or a trade record, `collect_rejections` return-shape
+parity) and 3 new tests in `tests/test_validation.py` (the flag correctly
+dispatches to the mtm engine, the default stays on the unchanged
+cost-basis engine, and the flag correctly has no effect under `uncapped`/
+`portfolio_mode`, which have no deployment-cap concept for it to apply
+to). Full suite: 388 passing.
+
+**Re-verification of today's key findings under genuine mark-to-market
+tracking** — Part 9's capped-vs-priority-engine reversal, Part 11's
+ETF-concentration finding (static-50's -87.49% drawdown), and the
+curated-40-vs-rolling-40 result — is a separate, materially larger
+compute task (three full historical re-runs) tracked and reported
+independently; see the follow-up entry immediately below once it lands.
+
+### Mark-to-market unbounded compounding defect (2026-08-01)
+
+The first attempt to run the three re-verifications above surfaced a
+genuine, severe defect in `simulate_portfolio_compounding_mtm()` before
+any of the three findings could actually be re-checked — production-scale
+runs produced `position_gbp` values of 10^60-10^76, every historical
+validation block failing, CAGR in physically impossible ranges. Not a
+reporting artifact — confirmed directly from real trade rows.
+
+**Two independent, compounding causes, both found and fixed the same
+day, not one:**
+
+1. **Unrealized appreciation feeding forward into new-entry sizing.**
+   `current_balance` (what `per_trade_pct` sizing is measured against)
+   includes every open position's current mark-to-market value —
+   deliberately, since that's what genuinely matches T212's real
+   `totalValue`. But a single position that appreciates enormously while
+   never triggering an exit condition inflates `current_balance`
+   indefinitely, which inflates the sizing ceiling for every OTHER,
+   unrelated new entry, which (if those also stay open and appreciate)
+   inflates `current_balance` further still — an exponential feedback
+   loop with no natural limit across a long enough backtest. Confirmed
+   directly: a synthetic two-ticker scenario (one massively-appreciating,
+   never-exiting position; a second, flat-priced ticker cycling
+   entries/exits every 30 days, sized fresh each time) reproduced the
+   mechanism cleanly — the second ticker's position size grew from £250
+   to over £20,000 purely from the first ticker's unrelated, unrealized
+   paper gains, with the second ticker's own price never moving at all.
+2. **A separate, real bug in the same engine's cash bookkeeping.** `cash`
+   was credited on every exit (`cash += position_gbp + pnl_gbp`) but
+   never DEBITED on entry — found while implementing the fix for (1), not
+   anticipated in advance. This meant every open position's cost basis
+   was effectively double-counted in `current_balance = cash + mtm_value`
+   — once as "still sitting in cash" (never actually spent) and again as
+   `mtm_value` — compounding `current_balance` upward on every single
+   entry/exit cycle regardless of whether the position was ever
+   profitable or ever appreciated while open. This alone was confirmed to
+   be a major contributor to the magnitude of the runaway, independent of
+   cause (1).
+
+**Is live trading exposed to the same defect? Checked directly, not
+assumed — the answer is nuanced, not a clean yes/no.** Live sizing
+(`brokers/trading212.py`) already reads T212's real `totalValue`
+(mark-to-market, same as the backtest engine) for `dynamic_max_position_
+gbp`, so cause (1)'s mechanism is structurally present in live too — the
+only reason it's never been observed live is that the system has been
+running for days, not years, and hasn't yet held a position through a
+large enough unrealized run-up to expose it. **However, live already had
+a real, independent, pre-existing defence the backtest engine was simply
+missing**: `position_gbp = min(position_gbp, free_cash * 0.25)` — a
+second clamp against `cash.availableToTrade`, T212's real, currently-
+uninvested cash, which is NEVER inflated by unrealized gains on other
+positions (cash only ever moves on a genuine realised transaction).
+Confirmed directly by reading the code, not inferred: this meant live's
+real-world exposure was already narrower than the backtest's clean
+numerical runaway suggested — an oversized *sizing calculation* could
+still occur (feeding off a corrupted `total_val`), but the *order actually
+placed* was already bounded to at most 25% of real, currently-available
+cash, not an unbounded figure. Not zero risk, but a materially different
+(and better) failure mode than "could place an order for a nonsensical
+amount" — and cause (2), the cash-double-counting bug, was specific to
+the new backtest engine's own bookkeeping and never existed in live at
+all, since live reads T212's real cash figure directly rather than
+tracking it locally.
+
+**The fix — one shared implementation, not a backtest-side patch,**
+matching the exact pattern this project has now applied five times in
+one day (see `analysis/decision.py`'s own docstring for the first four:
+exit priority, entry gate, `is_etf` dispatch, deployment-cap tracking).
+Two new functions in `analysis/decision.py`:
+
+- `resolve_dynamic_max_position_gbp(account_value_gbp, per_trade_pct,
+  absolute_max_position_gbp)` — `min(account_value_gbp * per_trade_pct,
+  absolute_max_position_gbp)`. `absolute_max_position_gbp` is a new
+  config key (`trading212_invest.absolute_max_position_gbp`, default
+  £1,000,000) — deliberately **not** a reintroduction of the retired
+  `max_position_gbp` (rejected 2026-08-01 as a PRIMARY sizing driver
+  because a flat ceiling saturates VaR's own volatility differentiation
+  for low-volatility names — see "Compounding portfolio backtest" above).
+  This is a rarely-binding SAFETY backstop: `per_trade_pct` still governs
+  sizing in every ordinary case; the ceiling only intervenes once that
+  figure becomes absurd. Set high enough (20x+ a realistic account size)
+  to be inert for any plausible real compounding trajectory while still
+  decisively breaking the exponential shape of the defect.
+- `resolve_cash_constrained_position_gbp(position_gbp, available_cash_gbp,
+  cash_fraction=0.25)` — the same `min(position_gbp, cash * 0.25)` clamp
+  live already had, now a shared function rather than an ad-hoc inline
+  `min()`, and newly ported into `simulate_portfolio_compounding_mtm()`
+  (which tracks its own `cash` variable, distinct from `current_balance`,
+  specifically to support this).
+
+Both functions are called identically by live order placement
+(`brokers/trading212.py:maybe_place_orders()`) and
+`simulate_portfolio_compounding_mtm()`. The original, frozen cost-basis
+`simulate_portfolio_compounding()` also gets the
+`resolve_dynamic_max_position_gbp()` ceiling (defense-in-depth — that
+engine's `current_balance` only ever grows from realised profit, so it
+was never vulnerable to cause (1)'s specific mechanism, but the shared
+ceiling costs nothing and closes the theoretical gap) — it does NOT get
+the cash-clamp fix, since it has no independently-tracked cash concept to
+begin with and is deliberately left structurally unchanged, preserving
+its own reproducibility guarantee for every already-published cost-basis
+figure in this file.
+
+**Verified the fix actually works, not just assumed.** A calibrated
+synthetic scenario (one massively-appreciating never-exiting position,
+one repeatedly-cycling second position) that previously grew the second
+position's size from £250 toward tens of thousands now stays bounded to
+low thousands, consistent with the cash clamp binding correctly. Direct,
+deterministic unit tests on the two new functions themselves (`tests/
+test_decision.py`) confirm the ceiling caps an absurdly inflated account
+value at exactly the configured limit, with no off-by-one at the exact
+boundary, and that the cash clamp is structurally immune to inflated
+account-value figures by construction (it never reads `account_value_gbp`
+at all). A genuinely multi-year (~10 simulated years), many-compounding-
+entry scenario test (`tests/test_portfolio_backtest.py:
+test_mtm_many_year_compounding_never_produces_unbounded_position_sizes`)
+guards against a regression at meaningful scale — though, checked
+directly and stated honestly: a 2-ticker synthetic scenario cannot
+reproduce the FULL magnitude of the original production-scale defect
+(which involved dozens of simultaneously-appreciating tickers across
+thousands of trades over 19 years) within a fast unit test's runtime, so
+this test is a plausibility/bounded-growth guard, not a literal
+reproduction of the original 10^60-scale failure — production-scale
+re-verification (the task this fix exists to unblock) is the real,
+decisive confirmation, reported in the follow-up entry immediately below.
+
+Full suite: 400 passing (7 new: 6 direct `resolve_dynamic_max_position_
+gbp()`/`resolve_cash_constrained_position_gbp()` unit tests, 1 multi-year
+scale scenario).
+
+### Structural enforcement for live/backtest parity (2026-08-01)
+
+Direct follow-up to the section immediately above — a targeted parity
+test suite, however well-built, can only catch divergence in a decision
+someone thought to test in advance, and the deployment-cap gap wasn't on
+anyone's list until it was found by accident. Three layers, deliberately
+of decreasing strength, added the same day:
+
+1. **Mechanical scan for decision-shaped logic outside
+   `analysis/decision.py`** — a repo-level check over `brokers/
+   trading212.py` and `analysis/backtest.py`.
+2. **A comprehensive, end-to-end parity test** — a full historical
+   simulation through live's real decision code (dry-run, no orders
+   placed) and the backtest engine over identical data, asserting the
+   entire resulting trade sequence matches, not just a handful of
+   hand-picked scenarios.
+3. **A standing CLAUDE.md checklist** for any future change touching
+   either file.
+
+**Layer 1 — `tests/test_decision_logic_placement.py`, a mechanical AST
+scan for decision-shaped logic outside `analysis/decision.py`.** Parses
+`brokers/trading212.py` and `analysis/backtest.py`, finds every raw
+Python comparison (`>`, `<`, `>=`, `<=`, `==`, `!=`) whose operand is a
+genuine variable reference (not a coincidental string-literal mention)
+matching a curated list of decision-signal keywords
+(`deployed_pct`/`max_total_deployed`/`current_deployed`, `sig_on`,
+`is_member`, `entry_blocked`, `exit_reason`, `holding_days`/`max_hold`,
+`stop_price`, `crisis_now`), and fails if that comparison isn't in an
+explicit, CLAUDE.md-documented whitelist. A comparison that's only
+*reading* an already-decided outcome against a literal (`exit_reason ==
+"STOP_LOSS"`, `exit_reason is None`) is excluded — that's consuming a
+decision made elsewhere, not deriving a new one; a comparison against a
+*number* (a threshold, a percentage, a day count) is never excluded,
+since that's the actually dangerous shape — two places independently
+picking a different operator or threshold for the same quantity, exactly
+what the deployment-cap bug was.
+
+**What it caught immediately, on its own first real run — not a
+hypothetical, a genuine bug in the same day's own new code.** The brand
+new `simulate_portfolio_compounding_mtm()` (built earlier the same task)
+had already reproduced `would_deploy_pct = (current_deployed +
+position_gbp) / current_balance` verbatim from the original cost-basis
+engine — the scanner flagged both occurrences immediately. Fixed by
+extracting `analysis/backtest.py:_would_deploy_pct()`, a small shared
+helper both engines now call, rather than whitelisting the duplication —
+the semantically risky part (what "deployed" means) is now singly
+defined; only the trivial `> max_deployed_pct` branch (which differs
+structurally per engine — different rejection-record shape, different
+capacity bookkeeping) remains duplicated, and *that* remaining piece is
+whitelisted with the reason recorded inline in the test file. Live's own
+`deployed_after_pct > max_deployed_pct` in `_submit_pending_orders()`
+stays a separate, deliberately whitelisted entry too — it reads a live
+HTTP-sourced value and genuinely can't share one function with a
+backtest-simulated equivalent.
+
+**What Layer 1 does and doesn't catch, stated plainly (not overclaimed
+— see the module's own docstring for the same text):** catches a raw
+comparison using one of the listed keywords, living outside the
+whitelist. Does NOT catch decision logic expressed any other way — a
+lookup table, a dict-based dispatch, a call into a third function outside
+`analysis/decision.py` that itself contains an unshared comparison, or a
+comparison whose variable names don't happen to match the keyword list.
+It is a targeted, high-precision scan for the one specific anti-pattern
+this project has now been burned by (see `analysis/decision.py`'s own
+docstring for the earlier three instances found the same day), not a
+general-purpose decision-logic detector. Verified to actually fail on a
+deliberately injected synthetic violation (`test_scanner_actually_fails_
+on_a_deliberately_injected_violation`), and to correctly leave an
+unrelated, keyword-free comparison alone.
+
+**Layer 2 — `tests/test_comprehensive_replay_parity.py`, a genuinely
+continuous multi-day, multi-ticker replay.** Unlike every other parity
+test in this suite (which drives real live/backtest code against
+hand-picked isolated scenarios — one decision, one day), this file plays
+the role of T212's own API for real: a small in-process harness tracks
+cash and open positions and returns a genuinely mark-to-market
+`get_account_summary()`/`get_positions()` response computed from that
+state — exactly what T212 itself would return — while live's actual
+`maybe_place_orders()` / `submit_pending_etf_orders()` /
+`submit_pending_stock_orders()` / `maybe_exit_positions()` run for real,
+once per simulated trading day, across ~320 days and two tickers (an
+ETF and a stock, deliberately competing for the same shared deployment
+capacity) genuinely built to exercise the exact multi-day, capacity-
+sharing behaviour a single-scenario test structurally cannot. Compared
+against `simulate_portfolio_compounding_mtm()` run once over the
+identical price history — the two must agree on the exact (ticker,
+direction) → count of every BUY/SELL, not just "did entry ever happen."
+
+**Two real, structural findings surfaced during this test's own
+construction — reported here rather than quietly engineered around,
+since surfacing exactly this kind of thing is the whole reason Layer 2
+exists:**
+
+1. **A blind spot in the comparison itself.** An early version compared
+   plain *sets* of (ticker, direction) pairs — which silently treats
+   "sold once" and "sold five times" as identical. A sustained-decline
+   test scenario produced 5 separate `STOP_LOSS`-then-immediate-re-entry
+   cycles in the backtest engine but only 1 on the live replay side, and
+   the set-based comparison didn't notice. Fixed by comparing `Counter`s
+   (exact occurrence counts), not sets — the test file's own docstring
+   records this as the reason, not a hypothetical.
+2. **A genuine, previously-undocumented live/backtest divergence around
+   post-exit re-entry timing.** `brokers/trading212.py:
+   _load_open_order_tickers(days=30)` blocks re-entry into any ticker
+   with a `PLACED`/`FILLED` order in the last 30 real days — a real,
+   intentional dedup guard in live trading. `simulate_portfolio_
+   compounding_mtm()` (and every other backtest engine) has no equivalent
+   concept at all: the moment a position closes and `open_trade` is
+   `None` again, it's immediately eligible to re-enter the very next
+   day if the signal still qualifies. This means: after a stop-loss on a
+   ticker whose momentum hasn't yet turned negative, **live will not
+   re-attempt that ticker for 30 days; every backtest figure in this file
+   would have let it re-enter immediately.** This is a real, structural
+   gap between live's actual behaviour and every backtest number
+   reported to date — not fixed here (a design decision about the
+   correct re-entry cooldown, if any, belongs in a follow-up task, not
+   folded into building the detection mechanism itself), but explicitly
+   flagged rather than engineered around: the test scenario was
+   deliberately calibrated (a single severe price shock that flips
+   momentum negative in the same move that triggers the stop, see
+   `_rising_then_crashing_frame()`'s own docstring) to isolate capacity/
+   sizing/timing parity from this separate question, not to hide that the
+   divergence exists.
+
+**Verified to actually fail, the same standard as everything else in
+this file** — `test_replay_actually_fails_on_a_deliberately_injected_
+live_bug` patches `brokers.trading212.evaluate_exit_reason` to always
+return `None` (silently disabling every live exit) and confirms the
+replay correctly diverges (STKA's live SELL count drops to zero while
+backtest's doesn't), proving the mechanism catches a real behavioural
+break without being told in advance which decision was broken —
+unlike every other parity test in this suite, which has to be constructed
+around a specific, anticipated scenario.
+
+**What Layer 2 does and doesn't guarantee.** It replays a genuinely
+continuous multi-day, multi-ticker, capacity-sharing scenario — not "full
+19-year production history" (which would make the fast unit suite
+impractically slow to run on every commit); the mechanism, once proven
+correct on a meaningful multi-day walk, generalises, but a literal full-
+history replay as a periodic, separate (non-unit-suite) job would be a
+reasonable future addition, not built here. It exercises the ETF-then-
+stock same-day ordering and shared deployment-cap admission exactly as
+production does, but does not model every corner of live's real
+async order-fill polling (a same-day instant-fill simplification is used
+instead of a second, separately-mocked polling call — see the harness's
+own comments for why this is a reasonable simplification, not a gap that
+weakens what the test actually checks).
+
+**Layer 3 — a standing checklist, the weakest of the three, added here
+directly rather than as a separate file:**
+
+> **Any future change to `brokers/trading212.py` or
+> `analysis/backtest.py` must state explicitly, in its own commit
+> message or PR description, whether it introduces or modifies a
+> decision** — anything determining entry eligibility, exit triggers,
+> priority ordering, or capacity/deployment gating (as opposed to
+> execution mechanics: retry/back-off, DB bookkeeping, HTTP error
+> handling). If it does, confirm the change goes through
+> `analysis/decision.py` (or an equally shared module), not an inline
+> comparison in either file — and that Layers 1-2 above still pass
+> unmodified, or that any scenario needing to change is itself a signal
+> the change altered semantics, not just an implementation detail. This
+> is a backstop for a human or an agent moving fast, not a substitute
+> for Layers 1-2 — it only works if whoever's making the change actually
+> pauses to ask the question.
+
+**Honest statement of what all three layers do and don't guarantee,
+together — no overclaiming.** They do not make live/backtest divergence
+*impossible*. A genuinely new kind of decision, expressed in a way Layer
+1's keyword list doesn't recognise, living in a function Layer 2's
+scenario doesn't happen to exercise, would still slip through undetected
+until something else surfaces it — exactly the same way the deployment-
+cap gap itself was found by accident, not by any prior mechanism. What
+these three layers change is the *shape* of what future divergence needs
+to look like to go unnoticed: Layer 1 needs a genuinely novel decision
+pattern outside its keyword vocabulary; Layer 2 needs a scenario outside
+what its multi-day, multi-ticker walk exercises; Layer 3 needs a change
+author to skip a two-line checklist. Each is individually incomplete by
+design and by honest admission — together they are a materially higher
+bar than "we wrote one targeted test for the specific thing we already
+found," which is what existed before this task and precisely what proved
+insufficient. Execution-mechanics differences (live's real retry/back-off
+HTTP logic, its DB bookkeeping) remain legitimately, permanently
+different between the two sides and are correctly outside what any of
+these three layers try to unify — see `analysis/decision.py`'s own
+docstring for that boundary, unchanged by this work.
+
+Full suite: 393 passing (5 new since the deployment-cap fix above: 3 in
+`test_decision_logic_placement.py`, 2 in
+`test_comprehensive_replay_parity.py`).
 
 ### Broker integration — Trading212 Invest
 

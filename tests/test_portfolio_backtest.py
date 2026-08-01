@@ -1008,3 +1008,222 @@ def test_simulate_portfolio_end_of_data_still_correct_when_every_ticker_ends_tog
     assert len(end_of_data_trades) == 2  # both tickers, each closed exactly once at the shared end
     for t in end_of_data_trades:
         assert t["exit_date"] == pd.Timestamp("2020-01-01").date() + pd.Timedelta(days=n - 1)
+
+
+# ---------------------------------------------------------------------------
+# simulate_portfolio_compounding_mtm() -- mark-to-market variant (2026-08-01)
+#
+# Added after confirming simulate_portfolio_compounding()'s current_deployed
+# is cost-basis (never adjusted for unrealized P&L on a still-open position),
+# while live trading (brokers/trading212.py) reads T212's genuine
+# mark-to-market investments.currentValue for the identical check -- see
+# CLAUDE.md's "Live/backtest deployment-cap parity" section for the full
+# investigation. These tests prove the new engine actually differs from the
+# cost-basis one in the specific, expected direction, using a still-OPEN
+# position (never exited) so any capacity difference can only come from how
+# its current, unrealized value is (or isn't) counted -- not from any
+# realised-P&L bookkeeping, which both engines already handle identically.
+# ---------------------------------------------------------------------------
+
+def test_mtm_appreciation_reduces_capacity_versus_cost_basis(mocker):
+    """Ticker A enters day 0 at 100 and doubles to 200 by day 20, staying
+    open throughout (signal never turns off, fallback_max_holding_days set
+    very high so it can't exit via MAX_HOLDING either) -- a genuine
+    unrealized +100% gain, still on the books. Ticker B becomes a candidate
+    on day 20 with a deployment cap tight enough that A's cost basis alone
+    comfortably fits, but A's doubled mark-to-market value pushes the
+    account over the cap. Cost-basis engine must admit B on its very first
+    candidacy day (A only ever counts at its £250 cost); the mark-to-market
+    engine must still reject it that same day (A counts at ~£500 current
+    value) -- the exact, opposite-direction outcome this engine exists to
+    produce.
+
+    Checked specifically on B's FIRST candidacy day (day 20), not "ever
+    admitted across the whole run" -- on the simulation's very last day,
+    ticker A's own END_OF_DATA force-close (Phase A) realises its P&L
+    before that same day's Phase B runs, which would converge both
+    engines' balances and mask exactly the divergence this test exists to
+    prove. Checking the specific early day A is still genuinely open and
+    unrealized avoids that confound entirely."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 60
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    day20 = dates[20].date()
+
+    close_a = pd.Series([100.0 + i * 5.0 for i in range(n)], index=dates)  # 100 -> 200 by day 20
+    frame_a = pd.DataFrame({
+        "close": close_a, "atr": pd.Series([1.0] * n, index=dates),
+        "signal": pd.Series([True] * n, index=dates),  # never exits via SIGNAL_OFF
+    })
+
+    sig_b = pd.Series([False] * 20 + [True] * (n - 20), index=dates)
+    close_b = pd.Series([50.0] * n, index=dates)
+    frame_b = pd.DataFrame({"close": close_b, "atr": pd.Series([0.01] * n, index=dates), "signal": sig_b})
+
+    cached = [{"ticker": "A_APPRECIATES", "frame": frame_a}, {"ticker": "B_CANDIDATE", "frame": frame_b}]
+    cfg = _compounding_config()
+    cfg["backtest"]["fallback_max_holding_days"] = 9999  # A must never exit via MAX_HOLDING in this window
+    per_trade_pct = 0.05
+    max_deployed_pct = 0.06  # cost-basis's constant 5% fits under this; mark-to-market's ~7.3% (day 20) doesn't
+
+    trades_cost = v2b.simulate_portfolio_compounding(cached, cfg, _flat_gspc(n), per_trade_pct, max_deployed_pct)
+    trades_mtm = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), per_trade_pct, max_deployed_pct)
+
+    assert any(t["ticker"] == "B_CANDIDATE" and t["entry_date"] == day20 for t in trades_cost), \
+        "cost-basis engine should admit B on its first candidacy day"
+    assert not any(t["ticker"] == "B_CANDIDATE" and t["entry_date"] == day20 for t in trades_mtm), \
+        "mark-to-market engine should reject B on its first candidacy day"
+
+
+def test_mtm_depreciation_frees_capacity_versus_cost_basis(mocker):
+    """Mirror image: ticker A enters at 100 and DECLINES exponentially
+    (never reaching zero/negative, which would break the VaR log-return
+    calculation) to ~60 by day 20, staying open throughout (ATR wide
+    enough that its stop is never hit, isolating unrealized-loss
+    accounting from the stop-loss exit path entirely, and
+    fallback_max_holding_days set very high so MAX_HOLDING can't fire
+    either). A's shrunk mark-to-market value should free MORE capacity
+    than its unchanged cost basis would under the cost-basis engine --
+    the reverse of the appreciation case above, confirming this isn't just
+    "the mark-to-market engine always rejects more," it genuinely tracks
+    value in both directions. Checked on B's first candidacy day, same
+    end-of-simulation-confound reasoning as the appreciation test above."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 60
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    day20 = dates[20].date()
+
+    close_a = pd.Series([100.0 * (0.975 ** i) for i in range(n)], index=dates)  # 100 -> ~60 by day 20
+    frame_a = pd.DataFrame({
+        "close": close_a, "atr": pd.Series([100.0] * n, index=dates),  # stop far below any reachable price
+        "signal": pd.Series([True] * n, index=dates),
+    })
+
+    sig_b = pd.Series([False] * 20 + [True] * (n - 20), index=dates)
+    close_b = pd.Series([50.0] * n, index=dates)
+    frame_b = pd.DataFrame({"close": close_b, "atr": pd.Series([0.01] * n, index=dates), "signal": sig_b})
+
+    cached = [{"ticker": "A_DECLINES", "frame": frame_a}, {"ticker": "B_CANDIDATE", "frame": frame_b}]
+    cfg = _compounding_config()
+    cfg["backtest"]["fallback_max_holding_days"] = 9999
+    per_trade_pct = 0.05
+    max_deployed_pct = 0.045  # cost-basis's constant 5% rejects B; mark-to-market's shrunk value admits it
+
+    trades_cost = v2b.simulate_portfolio_compounding(cached, cfg, _flat_gspc(n), per_trade_pct, max_deployed_pct)
+    trades_mtm = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), per_trade_pct, max_deployed_pct)
+
+    assert not any(t["ticker"] == "B_CANDIDATE" and t["entry_date"] == day20 for t in trades_cost), \
+        "cost-basis engine should reject B on its first candidacy day"
+    assert any(t["ticker"] == "B_CANDIDATE" and t["entry_date"] == day20 for t in trades_mtm), \
+        "mark-to-market engine should admit B on its first candidacy day"
+
+    # A never stopped out on day 20 specifically -- confirms the freed
+    # capacity came from mark-to-market accounting of a still-open
+    # position on that day, not an early exit.
+    assert not any(t["ticker"] == "A_DECLINES" and t["exit_date"] == day20 for t in trades_mtm)
+
+
+def test_mtm_still_open_position_never_realises_pnl_into_cash(mocker):
+    """A's unrealized loss must reduce its own mark-to-market contribution
+    to current_deployed/current_balance without ever touching cash or
+    generating a trade record -- unrealized P&L is not realised P&L. Only
+    a genuine exit event should ever produce a trades entry or move cash."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 30
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    close_a = pd.Series([100.0 - i * 2.0 for i in range(n)], index=dates)
+    frame_a = pd.DataFrame({
+        "close": close_a, "atr": pd.Series([100.0] * n, index=dates),
+        "signal": pd.Series([True] * n, index=dates),
+    })
+    cached = [{"ticker": "A_STILL_OPEN", "frame": frame_a}]
+    cfg = _compounding_config()
+
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+    # A never exits (signal always on, stop never reached, data doesn't run
+    # out until the defensive END_OF_DATA backstop) -- no realised trade
+    # for it should appear other than the final forced close.
+    assert all(t["exit_reason"] == "END_OF_DATA" for t in trades if t["ticker"] == "A_STILL_OPEN")
+    assert len([t for t in trades if t["ticker"] == "A_STILL_OPEN"]) == 1
+
+
+def test_mtm_many_year_compounding_never_produces_unbounded_position_sizes(mocker):
+    """Regression guard for a genuine, severe defect found 2026-08-01 (see
+    CLAUDE.md's "Mark-to-market unbounded compounding defect" section):
+    unrealized appreciation on a still-open position fed forward into
+    account_value_gbp, inflating the sizing ceiling for every OTHER new
+    entry, which (if those also stayed open and appreciated) inflated it
+    further still -- an unbounded feedback loop confirmed via real
+    production data to reach position_gbp values of 10^60-10^76 over a
+    genuine 19-year backtest. A short-horizon unit test (every other test
+    in this file) cannot catch this class of defect at all -- the loop
+    needs many real compounding iterations across MANY YEARS to visibly
+    run away; this test deliberately uses a long enough window (~10
+    years) and enough entry/exit cycles for the defect to have shown up
+    clearly if the fix (resolve_dynamic_max_position_gbp()'s
+    absolute_max_position_gbp ceiling, plus the separate cash-double-
+    counting fix in the same commit) were ever reverted or bypassed.
+
+    One ticker appreciates ~1000x while staying open the entire window
+    (the exact "massive unrealized winner" shape that triggered the
+    original defect); a second, flat-priced ticker cycles in and out
+    every 30 days so its OWN entries are repeatedly re-sized against
+    whatever account_value_gbp happens to be at that point -- the exact
+    mechanism through which one ticker's paper gains inflated an
+    unrelated ticker's position size."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 2600  # ~10 years of calendar days
+    dates = pd.date_range("2010-01-01", periods=n, freq="D")
+
+    daily_growth = 1000.0 ** (1.0 / n)  # compounds to ~1000x over the window
+    close_mega = pd.Series([100.0 * (daily_growth ** i) for i in range(n)], index=dates)
+    frame_mega = pd.DataFrame({
+        "close": close_mega, "atr": pd.Series([close_mega.iloc[0] * 0.02] * n, index=dates),
+        "signal": pd.Series([True] * n, index=dates),  # never exits -- stays open, appreciating, the whole window
+    })
+
+    sig_cycle = pd.Series([(i // 30) % 2 == 0 for i in range(n)], index=dates)
+    close_cycle = pd.Series([50.0] * n, index=dates)  # flat -- isolates the sizing effect from its own gains
+    frame_cycle = pd.DataFrame({"close": close_cycle, "atr": pd.Series([0.5] * n, index=dates), "signal": sig_cycle})
+
+    gspc = pd.Series([100.0 + i * 0.001 for i in range(n)], index=dates)
+    cfg = _compounding_config()
+    cfg["trading212_invest"]["absolute_max_position_gbp"] = 1_000_000
+
+    cached = [{"ticker": "MEGA", "frame": frame_mega}, {"ticker": "CYCLE", "frame": frame_cycle}]
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, gspc, 0.05, 0.90)
+
+    cycle_trades = [t for t in trades if t["ticker"] == "CYCLE"]
+    assert len(cycle_trades) > 10, "Scenario should exercise many CYCLE entry/exit cycles, not just one or two"
+
+    max_position = max(t["position_gbp"] for t in trades)
+    # A generous but genuinely bounding check -- 10x the absolute ceiling
+    # itself would already be impossible given the ceiling this fix adds;
+    # anything even approaching astronomical (the original defect reached
+    # 10^60+) fails this immediately and unambiguously.
+    assert max_position < cfg["trading212_invest"]["absolute_max_position_gbp"] * 10, (
+        f"A position size of £{max_position:,.2f} was reached across a "
+        f"~10-year, many-cycle compounding run -- the unbounded-growth "
+        f"defect appears to have regressed."
+    )
+    assert max_position < 1e6 * 10  # explicit, human-readable magnitude check independent of config
+
+
+def test_mtm_collect_rejections_preserves_return_signature(mocker):
+    """Same return-shape contract as simulate_portfolio_compounding():
+    collect_rejections=False -> plain list; =True -> (trades, rejections)
+    tuple."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 40
+    cached = [{"ticker": "SOLO", "frame": _frame(n)}]
+    cfg = _compounding_config()
+
+    result_default = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+    assert isinstance(result_default, list)
+
+    result_tuple = v2b.simulate_portfolio_compounding_mtm(
+        cached, cfg, _flat_gspc(n), 0.05, 0.90, collect_rejections=True,
+    )
+    assert isinstance(result_tuple, tuple) and len(result_tuple) == 2
+    trades, rejections = result_tuple
+    assert isinstance(trades, list) and isinstance(rejections, list)

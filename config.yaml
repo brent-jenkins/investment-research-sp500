@@ -265,6 +265,26 @@ trading212_invest:
   # removing these keys here does not break that reproducibility -- see
   # CLAUDE.md's "Live execution switched to the compounding two-parameter
   # scheme" section for the full rationale.
+  # absolute_max_position_gbp -- a rarely-binding SAFETY ceiling, added
+  # 2026-08-01 after a genuine unbounded-compounding defect was found in
+  # simulate_portfolio_compounding_mtm() (see CLAUDE.md's "Mark-to-market
+  # unbounded compounding defect" section). This is NOT a reintroduction
+  # of the retired max_position_gbp above -- that was rejected as a
+  # PRIMARY sizing driver (too blunt, saturated VaR differentiation for
+  # low-volatility names -- see "Compounding portfolio backtest" in
+  # CLAUDE.md). This is a backstop that should almost never bind under
+  # normal operation: per_trade_pct * current account value still governs
+  # sizing in every ordinary case; this only intervenes if that figure
+  # somehow becomes absurd (e.g. a still-open position's own unrealized
+  # appreciation feeding back into the sizing of BRAND NEW, unrelated
+  # entries -- the exact defect this was added to close). Set high enough
+  # (20x+ a realistic account size) that it is inert for any plausible
+  # real compounding trajectory, while still decisively breaking the
+  # exponential-feedback shape of the defect it exists to catch. Read
+  # identically by live order placement and both compounding backtest
+  # engines -- one shared key, one shared meaning, matching every other
+  # sizing parameter in this section.
+  absolute_max_position_gbp: 1000000
   # Position sizing -- Historical VaR, scaled to each ticker's own holding
   # period via the square-root-of-time rule
   # (analysis/volatility.py:_var_position_size_core()) -- position size

@@ -54,6 +54,7 @@ from analysis.backtest import (
     run_candidate,
     simulate_portfolio,
     simulate_portfolio_compounding,
+    simulate_portfolio_compounding_mtm,
     slice_ticker,
     walk_forward_pf,
 )
@@ -197,6 +198,7 @@ def run_full_validation(
     per_trade_pct: Optional[float] = None,
     max_deployed_pct_compounding: Optional[float] = None,
     uncapped: bool = False,
+    mark_to_market: bool = False,
 ) -> dict:
     """Run the complete validated battery over [start, end] and return every
     figure the Backtest page / DD report need. end defaults to today.
@@ -236,9 +238,25 @@ def run_full_validation(
       needed for normal use, where the config-sourced default already is
       "the real thing."
 
+    A fourth, ORTHOGONAL flag — `mark_to_market` — switches whichever
+    compounding variant is selected (explicit or config-default) from
+    `simulate_portfolio_compounding()` (cost-basis deployment tracking) to
+    `simulate_portfolio_compounding_mtm()` (genuine mark-to-market
+    deployment tracking, matching what live trading's `investments.
+    currentValue` actually reflects — see CLAUDE.md's "Live/backtest
+    deployment-cap parity" section for why the two diverge and which one
+    live trading really uses). Has no effect when `uncapped` or
+    `portfolio_mode` is set, since neither of those engines has a
+    deployment-cap concept this flag could apply to. Defaults `False` so
+    every existing caller's behaviour (and every figure already published
+    against the cost-basis engine) is completely unchanged unless a caller
+    opts in explicitly.
+
     Priority when more than one is passed (only one is ever expected in
     practice): uncapped > explicit per_trade_pct/max_deployed_pct_compounding
     > portfolio_mode > the new config-sourced compounding default.
+    `mark_to_market` layers on top of whichever of these wins, wherever it
+    applies.
     """
     end = end or pd.Timestamp(datetime.date.today())
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 50000))
@@ -299,7 +317,11 @@ def run_full_validation(
         all_trades = run_candidate(caches, config, gspc_close)
     elif engine_used == "portfolio_capped":
         all_trades = simulate_portfolio(caches, config, gspc_close)
-    else:  # compounding_explicit or compounding_default
+    elif mark_to_market:  # compounding_explicit or compounding_default, mark-to-market variant
+        all_trades = simulate_portfolio_compounding_mtm(
+            caches, config, gspc_close, effective_per_trade_pct, effective_max_deployed_pct,
+        )
+    else:  # compounding_explicit or compounding_default, cost-basis variant (unchanged default)
         all_trades = simulate_portfolio_compounding(
             caches, config, gspc_close, effective_per_trade_pct, effective_max_deployed_pct,
         )
@@ -359,6 +381,9 @@ def run_full_validation(
         "start": start.date().isoformat(), "end": end.date().isoformat(),
         "starting_capital_gbp": starting_capital,
         "engine_used": engine_used,
+        "deployment_basis": (
+            "mark_to_market" if (mark_to_market and engine_used.startswith("compounding")) else "cost_basis"
+        ),
         "per_trade_pct": effective_per_trade_pct,
         "max_deployed_pct": effective_max_deployed_pct,
         "universe": universe_snapshot(),

@@ -74,7 +74,13 @@ import pandas as pd
 import requests
 
 from analysis import crisis, signals, universe
-from analysis.decision import evaluate_exit_reason, is_asset_class_enabled, passes_entry_gate
+from analysis.decision import (
+    evaluate_exit_reason,
+    is_asset_class_enabled,
+    passes_entry_gate,
+    resolve_cash_constrained_position_gbp,
+    resolve_dynamic_max_position_gbp,
+)
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
 from data.ingestion import get_price_df
@@ -1647,7 +1653,16 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             var_lookback = int(t212_cfg.get("var_lookback_days", 252))
             max_risk_pct = float(t212_cfg.get("max_risk_pct", 0.01))
             min_position_gbp = float(t212_cfg.get("min_position_gbp", 50))
-            dynamic_max_position_gbp = total_val * per_trade_pct
+            absolute_max_position_gbp = float(t212_cfg.get("absolute_max_position_gbp", 1_000_000))
+            # Shared with both compounding backtest engines
+            # (analysis/backtest.py) via analysis/decision.py -- see
+            # CLAUDE.md's "Mark-to-market unbounded compounding defect"
+            # section for why total_val alone (mark-to-market, includes
+            # unrealized gains on OTHER open positions) needed a hard,
+            # independent ceiling here.
+            dynamic_max_position_gbp = resolve_dynamic_max_position_gbp(
+                total_val, per_trade_pct, absolute_max_position_gbp,
+            )
 
             prior_closes = close_series.tail(var_lookback + 1)
             log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
@@ -1659,7 +1674,14 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             else:
                 position_gbp = round(dynamic_max_position_gbp * 0.5, 2)
                 holding_var = None
-            position_gbp = min(position_gbp, free_cash * 0.25)
+            # Real, independently-tracked available cash -- never inflated
+            # by unrealized gains on other positions the way total_val can
+            # be (see analysis/decision.py:resolve_cash_constrained_
+            # position_gbp()'s own docstring). This clamp already existed
+            # here before the mark-to-market defect was found; now routed
+            # through the same shared function the backtest engine also
+            # calls, rather than staying an independent inline min().
+            position_gbp = resolve_cash_constrained_position_gbp(position_gbp, free_cash)
 
             if position_gbp < 10:
                 logger.debug("%s: sized position (£%.2f) below minimum viable order — skipping.",

@@ -350,6 +350,67 @@ def test_default_engine_falls_back_to_5pct_50pct_when_config_absent(db_engine, m
     assert result["engine_used"] == "compounding_default"
 
 
+def test_mark_to_market_flag_forces_mtm_engine_not_cost_basis(db_engine, mocker):
+    """mark_to_market=True on an otherwise-default call must dispatch to
+    simulate_portfolio_compounding_mtm(), never the cost-basis
+    simulate_portfolio_compounding() -- and record deployment_basis
+    accordingly, so a caller reading the result dict can tell which
+    accounting basis produced it without inspecting engine_used alone."""
+    _engine_selection_setup(mocker)
+    mock_cost_basis = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+    mock_mtm = mocker.patch("analysis.validation.simulate_portfolio_compounding_mtm", return_value=[])
+
+    config = {"backtest": {"starting_capital_gbp": 10000},
+              "trading212_invest": {"per_trade_pct": 0.05, "max_total_deployed": 0.5}}
+    result = v2v.run_full_validation(
+        config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"), mark_to_market=True,
+    )
+
+    mock_cost_basis.assert_not_called()
+    mock_mtm.assert_called_once()
+    assert result["engine_used"] == "compounding_default"
+    assert result["deployment_basis"] == "mark_to_market"
+
+
+def test_mark_to_market_flag_defaults_false_preserving_cost_basis_behaviour(db_engine, mocker):
+    """The default (mark_to_market not passed at all) must be completely
+    unchanged -- every figure already published against the cost-basis
+    engine stays reproducible without any caller needing to opt in."""
+    _engine_selection_setup(mocker)
+    mock_cost_basis = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+    mock_mtm = mocker.patch("analysis.validation.simulate_portfolio_compounding_mtm", return_value=[])
+
+    config = {"backtest": {"starting_capital_gbp": 10000},
+              "trading212_invest": {"per_trade_pct": 0.05, "max_total_deployed": 0.5}}
+    result = v2v.run_full_validation(config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"))
+
+    mock_mtm.assert_not_called()
+    mock_cost_basis.assert_called_once()
+    assert result["deployment_basis"] == "cost_basis"
+
+
+def test_mark_to_market_flag_has_no_effect_under_uncapped_or_portfolio_mode(db_engine, mocker):
+    """mark_to_market only applies to the two compounding variants --
+    passing it alongside uncapped or portfolio_mode must not silently
+    call the mtm engine instead of the one those flags actually select,
+    and deployment_basis must correctly read cost_basis (there is no
+    mark-to-market variant of either legacy engine)."""
+    _engine_selection_setup(mocker)
+    mock_uncapped = mocker.patch("analysis.validation.run_candidate", return_value=[])
+    mock_mtm = mocker.patch("analysis.validation.simulate_portfolio_compounding_mtm", return_value=[])
+
+    result = v2v.run_full_validation(
+        {"backtest": {"starting_capital_gbp": 10000}},
+        start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        uncapped=True, mark_to_market=True,
+    )
+
+    mock_uncapped.assert_called_once()
+    mock_mtm.assert_not_called()
+    assert result["engine_used"] == "uncapped"
+    assert result["deployment_basis"] == "cost_basis"
+
+
 def test_uncapped_flag_forces_run_candidate(db_engine, mocker):
     _engine_selection_setup(mocker)
     mock_uncapped = mocker.patch("analysis.validation.run_candidate", return_value=[])

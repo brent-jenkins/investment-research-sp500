@@ -147,3 +147,84 @@ def is_asset_class_enabled(*, is_etf: bool, config: dict) -> bool:
     t212_cfg = config.get("trading212_invest", {})
     key = "etf_trading_enabled" if is_etf else "stock_trading_enabled"
     return bool(t212_cfg.get(key, True))
+
+
+def resolve_dynamic_max_position_gbp(
+    account_value_gbp: float, per_trade_pct: float, absolute_max_position_gbp: float,
+) -> float:
+    """The per-trade sizing ceiling fed into _var_position_size_core() as
+    its own max_position_gbp cap — per_trade_pct of the account's current
+    value, hard-bounded by absolute_max_position_gbp regardless of how
+    large account_value_gbp becomes.
+
+    Added 2026-08-01 to close a genuine, severe defect found the same day
+    (see CLAUDE.md's "Mark-to-market unbounded compounding defect"
+    section): `account_value_gbp * per_trade_pct` alone has no ceiling
+    independent of account_value_gbp itself, and account_value_gbp is
+    mark-to-market — it includes UNREALIZED appreciation on still-open
+    positions. A single position that appreciates enormously while never
+    triggering an exit condition inflates account_value_gbp, which
+    inflates the sizing ceiling for every OTHER, unrelated new entry,
+    which (if those also appreciate while open) inflates account_value_gbp
+    further still — an unbounded feedback loop with no natural limit
+    across a long enough backtest. Confirmed via a full 19-year production
+    backtest run: position_gbp reached 10^60-10^76 before this fix,
+    every historical validation block failing, CAGR in physically
+    impossible ranges.
+
+    This is deliberately NOT a reintroduction of the retired (2026-08-01,
+    same day) max_position_gbp / max_open_positions config keys — those
+    were rejected as the PRIMARY sizing driver because a flat ceiling
+    saturates VaR's own volatility-differentiation for low-volatility
+    names (see CLAUDE.md's "Compounding portfolio backtest" section).
+    absolute_max_position_gbp is a rarely-binding SAFETY backstop, set
+    high enough (config.yaml default: £1,000,000, 20x+ a realistic
+    account size) that it is inert for any ordinary compounding
+    trajectory — per_trade_pct still governs sizing in every normal case
+    — while still decisively breaking the exponential shape of the
+    specific defect this function exists to close.
+
+    Called identically by live order placement
+    (brokers/trading212.py:maybe_place_orders()) and both compounding
+    backtest engines (analysis/backtest.py:simulate_portfolio_compounding()
+    and simulate_portfolio_compounding_mtm()) — one shared function, not
+    three independently-written copies of the same `min()` that could
+    silently diverge again, exactly the failure mode this project has
+    already found and fixed five separate times in one day (see this
+    module's own docstring for the first three).
+    """
+    return min(account_value_gbp * per_trade_pct, absolute_max_position_gbp)
+
+
+def resolve_cash_constrained_position_gbp(position_gbp: float, available_cash_gbp: float, cash_fraction: float = 0.25) -> float:
+    """A second, independent bound on a single entry's size: never more
+    than cash_fraction of REAL, currently available (uninvested) cash —
+    matching brokers/trading212.py's own pre-existing
+    `min(position_gbp, free_cash * 0.25)` clamp, which live order
+    placement already had before the mark-to-market defect was found.
+
+    This matters specifically because available_cash_gbp — T212's
+    `cash.availableToTrade`, or this codebase's own equivalent
+    running `cash` tracking in the mark-to-market backtest engine — is
+    NEVER inflated by unrealized appreciation on other open positions the
+    way account_value_gbp (used by resolve_dynamic_max_position_gbp
+    above) can be: cash only ever moves on a genuine realised transaction
+    (a real deposit, or the real proceeds of a real sale). So even before
+    the absolute_max_position_gbp fix above existed, live order placement
+    already had a real, independent, structural defence against the worst
+    of this exact defect that the backtest engine was simply missing —
+    confirmed directly by reading brokers/trading212.py's own code (see
+    CLAUDE.md's "Mark-to-market unbounded compounding defect" section for
+    the full investigation, including why this made live's actual
+    real-world exposure narrower than the backtest's clean numerical
+    runaway suggested, without making it zero).
+
+    Only applied where the caller has a genuine, independently-tracked
+    cash figure distinct from account/portfolio value — live order
+    placement and simulate_portfolio_compounding_mtm() both do;
+    simulate_portfolio_compounding() (the original cost-basis engine) does
+    not track cash as a separate concept from its own current_balance and
+    is deliberately left unchanged/frozen, so this function is not called
+    from there — see that engine's own reproducibility guarantee.
+    """
+    return min(position_gbp, available_cash_gbp * cash_fraction)
