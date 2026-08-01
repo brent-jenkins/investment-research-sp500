@@ -770,7 +770,7 @@ New columns are added to existing tables via `_apply_migrations()` in `data/data
 
 `_apply_data_fixes(engine)` runs after migrations on every startup. Most fixes are keyed via `_migration_applied()` so they run only once and are skipped on every subsequent startup. One fix runs unconditionally on every startup: `DELETE FROM price_data WHERE close IS NULL OR close <= 0`. This removes incomplete intraday bars that yfinance can return for sessions that hadn't closed at fetch time. A single such row in the rolling window makes `pd.Series.rolling(n).mean()` return NaN for all subsequent `n` dates, breaking the SMA overlay on the chart. The ingestion layer (`_upsert_price_rows` in `data/ingestion.py`) now also skips these rows before they reach the database, so the startup DELETE is a no-op when no bad rows exist. Use the `_migration_applied` pattern for one-time corrections to existing trade rows; use the unconditional DELETE pattern for data-quality guards that must survive repeated incremental pulls.
 
-`_purge_unlisted_tickers(engine)` runs on every startup. It reads the current watchlist from config.yaml, then deletes rows for any ticker no longer present from `price_data`, `indicators`, `signals`, and `correlations`. For `correlations` it removes pairs where either `ticker_a` or `ticker_b` has been removed. This keeps the DB in sync when assets are removed from the watchlist without manual SQL.
+**`_purge_unlisted_tickers(engine)` was removed 2026-08-01 — this paragraph is retained as historical record only, describing behavior that no longer exists.** It used to run on every startup, reading the current watchlist from config.yaml and deleting rows for any ticker no longer present from `price_data` (and, pre-V1-removal, `indicators`/`signals`/`correlations` too). See "`price_data` purge removed — permanent storage is now the design" below for why, what was verified before removing it, and what this means going forward.
 
 ### Additional database tables
 
@@ -1028,7 +1028,10 @@ watchlist** — adding TSLA/META/GOOGL there would also expose them to V1's
 not do. `data/database.py:_purge_unlisted_tickers()` was extended with a
 deferred import of `analysis.v2.universe.ALL_V2_TICKERS` so these tickers'
 price history survives V1's own stale-ticker purge without ever being
-added to the watchlist V1 itself reads.
+added to the watchlist V1 itself reads. **This entire purge mechanism was
+removed 2026-08-01** (see "`price_data` purge removed" below) — the
+survives-the-purge concern this paragraph describes no longer applies to
+anything, since nothing is purged any more.
 
 **Ongoing membership tracking** (not a one-time snapshot):
 `analysis/v2/universe.py:refresh_membership_from_source()` re-fetches the
@@ -2437,8 +2440,9 @@ loop body itself needed no change. Every other call site
 `main.py`'s `_asset_type_map()` and the Status page's mapping
 table/ETF-audit expander/seed form) now reads `config.get("instruments", {})`
 directly and `raw.get("t212_instrument_id")` in place of the old
-`raw.get("ticker")`. `data/database.py:_purge_unlisted_tickers()` combines
-both sources for its stale-ticker allow-list.
+`raw.get("ticker")`. `data/database.py:_purge_unlisted_tickers()` combined
+both sources for its stale-ticker allow-list — since removed, see
+"`price_data` purge removed" below.
 
 **Step 4 — reproducibility check.** Ran `get_ticker_status()` (momentum
 signal, index membership, crisis state per ticker) and
@@ -4287,6 +4291,96 @@ before the backfill wrote a single row. Both `investment-research` and
 new table was created automatically by `init_db()`'s
 `Base.metadata.create_all()` on that restart, no manual migration needed
 since this is a wholly new table, not an `ALTER TABLE` on an existing one.
+
+### `price_data` purge removed — permanent storage is now the design (2026-08-01)
+
+`data/database.py:_purge_unlisted_tickers()` — a startup hygiene function
+dating from the V1 era, deleting any `price_data` row for a ticker not in
+`config.yaml`'s watchlist/`instruments:` or `analysis.universe.ALL_TICKERS`
+— has been **removed entirely**, not disabled. It ran on every service
+startup and existed for a real reason (its own docstring: "keeps the DB in
+sync when assets are removed from the watchlist without manual SQL"), but
+that reason stopped fitting this project's actual direction the moment
+market-cap research started needing broad, non-watchlist price history to
+persist. The market-cap infrastructure deploy immediately above this
+section hit this directly: a fresh backfill of the 503-candidate pool's
+price history would have worked right up until the next service restart,
+at which point every non-watchlist row would have been silently deleted
+again — the same fate every future research task would keep re-triggering.
+
+**Decision: `price_data` becomes permanent, traceable storage for
+everything ever fetched, matching the pattern already established
+elsewhere today** — `GOLD` kept as a permanently-zero-eligible candidate
+rather than deleted from `STOCK_MEMBERSHIP`, `SKIPPED_PRICE_MOVED` and
+`REJECTED_CAPACITY` recording a decision rather than discarding it,
+the membership-window fix keeping a still-active ticker's window open
+rather than closing it prematurely. None of those precedents destroy
+data to keep the system "clean" — they flag, record, or simply leave
+data alone. Deleting a ticker's price history the moment it falls out of
+the watchlist was the odd one out.
+
+**Step 1 — verified before removing, not after.** Checked directly
+whether anything else in the codebase treats `price_data`'s distinct-ticker
+set as an implicit proxy for "the live-relevant universe" without explicit
+filtering — the exact failure shape `get_max_holding_days()` had before
+its own same-day fix (see the parallel session's commit). Full repo sweep,
+every hit reviewed individually:
+- `analysis/backtest.py`/`analysis/validation.py` (the highest-stakes
+  candidates, since this determines a live-reported backtest's candidate
+  universe) — confirmed clean: `run_full_validation()`'s `candidate_tickers`
+  is sourced explicitly from `universe.ALL_TICKERS`, never from a
+  `price_data` query. `analysis/backtest.py` has zero direct references to
+  `price_data` at all.
+- `main.py`'s two broad, unfiltered `price_data` queries (`_price_coverage()`'s
+  coverage grid, the Charts landing page's 1-day-change lookup) both build
+  a dict keyed by ticker and then iterate the *explicit* watchlist
+  (`get_all_watchlist_entries()`), only ever using the broad query result
+  as a lookup — a ticker present in `price_data` but absent from the
+  watchlist is simply never visited. Confirmed safe by tracing the actual
+  iteration, not assumed from the query shape alone.
+- `data/ingestion.py:get_last_update_timestamp()` (an unfiltered
+  `MAX(price_data.date)`) has zero callers anywhere in the codebase —
+  dead code, confirmed via grep, no fix needed.
+- `brokers/trading212.py`'s three `price_data` reads (FX rate lookup,
+  instrument price fallback) are all hardcoded to specific tickers or
+  parameterized by a single passed-in ticker — never a broad scan.
+- `analysis/market_cap.py`'s reads are all per-ticker by design (this
+  module exists specifically to serve a broad candidate pool one ticker
+  at a time) — correctly scoped, no change needed.
+- `analysis/correlations.py` no longer exists (removed in the V1 removal),
+  eliminating what would otherwise have been the highest-risk legacy call
+  site.
+
+**No hidden dependency found.** Nothing needed fixing before or alongside
+the removal.
+
+**Step 2 — removed.** `_purge_unlisted_tickers()` and its call site inside
+`init_db()` are both deleted outright (not commented out, not
+feature-flagged) — matching this project's standing practice for
+confirmed-rejected mechanisms (the GARCH stop loss and HMM regime gate
+removals follow the identical pattern). `_apply_data_fixes()`'s own
+unconditional `DELETE FROM price_data WHERE close IS NULL OR close <= 0`
+is untouched — that guard is a data-*quality* fix (incomplete intraday
+bars), unrelated to watchlist membership, and still runs on every startup
+exactly as before.
+
+**Step 3 — practical outcome.** Price data fetched for any research
+purpose — the market-cap candidate pool, a future universe-broadening
+study, anything else — now persists in production's `price_data` table
+indefinitely, surviving every future restart and deploy. A research task
+that needs the same broad price coverage twice no longer needs to
+re-fetch it, the same efficiency this file's market-cap-infrastructure
+section above already established for `market_cap_history` specifically
+(which was never touched by the purge in the first place) — now the
+identical guarantee extends to price history too, and a dedicated
+purge-exempt table (considered and rejected as an alternative — see the
+interrupted design discussion this decision superseded) was never needed.
+
+Covered by `tests/test_ingestion.py:test_init_db_does_not_delete_non_watchlist_ticker_price_data`
+— a ticker with no `config.yaml`/`ALL_TICKERS` presence at all (exactly
+what the old purge would have deleted) is confirmed to survive a real
+`init_db()` call unchanged. Full suite (381 tests, +1 from this change)
+passes.
 
 ### Broker integration — Trading212 Invest
 

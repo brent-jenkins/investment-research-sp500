@@ -442,78 +442,6 @@ def _apply_data_fixes(engine) -> None:
         pass
 
 
-def _purge_unlisted_tickers(engine) -> None:
-    """Delete price_data rows for tickers no longer present in config.yaml's
-    watchlist or the tracked universe (analysis/universe.py:ALL_TICKERS).
-
-    Runs on every startup; DELETE on absent rows is a no-op so this is
-    always safe. price_data is the only remaining ticker-keyed table in the
-    schema post-V1-removal — indicators/signals/correlations (which this
-    used to also prune) no longer exist.
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    # Top-level config.yaml section names — never valid ticker symbols.
-    # Excluded from stale-ticker detection so that rows erroneously written
-    # under a config key name (from any past mis-parse) are silently skipped
-    # rather than being logged as purge targets on every startup.
-    _CONFIG_SECTIONS: frozenset[str] = frozenset({
-        "watchlist", "instruments", "data", "database", "scheduler",
-        "signals", "notifications", "backtest", "trading212_invest",
-    })
-
-    try:
-        config = _load_config()
-    except Exception as exc:
-        logger.warning("_purge_unlisted_tickers: could not load config — skipping. %s", exc)
-        return
-
-    allowed: set[str] = set()
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for entry in assets:
-            if isinstance(entry, dict) and "ticker" in entry:
-                allowed.add(entry["ticker"])
-    # Top-level `instruments:` section (consolidated 2026-07-31 from
-    # watchlist.trading + trading212_invest.instrument_mapping — see
-    # CLAUDE.md's "Unified instrument structure" section) — dict keyed by
-    # ticker rather than a list, so the key itself is the ticker symbol.
-    for ticker in config.get("instruments", {}):
-        allowed.add(ticker)
-
-    # The tracked stock/ETF universe (analysis/universe.py) is deliberately
-    # kept out of config.yaml's watchlist proper — deferred import so a
-    # universe-module import failure never blocks this startup purge.
-    try:
-        from analysis.universe import ALL_TICKERS
-        allowed |= set(ALL_TICKERS)
-    except Exception as exc:
-        logger.warning("_purge_unlisted_tickers: could not load tracked ticker list — %s", exc)
-
-    if not allowed:
-        logger.warning("_purge_unlisted_tickers: watchlist is empty — skipping to avoid data loss.")
-        return
-
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT DISTINCT ticker FROM price_data"))
-            stale = [
-                row[0] for row in result
-                if row[0] not in allowed and row[0] not in _CONFIG_SECTIONS
-            ]
-        for ticker in stale:
-            with engine.begin() as conn:
-                conn.execute(
-                    text("DELETE FROM price_data WHERE ticker = :t"),
-                    {"t": ticker},
-                )
-            logger.info("Purged %s from price_data (no longer tracked).", ticker)
-    except Exception as exc:
-        logger.warning("_purge_unlisted_tickers: error cleaning price_data: %s", exc)
-
-
 def init_db() -> None:
     """Create all tables in the database if they do not already exist.
 
@@ -543,7 +471,6 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _apply_migrations(engine)
     _apply_data_fixes(engine)
-    _purge_unlisted_tickers(engine)
 
 
 def get_session() -> Session:

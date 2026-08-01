@@ -141,7 +141,7 @@ def _insert_rows(engine, ticker: str, closes: dict) -> None:
 def test_backfill_skips_ticker_already_covering_start_date(db_engine, mocker):
     """A ticker whose earliest stored row is already <= start_date has
     nothing to backfill — _fetch_ticker must never be called for it."""
-    mocker.patch("data.ingestion.init_db")  # skip _purge_unlisted_tickers -- these test tickers aren't in config.yaml's watchlist
+    mocker.patch("data.ingestion.init_db")  # avoid a redundant real init_db() call -- db_engine fixture already created the schema
     _insert_rows(db_engine, "COVERED", {datetime(2006, 1, 3): 50.0})
     fetch = mocker.patch("data.ingestion._fetch_ticker")
 
@@ -155,7 +155,7 @@ def test_backfill_fetches_only_strictly_before_existing_earliest_date(db_engine,
     """The fetch window must end the day BEFORE the ticker's current
     earliest stored date, and never touch that date or anything after it —
     the additive-only guarantee this function exists to provide."""
-    mocker.patch("data.ingestion.init_db")  # skip _purge_unlisted_tickers -- these test tickers aren't in config.yaml's watchlist
+    mocker.patch("data.ingestion.init_db")  # avoid a redundant real init_db() call -- db_engine fixture already created the schema
     _insert_rows(db_engine, "PARTIAL", {datetime(2016, 6, 15): 100.0, datetime(2016, 6, 16): 101.0})
 
     new_rows = _ohlcv_df({datetime(2007, 1, 3): 10.0, datetime(2007, 1, 4): 10.5})
@@ -174,7 +174,7 @@ def test_backfill_fetches_only_strictly_before_existing_earliest_date(db_engine,
 def test_backfill_full_fetch_when_no_existing_data(db_engine, mocker):
     """A ticker with no stored data at all falls back to a full fetch from
     start_date (mirrors pull_incremental()'s first-time-download path)."""
-    mocker.patch("data.ingestion.init_db")  # skip _purge_unlisted_tickers -- these test tickers aren't in config.yaml's watchlist
+    mocker.patch("data.ingestion.init_db")  # avoid a redundant real init_db() call -- db_engine fixture already created the schema
     new_rows = _ohlcv_df({datetime(2007, 1, 3): 5.0})
     fetch = mocker.patch("data.ingestion._fetch_ticker", return_value=new_rows)
 
@@ -190,7 +190,7 @@ def test_backfill_never_overwrites_existing_rows(db_engine, mocker):
     must be byte-for-byte unchanged after a backfill run, even when the
     mocked fetch is (deliberately, unrealistically) asked to return data —
     the function's own end= boundary must prevent any overlap regardless."""
-    mocker.patch("data.ingestion.init_db")  # skip _purge_unlisted_tickers -- these test tickers aren't in config.yaml's watchlist
+    mocker.patch("data.ingestion.init_db")  # avoid a redundant real init_db() call -- db_engine fixture already created the schema
     _insert_rows(db_engine, "GUARD", {datetime(2016, 6, 15): 100.0, datetime(2016, 6, 16): 101.0})
     before = _stored_closes(db_engine, "GUARD")
 
@@ -205,3 +205,24 @@ def test_backfill_never_overwrites_existing_rows(db_engine, mocker):
             {"d": datetime(2016, 6, 15)},
         ).fetchall()
     assert [r[0] for r in after] == before
+
+
+# ---------------------------------------------------------------------------
+# init_db() no longer purges non-watchlist tickers from price_data
+# ---------------------------------------------------------------------------
+
+def test_init_db_does_not_delete_non_watchlist_ticker_price_data(db_engine):
+    """_purge_unlisted_tickers() was removed 2026-08-01 (see CLAUDE.md's
+    "price_data purge removed" section) — permanent, traceable storage is
+    now the deliberate design, so a research-only ticker's price history
+    must survive init_db() indefinitely, not just until the next
+    restart/deploy. This is the direct, positive guarantee the removal
+    exists to provide — a ticker with no config.yaml/ALL_TICKERS presence
+    at all is exactly the case the old purge would have deleted."""
+    from data.database import init_db
+
+    _insert_rows(db_engine, "NOTINWATCHLIST", {datetime(2020, 1, 2): 42.0, datetime(2020, 1, 3): 43.0})
+
+    init_db()
+
+    assert _stored_closes(db_engine, "NOTINWATCHLIST") == [42.0, 43.0]
