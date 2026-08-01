@@ -728,6 +728,66 @@ def test_uncapped_submission_still_places_every_pending_row(db_engine, v2_mocks,
     assert len(_pending_rows(db_engine, status="PENDING")) == 0
 
 
+def test_organic_over_deployment_rejects_new_entries_cleanly_no_negative_capacity_bug(db_engine, v2_mocks, mocker):
+    """Deployment can drift ABOVE max_total_deployed organically (held
+    positions appreciating in value -- investments.currentValue is a live
+    mark-to-market read, not cost-basis) without any new order ever having
+    caused it. This test starts the mocked account already at 70% invested
+    against a 50% cap and confirms the capacity check
+    (deployed_after_pct = (invested + position_gbp) / total_val, compared
+    directly against max_deployed_pct) rejects the new candidate cleanly --
+    no exception, no negative-number arithmetic, no accidental admission --
+    because the check is expressed as "would-be deployed % after adding
+    this candidate", never as a "remaining capacity = cap - invested"
+    subtraction that could go negative and be misread as falsy/zero."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0,
+        "cash": {"availableToTrade": 3_000.0},
+        "investments": {"currentValue": 7_000.0},  # 70% already deployed, organically
+    }
+    v2_mocks.get_positions.return_value = []  # the 70% is in tickers NOT in this pending batch
+    frames = {"T0": _bullish_frame()}
+    _mock_price_data(mocker, frames)
+    _seed_n_pending(db_engine, 1, frames)  # position_gbp=500 (10 qty x £50 mocked price)
+
+    n = submit_pending_etf_orders(_submission_config(max_deployed=0.5, etf_enabled=True))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rejected) == 1
+    note = rejected[0]["resolution_note"]
+    assert "deploy" in note.lower()
+    assert "75.0%" in note  # (7000 + 500) / 10000 -- correctly computed, not negative/garbled
+
+
+def test_extreme_over_deployment_still_rejects_cleanly(db_engine, v2_mocks, mocker):
+    """Pathological case: invested value has run up to 3x total_val (e.g. a
+    stale/lagging totalValue read, or an extreme rally) -- the deployed
+    fraction is already >>100%. Confirms the same clean-rejection path holds
+    at the extreme, not just near the boundary, and that nothing divides by
+    zero or produces a negative quantity/position size downstream."""
+    from brokers.trading212 import submit_pending_etf_orders
+
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0,
+        "cash": {"availableToTrade": 500.0},
+        "investments": {"currentValue": 30_000.0},
+    }
+    v2_mocks.get_positions.return_value = []
+    frames = {"T0": _bullish_frame()}
+    _mock_price_data(mocker, frames)
+    _seed_n_pending(db_engine, 1, frames)
+
+    n = submit_pending_etf_orders(_submission_config(max_deployed=0.5, etf_enabled=True))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="REJECTED_CAPACITY")) == 1
+
+
 # ---------------------------------------------------------------------------
 # Never-raises contract
 # ---------------------------------------------------------------------------
