@@ -113,6 +113,72 @@ class UniverseMembership(Base):
     )
 
 
+class MarketCapHistory(Base):
+    """Point-in-time historical market-cap inputs — quarterly shares
+    outstanding sourced from SEC EDGAR XBRL company-concept filings (see
+    analysis/market_cap.py), joined against price_data at read time to
+    compute market_cap(ticker, date) without look-ahead.
+
+    One row per (ticker, period_end_date) — period_end_date is the exact
+    date the filing itself reports the share count as of (the XBRL
+    concept's own "end" value), not the date it was fetched or filed.
+    `source` records which XBRL tag resolved for this ticker (e.g.
+    "dei:EntityCommonStockSharesOutstanding") since real filings are
+    inconsistent about which tag they populate — see
+    analysis/market_cap.py:fetch_shares_outstanding()'s own docstring for
+    the fallback order and why the earliest-filed value for a given
+    period_end_date is kept (not the latest, which can be a later
+    restatement — e.g. a stock split applied retroactively to an older
+    balance-sheet date in a subsequent filing).
+
+    `cik` records which SEC filer this row's data actually came from —
+    added specifically so a re-backfill can detect ticker-symbol recycling
+    (an unrelated company later trading under a symbol a delisted company
+    used to hold — distinct from a same-company rename like FB→META,
+    already handled by analysis/universe.py's _KNOWN_TICKER_RENAMES). SEC
+    EDGAR filings are genuinely CIK-scoped, so this project's shares data
+    can never itself blend two companies together — but if a ticker's
+    resolved CIK ever changes between one backfill_shares_outstanding()
+    run and the next, that is a direct, confirmed signal the symbol has
+    been reassigned, and — since price_data has no equivalent company-
+    identity concept at all (it's keyed on the bare ticker string) — a
+    strong warning that the ticker's PRICE history may silently splice two
+    unrelated companies together too. See
+    analysis/market_cap.py:detect_cik_change()'s own docstring for the
+    detection mechanism this field exists to support.
+
+    `filed_date` records when this observation actually became public (the
+    XBRL concept's own "filed" value) — distinct from period_end_date (the
+    date the filing DESCRIBES). analysis/market_cap.py's point-in-time
+    reads gate on filed_date, not period_end_date: a quarter's real
+    shares-outstanding figure typically isn't filed until 4-8 weeks after
+    the quarter itself ends, so gating on period_end_date alone would let a
+    reconstitution query "know" a filing's contents before it was actually
+    public — the exact hindsight-bias mistake this whole project's
+    point-in-time membership work already exists to avoid, reintroduced at
+    the filing-lag layer instead of the index-membership layer. Nullable
+    for backward compatibility with rows written before this field existed
+    (or synthetic test fixtures) — analysis/market_cap.py's read path
+    falls back to period_end_date only when filed_date is genuinely
+    unknown for a row, never as the default gate.
+    """
+
+    __tablename__ = "market_cap_history"
+
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
+    ticker              = Column(String(20), nullable=False, index=True)
+    period_end_date     = Column(Date, nullable=False)
+    shares_outstanding  = Column(Float, nullable=False)
+    source              = Column(String(80), nullable=False)   # e.g. "dei:EntityCommonStockSharesOutstanding"
+    cik                 = Column(String(12))                    # SEC filer CIK this row's data was fetched from
+    filed_date          = Column(Date)                          # when this observation actually became public
+    fetched_at          = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "period_end_date", name="uq_marketcap_ticker_period"),
+    )
+
+
 class InvestOrder(Base):
     """Record of every order attempt on the T212 Invest account (demo and
     live) — brokers/trading212.py:_log_order() writes one row per attempt,

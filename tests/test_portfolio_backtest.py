@@ -881,3 +881,130 @@ def test_collect_rejections_false_preserves_original_return_signature(mocker):
         cached, cfg, _flat_gspc(n + 10, start="2019-01-01"), per_trade_pct=0.1, max_deployed_pct=0.5,
     )
     assert isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# 6. Mid-simulation END_OF_DATA -- a ticker's own data ending years before
+# the overall backtest's end date, while OTHER tickers continue (the case
+# the rolling quarterly-reconstitution universe routinely creates: a
+# genuine delisting/acquisition). Distinct from the whole-backtest-reached-
+# its-end-date case already covered by the huge-caps-reproduce-run_candidate
+# tests above -- those never exercise a ticker ending EARLY relative to a
+# still-running sibling. Found and fixed 2026-08-01: before the fix, a
+# ticker's still-open position at the moment its own data ended was left
+# "stuck" in current_open/current_deployed until the trailing end-of-
+# function catch-all loop ran -- i.e. until every OTHER ticker's data had
+# also finished -- silently starving every other candidate's capacity for
+# however much simulated time was left.
+# ---------------------------------------------------------------------------
+
+def _delisting_frame(n, start="2020-01-01"):
+    """Always-on signal, steadily rising close -- a ticker that would stay
+    open indefinitely if its own data-ending were never detected."""
+    dates = pd.date_range(start, periods=n, freq="D")
+    close = pd.Series([100.0 + i * 0.05 for i in range(n)], index=dates)
+    return pd.DataFrame({
+        "close": close,
+        "atr": pd.Series([0.01] * n, index=dates),
+        "signal": pd.Series([True] * n, index=dates),
+    })
+
+
+def test_simulate_portfolio_frees_capacity_the_moment_one_tickers_data_ends(mocker):
+    """TICKA's frame ends at day 300 (a simulated delisting); TICKB's frame
+    continues to day 900. max_holding_days is set well beyond TICKA's own
+    300-day span so TICKA enters once on day 0 and holds continuously (no
+    MAX_HOLDING churn to complicate the picture) until its data ends. With
+    max_open_positions=1, TICKB (lower priority, idx=1) can never get the
+    slot while TICKA holds it. If TICKA's still-open position is correctly
+    force-closed the moment its own data ends (not deferred to the trailing
+    end-of-simulation loop), TICKB -- which has a continuously valid signal
+    for the whole 900-day span -- must pick up the freed slot right away,
+    not only in the final days once every ticker's data has run out."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    frame_a = _delisting_frame(300, start="2020-01-01")
+    frame_b = _delisting_frame(900, start="2020-01-01")
+    cached = [{"ticker": "TICKA", "frame": frame_a}, {"ticker": "TICKB", "frame": frame_b}]
+    cfg = _config_with_caps(max_open=1, max_deployed=999.0)
+    cfg["backtest"]["max_holding_days"] = 1000  # longer than either ticker's own data span
+
+    trades = v2b.simulate_portfolio(cached, cfg, _flat_gspc(900, start="2020-01-01"))
+
+    tick_a_trades = [t for t in trades if t["ticker"] == "TICKA"]
+    assert len(tick_a_trades) == 1  # entered once, held continuously, no MAX_HOLDING churn
+    assert tick_a_trades[0]["entry_date"] == frame_a.index[0].date()
+    assert tick_a_trades[0]["exit_reason"] == "END_OF_DATA"
+    assert tick_a_trades[0]["exit_date"] == frame_a.index[-1].date()
+
+    # The core regression: TICKB must have been admitted essentially
+    # immediately after TICKA's data-ending date, not only in the final
+    # days once every ticker's data has run out.
+    tickb_trades = [t for t in trades if t["ticker"] == "TICKB"]
+    assert tickb_trades, "TICKB should have been admitted once TICKA's slot freed up"
+    first_b_entry = min(pd.Timestamp(t["entry_date"]) for t in tickb_trades)
+    assert first_b_entry <= frame_a.index[-1] + pd.Timedelta(days=5)
+
+
+def test_simulate_portfolio_compounding_frees_capacity_the_moment_one_tickers_data_ends(mocker):
+    """Identical regression against simulate_portfolio_compounding() --
+    the fix was applied independently to both engines and must be verified
+    against both, not assumed to carry over.
+
+    _MIN_VAR_RETURNS is patched to an unreachable value so every position
+    in this test sizes via the deterministic <60-day fallback formula
+    (round(current_balance * per_trade_pct * 0.5, 2)) rather than the real
+    risk-based VaR formula -- makes the capacity arithmetic fully
+    predictable (each fallback-sized position is exactly 15% of whatever
+    the current balance is at entry) rather than depending on this
+    fixture's own incidental volatility, which is what real VaR sizing
+    would otherwise key off.
+    """
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    mocker.patch.object(v2b, "_MIN_VAR_RETURNS", 100_000)
+    frame_a = _delisting_frame(300, start="2020-01-01")
+    frame_b = _delisting_frame(900, start="2020-01-01")
+    cached = [{"ticker": "TICKA", "frame": frame_a}, {"ticker": "TICKB", "frame": frame_b}]
+    cfg = _compounding_config()
+    cfg["backtest"]["max_holding_days"] = 1000
+    # per_trade_pct=0.3 -> each fallback-sized position is 15% of balance.
+    # max_deployed_pct=0.2 sits strictly between one position (15%, fits)
+    # and two simultaneous positions (30%, does not) -- so TICKB is
+    # genuinely capacity-blocked for as long as TICKA holds its slot, and
+    # must be admitted the moment (not years after) TICKA's END_OF_DATA
+    # exit frees it back up.
+    per_trade_pct, max_deployed_pct = 0.3, 0.2
+
+    trades = v2b.simulate_portfolio_compounding(
+        cached, cfg, _flat_gspc(900, start="2020-01-01"), per_trade_pct, max_deployed_pct,
+    )
+
+    tick_a_trades = [t for t in trades if t["ticker"] == "TICKA"]
+    assert len(tick_a_trades) == 1
+    assert tick_a_trades[0]["exit_reason"] == "END_OF_DATA"
+    assert tick_a_trades[0]["exit_date"] == frame_a.index[-1].date()
+
+    tickb_trades = [t for t in trades if t["ticker"] == "TICKB"]
+    assert tickb_trades, "TICKB should have been admitted once TICKA's capital freed up"
+    first_b_entry = min(pd.Timestamp(t["entry_date"]) for t in tickb_trades)
+    # The core regression: admitted essentially the same day TICKA's data
+    # ended, not deferred for the ~4.7 remaining simulated years until
+    # TICKB's own data (900 days) runs out too.
+    assert first_b_entry <= frame_a.index[-1] + pd.Timedelta(days=5)
+
+
+def test_simulate_portfolio_end_of_data_still_correct_when_every_ticker_ends_together(mocker):
+    """Regression guard: the fix must not disturb the ordinary case every
+    other test in this file already exercises -- every ticker's data
+    genuinely running to the same final backtest date."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 200
+    cached = [
+        {"ticker": "VOO", "frame": _delisting_frame(n)},
+        {"ticker": "GLD", "frame": _delisting_frame(n)},
+    ]
+    cfg = _config_with_caps(max_open=999999, max_deployed=999.0)
+    trades = v2b.simulate_portfolio(cached, cfg, _flat_gspc(n))
+    end_of_data_trades = [t for t in trades if t["exit_reason"] == "END_OF_DATA"]
+    assert len(end_of_data_trades) == 2  # both tickers, each closed exactly once at the shared end
+    for t in end_of_data_trades:
+        assert t["exit_date"] == pd.Timestamp("2020-01-01").date() + pd.Timedelta(days=n - 1)

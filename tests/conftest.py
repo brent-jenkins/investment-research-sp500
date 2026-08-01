@@ -30,6 +30,7 @@ _GET_ENGINE_BINDINGS = (
     "data.ingestion.get_engine",
     "output.performance.get_engine",
     "analysis.universe.get_engine",
+    "analysis.market_cap.get_engine",
 )
 
 

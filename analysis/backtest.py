@@ -548,6 +548,28 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
                 stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
                 max_holding_days=st["max_hold"],
             )
+            # A ticker's own price data can end mid-simulation (a genuine
+            # delisting/acquisition — the rolling quarterly-reconstitution
+            # universe, unlike the old curated-40, routinely includes
+            # candidates whose real history ends years before the overall
+            # backtest's end date) while OTHER tickers' data continues for
+            # years afterward. `events` only ever contains a row for dates a
+            # ticker actually has data on, so once its last row is reached
+            # here, the day-by-day walk below never revisits it again — if
+            # its position is still open at that point, it must be forced
+            # closed HERE, on this exact row, not deferred to the trailing
+            # end-of-simulation loop below. Deferring it (the original,
+            # pre-fix behaviour) left its position_gbp permanently "stuck" in
+            # current_open/current_deployed for the ENTIRE remainder of the
+            # simulation, silently starving every other candidate's capacity
+            # for however many years of simulated time were left — verified
+            # directly (2026-08-01): a 2-ticker synthetic fixture with
+            # max_open_positions=1, one ticker's data ending 1.5 years before
+            # the other's, produced exactly 1 trade total (the survivor
+            # ticker, which had a continuously valid signal for that entire
+            # 1.5-year stretch, got zero).
+            if exit_reason is None and dt == st["frame"].index[-1]:
+                exit_reason = "END_OF_DATA"
             exit_price = stop_price if exit_reason == "STOP_LOSS" else price
 
             if exit_reason:
@@ -621,8 +643,14 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
 
         i = j
 
-    # End of data — close every still-open position at its own ticker's
-    # last available row, mirroring simulate_trades()'s own END_OF_DATA exit.
+    # Defensive backstop only, post-fix — every ticker's own last row is now
+    # forced closed inline in Phase A above the moment it's reached, so this
+    # loop should find nothing left open EXCEPT the one edge case Phase A
+    # can't cover: a position entered in Phase B on a ticker's own literal
+    # final day has no later day left for Phase A to ever revisit. Kept as a
+    # genuine catch-all (not dead code) for that case and any other
+    # unanticipated one — never expected to run for a position whose ticker
+    # had any further trading day in this backtest.
     for ticker, st in per_ticker.items():
         ot = st["open_trade"]
         if ot is None:
@@ -939,6 +967,17 @@ def simulate_portfolio_compounding(
                 stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
                 max_holding_days=st["max_hold"],
             )
+            # See simulate_portfolio()'s identical fix/comment above for the
+            # full incident: a ticker's own data can end mid-simulation
+            # (genuine delisting/acquisition) while other tickers continue
+            # for years — without forcing END_OF_DATA here, on this exact
+            # row, the position's capital stays falsely "stuck" in
+            # current_deployed (and current_balance never gets its P&L
+            # credited back) for the rest of the simulation, silently
+            # starving every later candidate's capacity/sizing. Verified
+            # directly against this function too, not just simulate_portfolio().
+            if exit_reason is None and dt == st["frame"].index[-1]:
+                exit_reason = "END_OF_DATA"
             exit_price = stop_price if exit_reason == "STOP_LOSS" else price
 
             if exit_reason:
@@ -975,10 +1014,11 @@ def simulate_portfolio_compounding(
 
         i = j
 
-    # End of data — close every still-open position at its own ticker's
-    # last available row, mirroring simulate_portfolio()'s own END_OF_DATA
-    # exit (balance updated for completeness/symmetry, though nothing reads
-    # it after this point).
+    # Defensive backstop only, post-fix — see simulate_portfolio()'s
+    # identical comment above; Phase A now force-closes every ticker's own
+    # last row inline, so this should only ever catch a position entered on
+    # a ticker's own literal final day (balance updated for
+    # completeness/symmetry, though nothing reads it after this point).
     for ticker, st in per_ticker.items():
         ot = st["open_trade"]
         if ot is None:
