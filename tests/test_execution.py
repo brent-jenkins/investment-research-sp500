@@ -57,8 +57,11 @@ def _config(mapping=None, enabled=True) -> dict:
             "enabled": enabled,
             "live": False,
             "max_total_deployed": 0.5,
-            "max_open_positions": 20,
-            "max_position_gbp": 500,
+            # 5% of v2_mocks' mocked totalValue (£10,000) = £500 -- deliberately
+            # matches the old fixed max_position_gbp: 500 this fixture used
+            # before per_trade_pct replaced it (2026-08-01), so every existing
+            # test's implicit "£500 ceiling" expectation still holds unchanged.
+            "per_trade_pct": 0.05,
             "var_confidence": 0.95,
             "var_lookback_days": 252,
             "max_risk_pct": 0.01,
@@ -203,6 +206,57 @@ def test_entry_fires_when_all_three_conditions_hold(db_engine, v2_mocks, mocker)
     assert rows[0]["decided_price"] > 0
 
 
+def test_entry_sizing_ceiling_scales_with_live_account_value(db_engine, v2_mocks, mocker):
+    """position_gbp's ceiling is per_trade_pct * the account's CURRENT
+    total value (client.get_account_summary()['totalValue']), not a fixed
+    GBP figure (2026-08-01) -- confirmed via the deterministic <60-day-
+    history fallback formula (round(dynamic_max_position_gbp * 0.5, 2)),
+    which isolates the ceiling itself from any real VaR computation.
+    var_lookback_days is set well below _MIN_VAR_RETURNS (60) so even
+    _bullish_frame()'s 400 days of history yields too few usable log
+    returns for the ticker's slice, forcing the fallback path
+    deterministically. Doubling total_val must exactly double the
+    resulting queued position_gbp -- the old flat max_position_gbp cap
+    could never have done this, by construction."""
+    from brokers.trading212 import maybe_place_orders
+
+    _mock_price_data(mocker, {"VOO": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg["trading212_invest"]["var_lookback_days"] = 30
+    cfg["trading212_invest"]["per_trade_pct"] = 0.05
+
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0,
+        # generous free cash so the unrelated `free_cash * 0.25` cap never
+        # binds and this test isolates the per_trade_pct ceiling alone.
+        "cash": {"availableToTrade": 50_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    maybe_place_orders(cfg, run_type="full")
+    rows_small = _pending_rows(db_engine, status="PENDING")
+    assert len(rows_small) == 1
+    position_small = rows_small[0]["position_gbp"]
+    assert position_small == pytest.approx(10_000.0 * 0.05 * 0.5)  # £250
+
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("DELETE FROM pending_orders"))
+
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 100_000.0,
+        "cash": {"availableToTrade": 500_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    maybe_place_orders(cfg, run_type="full")
+    rows_large = _pending_rows(db_engine, status="PENDING")
+    assert len(rows_large) == 1
+    position_large = rows_large[0]["position_gbp"]
+    assert position_large == pytest.approx(100_000.0 * 0.05 * 0.5)  # £5,000
+
+    assert position_large == pytest.approx(position_small * 10)
+
+
 def test_entry_blocked_when_momentum_negative(db_engine, v2_mocks, mocker):
     from brokers.trading212 import maybe_place_orders
 
@@ -274,11 +328,16 @@ def test_decide_phase_skips_ticker_with_existing_unresolved_pending_order(db_eng
     assert len(_pending_rows(db_engine, status="PENDING")) == 1  # still just the seeded one
 
 
-def test_decide_phase_queues_regardless_of_deployed_and_open_position_caps(db_engine, v2_mocks, mocker):
-    """Decide-phase no longer enforces max_total_deployed / max_open_positions
-    -- those are submission-time concerns now (account state can genuinely
-    differ by the time submission runs). A cold-start run with 5 qualifiers
-    and tight caps must still queue all 5 -- nothing is lost, just deferred."""
+def test_decide_phase_queues_regardless_of_deployed_cap(db_engine, v2_mocks, mocker):
+    """Decide-phase no longer enforces max_total_deployed -- that's a
+    submission-time concern now (account state can genuinely differ by the
+    time submission runs). A cold-start run with 5 qualifiers and an
+    already-exceeded deployment cap must still queue all 5 -- nothing is
+    lost, just deferred. (max_open_positions was retired entirely
+    2026-08-01 -- position count is now emergent from per_trade_pct/
+    max_total_deployed together, so there is no separate cap left to test
+    here -- see CLAUDE.md's "Live execution switched to the compounding
+    two-parameter scheme" section.)"""
     from brokers.trading212 import maybe_place_orders
 
     v2_mocks.get_positions.return_value = [
@@ -294,7 +353,6 @@ def test_decide_phase_queues_regardless_of_deployed_and_open_position_caps(db_en
     mocker.patch("analysis.universe.is_member", return_value=True)
 
     cfg = _config(mapping=_n_ticker_mapping(5))
-    cfg["trading212_invest"]["max_open_positions"] = 2   # already "exceeded" by the 2 seeded positions
     cfg["trading212_invest"]["max_total_deployed"] = 0.5  # already exceeded (60%)
     maybe_place_orders(cfg, run_type="full")
 
@@ -476,15 +534,16 @@ def _n_ticker_mapping(n: int) -> dict:
 # ---------------------------------------------------------------------------
 # Exchange-aware order submission (2026-07-31, see CLAUDE.md) --
 # _submit_pending_orders() / submit_pending_etf_orders() /
-# submit_pending_stock_orders(). max_total_deployed / max_open_positions /
-# the price-sanity check all now live here, applied against the account's
-# live state *at submission time* rather than at EOD decide time.
+# submit_pending_stock_orders(). max_total_deployed / the price-sanity
+# check all now live here, applied against the account's live state *at
+# submission time* rather than at EOD decide time. No position-count cap
+# (max_open_positions retired 2026-08-01 -- see CLAUDE.md's "Live execution
+# switched to the compounding two-parameter scheme" section).
 # ---------------------------------------------------------------------------
 
-def _submission_config(max_open=999, max_deployed=1.0, threshold=0.03,
+def _submission_config(max_deployed=1.0, threshold=0.03,
                         etf_enabled=None, stock_enabled=None) -> dict:
     cfg = _config()
-    cfg["trading212_invest"]["max_open_positions"] = max_open
     cfg["trading212_invest"]["max_total_deployed"] = max_deployed
     cfg["trading212_invest"]["price_sanity_threshold_pct"] = threshold
     if etf_enabled is not None:
@@ -597,7 +656,8 @@ def test_sanity_check_allows_submission_when_price_within_threshold(db_engine, v
 
 
 # ---------------------------------------------------------------------------
-# max_open_positions / max_total_deployed gates, applied at submission time
+# max_total_deployed gate, applied at submission time -- and confirmation
+# that NO position-count gate exists any more (retired 2026-08-01).
 # ---------------------------------------------------------------------------
 
 def _seed_n_pending(engine, n: int, frames: dict) -> None:
@@ -607,21 +667,24 @@ def _seed_n_pending(engine, n: int, frames: dict) -> None:
         _seed_pending_order(engine, ticker=ticker, t212_ticker=f"T{i}_EQ", is_etf=True, decided_price=close)
 
 
-def test_max_open_positions_stops_submission_partway(db_engine, v2_mocks, mocker):
-    """5 pending ETF decisions, cold start (0 open positions),
-    max_open_positions=2 -- must submit exactly 2, leaving 3 still PENDING."""
+def test_no_position_count_cap_many_open_positions_do_not_block_submission(db_engine, v2_mocks, mocker):
+    """max_open_positions was retired 2026-08-01 -- position count is now an
+    emergent consequence of per_trade_pct/max_total_deployed together, not a
+    separately-enforced rule. 50 already-open positions (far more than the
+    old max_open_positions=20 default would ever have allowed) must NOT
+    block 5 new pending ETF decisions from submitting, as long as the
+    deployment cap itself isn't binding."""
     from brokers.trading212 import submit_pending_etf_orders
 
-    v2_mocks.get_positions.return_value = []  # cold start
+    v2_mocks.get_positions.return_value = [{"ticker": f"EXISTING{i}_EQ", "quantity": 1.0} for i in range(50)]
     frames = {f"T{i}": _bullish_frame() for i in range(5)}
     _mock_price_data(mocker, frames)
     _seed_n_pending(db_engine, 5, frames)
 
-    n = submit_pending_etf_orders(_submission_config(max_open=2, etf_enabled=True))
+    n = submit_pending_etf_orders(_submission_config(max_deployed=1.0, etf_enabled=True))
 
-    assert n == 2
-    assert v2_mocks.place_market_order.call_count == 2
-    assert len(_pending_rows(db_engine, status="PENDING")) == 3
+    assert n == 5
+    assert len(_pending_rows(db_engine, status="PENDING")) == 0
 
 
 def test_max_total_deployed_stops_submission_partway(db_engine, v2_mocks, mocker):
@@ -635,15 +698,15 @@ def test_max_total_deployed_stops_submission_partway(db_engine, v2_mocks, mocker
     _mock_price_data(mocker, frames)
     _seed_n_pending(db_engine, 5, frames)
 
-    n = submit_pending_etf_orders(_submission_config(max_open=999, max_deployed=0.15, etf_enabled=True))
+    n = submit_pending_etf_orders(_submission_config(max_deployed=0.15, etf_enabled=True))
 
     assert n == 3
     assert len(_pending_rows(db_engine, status="PENDING")) == 2
 
 
 def test_uncapped_submission_still_places_every_pending_row(db_engine, v2_mocks, mocker):
-    """Sanity check the caps don't over-suppress: with both caps generous,
-    all 5 pending ETF decisions still submit."""
+    """Sanity check the deployment cap doesn't over-suppress: with it
+    generous, all 5 pending ETF decisions still submit."""
     from brokers.trading212 import submit_pending_etf_orders
 
     v2_mocks.get_positions.return_value = []
@@ -651,7 +714,7 @@ def test_uncapped_submission_still_places_every_pending_row(db_engine, v2_mocks,
     _mock_price_data(mocker, frames)
     _seed_n_pending(db_engine, 5, frames)
 
-    n = submit_pending_etf_orders(_submission_config(max_open=999, max_deployed=1.0, etf_enabled=True))
+    n = submit_pending_etf_orders(_submission_config(max_deployed=1.0, etf_enabled=True))
 
     assert n == 5
     assert len(_pending_rows(db_engine, status="PENDING")) == 0

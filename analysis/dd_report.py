@@ -272,14 +272,33 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
         "research history: a broad, frequently-firing overlay suppresses more edge than it protects.",
         styles["BodyText"],
     ))
-    story.append(Paragraph("Position Sizing & Exits", styles["H2"]))
-    story.append(Paragraph(
-        "Positions are sized via Historical VaR (95% confidence, scaled to the ticker's own max "
-        "holding period via the square-root-of-time rule), the same mechanism validated in the prior "
-        "architecture and reused unmodified. Exit priority: crisis override → index removal (stocks "
-        "only) → ATR-based stop-loss → signal turning off → max holding period backstop.",
-        styles["BodyText"],
-    ))
+    story.append(Paragraph("Position Sizing, Portfolio Constraints & Exits", styles["H2"]))
+    engine_used = result.get("engine_used", "compounding_default")
+    if engine_used in ("compounding_default", "compounding_explicit"):
+        per_trade_pct = result.get("per_trade_pct") or 0.0
+        max_deployed_pct = result.get("max_deployed_pct") or 0.0
+        story.append(Paragraph(
+            "Every position is sized via Historical VaR (95% confidence, scaled to the ticker's own "
+            f"max holding period via the square-root-of-time rule), ceilinged at {per_trade_pct * 100:.0f}% "
+            "of the account's own CURRENT value — the same formula and the same account-value-derived "
+            "ceiling real order placement uses — rather than a fixed £ figure, since a single account's "
+            "positions genuinely share and compete for capital across every ticker together, not each "
+            f"ticker sized independently against an unconstrained notional balance. New entries stop "
+            f"once {max_deployed_pct * 100:.0f}% of the account's current value is deployed; position "
+            "count is an emergent consequence of these two limits together, not a separately-enforced "
+            "third rule. Exit priority: crisis override → index removal (stocks only) → ATR-based "
+            "stop-loss → signal turning off → max holding period backstop.",
+            styles["BodyText"],
+        ))
+    else:
+        story.append(Paragraph(
+            "Positions are sized via Historical VaR (95% confidence, scaled to the ticker's own max "
+            "holding period via the square-root-of-time rule), the same mechanism validated in the "
+            "prior architecture and reused unmodified. Exit priority: crisis override → index "
+            "removal (stocks only) → ATR-based stop-loss → signal turning off → max holding period "
+            "backstop.",
+            styles["BodyText"],
+        ))
     story.append(PageBreak())
 
     # --- Validated Results ---

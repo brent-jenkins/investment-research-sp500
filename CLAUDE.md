@@ -3855,6 +3855,141 @@ services' `ActiveEnterTimestamp` unchanged throughout. `analysis/backtest.py`,
 remain new, uncommitted local changes pending review, alongside this
 section.
 
+### Live execution switched to the compounding two-parameter scheme (2026-08-01)
+
+Direct follow-up to the two sections immediately above — the research was
+adopted into real, permanent code the same day, not left as a backtest-only
+finding. Two related but distinct problems are closed together, because
+they shared one root cause: live order placement and the backtest engine
+each grew their own answer to "how much capital does one trade get," and
+those answers had silently diverged.
+
+**Part A confirmed first, independently, before changing anything.** Live
+order placement (`brokers/trading212.py`) already compounds correctly —
+`maybe_place_orders()` and `_submit_pending_orders()` both call
+`client.get_account_summary()` fresh on every invocation and pass
+`total_val = summary["totalValue"]` — T212's real, current account balance
+— directly into `_var_position_size_core()` as `account_value_gbp`. There
+was never a live-trading bug here; the gap was entirely that the *backtest*
+engine (`analysis/backtest.py:simulate_portfolio()`, this file's own
+"Portfolio-capped backtest engine" section above) sized against a fixed
+notional constant instead of a moving balance, so nothing had ever measured
+live and backtest against the same yardstick.
+
+**What changed, concretely:**
+
+1. **`config.yaml`**: `trading212_invest.max_position_gbp` and
+   `max_open_positions` are **removed entirely** — neither key exists in
+   the file any more, and nothing reads them from config. `per_trade_pct:
+   0.05` is new; `max_total_deployed: 0.5` is unchanged (its meaning was
+   already "percentage of the account's current value," so it needed no
+   rename — see Part A above for why that was already correct).
+2. **`brokers/trading212.py`** — `maybe_place_orders()` (decide phase) now
+   computes `dynamic_max_position_gbp = total_val * per_trade_pct` and
+   feeds that into `_var_position_size_core()` in place of the old fixed
+   `max_position_gbp`. This is a **ceiling on the VaR-computed size, not a
+   target** — `_var_position_size_core()`'s own formula (`analysis/
+   volatility.py`) computes the risk-based size first and only then applies
+   `min(position_gbp, max_position_gbp)`; `per_trade_pct` never replaces
+   VaR sizing, it only ever caps it down when VaR wants more. The <60-day
+   fallback (`round(dynamic_max_position_gbp * 0.5, 2)`) scales the same
+   way. `_submit_pending_orders()` (submission phase) had its entire
+   `max_open_positions` cap-check block and `current_open` counter removed
+   — position count is now an emergent consequence of `per_trade_pct` and
+   `max_total_deployed` together, exactly matching
+   `simulate_portfolio_compounding()`'s own design (see "Compounding
+   portfolio backtest" above). The `max_total_deployed` check itself is
+   unchanged — it was already checking `invested / total_val`, a
+   compounding ratio, so Part A's finding meant this half of the mechanism
+   needed no code change at all, only the documentation to say so plainly.
+3. **`analysis/validation.py:run_full_validation()`** — **the default
+   behaviour of a bare call changed**, closing the gap the task set out to
+   close: no flags passed now runs `simulate_portfolio_compounding()` with
+   `per_trade_pct`/`max_total_deployed` read straight from
+   `config["trading212_invest"]` — the identical two keys, the identical
+   values, live order placement reads. The Backtest page and the DD report
+   generator (`analysis/dd_report.py`) both call `run_full_validation(config)`
+   bare and needed no changes themselves to pick this up. Three explicit
+   overrides exist purely to reproduce specific figures already published
+   in this file on demand, never as a default: `uncapped=True` forces the
+   original `run_candidate()` (reproduces the "Current baseline" figures);
+   `portfolio_mode=True` forces `simulate_portfolio()` (reproduces
+   "Portfolio-capped validation findings"); explicit `per_trade_pct`/
+   `max_deployed_pct_compounding` arguments (the research-sweep interface)
+   still work exactly as before, taking priority over config when both are
+   supplied together.
+4. **Historical reproducibility, preserved despite the config keys being
+   gone.** `simulate_trades()`'s and `simulate_portfolio()`'s own
+   `max_position_gbp`/`max_open_positions` fallback defaults (previously
+   500/999 — generic placeholder values, never meant to be load-bearing
+   while the config keys existed) are now hardcoded to the real historical
+   values, **2500** and **20**, directly in `analysis/backtest.py` — so
+   `run_full_validation(uncapped=True)` and `run_full_validation(
+   portfolio_mode=True)` keep reproducing their respective published
+   figures exactly, with no dependency on config.yaml carrying keys that
+   are no longer part of the live, forward-looking configuration.
+5. **`analysis/dd_report.py`**'s "Position Sizing, Portfolio Constraints &
+   Exits" section now reads `result["engine_used"]`/`result["per_trade_pct"]`/
+   `result["max_deployed_pct"]` and states the real, live-matching
+   methodology (percentage-of-current-value ceiling and deployment cap,
+   position count emergent) whenever the result came from either
+   compounding variant — falling back to the old static VaR-only wording
+   only for a report generated from one of the two explicitly-selected
+   legacy engines, so the report can never misdescribe which methodology
+   actually produced the figures it's showing.
+6. **`main.py`**'s Status page T212 Invest Account badge now reads
+   `per_trade_pct` instead of `max_position_gbp`/`max_open_positions`,
+   showing "max N% of account/order · max M% deployed (position count is
+   emergent — no separate cap)".
+
+**Verified three ways before trusting this, not assumed:**
+
+- **Full local suite passes** (238 tests, `pytest` from the project root)
+  — new coverage added specifically for this change: dynamic per-trade
+  sizing scaling exactly with a mocked account's `totalValue` (doubling
+  the account exactly doubles the queued `position_gbp`, via the
+  deterministic <60-day fallback formula, isolating the ceiling from any
+  real VaR computation), confirmation that many pre-existing open
+  positions no longer block new submissions (only the deployment cap
+  does), the engine-selection priority order in `run_full_validation()`
+  (five tests — default, config-absent fallback to 5%/50%, and all three
+  explicit overrides, each asserting the correct underlying function was
+  called with the correct arguments), and the DD report's methodology
+  text correctly reflecting whichever engine actually produced a given
+  result.
+- **A bare `run_full_validation(config)` call, run against real 2007-2026
+  production data in an isolated server clone (own copied DB, deleted only
+  after these figures were captured, production never touched), exactly
+  reproduced today's already-documented 5%/50% sweep result**: 2,180
+  trades, TRAIN CAGR 3.27%, TEST CAGR 9.85%, 14/16 blocks with only 0 and
+  1 failing, walk-forward 83.4%, £73,961/£92,643 train/test £ growth — a
+  byte-for-byte match, confirming the new default genuinely resolves to
+  the validated scheme rather than merely appearing to.
+- **Both legacy explicit overrides, run against the same production data
+  in the same clone, exactly reproduced their own already-published
+  figures** despite `max_position_gbp`/`max_open_positions` no longer
+  existing in config.yaml: `uncapped=True` → 12,046 trades / TRAIN 13.23%
+  / TEST 22.39% / 14/16 blocks (the "Current baseline"); `portfolio_mode=True`
+  → 2,187 trades / TRAIN 3.14% / TEST 6.13% / 13/16 blocks failing 0,1,12
+  (the "Portfolio-capped validation findings" figures) — confirming the
+  hardcoded historical fallback defaults in `analysis/backtest.py` (point 4
+  above) do their job correctly.
+
+**Not done as part of this change**: `trading212_invest.live` remains
+`false` (unaffected either way — this change alters sizing/cap logic, not
+the live/demo gate); no change to the crisis override, exit priority,
+momentum signal, or universe-membership gating, all of which were already
+identical between live and backtest and remain so. The reservations
+already on record in "Compounding portfolio backtest" above still apply in
+full now that this is live — most importantly, that both windows
+underperform buy-and-hold S&P 500 in £ terms under this scheme, and the
+calmest, most defensive names in the universe are still sized almost
+entirely by the flat `per_trade_pct` ceiling rather than genuine
+risk-scaling. Adopting this was a deliberate choice to make the live
+system's real behaviour match its own validated research rather than
+continuing to run on parameters nobody had actually re-derived since V1,
+not a claim that 5%/50% is a fully solved, final answer.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

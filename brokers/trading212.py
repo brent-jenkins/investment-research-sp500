@@ -35,13 +35,26 @@ Safety invariants (both order-placement functions):
   - Any API exception disables order placement for the current run, writes
     the error to system_metadata under "invest_error", and sends an alert
     email.
-  - max_total_deployed / max_open_positions are enforced per-iteration
-    inside the BUY loop (not just once before it starts) via running
-    current_open/invested totals updated after each successful BUY — a
-    cold start (0 pre-existing positions/deployment) would otherwise be
-    able to walk through every qualifying ticker in one pass before either
-    cap ever binds. See CLAUDE.md's "V2 first-cycle deployment cap
-    overshoot" section for the incident this fixed.
+  - Position sizing and the deployment cap (2026-08-01, see CLAUDE.md's
+    "Live execution switched to the compounding two-parameter scheme"
+    section) are both percentages of the account's own CURRENT total value
+    (client.get_account_summary()["totalValue"], fetched fresh on every
+    decide/submit call — a genuinely compounding balance) rather than a
+    fixed £ figure or a fixed notional reference: trading212_invest.
+    per_trade_pct ceilings a single new entry's VaR-sized position;
+    max_total_deployed stops further entries once that fraction of the
+    account's current value is committed. Re-checked per-iteration inside
+    the submission loop (not just once before it starts) via a running
+    invested total updated after each successful order — a cold start (0%
+    deployed) would otherwise be able to walk through every qualifying
+    ticker in one pass before the cap ever binds. See CLAUDE.md's "V2
+    first-cycle deployment cap overshoot" section for the incident this
+    per-iteration check originally fixed. There is deliberately no
+    separate cap on the NUMBER of concurrently open positions — count is
+    an emergent consequence of per_trade_pct and max_total_deployed
+    together, not a third, independently-enforced rule (validated via a
+    20-combination sweep against real 2007-2026 production data — see
+    CLAUDE.md's "Compounding portfolio backtest" section).
 
 "Never raises" contract: every DB write and every T212 API call site is
 wrapped so a single ticker's failure never blocks the rest of the run, and
@@ -1501,7 +1514,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         return
 
     live = t212_cfg.get("live", False)
-    max_position_gbp = float(t212_cfg.get("max_position_gbp", 500))
+    per_trade_pct = float(t212_cfg.get("per_trade_pct", 0.05))
 
     try:
         client = Trading212Client(live=live)
@@ -1534,14 +1547,13 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
 
     orders_queued = 0
 
-    # No max_total_deployed / max_open_positions enforcement in this loop —
-    # unlike the old immediate-submission design, queuing a decision commits
-    # no cash and opens no position, so there is nothing yet for those caps
-    # to protect against. They are enforced for real in
-    # _submit_pending_orders(), against the account's live state *at
-    # submission time*, which can genuinely differ from right now (an
-    # overnight exit can free up room between this EOD decide and the next
-    # session's submission).
+    # No max_total_deployed enforcement in this loop — unlike the old
+    # immediate-submission design, queuing a decision commits no cash and
+    # opens no position, so there is nothing yet for that cap to protect
+    # against. It is enforced for real in _submit_pending_orders(), against
+    # the account's live state *at submission time*, which can genuinely
+    # differ from right now (an overnight exit can free up room between
+    # this EOD decide and the next session's submission).
     for ticker, raw in mapping.items():
         t212_ticker = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
         instrument_currency = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
@@ -1579,25 +1591,32 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             stop_price, _stop_pct = _resolve_entry_stop("LONG", entry_price, atr, config)
 
             # VaR position sizing — same formula/inputs the validated backtest
-            # itself uses (analysis/volatility.py:_var_position_size_core(), via
-            # analysis/backtest.py:simulate_trades()), except sourced from live
-            # account value and live prior-close history instead of a notional
-            # backtest constant.
+            # itself uses (analysis/volatility.py:_var_position_size_core(),
+            # via analysis/backtest.py:simulate_portfolio_compounding() —
+            # the same engine analysis/validation.py:run_full_validation()
+            # now defaults to, see CLAUDE.md's "Live execution switched to
+            # the compounding two-parameter scheme" section), sourced from
+            # live account value and live prior-close history instead of a
+            # notional backtest constant. The per-trade ceiling is dynamic —
+            # per_trade_pct of the account's own CURRENT total value, not a
+            # fixed £ figure — so it scales automatically as the account
+            # itself compounds.
             close_series = state["close_series"]
             var_confidence = float(t212_cfg.get("var_confidence", 0.95))
             var_lookback = int(t212_cfg.get("var_lookback_days", 252))
             max_risk_pct = float(t212_cfg.get("max_risk_pct", 0.01))
             min_position_gbp = float(t212_cfg.get("min_position_gbp", 50))
+            dynamic_max_position_gbp = total_val * per_trade_pct
 
             prior_closes = close_series.tail(var_lookback + 1)
             log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
             if len(log_returns) >= _MIN_VAR_RETURNS:
                 position_gbp, _dv, holding_var = _var_position_size_core(
-                    log_returns, total_val, max_position_gbp, max_hold,
+                    log_returns, total_val, dynamic_max_position_gbp, max_hold,
                     var_confidence, max_risk_pct, min_position_gbp,
                 )
             else:
-                position_gbp = round(max_position_gbp * 0.5, 2)
+                position_gbp = round(dynamic_max_position_gbp * 0.5, 2)
                 holding_var = None
             position_gbp = min(position_gbp, free_cash * 0.25)
 
@@ -1646,10 +1665,12 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     Applies, in order: an enabled/paused gate specific to this asset class
     (etf_submission_enabled / stock_submission_enabled — see CLAUDE.md for
     why ETF submission ships paused), a price-sanity check per row against
-    the price recorded at decide time, then the same max_total_deployed /
-    max_open_positions / free-cash caps the old immediate-submission design
-    enforced — just applied here, against the account's live state at
-    submission time, instead of at decide time.
+    the price recorded at decide time, then the max_total_deployed /
+    free-cash caps the old immediate-submission design enforced — just
+    applied here, against the account's live state at submission time,
+    instead of at decide time. No position-count cap (2026-08-01) — see
+    CLAUDE.md's "Live execution switched to the compounding two-parameter
+    scheme" section for why max_open_positions was retired.
 
     Never raises. Returns the number of orders actually placed.
     """
@@ -1686,8 +1707,6 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     threshold_pct = float(t212_cfg.get("price_sanity_threshold_pct", 0.03))
     live = t212_cfg.get("live", False)
     max_deployed_pct  = float(t212_cfg.get("max_total_deployed", 0.5))
-    max_position_gbp  = float(t212_cfg.get("max_position_gbp", 500))
-    max_open          = t212_cfg.get("max_open_positions", 999)
 
     try:
         client = Trading212Client(live=live)
@@ -1716,7 +1735,6 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
         return 0
 
     account_label = "LIVE" if live else "DEMO"
-    current_open = len(positions_by_t212)
     submitted = 0
 
     for row in pending:
@@ -1724,11 +1742,11 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
         # change, just against submission-time account state. A cap binding
         # here stops the run entirely; every row not yet reached stays
         # PENDING and is retried at the next submission window rather than
-        # being marked skipped or lost.
-        if current_open >= max_open:
-            logger.info("%d/%d positions open — max_open_positions reached, stopping %s submission.",
-                        current_open, max_open, label)
-            break
+        # being marked skipped or lost. No position-count cap (2026-08-01)
+        # — see CLAUDE.md's "Live execution switched to the compounding
+        # two-parameter scheme" section; count is now an emergent
+        # consequence of per_trade_pct (maybe_place_orders()'s sizing
+        # ceiling) and max_total_deployed below, together.
         if total_val > 0 and (invested / total_val) >= max_deployed_pct:
             logger.info("%.0f%% deployed (limit %.0f%%) — stopping %s submission.",
                         (invested / total_val) * 100, max_deployed_pct * 100, label)
@@ -1822,7 +1840,6 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 status = "PLACED"
                 free_cash -= position_gbp
                 invested += est_value_gbp
-                current_open += 1
                 submitted += 1
                 logger.info("BUY %s (%s) qty=%s approx £%.0f id=%s",
                             ticker, t212_ticker, quantity, position_gbp, order_id)

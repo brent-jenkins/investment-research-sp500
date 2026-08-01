@@ -1245,9 +1245,9 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
             f'padding:2px 8px;border-radius:4px;font-size:0.78rem;font-weight:600">'
             f'{"LIVE" if t212_live else "DEMO"}</span> '
             f'{len(mapping)} tickers · '
-            f'max £{float(t212_cfg.get("max_position_gbp", 2500)):,.0f}/order · '
-            f'max {int(float(t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed · '
-            f'max {t212_cfg.get("max_open_positions", 999)} open positions',
+            f'max {float(t212_cfg.get("per_trade_pct", 0.05)) * 100:.0f}% of account/order · '
+            f'max {int(float(t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed '
+            f'(position count is emergent — no separate cap)',
             unsafe_allow_html=True,
         )
         st.caption(

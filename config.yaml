@@ -208,12 +208,46 @@ trading212_invest:
   # `false`, since brokers/trading212.py's check is `if t212_cfg.get(...)`,
   # so an absent key already means "not paused" -- no reason to keep a dead
   # flag around).
+  # max_total_deployed -- percentage of the account's CURRENT total value
+  # (client.get_account_summary()["totalValue"], fetched fresh on every
+  # decide/submit call -- a genuinely compounding balance, not a fixed
+  # reference figure) that may be deployed at once. Read identically by
+  # live order placement (brokers/trading212.py) and by the backtest
+  # engine's own default, live-matching simulation
+  # (analysis/backtest.py:simulate_portfolio_compounding(), invoked by
+  # analysis/validation.py:run_full_validation() whenever no explicit
+  # engine override is passed) -- one shared key, one shared meaning,
+  # deliberately -- see CLAUDE.md's "Live execution switched to the
+  # compounding two-parameter scheme" section for why this file previously
+  # let live and backtest silently diverge on this exact question.
   max_total_deployed: 0.5
-  max_open_positions: 20
-  # Hard ceiling GBP limit per order -- VaR sizing never exceeds this,
-  # regardless of ticker (unlike max_holding_days, position sizing does not
-  # distinguish ETF vs stock -- one flat ceiling for the whole universe).
-  max_position_gbp: 2500
+  # per_trade_pct -- the VaR sizing ceiling for a single new entry, as a
+  # percentage of the account's CURRENT total value (same compounding
+  # balance as max_total_deployed above) rather than a fixed GBP figure.
+  # Replaces max_position_gbp for live order placement (2026-08-01) --
+  # validated via a 20-combination sweep against real 2007-2026 production
+  # data (per_trade_pct in {2,3,5,7,10}% x max_total_deployed in
+  # {50,65,75,90}%); 5% is the sole combination that reproduces the
+  # canonical 14/16-block failure pattern (see CLAUDE.md's "Compounding
+  # portfolio backtest" section for the full sweep and the reservations
+  # that come with this recommendation -- it is not an unqualified "beats
+  # the market" result).
+  per_trade_pct: 0.05
+  # max_open_positions and max_position_gbp are RETIRED (2026-08-01) --
+  # neither key exists in this file any more, and nothing reads them from
+  # config. Position count is an emergent consequence of per_trade_pct and
+  # max_total_deployed together, not a third, independently-enforced rule;
+  # the per-trade ceiling is per_trade_pct above, not a fixed £ figure. The
+  # two older backtest engines that used to read these keys
+  # (analysis/backtest.py:simulate_trades() / simulate_portfolio(), still
+  # explicitly selectable via run_full_validation(uncapped=True) /
+  # run_full_validation(portfolio_mode=True) to reproduce the "Current
+  # baseline" / "Portfolio-capped validation findings" figures already
+  # published in CLAUDE.md) now have the historical £2,500 / 20-position
+  # values frozen directly into their own code as fallback defaults, so
+  # removing these keys here does not break that reproducibility -- see
+  # CLAUDE.md's "Live execution switched to the compounding two-parameter
+  # scheme" section for the full rationale.
   # Position sizing -- Historical VaR, scaled to each ticker's own holding
   # period via the square-root-of-time rule
   # (analysis/volatility.py:_var_position_size_core()) -- position size

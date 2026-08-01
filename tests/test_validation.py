@@ -258,9 +258,15 @@ def test_run_full_validation_shape_and_train_test_split(db_engine, mocker):
     ]
     mocker.patch("analysis.validation.run_candidate", return_value=trades)
 
+    # uncapped=True forces run_candidate() (mocked above) -- this test is
+    # about the shape of the returned dict / train-test-split logic, not
+    # about which engine is the default (2026-08-01: a bare call now uses
+    # simulate_portfolio_compounding() instead -- see
+    # test_default_engine_is_compounding_and_config_sourced below).
     result = v2v.run_full_validation(
         {"backtest": {"starting_capital_gbp": 10000}},
         start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        uncapped=True,
     )
 
     assert result["total_trades"] == 3
@@ -280,6 +286,127 @@ def test_run_full_validation_shape_and_train_test_split(db_engine, mocker):
     assert set(gg.keys()) == {"starting_capital_gbp", "train", "test"}
     for leg in ("train", "test"):
         assert set(gg[leg].keys()) == {"strategy_ending_gbp", "sp500_ending_gbp"}
+
+
+# ---------------------------------------------------------------------------
+# Engine selection (2026-08-01) -- a bare call now defaults to the same
+# compounding, portfolio-capped engine live order placement uses, sourced
+# from trading212_invest.per_trade_pct / max_total_deployed in config; the
+# three older engines remain explicitly selectable for reproducing specific
+# historical figures already published in CLAUDE.md. See CLAUDE.md's "Live
+# execution switched to the compounding two-parameter scheme" section.
+# ---------------------------------------------------------------------------
+
+def _engine_selection_setup(mocker):
+    v2u.seed_baseline_membership()
+    gspc_dates = pd.date_range("2015-01-01", "2026-07-30", freq="D")
+    gspc_df = pd.DataFrame({
+        "date": gspc_dates, "close": [100.0 * (1.0002 ** i) for i in range(len(gspc_dates))],
+    })
+    mocker.patch("analysis.validation.get_price_df", return_value=gspc_df)
+    mocker.patch("analysis.validation.precompute_ticker", return_value={"ticker": "VOO", "frame": pd.DataFrame()})
+    mocker.patch("analysis.validation.slice_ticker", return_value={"ticker": "VOO", "frame": pd.DataFrame()})
+
+
+def test_default_engine_is_compounding_and_config_sourced(db_engine, mocker):
+    """A bare run_full_validation(config) call -- no engine flags at all --
+    must call simulate_portfolio_compounding() with per_trade_pct /
+    max_total_deployed read from config["trading212_invest"], not
+    run_candidate() or simulate_portfolio()."""
+    _engine_selection_setup(mocker)
+    mock_uncapped = mocker.patch("analysis.validation.run_candidate", return_value=[])
+    mock_capped = mocker.patch("analysis.validation.simulate_portfolio", return_value=[])
+    mock_compounding = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+
+    config = {"backtest": {"starting_capital_gbp": 10000},
+              "trading212_invest": {"per_trade_pct": 0.07, "max_total_deployed": 0.6}}
+    result = v2v.run_full_validation(config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"))
+
+    mock_uncapped.assert_not_called()
+    mock_capped.assert_not_called()
+    mock_compounding.assert_called_once()
+    call_args = mock_compounding.call_args[0]
+    assert call_args[3] == pytest.approx(0.07)   # per_trade_pct, positional
+    assert call_args[4] == pytest.approx(0.6)    # max_deployed_pct, positional
+    assert result["engine_used"] == "compounding_default"
+    assert result["per_trade_pct"] == pytest.approx(0.07)
+    assert result["max_deployed_pct"] == pytest.approx(0.6)
+
+
+def test_default_engine_falls_back_to_5pct_50pct_when_config_absent(db_engine, mocker):
+    """No trading212_invest section at all -- the documented, recommended
+    5% / 50% defaults apply (matching config.yaml's own shipped values)."""
+    _engine_selection_setup(mocker)
+    mock_compounding = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+
+    result = v2v.run_full_validation(
+        {"backtest": {"starting_capital_gbp": 10000}},
+        start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+    )
+
+    call_args = mock_compounding.call_args[0]
+    assert call_args[3] == pytest.approx(0.05)
+    assert call_args[4] == pytest.approx(0.5)
+    assert result["engine_used"] == "compounding_default"
+
+
+def test_uncapped_flag_forces_run_candidate(db_engine, mocker):
+    _engine_selection_setup(mocker)
+    mock_uncapped = mocker.patch("analysis.validation.run_candidate", return_value=[])
+    mock_compounding = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+
+    result = v2v.run_full_validation(
+        {"backtest": {"starting_capital_gbp": 10000}},
+        start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        uncapped=True,
+    )
+
+    mock_uncapped.assert_called_once()
+    mock_compounding.assert_not_called()
+    assert result["engine_used"] == "uncapped"
+    assert result["per_trade_pct"] is None
+    assert result["max_deployed_pct"] is None
+
+
+def test_portfolio_mode_flag_forces_simulate_portfolio(db_engine, mocker):
+    _engine_selection_setup(mocker)
+    mock_capped = mocker.patch("analysis.validation.simulate_portfolio", return_value=[])
+    mock_compounding = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+
+    result = v2v.run_full_validation(
+        {"backtest": {"starting_capital_gbp": 10000}},
+        start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        portfolio_mode=True,
+    )
+
+    mock_capped.assert_called_once()
+    mock_compounding.assert_not_called()
+    assert result["engine_used"] == "portfolio_capped"
+
+
+def test_explicit_compounding_params_override_config_and_take_priority_over_portfolio_mode(db_engine, mocker):
+    """Explicit per_trade_pct/max_deployed_pct_compounding (the research-
+    sweep interface) use those exact values, not config -- and take
+    priority over portfolio_mode=True if both were somehow passed together
+    (documented as not a supported combination, resolved deterministically
+    rather than raising)."""
+    _engine_selection_setup(mocker)
+    mock_capped = mocker.patch("analysis.validation.simulate_portfolio", return_value=[])
+    mock_compounding = mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+
+    config = {"backtest": {"starting_capital_gbp": 10000},
+              "trading212_invest": {"per_trade_pct": 0.05, "max_total_deployed": 0.5}}
+    result = v2v.run_full_validation(
+        config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        portfolio_mode=True, per_trade_pct=0.10, max_deployed_pct_compounding=0.90,
+    )
+
+    mock_capped.assert_not_called()
+    mock_compounding.assert_called_once()
+    call_args = mock_compounding.call_args[0]
+    assert call_args[3] == pytest.approx(0.10)
+    assert call_args[4] == pytest.approx(0.90)
+    assert result["engine_used"] == "compounding_explicit"
 
 
 def test_run_full_validation_no_trades_all_blocks_fail_gracefully(db_engine, mocker):

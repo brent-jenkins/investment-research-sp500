@@ -236,7 +236,16 @@ def simulate_trades(
     var_lookback = int(var_cfg.get("var_lookback_days", 252))
     max_risk_pct = float(var_cfg.get("max_risk_pct", 0.01))
     min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
-    max_position_gbp = float(var_cfg.get("max_position_gbp", 500))
+    # max_position_gbp is no longer a config.yaml key (2026-08-01 -- live
+    # order placement switched to a dynamic, account-value-relative ceiling
+    # via trading212_invest.per_trade_pct; see CLAUDE.md's "Live execution
+    # switched to the compounding two-parameter scheme" section). This
+    # function (run_full_validation(uncapped=True)'s engine) is frozen to
+    # the historical £2,500 flat ceiling every "Current baseline" figure in
+    # CLAUDE.md was generated with, so re-running it on demand still
+    # reproduces those figures exactly with no config dependency left to
+    # drift out from under it.
+    max_position_gbp = float(var_cfg.get("max_position_gbp", 2500))
     close_series = frame["close"].astype(float)
 
     raw_crisis = crisis.compute_raw_trigger(gspc_close).reindex(frame.index).ffill().fillna(False)
@@ -429,8 +438,15 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
     var_lookback = int(var_cfg.get("var_lookback_days", 252))
     max_risk_pct = float(var_cfg.get("max_risk_pct", 0.01))
     min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
-    max_position_gbp = float(var_cfg.get("max_position_gbp", 500))
-    max_open_positions = int(var_cfg.get("max_open_positions", 999))
+    # max_position_gbp / max_open_positions are no longer config.yaml keys
+    # (2026-08-01 -- see analysis/backtest.py:simulate_trades()'s identical
+    # comment above, and CLAUDE.md's "Live execution switched to the
+    # compounding two-parameter scheme" section). This function
+    # (run_full_validation(portfolio_mode=True)'s engine) is frozen to the
+    # historical £2,500 / 20-position values every "Portfolio-capped
+    # validation findings" figure in CLAUDE.md was generated with.
+    max_position_gbp = float(var_cfg.get("max_position_gbp", 2500))
+    max_open_positions = int(var_cfg.get("max_open_positions", 20))
     max_total_deployed = float(var_cfg.get("max_total_deployed", 999.0))
 
     # Per-ticker precomputation — identical inputs/derivations to
