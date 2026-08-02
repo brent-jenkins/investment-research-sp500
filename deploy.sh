@@ -24,6 +24,34 @@ set -euo pipefail
 # orders on that transitional state. Warn and require explicit confirmation
 # rather than blocking outright, since some deploys (e.g. urgent hotfixes)
 # legitimately need to go out regardless.
+#
+# Re-verified against data/scheduler.py:start_scheduler()'s actual
+# CronTrigger registrations 2026-08-02 (not assumed from an old comment) --
+# the 07:00 and 13:30 windows previously named jobs removed 2026-07-31
+# ("pre-market analysis" / "US open analysis" -- see CLAUDE.md's
+# "Pre-market/US-open scheduled runs removed"). Both time slots are still
+# genuinely real order-placing windows today, just for different, newer
+# jobs (etf_order_submission / stock_order_submission, added the same day
+# under "Exchange-aware order submission") -- the risk these windows guard
+# against never went away, only the job names changed. The Sunday window
+# was also stale for a second, independent reason: weekly_summary now
+# fires at 09:00 *Europe/London* (data/scheduler.py, "genuinely UK local
+# time"), not a fixed 10:00 UTC -- that's 08:00 UTC in BST (late Mar-late
+# Oct) or 09:00 UTC in GMT. Rather than compute DST at runtime in bash
+# (this environment's tzdata for Europe/London was found to not apply BST
+# correctly when checked directly, so a bash `TZ=` conversion can't be
+# trusted here), the window is simply widened to statically cover both
+# possible UTC times with a buffer -- a slightly wider "are you sure?"
+# net twice a year around the DST boundary, never a missed one.
+#
+# A second, independent bug found while re-verifying (not present before
+# either, not something this fix introduced): none of the three weekday
+# windows below ever checked day-of-week at all, so they fired on
+# Saturday/Sunday too -- every job they guard (etf_order_submission,
+# stock_order_submission, membership_refresh, scheduled_eod) is Mon-Fri
+# only, so a weekend "are you sure?" prompt for any of them was always a
+# false positive. Confirmed directly by dry-running the range logic
+# against injected times/weekdays before trusting this fix, not assumed.
 now_hm="$(date -u +%H%M)"
 now_dow="$(date -u +%u)"  # ISO day of week: 1=Monday ... 7=Sunday
 blackout_label=""
@@ -33,14 +61,20 @@ in_range() {
   [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
 }
 
-if in_range "$now_hm" 0645 0715; then
-  blackout_label="pre-market analysis job runs at 07:00 UTC"
-elif in_range "$now_hm" 1315 1400; then
-  blackout_label="US open analysis job runs at 13:30 UTC"
-elif in_range "$now_hm" 2100 2200; then
-  blackout_label="EOD job runs at 21:30 UTC"
-elif [ "$now_dow" = "7" ] && in_range "$now_hm" 0945 1015; then
-  blackout_label="Sunday weekly summary job runs at 10:00 UTC"
+is_weekday() {
+  # Mon-Fri only -- every job these three windows guard is Mon-Fri; only
+  # the Sunday weekly-summary window (below) should ever match a weekend.
+  [ "$now_dow" -ge 1 ] && [ "$now_dow" -le 5 ]
+}
+
+if is_weekday && in_range "$now_hm" 0645 0715; then
+  blackout_label="ETF order submission runs at 07:00 UTC weekdays (Monday also cancels stale weekend orders first)"
+elif is_weekday && in_range "$now_hm" 1315 1400; then
+  blackout_label="Stock order submission job runs at 13:30 UTC weekdays"
+elif is_weekday && in_range "$now_hm" 2100 2200; then
+  blackout_label="Membership refresh (21:15 UTC) and the EOD job (21:30 UTC) run in this window on weekdays — EOD is the one that places T212 orders"
+elif [ "$now_dow" = "7" ] && in_range "$now_hm" 0745 0915; then
+  blackout_label="Sunday weekly summary job runs at 09:00 Europe/London (08:00-09:00 UTC depending on BST/GMT)"
 fi
 
 if [ -n "$blackout_label" ]; then
