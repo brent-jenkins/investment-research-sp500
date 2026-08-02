@@ -224,12 +224,62 @@ def _has_upcoming_trading_day(from_date: date, lookahead_days: int = 10) -> bool
     return False
 
 
-def _fetch_t212_snapshot(config: dict) -> None:
+def _record_account_value_history(summary: dict) -> None:
+    """Upsert one row into account_value_history for today's date, from an
+    already-fetched T212 account summary dict — see AccountValueHistory's
+    own docstring (data/database.py) for why this is called only from
+    _fetch_t212_snapshot()'s record_history=True path (the EOD job's own
+    call), never the 60-second dispatcher's or hourly job's calls to the
+    same function.
+
+    Never raises — a history-recording failure must not affect the
+    account snapshot itself (already written to system_metadata by the
+    time this runs) or block whatever called it.
+    """
+    try:
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from data.database import AccountValueHistory, get_engine
+
+        cash_obj = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        inv_obj  = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_value = float(summary.get("totalValue", 0) or 0)
+        cash        = float(cash_obj.get("availableToTrade", 0) or 0)
+        invested    = float(inv_obj.get("currentValue", 0) or 0)
+        today = datetime.utcnow().date()
+        now = datetime.utcnow()
+
+        stmt = sqlite_insert(AccountValueHistory).values(
+            date=today, total_value_gbp=total_value, cash_gbp=cash,
+            invested_gbp=invested, captured_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date"],
+            set_={
+                "total_value_gbp": total_value, "cash_gbp": cash,
+                "invested_gbp": invested, "captured_at": now,
+            },
+        )
+        with get_engine().begin() as conn:
+            conn.execute(stmt)
+        logger.info("Account value history recorded for %s: £%.2f total.", today, total_value)
+    except Exception as exc:
+        logger.warning("Could not record account value history: %s", exc)
+
+
+def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> None:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
     Called by the 60-second dispatcher (on-demand UI requests) and by the EOD job
     so the snapshot stays reasonably fresh without manual refresh.  All T212 API
     calls are centralised here — the UI only reads from the DB.
+
+    record_history=True (passed only by _eod_job()'s own call) additionally
+    upserts a dated row into account_value_history from the same
+    already-fetched summary — no second API call, just one more DB write
+    right after a fetch that already happens daily. Deliberately NOT the
+    default, and NOT passed by the 60-second dispatcher's or hourly job's
+    own calls to this function, so the history table stays a genuine
+    one-row-per-day series rather than accumulating many rows a day.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -255,6 +305,9 @@ def _fetch_t212_snapshot(config: dict) -> None:
         logger.error("T212 snapshot fetch failed: %s", exc)
         set_metadata("t212_invest_error", str(exc))
         return
+
+    if record_history:
+        _record_account_value_history(summary)
 
     try:
         _poll(config)
@@ -574,7 +627,11 @@ def _eod_job() -> None:
     _run_analysis_pipeline(config, get_all_tickers(config), run_type)
 
     try:
-        _fetch_t212_snapshot(config)
+        # record_history=True (2026-08-02) — only this call, the EOD job's
+        # own daily snapshot, also records a dated account_value_history
+        # row. See _fetch_t212_snapshot()'s and AccountValueHistory's own
+        # docstrings for why the dispatcher/hourly calls below don't.
+        _fetch_t212_snapshot(config, record_history=True)
     except Exception as exc:
         logger.error("T212 snapshot fetch after EOD failed: %s", exc)
 

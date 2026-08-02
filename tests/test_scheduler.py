@@ -233,6 +233,7 @@ def test_missed_eod_not_triggered_on_market_holiday(monkeypatch):
 # ---------------------------------------------------------------------------
 
 from sqlalchemy.orm import Session  # noqa: E402
+from sqlalchemy import text as sa_text  # noqa: E402
 
 from data.database import InvestOrder  # noqa: E402
 
@@ -1078,3 +1079,116 @@ def test_membership_refresh_job_runs_normally_on_ordinary_weekday(monkeypatch, m
 
     mock_refresh.assert_called_once()
     mock_lag.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _fetch_t212_snapshot(record_history=...) / _record_account_value_history()
+# (2026-08-02) -- powers the Dashboard page's account-value chart. Only the
+# EOD job's own call passes record_history=True; the 60-second dispatcher's
+# and hourly job's calls to the same function must NOT also write a history
+# row, or account_value_history would accumulate many rows a day instead of
+# staying a genuine daily time series. See data/database.py:
+# AccountValueHistory's own docstring for the full reasoning.
+# ---------------------------------------------------------------------------
+
+def _t212_snapshot_mocks(monkeypatch, mocker, *, total_value=52_000.0, cash=47_000.0, invested=5_000.0):
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+    mock_client = mocker.MagicMock()
+    mock_client.get_account_summary.return_value = {
+        "totalValue": total_value,
+        "cash": {"availableToTrade": cash},
+        "investments": {"currentValue": invested},
+    }
+    mock_client.get_positions.return_value = []
+    mocker.patch("brokers.trading212.Trading212Client", return_value=mock_client)
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    return mock_client
+
+
+def _account_value_history_rows(engine) -> list:
+    with engine.connect() as conn:
+        return conn.execute(sa_text(
+            "SELECT date, total_value_gbp, cash_gbp, invested_gbp FROM account_value_history"
+        )).mappings().all()
+
+
+def test_fetch_t212_snapshot_default_does_not_record_history(db_engine, monkeypatch, mocker):
+    """The dispatcher's and hourly job's own calls use the default
+    (record_history=False) -- must never write a history row."""
+    _t212_snapshot_mocks(monkeypatch, mocker)
+
+    scheduler._fetch_t212_snapshot({"trading212_invest": {"enabled": True, "live": False}})
+
+    assert _account_value_history_rows(db_engine) == []
+
+
+def test_fetch_t212_snapshot_record_history_true_writes_row(db_engine, monkeypatch, mocker):
+    """The EOD job's own call (record_history=True) must write a real row
+    with the correct values from the just-fetched summary."""
+    _t212_snapshot_mocks(monkeypatch, mocker, total_value=52_340.50, cash=47_000.0, invested=5_340.50)
+
+    scheduler._fetch_t212_snapshot(
+        {"trading212_invest": {"enabled": True, "live": False}}, record_history=True,
+    )
+
+    rows = _account_value_history_rows(db_engine)
+    assert len(rows) == 1
+    assert rows[0]["total_value_gbp"] == 52_340.50
+    assert rows[0]["cash_gbp"] == 47_000.0
+    assert rows[0]["invested_gbp"] == 5_340.50
+
+
+def test_fetch_t212_snapshot_record_history_upserts_same_day(db_engine, monkeypatch, mocker):
+    """A manual same-day 'Refresh Data' re-run (or a second real EOD call
+    the same UTC day) must refresh that day's row, not create a duplicate
+    -- exactly one row per calendar day, always."""
+    _t212_snapshot_mocks(monkeypatch, mocker, total_value=50_000.0)
+    scheduler._fetch_t212_snapshot(
+        {"trading212_invest": {"enabled": True, "live": False}}, record_history=True,
+    )
+
+    _t212_snapshot_mocks(monkeypatch, mocker, total_value=51_500.0)
+    scheduler._fetch_t212_snapshot(
+        {"trading212_invest": {"enabled": True, "live": False}}, record_history=True,
+    )
+
+    rows = _account_value_history_rows(db_engine)
+    assert len(rows) == 1
+    assert rows[0]["total_value_gbp"] == 51_500.0  # the later value won
+
+
+def test_fetch_t212_snapshot_record_history_disabled_config_writes_nothing(db_engine, monkeypatch, mocker):
+    _t212_snapshot_mocks(monkeypatch, mocker)
+
+    scheduler._fetch_t212_snapshot(
+        {"trading212_invest": {"enabled": False}}, record_history=True,
+    )
+
+    assert _account_value_history_rows(db_engine) == []
+
+
+def test_record_account_value_history_never_raises_on_malformed_summary(db_engine):
+    """Never raises -- a history-recording failure must not affect the
+    account snapshot already written by the time this runs."""
+    scheduler._record_account_value_history({"totalValue": "not-a-number"})  # must not raise
+
+
+def test_eod_job_passes_record_history_true_to_snapshot_call(monkeypatch, mocker):
+    """Confirms the EOD job itself is the call site that opts in --
+    verified directly against the call arguments, not just that some
+    call happened."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))  # ordinary trading Tuesday
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    mock_snap.assert_called_once()
+    _, kwargs = mock_snap.call_args
+    assert kwargs.get("record_history") is True

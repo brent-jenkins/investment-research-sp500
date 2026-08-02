@@ -13,10 +13,15 @@ import pytest
 from sqlalchemy import text as sa_text
 
 from output.performance import (
+    get_account_value_history,
     get_brief_cards,
     get_crisis_status,
+    get_current_account_summary,
+    get_pending_candidates,
     get_pnl_rows,
     get_ticker_status,
+    get_top_trades,
+    get_unconfirmed_exits,
     pnl_metrics_df,
 )
 
@@ -169,6 +174,177 @@ def test_pnl_metrics_df_shapes_columns():
     assert list(df["is_win"]) == [True, False]
     assert (df["direction"] == "LONG").all()
     assert pd.api.types.is_datetime64_any_dtype(df["entry_date"])
+
+
+# ---------------------------------------------------------------------------
+# Dashboard functions (2026-08-02) — get_current_account_summary(),
+# get_account_value_history(), get_top_trades(), get_pending_candidates(),
+# get_unconfirmed_exits(). Backs the Dashboard page that replaced Daily
+# Briefing — see CLAUDE.md's dedicated section.
+# ---------------------------------------------------------------------------
+
+def test_get_current_account_summary_no_snapshot_returns_zeros(db_engine):
+    assert get_current_account_summary() == {
+        "total_value_gbp": 0.0, "cash_gbp": 0.0, "invested_gbp": 0.0, "deployed_pct": 0.0,
+    }
+
+
+def test_get_current_account_summary_parses_real_snapshot(db_engine, mocker):
+    import json
+    snapshot = {"totalValue": 52340.50, "cash": {"availableToTrade": 47000.0},
+                "investments": {"currentValue": 5340.50}}
+    mocker.patch("output.performance.get_metadata_str", return_value=json.dumps(snapshot))
+
+    result = get_current_account_summary()
+
+    assert result["total_value_gbp"] == 52340.50
+    assert result["cash_gbp"] == 47000.0
+    assert result["invested_gbp"] == 5340.50
+    assert result["deployed_pct"] == pytest.approx(5340.50 / 52340.50 * 100)
+
+
+def test_get_current_account_summary_malformed_json_returns_zeros(db_engine, mocker):
+    mocker.patch("output.performance.get_metadata_str", return_value="not valid json")
+    assert get_current_account_summary()["total_value_gbp"] == 0.0
+
+
+def _seed_value_history_row(engine, *, day_offset: int, total_value: float):
+    from datetime import date, timedelta as _td
+    d = (date.today() - _td(days=day_offset)).isoformat()
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO account_value_history (date, total_value_gbp, cash_gbp, invested_gbp, captured_at)
+            VALUES (:d, :tv, :tv, 0, :now)
+        """), {"d": d, "tv": total_value, "now": datetime.utcnow().isoformat()})
+
+
+def test_get_account_value_history_empty_table_anchors_at_starting_balance(db_engine):
+    """No real snapshots at all yet (the account was just reset) -- the
+    chart must still show a real starting-balance anchor, not an empty
+    result that would render as a blank/zero-looking chart."""
+    rows = get_account_value_history(days=7, starting_balance_gbp=50_000.0)
+    assert len(rows) == 1
+    assert rows[0]["total_value_gbp"] == 50_000.0
+
+
+def test_get_account_value_history_prepends_anchor_when_real_data_is_thinner_than_window(db_engine):
+    """Real snapshots exist, but only for the last couple of days -- still
+    thinner than the requested window, so the £50,000 anchor must still
+    be prepended so the true starting point is visible."""
+    _seed_value_history_row(db_engine, day_offset=1, total_value=50_120.0)
+    _seed_value_history_row(db_engine, day_offset=0, total_value=50_340.0)
+
+    rows = get_account_value_history(days=7, starting_balance_gbp=50_000.0)
+
+    assert rows[0]["total_value_gbp"] == 50_000.0
+    assert [r["total_value_gbp"] for r in rows[1:]] == [50_120.0, 50_340.0]
+
+
+def test_get_account_value_history_no_anchor_needed_when_real_data_covers_full_range(db_engine):
+    """Once real history genuinely covers the requested window, no
+    synthetic point should be prepended -- only real data."""
+    from datetime import date, timedelta as _td
+    days = 7
+    for offset in range(days, -1, -1):
+        _seed_value_history_row(db_engine, day_offset=offset, total_value=50_000.0 + offset)
+
+    rows = get_account_value_history(days=days, starting_balance_gbp=50_000.0)
+
+    cutoff = (date.today() - _td(days=days)).isoformat()
+    assert rows[0]["date"] == cutoff
+    assert len(rows) == days + 1
+    # No duplicate/synthetic row -- the real row already covers the cutoff date.
+    assert sum(1 for r in rows if r["date"] == cutoff) == 1
+
+
+def test_get_top_trades_empty(db_engine):
+    assert get_top_trades() == ([], [])
+
+
+def _seed_pnl_row(engine, *, ticker: str, pnl_gbp: float, exit_reason="SIGNAL_OFF"):
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pnl
+                (ticker, t212_ticker, buy_order_id, sell_order_id, entry_date, exit_date,
+                 entry_price, exit_price, quantity, currency, pnl_gbp, pnl_pct,
+                 holding_days, is_etf, momentum_pct_at_entry, exit_reason, created_at)
+            VALUES (:t, :t, :bid, :sid, :entry, :exit, 100.0, 100.0, 10, 'USD',
+                    :pnl, :pnl_pct, 10, 0, 0.05, :reason, :now)
+        """), {
+            "t": ticker, "bid": hash(ticker) % 100000, "sid": (hash(ticker) % 100000) + 1,
+            "entry": (datetime.utcnow() - timedelta(days=10)).isoformat(),
+            "exit": datetime.utcnow().isoformat(), "pnl": pnl_gbp,
+            "pnl_pct": pnl_gbp / 1000, "reason": exit_reason, "now": datetime.utcnow().isoformat(),
+        })
+
+
+def test_get_top_trades_ranks_winners_and_losers_correctly(db_engine):
+    for ticker, pnl in [("A", 500), ("B", -300), ("C", 200), ("D", -100), ("E", 50)]:
+        _seed_pnl_row(db_engine, ticker=ticker, pnl_gbp=pnl)
+
+    winners, losers = get_top_trades(limit=5)
+
+    assert [w["ticker"] for w in winners] == ["A", "C", "E"]
+    assert [l["ticker"] for l in losers] == ["B", "D"]
+
+
+def test_get_top_trades_respects_limit(db_engine):
+    for i in range(8):
+        _seed_pnl_row(db_engine, ticker=f"W{i}", pnl_gbp=100.0 + i)
+
+    winners, _ = get_top_trades(limit=5)
+
+    assert len(winners) == 5
+    assert winners[0]["ticker"] == "W7"  # highest pnl_gbp first
+
+
+def test_get_pending_candidates_empty(db_engine):
+    assert get_pending_candidates() == []
+
+
+def _seed_pending_row(engine, *, ticker: str, status: str, momentum_pct: float):
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+            VALUES (:t, :t, 0, 'USD', :now, 100.0, 500.0, :mom, 90.0, 0.02, :status, :now)
+        """), {"t": ticker, "mom": momentum_pct, "status": status, "now": datetime.utcnow().isoformat()})
+
+
+def test_get_pending_candidates_returns_only_pending_ordered_by_momentum(db_engine):
+    _seed_pending_row(db_engine, ticker="LOWMOM", status="PENDING", momentum_pct=0.05)
+    _seed_pending_row(db_engine, ticker="HIGHMOM", status="PENDING", momentum_pct=0.30)
+    _seed_pending_row(db_engine, ticker="SUBMITTED", status="SUBMITTED", momentum_pct=0.50)
+
+    rows = get_pending_candidates()
+
+    assert [r["ticker"] for r in rows] == ["HIGHMOM", "LOWMOM"]
+
+
+def test_get_unconfirmed_exits_empty(db_engine):
+    assert get_unconfirmed_exits() == []
+
+
+def test_get_unconfirmed_exits_returns_only_placed_sell_orders(db_engine):
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, quantity, exit_reason, placed_at, created_at)
+            VALUES ('SELLPENDING', 'SELLPENDING_US_EQ', 'SELL', 'PLACED', 5, 'SIGNAL_OFF', :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, quantity, exit_reason, placed_at, created_at)
+            VALUES ('SELLFILLED', 'SELLFILLED_US_EQ', 'SELL', 'FILLED', 5, 'SIGNAL_OFF', :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, quantity, placed_at, created_at)
+            VALUES ('BUYPLACED', 'BUYPLACED_US_EQ', 'BUY', 'PLACED', 5, :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+
+    rows = get_unconfirmed_exits()
+
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "SELLPENDING"
 
 
 # ---------------------------------------------------------------------------

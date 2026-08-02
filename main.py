@@ -38,10 +38,15 @@ from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
     compute_position_context,
+    get_account_value_history,
     get_brief_cards,
     get_crisis_status,
+    get_current_account_summary,
+    get_pending_candidates,
     get_pnl_rows,
     get_ticker_status,
+    get_top_trades,
+    get_unconfirmed_exits,
     position_context_style,
     position_exit_rule_text,
     positions_summary_text,
@@ -600,70 +605,6 @@ def _render_trade_card(e: dict) -> None:
     )
 
 
-def _render_trade_card_compact(e: dict) -> None:
-    """Render one open position as a single-line summary row — used on the
-    Daily Briefing, where full detail lives on the Performance page."""
-    status = e.get("status", "ON TRACK")
-    colour = _STATUS_COLOURS.get(status, "#8899AA")
-    icon   = _STATUS_ICONS.get(status, "")
-    bg     = _hex_rgba(colour, 0.08)
-
-    ticker    = html.escape(str(e.get("ticker", "")))
-    asset_tag = html.escape(str(e.get("asset_type", "")))
-    days_held = int(e.get("days_held") or 0)
-
-    entry_date_str = e.get("entry_date")
-    entry_disp = "—"
-    if entry_date_str:
-        try:
-            entry_disp = datetime.fromisoformat(str(entry_date_str)).strftime("%Y-%m-%d")
-        except Exception:
-            entry_disp = str(entry_date_str)[:10]
-
-    sig_on = e.get("current_sig_on")
-    sig_disp = "Long" if sig_on is True else ("Flat" if sig_on is False else "—")
-
-    unreal_pnl_gbp = e.get("unreal_pnl_gbp")
-    unreal_pct     = e.get("unreal_pct")
-    if unreal_pnl_gbp is not None and unreal_pct is not None:
-        pnl_col  = "#16a34a" if unreal_pnl_gbp >= 0 else "#dc2626"
-        pnl_html = html.escape(f"£{unreal_pnl_gbp:+.2f} ({unreal_pct:+.2f}%)")
-    else:
-        pnl_html = "—"
-        pnl_col  = "#8899AA"
-
-    # Decision-relevant context, added 2026-07-31 — same neutral, non-ranked
-    # treatment as the full-detail card on the Performance page (see
-    # _render_trade_card() and output/performance.py:position_context_style()).
-    ctx = compute_position_context(e)
-    ctx_colour = position_context_style(ctx["pct_above_stop"], ctx["days_remaining"])
-    ctx_bits = []
-    if ctx["pct_above_stop"] is not None:
-        ctx_bits.append(f"{ctx['pct_above_stop']:.1f}% above stop")
-    if ctx["days_remaining"] is not None:
-        ctx_bits.append(f"{ctx['days_remaining']}d until max-hold")
-    ctx_html = (
-        f"<span style='color:{ctx_colour};font-size:0.78rem'>{html.escape(' · '.join(ctx_bits))}</span>"
-        if ctx_bits else ""
-    )
-
-    st.markdown(
-        f"<div style='border-left:4px solid {colour};padding:6px 14px;"
-        f"background:{bg};border-radius:0 6px 6px 0;margin-bottom:6px;"
-        f"display:flex;align-items:center;gap:12px;flex-wrap:wrap'>"
-        f"<span style='background:{colour};color:#fff;padding:1px 8px;"
-        f"border-radius:4px;font-size:0.68rem;font-weight:800;letter-spacing:0.05em'>"
-        f"{icon} {status}</span>"
-        f"<strong style='font-size:0.92rem'>{ticker}</strong>"
-        f"<span style='color:#8899AA;font-size:0.78rem'>{asset_tag} · Day {days_held} · Entered {entry_disp}</span>"
-        f"<span style='color:#8899AA;font-size:0.78rem'>Signal: {sig_disp}</span>"
-        f"{ctx_html}"
-        f"<span style='color:{pnl_col};font-weight:700;font-size:0.85rem'>{pnl_html}</span>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-
 @st.cache_data(ttl=300)
 def _get_ticker_status() -> list[dict]:
     """Per-ticker live status (momentum, index membership, crisis flags).
@@ -816,22 +757,72 @@ def _render_charts_landing(config: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Daily Briefing page
+# Dashboard page (2026-08-02, replaces Daily Briefing)
 # ---------------------------------------------------------------------------
 
-def _render_briefing_page(config: dict) -> None:
-    """Render the Daily Briefing: live momentum/crisis status and open positions."""
-    _render_page_wordmark("Daily Briefing")
-    st.markdown("## Daily Briefing")
+_VALUE_CHART_RANGES = {"Week": 7, "Month": 30, "Year": 365}
 
-    last_sched = get_metadata("last_scheduled_run")
-    if last_sched:
-        st.caption(
-            f"As of: {_fmt_uk(last_sched, '%Y-%m-%d %H:%M')} · "
-            f"Updates: {_uk_sched_time(7,0)}, {_uk_sched_time(13,30)} and {_uk_sched_time(21,30)}"
-        )
-    else:
-        st.caption("No scheduled run yet — updates run automatically on weekdays.")
+
+@st.cache_data(ttl=60)
+def _get_account_summary() -> dict:
+    """Thin cached wrapper around output/performance.py:get_current_account_summary()."""
+    return get_current_account_summary()
+
+
+@st.cache_data(ttl=300)
+def _get_value_history(days: int) -> list[dict]:
+    """Thin cached wrapper around output/performance.py:get_account_value_history()."""
+    return get_account_value_history(days)
+
+
+@st.cache_data(ttl=60)
+def _get_top_trades_cached() -> tuple[list[dict], list[dict]]:
+    """Thin cached wrapper around output/performance.py:get_top_trades()."""
+    return get_top_trades(limit=5)
+
+
+@st.cache_data(ttl=60)
+def _get_pending_candidates_cached() -> list[dict]:
+    """Thin cached wrapper around output/performance.py:get_pending_candidates()."""
+    return get_pending_candidates()
+
+
+@st.cache_data(ttl=60)
+def _get_unconfirmed_exits_cached() -> list[dict]:
+    """Thin cached wrapper around output/performance.py:get_unconfirmed_exits()."""
+    return get_unconfirmed_exits()
+
+
+def _value_history_chart(rows: list[dict]) -> go.Figure:
+    """£ account-value line chart — a filled area under the line so the
+    real starting-balance anchor (see get_account_value_history()'s own
+    docstring) reads as a genuine floor, not a stray first point."""
+    df = pd.DataFrame(rows)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["total_value_gbp"], mode="lines+markers",
+        line=dict(color="#00C2FF", width=2), marker=dict(size=4),
+        fill="tozeroy", fillcolor="rgba(0,194,255,0.08)",
+        hovertemplate="%{x}<br>£%{y:,.2f}<extra></extra>",
+    ))
+    fig.update_layout(
+        height=320, margin=dict(l=10, r=10, t=10, b=10),
+        yaxis=dict(tickprefix="£", tickformat=",.0f"),
+        showlegend=False,
+    )
+    return _apply_dark_theme(fig)
+
+
+def _render_dashboard_page(config: dict) -> None:
+    """Render the Dashboard: account balance, account-value history, top
+    winning/losing closed trades, the queued-candidate list, and
+    placed-but-unconfirmed exits. Replaces the Daily Briefing page
+    (2026-08-02) — full open-position monitoring remains on the
+    Performance page (unchanged), and per-ticker momentum/eligibility
+    detail remains reachable via the Status page; this page's job is
+    account-level overview, not per-position or per-ticker detail."""
+    _render_page_wordmark("Dashboard")
+    st.markdown("## Dashboard")
 
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -839,104 +830,101 @@ def _render_briefing_page(config: dict) -> None:
         _render_footer()
         return
 
-    status_rows = _get_ticker_status()
-    valid_rows  = [r for r in status_rows if not r.get("insufficient_history")]
-    long_count  = sum(1 for r in valid_rows if r.get("sig_on") is True)
-    flat_count  = sum(1 for r in valid_rows if r.get("sig_on") is False)
-    crisis_active = any(r.get("crisis_now") for r in valid_rows)
-    entry_blocked = any(r.get("entry_blocked") for r in valid_rows)
+    # --- Account balance ---------------------------------------------------
+    summary = _get_account_summary()
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Account Value", f"£{summary['total_value_gbp']:,.2f}")
+    a2.metric("Available Cash", f"£{summary['cash_gbp']:,.2f}")
+    a3.metric("Invested", f"£{summary['invested_gbp']:,.2f}", delta=f"{summary['deployed_pct']:.0f}% deployed")
+    a4.metric("Starting Balance", "£50,000.00")
 
-    badge_colour = "#991b1b" if crisis_active else "#16a34a"
-    badge_text   = "🔴 CRISIS OVERRIDE ACTIVE" if crisis_active else "🟢 LIVE (DEMO)"
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
-        f'border:1px solid {badge_colour}44;border-radius:8px;padding:8px 14px;margin-bottom:6px">'
-        f'<span style="background:{badge_colour};color:#fff;font-weight:700;'
-        f'padding:2px 9px;border-radius:12px;font-size:0.8rem">{badge_text}</span>'
-        f'<span style="color:#8899AA;font-size:0.85rem">'
-        f'{long_count} long · {flat_count} flat of {len(valid_rows)} tickers'
-        + (' · new entries blocked (crisis cooldown)' if entry_blocked else '')
-        + '</span></div>',
-        unsafe_allow_html=True,
+    # --- Account value history ---------------------------------------------
+    st.markdown("### Account Value")
+    range_label = st.radio(
+        "Range", options=list(_VALUE_CHART_RANGES.keys()), index=0,
+        horizontal=True, label_visibility="collapsed", key="dashboard_value_range",
     )
-    st.caption(
-        "Entry: 12-month momentum > 0, current index membership, not in the "
-        "crisis entry-block window. Exit priority: crisis override → index "
-        "removal → ATR stop loss → momentum turning non-positive → max holding."
-    )
-
-    # --- Crisis override proximity ---------------------------------------
-    cs = _get_crisis_status()
-    if cs:
-        today_ret = cs.get("today_return_pct")
-        dist_pp = cs.get("distance_to_threshold_pp")
-        if cs.get("entry_blocked"):
-            since = cs.get("days_since_trigger")
-            remaining = max(0, cs.get("cooldown_days", 5) - since) if since is not None else None
-            cband, ctext = "#991b1b", (
-                f"🔴 Entry-block cooldown active — triggered {cs.get('last_trigger_date', '?')}"
-                + (f", {remaining} trading day(s) remaining" if remaining is not None else "")
-            )
-        elif today_ret is not None and dist_pp is not None and dist_pp <= 2.0:
-            cband, ctext = "#b45309", (
-                f"🟡 Approaching crisis threshold — today's S&P move {today_ret:+.2f}% "
-                f"({dist_pp:.2f}pp from the -7.0% trigger)"
-            )
-        else:
-            cband, ctext = "#16a34a", (
-                f"🟢 No crisis override active — today's S&P move "
-                f"{today_ret:+.2f}%" if today_ret is not None else "🟢 No crisis override active"
-            )
-        st.markdown(
-            f'<div style="border:1px solid {cband}44;border-radius:8px;padding:6px 14px;'
-            f'margin-bottom:10px;color:{cband};font-size:0.85rem;font-weight:600">{html.escape(ctext)}</div>',
-            unsafe_allow_html=True,
+    hist_rows = _get_value_history(_VALUE_CHART_RANGES[range_label])
+    st.plotly_chart(_value_history_chart(hist_rows), width="stretch")
+    if len(hist_rows) <= 2:
+        st.caption(
+            "The account was reset to a clean £50,000 with no trading history yet — "
+            "this chart fills in day by day as real T212 EOD snapshots accumulate, not an error."
         )
 
-    # --- Next scheduled membership refresh --------------------------------
-    next_refresh = _next_run_for_time(21, 15)
-    st.caption(f"Next S&P 500 membership refresh: {_fmt_uk(next_refresh, '%Y-%m-%d %H:%M')} "
-               f"(21:15 UTC weekdays, 15 minutes ahead of the EOD trading run)")
-
     st.divider()
-    st.markdown("### Open Positions")
-    open_cards = _get_open_cards(config)
-    held_tickers = {c.get("ticker") for c in open_cards}
-    st.markdown(f"**{positions_summary_text(len(open_cards))}**")
-    if open_cards:
-        st.caption(POSITIONS_RULES_EXPLANATION)
-    if not open_cards:
-        st.info("No open positions.")
+
+    # --- Top winners / losers -----------------------------------------
+    st.markdown("### Top Trades")
+    winners, losers = _get_top_trades_cached()
+    if not winners and not losers:
+        st.info("No closed trades yet — no live position has closed since the account reset. "
+                 "This section will populate as real trading accumulates.")
     else:
-        # Stable, neutral order — alphabetical by ticker. Deliberately not
-        # sorted by status/proximity to a threshold, which would imply
-        # some positions need more attention than others.
-        all_cards = sorted(open_cards, key=lambda x: x.get("ticker", ""))
-        for e in all_cards:
-            _render_trade_card_compact(e)
-        st.caption("Full position detail is on the **Performance** page.")
+        wcol, lcol = st.columns(2)
+        with wcol:
+            st.markdown("**Top 5 Winners**")
+            if winners:
+                wdf = pd.DataFrame(winners)[["ticker", "exit_date", "pnl_gbp", "pnl_pct", "exit_reason"]].copy()
+                wdf["exit_date"] = pd.to_datetime(wdf["exit_date"]).dt.strftime("%Y-%m-%d")
+                wdf["pnl_gbp"] = wdf["pnl_gbp"].map(lambda v: f"+£{v:,.2f}")
+                wdf["pnl_pct"] = wdf["pnl_pct"].map(lambda v: f"+{v * 100:.1f}%")
+                wdf.columns = ["Ticker", "Closed", "P&L (£)", "P&L (%)", "Exit Reason"]
+                st.dataframe(wdf, width="stretch", hide_index=True)
+            else:
+                st.caption("No winning trades yet.")
+        with lcol:
+            st.markdown("**Top 5 Losers**")
+            if losers:
+                ldf = pd.DataFrame(losers)[["ticker", "exit_date", "pnl_gbp", "pnl_pct", "exit_reason"]].copy()
+                ldf["exit_date"] = pd.to_datetime(ldf["exit_date"]).dt.strftime("%Y-%m-%d")
+                ldf["pnl_gbp"] = ldf["pnl_gbp"].map(lambda v: f"£{v:,.2f}")
+                ldf["pnl_pct"] = ldf["pnl_pct"].map(lambda v: f"{v * 100:.1f}%")
+                ldf.columns = ["Ticker", "Closed", "P&L (£)", "P&L (%)", "Exit Reason"]
+                st.dataframe(ldf, width="stretch", hide_index=True)
+            else:
+                st.caption("No losing trades yet.")
 
     st.divider()
-    st.markdown(f"### Every Tracked Ticker — Eligibility & Momentum ({len(valid_rows)} tracked)")
+
+    # --- Candidate queue -----------------------------------------------
+    st.markdown("### Candidate Queue")
+    st.caption("Decisions queued at EOD, awaiting their exchange-timed submission window "
+               "(14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware order submission\" section).")
+    candidates = _get_pending_candidates_cached()
+    if not candidates:
+        st.info("No candidates currently queued.")
+    else:
+        cdf = pd.DataFrame(candidates).copy()
+        cdf["Type"] = cdf["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
+        cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
+        cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
+        cdf = cdf[["ticker", "Type", "momentum_pct", "position_gbp", "decided_at"]]
+        cdf.columns = ["Ticker", "Type", "Momentum", "Sized Position", "Decided At"]
+        st.dataframe(cdf, width="stretch", hide_index=True)
+
+    st.divider()
+
+    # --- Placed, unconfirmed exits --------------------------------------
+    st.markdown("### Placed, Unconfirmed Exits")
     st.caption(
-        "Every ticker in the live universe, not just open positions — momentum state, current "
-        "index eligibility, and crisis entry-block status. \"Held\" marks a position currently open."
+        "SELL orders T212 has accepted but not yet resolved to FILLED/CANCELLED/REJECTED. "
+        "This account has a documented lag here — orders have been observed sitting in this "
+        "state for 60+ hours before resolving — so this reflects the real order-status lag, "
+        "not a stuck order needing manual intervention."
     )
-    with st.expander("Show full ticker table", expanded=True):
-        status_df = pd.DataFrame(valid_rows)
-        if not status_df.empty:
-            status_df = status_df.sort_values(by=["sig_on", "momentum_pct"], ascending=[False, False])
-        status_df["Held"] = status_df["ticker"].map(lambda t: "●" if t in held_tickers else "")
-        status_df["Type"] = status_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-        status_df["sig_on"] = status_df["sig_on"].map(lambda b: "Long" if b else "Flat")
-        status_df["is_member"] = status_df["is_member"].map(lambda b: "Yes" if b else "No")
-        status_df["momentum_pct"] = status_df["momentum_pct"].map(
-            lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
-        )
-        status_df["entry_blocked"] = status_df["entry_blocked"].map(lambda b: "Yes" if b else "No")
-        status_df = status_df[["ticker", "Held", "Type", "sig_on", "momentum_pct", "is_member", "entry_blocked"]]
-        status_df.columns = ["Ticker", "Held", "Type", "Momentum", "12m Return", "Index Eligible", "Entry Blocked"]
-        st.dataframe(status_df, width="stretch", hide_index=True)
+    exits = _get_unconfirmed_exits_cached()
+    if not exits:
+        st.info("No exits currently awaiting confirmation.")
+    else:
+        edf = pd.DataFrame(exits).copy()
+        edf["placed_at"] = pd.to_datetime(edf["placed_at"])
+        edf["age_hours"] = ((datetime.utcnow() - edf["placed_at"]).dt.total_seconds() / 3600).round(1)
+        edf["placed_at"] = edf["placed_at"].dt.strftime("%Y-%m-%d %H:%M")
+        edf = edf[["ticker", "exit_reason", "quantity", "placed_at", "age_hours"]]
+        edf.columns = ["Ticker", "Exit Reason", "Quantity", "Placed At", "Age (hours)"]
+        st.dataframe(edf, width="stretch", hide_index=True)
 
     _render_footer()
 
@@ -1338,7 +1326,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                         unsafe_allow_html=True,
                     )
                     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
-                    st.caption("Open positions are shown in full on the **Performance** and **Daily Briefing** pages.")
+                    st.caption("Open positions are shown in full on the **Performance** page.")
 
                     if snap_fetched:
                         try:
@@ -2053,8 +2041,9 @@ def _render_performance_page(config: dict) -> None:
         st.info("No open positions.")
     else:
         # Stable, neutral order — alphabetical by ticker, not by status/
-        # proximity to a threshold (see the Daily Briefing's identical
-        # ordering choice above).
+        # proximity to a threshold, which would imply some positions need
+        # more attention than others (see CLAUDE.md's "Decision-relevant,
+        # tone-neutral context on open position cards" section).
         all_cards = sorted(open_cards, key=lambda x: x.get("ticker", ""))
         for e in all_cards:
             _render_trade_card(e)
@@ -2194,15 +2183,15 @@ def main() -> None:
         """, unsafe_allow_html=True)
         st.divider()
 
-        _PAGES = ["Daily Briefing", "Charts", "Performance", "Backtest", "Status"]
+        _PAGES = ["Dashboard", "Charts", "Performance", "Backtest", "Status"]
         _PAGE_KEYS = {
-            "Daily Briefing": "briefing",
+            "Dashboard":      "dashboard",
             "Charts":         "charts",
             "Performance":    "performance",
             "Backtest":       "backtest",
             "Status":         "status",
         }
-        current_key = st.session_state.get("page", "briefing")
+        current_key = st.session_state.get("page", "dashboard")
         default_idx = next(
             (i for i, k in enumerate(_PAGE_KEYS.values()) if k == current_key), 0
         )
@@ -2227,10 +2216,10 @@ def main() -> None:
         st.caption(f"**Last scheduled run:** {_sb_s_str}")
 
     # ---- Main content --------------------------------------------------
-    page_key = st.session_state.get("page", "briefing")
+    page_key = st.session_state.get("page", "dashboard")
 
-    if page_key == "briefing":
-        _render_briefing_page(config)
+    if page_key == "dashboard":
+        _render_dashboard_page(config)
         return
 
     if page_key == "status":

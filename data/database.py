@@ -319,6 +319,36 @@ class PositionReconciliation(Base):
     )
 
 
+class AccountValueHistory(Base):
+    """One row per calendar day of the T212 account's total value, cash,
+    and invested amount — the real, historical time series the
+    dashboard's week/month/year account-value chart is built from.
+
+    Captured as part of the EOD job's own existing daily account-snapshot
+    fetch (brokers/trading212.py-adjacent data/scheduler.py:_fetch_t212_
+    snapshot(config, record_history=True) — called with that flag ONLY
+    from _eod_job(), never from the 60-second dispatcher's or the hourly
+    job's own calls to the same function, so this stays a genuine
+    one-row-per-day series rather than accumulating many rows a day).
+    Essentially free: no new T212 API call — one more DB write right
+    after a fetch that already happens daily, using the exact same
+    already-fetched summary dict `t212_account_snapshot` (system_metadata)
+    is built from.
+
+    Upserted on `date` (not append-only) — a manual same-day "Refresh
+    Data" re-run must refresh that day's row, not create a duplicate.
+    """
+
+    __tablename__ = "account_value_history"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    date             = Column(Date, nullable=False, unique=True)
+    total_value_gbp  = Column(Float)
+    cash_gbp         = Column(Float)
+    invested_gbp     = Column(Float)
+    captured_at      = Column(DateTime, default=datetime.utcnow)
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -498,6 +528,7 @@ def init_db() -> None:
         Pnl,
         PendingOrder,
         InstrumentResolution,
+        AccountValueHistory,
         SystemMetadata,
         SchemaMigration,
     )

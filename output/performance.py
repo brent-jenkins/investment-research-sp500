@@ -413,3 +413,143 @@ def pnl_metrics_df(pnl_rows: list[dict]) -> pd.DataFrame:
     df["is_win"]     = df["pnl_gbp"] > 0
     df["direction"]  = "LONG"
     return df
+
+
+# ---------------------------------------------------------------------------
+# Dashboard (2026-08-02) — replaces the Daily Briefing page. Every function
+# below is a plain DB read; no T212 API calls happen here (matches this
+# module's own "UI only reads from the DB" convention — brokers/trading212.py
+# and data/scheduler.py are the only code that talks to T212 directly).
+# ---------------------------------------------------------------------------
+
+def get_current_account_summary() -> dict:
+    """The latest T212 account snapshot (system_metadata's
+    t212_account_snapshot, written by data/scheduler.py:_fetch_t212_
+    snapshot() — the UI never calls T212 directly). Returns
+    {"total_value_gbp", "cash_gbp", "invested_gbp", "deployed_pct"}, all
+    0.0 if no snapshot has ever been fetched yet."""
+    import json as _json
+
+    raw = get_metadata_str("t212_account_snapshot")
+    if not raw:
+        return {"total_value_gbp": 0.0, "cash_gbp": 0.0, "invested_gbp": 0.0, "deployed_pct": 0.0}
+    try:
+        summary = _json.loads(raw)
+        cash_obj = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        inv_obj  = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_value = float(summary.get("totalValue", 0) or 0)
+        cash        = float(cash_obj.get("availableToTrade", 0) or 0)
+        invested    = float(inv_obj.get("currentValue", 0) or 0)
+        deployed_pct = (invested / total_value * 100) if total_value else 0.0
+        return {
+            "total_value_gbp": total_value, "cash_gbp": cash,
+            "invested_gbp": invested, "deployed_pct": deployed_pct,
+        }
+    except Exception:
+        return {"total_value_gbp": 0.0, "cash_gbp": 0.0, "invested_gbp": 0.0, "deployed_pct": 0.0}
+
+
+def get_account_value_history(days: int, starting_balance_gbp: float = 50_000.0) -> list[dict]:
+    """Real daily account-value snapshots for the last *days* calendar
+    days (account_value_history — see data/database.py:AccountValueHistory
+    and data/scheduler.py:_record_account_value_history() for how this is
+    populated, once daily, as part of the EOD job's own existing T212
+    snapshot fetch).
+
+    Anchored to start at *starting_balance_gbp* (the account's real
+    initial T212 balance, £50,000 — not £0) rather than an empty/flat
+    -looking chart: if the earliest real snapshot is later than
+    (today - days) — which it currently always is, since the account was
+    only just reset with no trading history yet — a synthetic point dated
+    (today - days) at starting_balance_gbp is prepended, so the scale of
+    any real gain or loss the account goes on to show is visible
+    immediately rather than the chart looking like it started from
+    nothing. This is a real, honest anchor (the account's genuine actual
+    starting balance), not a fabricated data point standing in for a
+    real one — it is exactly what the account was worth on that date.
+
+    Returns a list of {"date": "YYYY-MM-DD", "total_value_gbp": float},
+    sorted ascending by date. Never raises.
+    """
+    from datetime import date, timedelta
+    from sqlalchemy import text as sa_text
+
+    cutoff = date.today() - timedelta(days=days)
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT date, total_value_gbp FROM account_value_history
+                WHERE date >= :cutoff ORDER BY date ASC
+            """), {"cutoff": cutoff.isoformat()}).mappings().all()
+    except Exception:
+        rows = []
+
+    result = [{"date": str(r["date"]), "total_value_gbp": float(r["total_value_gbp"] or 0.0)} for r in rows]
+    if not result or result[0]["date"] > cutoff.isoformat():
+        result.insert(0, {"date": cutoff.isoformat(), "total_value_gbp": starting_balance_gbp})
+    return result
+
+
+def get_top_trades(limit: int = 5) -> tuple[list[dict], list[dict]]:
+    """Top *limit* winning and bottom *limit* losing closed T212 trades by
+    realised pnl_gbp (the pnl table — see get_pnl_rows()). Empty lists are
+    the correct, honest result until real trading accumulates closed
+    positions — not an error state; no live trade has closed yet as of
+    this feature shipping."""
+    rows = get_pnl_rows()
+    if not rows:
+        return [], []
+    winners = sorted(
+        (r for r in rows if (r.get("pnl_gbp") or 0.0) > 0),
+        key=lambda r: r.get("pnl_gbp") or 0.0, reverse=True,
+    )[:limit]
+    losers = sorted(
+        (r for r in rows if (r.get("pnl_gbp") or 0.0) < 0),
+        key=lambda r: r.get("pnl_gbp") or 0.0,
+    )[:limit]
+    return winners, losers
+
+
+def get_pending_candidates() -> list[dict]:
+    """Every PENDING pending_orders row — decisions queued at EOD,
+    awaiting their exchange-timed submission window (see CLAUDE.md's
+    "Exchange-aware order submission" section). Ordered by momentum
+    descending, matching the real admission-priority order live
+    submission itself uses (brokers/trading212.py:_load_pending_orders())."""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT ticker, is_etf, decided_at, decided_price, position_gbp, momentum_pct
+                FROM pending_orders WHERE status = 'PENDING'
+                ORDER BY momentum_pct DESC
+            """)).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_unconfirmed_exits() -> list[dict]:
+    """SELL orders (invest_orders) sitting in PLACED status — accepted by
+    T212 but not yet resolved to FILLED/CANCELLED/REJECTED via
+    poll_placed_orders(). Deliberately built against this real, existing
+    status rather than a "decided but not submitted" concept, which
+    doesn't exist as a distinct state for exits — maybe_exit_positions()
+    decides and submits an exit in one hourly operation, so the only
+    genuinely observable "in-flight" exit state is a real order this
+    system already placed that T212 hasn't confirmed yet. This account
+    has a documented lag here — orders have been observed sitting PLACED
+    for 60+ hours before resolving (see CLAUDE.md's "Broker integration"
+    section) — so this is genuinely useful to surface, not a rare edge
+    case."""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT ticker, t212_ticker, quantity, exit_reason, placed_at
+                FROM invest_orders WHERE direction = 'SELL' AND status = 'PLACED'
+                ORDER BY placed_at ASC
+            """)).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
