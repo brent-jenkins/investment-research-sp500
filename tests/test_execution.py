@@ -2473,3 +2473,282 @@ def test_unconfirmed_exits_can_linger_if_poll_never_terminal_resolves_the_order(
     mocker.patch("output.briefing.send_position_reconciliation_alert")
     summary = reconcile_positions_with_broker(_reconcile_config())
     assert summary["broker_closed_no_sell"] == []
+
+
+# ---------------------------------------------------------------------------
+# purge_old_pending_orders() (2026-08-02) -- bounded retention for
+# pending_orders' resolved rows, a deliberate, scoped exception to
+# "flag, don't delete" for this specific high-volume, mostly-routine-noise
+# table. invest_orders (real trade history) is never touched by this.
+# ---------------------------------------------------------------------------
+
+def _insert_pending_row(engine, *, ticker, status, resolved_at, t212_ticker=None):
+    """Direct insert with an explicit resolved_at timestamp -- the existing
+    _seed_pending_order() helper always leaves resolved_at NULL, which
+    can't exercise age-based retention at all."""
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status,
+                 resolution_note, resolved_at, created_at)
+            VALUES (:ticker, :t212_ticker, 0, 'USD', :now, 100.0,
+                    500.0, 0.05, 90.0, 0.02, :status,
+                    'test row', :resolved_at, :now)
+        """), {
+            "ticker": ticker, "t212_ticker": t212_ticker or f"{ticker}_US_EQ",
+            "now": datetime.utcnow().isoformat(), "status": status,
+            "resolved_at": resolved_at.isoformat() if resolved_at else None,
+        })
+
+
+def test_purge_deletes_resolved_rows_past_retention_window(db_engine):
+    from brokers.trading212 import purge_old_pending_orders
+
+    old_cutoff = datetime.utcnow() - timedelta(days=45)
+    _insert_pending_row(db_engine, ticker="OLDREJECT", status="REJECTED_CAPACITY", resolved_at=old_cutoff)
+
+    deleted = purge_old_pending_orders(retention_days=30)
+
+    assert deleted == 1
+    row = db_engine.connect().execute(sa_text(
+        "SELECT 1 FROM pending_orders WHERE ticker='OLDREJECT'"
+    )).fetchone()
+    assert row is None
+
+
+def test_purge_preserves_resolved_rows_within_retention_window(db_engine):
+    from brokers.trading212 import purge_old_pending_orders
+
+    recent = datetime.utcnow() - timedelta(days=5)
+    _insert_pending_row(db_engine, ticker="RECENTREJECT", status="REJECTED_CAPACITY", resolved_at=recent)
+
+    deleted = purge_old_pending_orders(retention_days=30)
+
+    assert deleted == 0
+    row = db_engine.connect().execute(sa_text(
+        "SELECT 1 FROM pending_orders WHERE ticker='RECENTREJECT'"
+    )).fetchone()
+    assert row is not None
+
+
+def test_purge_never_deletes_a_still_pending_row_regardless_of_age(db_engine):
+    """A PENDING row is a live, unresolved decision awaiting its
+    submission window -- must never be purged just because it's old,
+    even if it's been sitting unresolved for far longer than the
+    retention window (e.g. submission paused)."""
+    from brokers.trading212 import purge_old_pending_orders
+
+    very_old = datetime.utcnow() - timedelta(days=200)
+    # PENDING rows have no resolved_at in real use (only set by
+    # _resolve_pending()) -- seed one with an old decided_at/created_at
+    # but resolved_at left NULL, the genuine shape of a real stuck-PENDING row.
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+            VALUES ('STUCKPENDING', 'STUCKPENDING_US_EQ', 0, 'USD', :old, 100.0,
+                    500.0, 0.05, 90.0, 0.02, 'PENDING', :old)
+        """), {"old": very_old.isoformat()})
+
+    deleted = purge_old_pending_orders(retention_days=30)
+
+    assert deleted == 0
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM pending_orders WHERE ticker='STUCKPENDING'"
+    )).fetchone()
+    assert row is not None and row[0] == "PENDING"
+
+
+def test_purge_handles_mixed_statuses_correctly_in_one_pass(db_engine):
+    from brokers.trading212 import purge_old_pending_orders
+
+    old = datetime.utcnow() - timedelta(days=45)
+    recent = datetime.utcnow() - timedelta(days=5)
+    _insert_pending_row(db_engine, ticker="OLD_SUPERSEDED", status="SUPERSEDED", resolved_at=old)
+    _insert_pending_row(db_engine, ticker="OLD_SKIPPED", status="SKIPPED_PRICE_MOVED", resolved_at=old)
+    _insert_pending_row(db_engine, ticker="RECENT_FAILED", status="FAILED", resolved_at=recent)
+
+    deleted = purge_old_pending_orders(retention_days=30)
+
+    assert deleted == 2
+    remaining = {r[0] for r in db_engine.connect().execute(sa_text(
+        "SELECT ticker FROM pending_orders"
+    )).fetchall()}
+    assert remaining == {"RECENT_FAILED"}
+
+
+def test_purge_reads_retention_days_from_config(db_engine):
+    """config.yaml's trading212_invest.pending_orders_retention_days must
+    genuinely drive the cutoff, not just be documented and ignored."""
+    from brokers.trading212 import purge_old_pending_orders
+
+    ten_days_ago = datetime.utcnow() - timedelta(days=10)
+    _insert_pending_row(db_engine, ticker="TENDAYSOLD", status="REJECTED_CAPACITY", resolved_at=ten_days_ago)
+
+    # A tight 7-day retention must purge a 10-day-old row.
+    deleted = purge_old_pending_orders(config={"trading212_invest": {"pending_orders_retention_days": 7}})
+    assert deleted == 1
+
+
+def test_purge_defaults_to_30_days_when_config_key_absent(db_engine):
+    from brokers.trading212 import purge_old_pending_orders
+
+    fifty_days_ago = datetime.utcnow() - timedelta(days=50)
+    twenty_days_ago = datetime.utcnow() - timedelta(days=20)
+    _insert_pending_row(db_engine, ticker="FIFTYDAYSOLD", status="REJECTED_CAPACITY", resolved_at=fifty_days_ago)
+    _insert_pending_row(db_engine, ticker="TWENTYDAYSOLD", status="REJECTED_CAPACITY", resolved_at=twenty_days_ago)
+
+    deleted = purge_old_pending_orders(config={"trading212_invest": {}})
+
+    assert deleted == 1
+    remaining = {r[0] for r in db_engine.connect().execute(sa_text(
+        "SELECT ticker FROM pending_orders"
+    )).fetchall()}
+    assert remaining == {"TWENTYDAYSOLD"}
+
+
+def test_purge_never_raises_on_db_failure(db_engine, mocker):
+    from brokers.trading212 import purge_old_pending_orders
+    mocker.patch("data.database.get_engine", side_effect=RuntimeError("db down"))
+    assert purge_old_pending_orders() == 0  # must not raise
+
+
+def test_purge_never_touches_invest_orders(db_engine):
+    """invest_orders (real trade/order history) must remain completely
+    untouched under any condition -- confirmed by seeding a resolved
+    invest_orders row old enough to be purged if this function were ever
+    accidentally scoped too broadly, and confirming it survives."""
+    from brokers.trading212 import purge_old_pending_orders
+
+    old = datetime.utcnow() - timedelta(days=400)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('ANCIENT', 'ANCIENT_US_EQ', 'SELL', 'FAILED', :old, :old)
+        """), {"old": old.isoformat()})
+        _insert_pending_row(db_engine, ticker="ALSOOLD", status="REJECTED_CAPACITY",
+                             resolved_at=old)
+
+    before_count = db_engine.connect().execute(sa_text("SELECT COUNT(*) FROM invest_orders")).scalar()
+    deleted = purge_old_pending_orders(retention_days=30)
+    after_count = db_engine.connect().execute(sa_text("SELECT COUNT(*) FROM invest_orders")).scalar()
+
+    assert deleted == 1  # only the pending_orders row
+    assert before_count == after_count == 1
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM invest_orders WHERE ticker='ANCIENT'"
+    )).fetchone()
+    assert row is not None and row[0] == "FAILED"  # completely untouched
+
+
+# ---------------------------------------------------------------------------
+# project_pending_order_admission() (2026-08-02) -- read-only projection of
+# tomorrow's capacity admission, for the Dashboard's candidate-queue Status
+# column. Shares _capacity_fit_reason() with the real _submit_pending_orders()
+# walk -- never a second, independently-derived rule.
+# ---------------------------------------------------------------------------
+
+def test_project_admission_ranks_by_momentum_and_admits_until_capacity(db_engine, v2_mocks):
+    """Highest momentum first, skip-and-continue against real account
+    state -- must reproduce the exact 2026-08-02 verification shape."""
+    from brokers.trading212 import project_pending_order_admission
+
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0,
+        "cash": {"availableToTrade": 10_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    # £2,500 each -> cap (30%% = £3,000) fits exactly 1; the rest reject.
+    _seed_pending_order(db_engine, ticker="HIGH", t212_ticker="HIGH_EQ", is_etf=False,
+                         momentum_pct=2.0, position_gbp=2500.0)
+    _seed_pending_order(db_engine, ticker="MID", t212_ticker="MID_EQ", is_etf=False,
+                         momentum_pct=1.0, position_gbp=2500.0)
+    _seed_pending_order(db_engine, ticker="LOW", t212_ticker="LOW_EQ", is_etf=False,
+                         momentum_pct=0.1, position_gbp=2500.0)
+
+    projected = project_pending_order_admission(_submission_config(max_deployed=0.30))
+
+    by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
+    assert by_ticker["HIGH"] == "PROJECTED_ADMIT"
+    assert by_ticker["MID"] == "PROJECTED_REJECT_CAPACITY"
+    assert by_ticker["LOW"] == "PROJECTED_REJECT_CAPACITY"
+    # Order returned must itself be momentum-descending, matching the real walk.
+    assert [p["ticker"] for p in projected] == ["HIGH", "MID", "LOW"]
+
+
+def test_project_admission_never_places_an_order_or_resolves_a_row(db_engine, v2_mocks):
+    """Purely read-only -- confirmed directly, not just by absence of a
+    call in this one test's own assertions."""
+    from brokers.trading212 import project_pending_order_admission
+
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0, "cash": {"availableToTrade": 10_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False,
+                         momentum_pct=0.5, position_gbp=500.0)
+
+    project_pending_order_admission(_submission_config(max_deployed=0.5))
+
+    v2_mocks.place_market_order.assert_not_called()
+    still_pending = _pending_rows(db_engine, status="PENDING")
+    assert len(still_pending) == 1  # unresolved -- projection never wrote anything
+
+
+def test_project_admission_returns_empty_when_disabled(db_engine, v2_mocks):
+    from brokers.trading212 import project_pending_order_admission
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False, position_gbp=500.0)
+    assert project_pending_order_admission(_config(enabled=False)) == []
+
+
+def test_project_admission_returns_empty_on_account_read_failure(db_engine, v2_mocks):
+    """No honest projection can be made without real account state --
+    returns [] rather than guessing, matching this project's own
+    "fail loud, don't guess" convention."""
+    from brokers.trading212 import project_pending_order_admission
+    v2_mocks.get_account_summary.side_effect = RuntimeError("t212 api down")
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False, position_gbp=500.0)
+
+    assert project_pending_order_admission(_submission_config()) == []
+
+
+def test_project_admission_empty_when_no_pending_rows(db_engine, v2_mocks):
+    from brokers.trading212 import project_pending_order_admission
+    assert project_pending_order_admission(_submission_config()) == []
+
+
+def test_capacity_fit_reason_matches_real_submission_rejection_for_the_same_inputs(db_engine, v2_mocks, mocker):
+    """The shared helper genuinely drives both call sites identically --
+    proven by running the same scenario through both
+    project_pending_order_admission() and the real submit_pending_stock_
+    orders() and confirming they agree on which ticker is rejected."""
+    from brokers.trading212 import project_pending_order_admission, submit_pending_stock_orders
+
+    account = {
+        "totalValue": 10_000.0, "cash": {"availableToTrade": 10_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    v2_mocks.get_account_summary.return_value = account
+    v2_mocks.get_positions.return_value = []
+    v2_mocks.get_quantity_for_gbp.return_value = 10.0
+    v2_mocks.get_instrument_price_gbp.return_value = 250.0
+    v2_mocks.get_instruments.return_value = [{"ticker": "OVERCAP_EQ", "minTradeQuantity": 1.0}]
+    # Real submission also runs the price-sanity check, which needs a live
+    # current price -- irrelevant to what THIS test is proving (that the
+    # two paths agree on capacity), so held equal to decided_price (100.0,
+    # _seed_pending_order's default) to guarantee it never blocks first.
+    mocker.patch("brokers.trading212._live_current_price", return_value=100.0)
+
+    _seed_pending_order(db_engine, ticker="OVERCAP", t212_ticker="OVERCAP_EQ", is_etf=False,
+                         momentum_pct=1.0, position_gbp=6000.0)  # alone exceeds a 50% cap
+
+    projected = project_pending_order_admission(_submission_config(max_deployed=0.5, stock_enabled=True))
+    assert projected[0]["projected_status"] == "PROJECTED_REJECT_CAPACITY"
+
+    submitted = submit_pending_stock_orders(_submission_config(max_deployed=0.5, stock_enabled=True))
+    assert submitted == 0
+    rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
+    assert len(rejected) == 1 and rejected[0]["ticker"] == "OVERCAP"

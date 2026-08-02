@@ -698,6 +698,20 @@ def _eod_job() -> None:
         except Exception as exc:
             logger.error("T212 snapshot fetch after EOD failed: %s", exc)
             details["snapshot_error"] = str(exc)
+
+        try:
+            # Bounded retention for pending_orders (2026-08-02) -- a
+            # deliberate, scoped exception to "flag, don't delete": this
+            # table's resolved rows (SKIPPED_*/REJECTED_CAPACITY/SUPERSEDED)
+            # are routine, high-volume queue noise, not meaningful trade
+            # history -- see purge_old_pending_orders()'s own docstring.
+            # Own try/except so a purge failure never blocks anything else
+            # in this job, matching every other step here.
+            from brokers.trading212 import purge_old_pending_orders  # noqa: PLC0415
+            n_purged = purge_old_pending_orders(config)
+            details["pending_orders_purged"] = n_purged
+        except Exception as exc:
+            logger.warning("pending_orders purge failed: %s", exc)
     except Exception as exc:
         logger.error("EOD job failed with an unhandled exception: %s", exc, exc_info=True)
         _record_eod_completion("FAILED", today_utc, error=str(exc), **details)

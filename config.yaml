@@ -120,3 +120,9 @@ trading212_invest:
   # this fraction since the EOD decision was made, skip submission rather
   # than execute on a stale decision.
   price_sanity_threshold_pct: 0.03
+  # How long a RESOLVED pending_orders row (SUBMITTED/FAILED/SKIPPED_*/
+  # REJECTED_CAPACITY/SUPERSEDED) is kept before being genuinely deleted --
+  # a deliberate, scoped exception to "flag, don't delete" for this
+  # specific, high-volume, mostly-routine-noise table. A still-PENDING row
+  # is never purged regardless of age. See purge_old_pending_orders().
+  pending_orders_retention_days: 30

@@ -375,7 +375,22 @@ def dashboard_app(db_engine, monkeypatch, mocker):
     Dashboard section's own output.performance function is already
     "never raises, empty-safe against a blank DB" by this codebase's own
     standing convention, so no further mocking is needed for the page to
-    render cleanly against the fresh, empty db_engine fixture."""
+    render cleanly against the fresh, empty db_engine fixture.
+
+    Clears st.cache_data before every test (2026-08-02) -- @st.cache_data
+    is a genuine process-wide cache that outlives any single AppTest
+    instance, and _get_projected_admission_cached()'s leading-underscore
+    `_config` parameter is deliberately excluded from Streamlit's cache
+    key (the standard convention for an unhashed argument) -- meaning
+    every call across the whole pytest session would otherwise share ONE
+    cache entry, so whichever test happened to run first would silently
+    poison every test after it with its own mocked projection. Confirmed
+    this was a real, not hypothetical, risk: the fix was written after a
+    test relying on a fresh [] projection got the previous test's
+    stale SNDK/WBD result instead.
+    """
+    import streamlit as st
+    st.cache_data.clear()
     mocker.patch("data.scheduler.start_scheduler")
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
     monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: [])
@@ -447,3 +462,91 @@ def test_dashboard_shows_stale_warning_when_eod_record_is_old(db_engine, dashboa
     assert any("stale" in w.value.lower() and "72h" in w.value for w in at.warning)
     # Must NOT also show the green "completed" success box for a stale record.
     assert not any("completed" in s.value.lower() for s in at.success)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard candidate-queue Status column + filter (2026-08-02) -- sourced
+# from brokers.trading212.project_pending_order_admission(), the same
+# read-only projection built during the urgent capacity/momentum
+# verification, not a separate/approximate computation.
+# ---------------------------------------------------------------------------
+
+def _seed_dashboard_pending_row(db_engine, *, ticker, momentum_pct, position_gbp=1000.0, is_etf=False):
+    from sqlalchemy import text as sa_text
+    from datetime import datetime
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+            VALUES (:ticker, :t212_ticker, :is_etf, 'USD', :now, 100.0,
+                    :position_gbp, :momentum_pct, 90.0, 0.02, 'PENDING', :now)
+        """), {
+            "ticker": ticker, "t212_ticker": f"{ticker}_US_EQ", "is_etf": is_etf,
+            "now": datetime.utcnow().isoformat(), "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+        })
+
+
+def test_dashboard_candidate_table_shows_status_from_the_real_projection(db_engine, dashboard_app, mocker):
+    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0, position_gbp=806.81)
+    _seed_dashboard_pending_row(db_engine, ticker="WBD", momentum_pct=0.98, position_gbp=2500.0)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "SNDK", "momentum_pct": 27.0, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
+        {"ticker": "WBD", "momentum_pct": 0.98, "position_gbp": 2500.0, "projected_status": "PROJECTED_REJECT_CAPACITY"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Status" in df.columns
+    assert df.loc[df["Ticker"] == "SNDK", "Status"].iloc[0] == "PROJECTED_ADMIT"
+    assert df.loc[df["Ticker"] == "WBD", "Status"].iloc[0] == "PROJECTED_REJECT_CAPACITY"
+    # Sourced from the real function, not a separate computation -- confirmed
+    # it was actually called, not just that the right values happened to appear.
+    from brokers.trading212 import project_pending_order_admission
+    project_pending_order_admission.assert_called_once()
+
+
+def test_dashboard_candidate_status_labelled_as_projection_not_guarantee(db_engine, dashboard_app, mocker):
+    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 0.5, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "projection" in all_text.lower()
+    assert "not a guarantee" in all_text.lower()
+
+
+def test_dashboard_candidate_status_filter_narrows_the_table(db_engine, dashboard_app, mocker):
+    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0)
+    _seed_dashboard_pending_row(db_engine, ticker="WBD", momentum_pct=0.98)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "SNDK", "momentum_pct": 27.0, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
+        {"ticker": "WBD", "momentum_pct": 0.98, "position_gbp": 2500.0, "projected_status": "PROJECTED_REJECT_CAPACITY"},
+    ])
+
+    at = dashboard_app.run()
+    at.multiselect(key="candidate_status_filter").set_value(["PROJECTED_ADMIT"]).run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"SNDK"}
+
+
+def test_dashboard_candidate_status_shows_unavailable_when_projection_fails(db_engine, dashboard_app, mocker):
+    """A ticker with no matching projection entry (e.g. the projection
+    call itself failed and returned []) must show a distinct
+    "unavailable" status, never silently read as rejected."""
+    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert df.loc[df["Ticker"] == "AAPL", "Status"].iloc[0] == "PROJECTION_UNAVAILABLE"

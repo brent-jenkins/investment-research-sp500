@@ -1066,6 +1066,81 @@ def _resolve_pending(row_id: int, status: str, note: Optional[str] = None) -> No
         logger.warning("Failed to resolve pending_orders row %s: %s", row_id, exc)
 
 
+_DEFAULT_PENDING_ORDERS_RETENTION_DAYS = 30
+
+
+def purge_old_pending_orders(config: Optional[dict] = None, retention_days: Optional[int] = None) -> int:
+    """Genuinely delete RESOLVED pending_orders rows older than the
+    retention window — a deliberate, scoped exception to this project's
+    "flag, don't delete" default (2026-08-02).
+
+    Why this table is the exception, not a reversal of the principle:
+    "flag, don't delete" protects genuinely meaningful HISTORY (a real
+    trade, a detected discrepancy, a decision that was actually acted
+    on) — pending_orders is structurally different. With a ~500-ticker
+    live candidate pool and capacity for roughly 10 positions (confirmed
+    2026-08-02: 318 candidates queued, 17 admitted), the large majority
+    of every day's rows are routine, high-volume noise that was never
+    going to become a real trade — REJECTED_CAPACITY and SUPERSEDED rows
+    especially. Left permanent, this table would grow by hundreds of
+    rows every single trading day, indefinitely, eventually dwarfing the
+    genuinely meaningful trade history in invest_orders — the same
+    unbounded-growth/explainability concern that justified fully
+    removing the EDGAR market-cap pipeline earlier tonight rather than
+    leaving it dormant.
+
+    Scope, precisely: ONLY rows with status != 'PENDING' (i.e. already
+    resolved one way or another — SUBMITTED/FAILED/SKIPPED_PRICE_MOVED/
+    SKIPPED_ALREADY_HELD/REJECTED_CAPACITY/SUPERSEDED) AND resolved_at
+    older than the retention window. A still-PENDING row — a live,
+    unresolved decision genuinely awaiting its submission window — is
+    NEVER purged, regardless of age; deleting one would silently lose a
+    real decision the system still intends to act on, not routine noise.
+
+    30 days is the default retention (configurable via config.yaml's
+    trading212_invest.pending_orders_retention_days) — long enough for
+    near-term debugging/review of a specific day's admission decisions
+    (the exact use case that came up tonight), short enough to keep the
+    table's steady-state size bounded to roughly one month of daily
+    churn rather than growing across the whole life of the account. At
+    ~300 resolved rows/trading day (tonight's real ratio) x ~21 trading
+    days/month, steady-state is roughly 6,000-7,000 rows, not the tens
+    of thousands per year unbounded retention would accumulate.
+
+    Never raises — a purge failure must not block whatever scheduled job
+    calls this. Returns the number of rows actually deleted.
+    """
+    if config is not None:
+        retention_days = retention_days or int(
+            config.get("trading212_invest", {}).get(
+                "pending_orders_retention_days", _DEFAULT_PENDING_ORDERS_RETENTION_DAYS,
+            )
+        )
+    else:
+        retention_days = retention_days or _DEFAULT_PENDING_ORDERS_RETENTION_DAYS
+
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+        eng = get_engine()
+        with eng.begin() as conn:
+            result = conn.execute(sa_text("""
+                DELETE FROM pending_orders
+                WHERE status != 'PENDING' AND resolved_at IS NOT NULL AND resolved_at < :cutoff
+            """), {"cutoff": cutoff})
+            deleted = result.rowcount or 0
+        if deleted:
+            logger.info(
+                "purge_old_pending_orders: deleted %d resolved row(s) older than %dd.",
+                deleted, retention_days,
+            )
+        return deleted
+    except Exception as exc:
+        logger.warning("purge_old_pending_orders failed: %s", exc)
+        return 0
+
+
 def _live_current_price(ticker: str) -> Optional[float]:
     """A genuinely live/current price for *ticker* — used by the
     submission-time price-sanity check.
@@ -2413,6 +2488,104 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
 # maybe_place_orders()'s docstring above for the full rationale.
 # ---------------------------------------------------------------------------
 
+def _capacity_fit_reason(
+    position_gbp: float, invested: float, total_val: float, free_cash: float, max_deployed_pct: float,
+) -> Optional[str]:
+    """The genuine capacity-fit decision — None if *position_gbp* fits
+    within *max_deployed_pct* of the account and available *free_cash*,
+    otherwise a human-readable reason it doesn't. Pure, no I/O — extracted
+    2026-08-02 so this exact rule has exactly one implementation, shared
+    between _submit_pending_orders() (the real, order-placing walk) and
+    project_pending_order_admission() (the Dashboard's read-only
+    projection of the same walk) — the same "one shared function, not two
+    that could independently drift" discipline this project applies
+    throughout. Checked in the same order the real submission loop always
+    has: deployment-cap first, then free cash.
+    """
+    deployed_after_pct = (invested + position_gbp) / total_val if total_val > 0 else 0.0
+    if total_val > 0 and deployed_after_pct > max_deployed_pct:
+        return (
+            f"would deploy {deployed_after_pct:.1%} of account (limit {max_deployed_pct:.0%}) -- "
+            f"position £{position_gbp:.2f}, already invested £{invested:.2f} of £{total_val:.2f}"
+        )
+    if position_gbp > free_cash:
+        return f"position £{position_gbp:.2f} exceeds available free cash £{free_cash:.2f}"
+    return None
+
+
+def project_pending_order_admission(config: dict) -> list[dict]:
+    """Read-only projection of tomorrow's stock submission — reuses the
+    EXACT capacity-fit rule (_capacity_fit_reason()) and the exact
+    momentum-descending priority order (_load_pending_orders()) the real
+    _submit_pending_orders() walk uses, against a fresh, live read of the
+    account's real current state. Never places an order, never resolves a
+    pending_orders row, never calls the price-sanity/already-held/
+    quantity-viability checks _submit_pending_orders() also applies at
+    genuine submission time.
+
+    THIS IS A PROJECTION, NOT A GUARANTEE (2026-08-02, built for the
+    Dashboard's candidate-queue Status column after the 2026-08-02 urgent
+    verification needed to replay this same logic ad hoc to answer "which
+    of these 318 will actually trade"). The real admission decision only
+    happens at actual submission time, against whatever the account's
+    real state is AT THAT MOMENT — which can genuinely differ from right
+    now (a position closing, an emergency exit, another candidate's order
+    filling first and consuming capacity this projection assumed was
+    still free). Every caller must treat the returned "projected_status"
+    as exactly that: a projection, current as of this read, not a
+    committed outcome.
+
+    Returns one dict per PENDING stock row: {ticker, momentum_pct,
+    position_gbp, projected_status}, where projected_status is
+    "PROJECTED_ADMIT" or "PROJECTED_REJECT_CAPACITY". Never raises —
+    returns [] on any failure (a missing/unreadable account state means
+    no projection can honestly be made at all, not a guess).
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return []
+    if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
+        return []
+
+    try:
+        pending = _load_pending_orders(is_etf=False)
+    except Exception as exc:
+        logger.warning("project_pending_order_admission: could not read pending orders — %s", exc)
+        return []
+    if not pending:
+        return []
+
+    max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
+    live = t212_cfg.get("live", False)
+    try:
+        client = Trading212Client(live=live)
+        summary = client.get_account_summary()
+        _s_cash = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
+        _s_inv  = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
+        total_val = float(summary.get("totalValue", 0) or 0)
+        invested  = float(_s_inv.get("currentValue", 0) or 0)
+        free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
+    except Exception as exc:
+        logger.warning("project_pending_order_admission: could not read account state — %s", exc)
+        return []
+
+    projected = []
+    for row in pending:
+        position_gbp = row["position_gbp"] or 0.0
+        fit_reason = _capacity_fit_reason(position_gbp, invested, total_val, free_cash, max_deployed_pct)
+        if fit_reason is None:
+            invested += position_gbp
+            free_cash -= position_gbp
+            status = "PROJECTED_ADMIT"
+        else:
+            status = "PROJECTED_REJECT_CAPACITY"
+        projected.append({
+            "ticker": row["ticker"], "momentum_pct": row["momentum_pct"],
+            "position_gbp": position_gbp, "projected_status": status,
+        })
+    return projected
+
+
 def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     """Submit every still-PENDING decision for one asset class.
 
@@ -2590,19 +2763,13 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
             # REJECTED_CAPACITY and moves on to the next (lower-priority,
             # momentum-ranked) candidate rather than stopping the run --
             # see this function's own docstring for the full rationale.
-            deployed_after_pct = (invested + position_gbp) / total_val if total_val > 0 else 0.0
-            if total_val > 0 and deployed_after_pct > max_deployed_pct:
-                note = (
-                    f"would deploy {deployed_after_pct:.1%} of account (limit {max_deployed_pct:.0%}) -- "
-                    f"position £{position_gbp:.2f}, already invested £{invested:.2f} of £{total_val:.2f}"
-                )
-                logger.info("Skipping %s (%s) — %s", ticker, t212_ticker, note)
-                _resolve_pending(row["id"], "REJECTED_CAPACITY", note=note)
-                continue
-            if position_gbp > free_cash:
-                note = f"position £{position_gbp:.2f} exceeds available free cash £{free_cash:.2f}"
-                logger.info("Skipping %s (%s) — %s", ticker, t212_ticker, note)
-                _resolve_pending(row["id"], "REJECTED_CAPACITY", note=note)
+            # Shared with project_pending_order_admission() (the Dashboard's
+            # read-only projection) via _capacity_fit_reason() below, so the
+            # two can never independently drift on what "fits" means.
+            fit_reason = _capacity_fit_reason(position_gbp, invested, total_val, free_cash, max_deployed_pct)
+            if fit_reason is not None:
+                logger.info("Skipping %s (%s) — %s", ticker, t212_ticker, fit_reason)
+                _resolve_pending(row["id"], "REJECTED_CAPACITY", note=fit_reason)
                 continue
 
             quantity = client.get_quantity_for_gbp(

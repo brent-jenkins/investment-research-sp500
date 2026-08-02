@@ -723,6 +723,17 @@ def _get_pending_candidates_cached() -> list[dict]:
 
 
 @st.cache_data(ttl=60)
+def _get_projected_admission_cached(_config: dict) -> list[dict]:
+    """Thin cached wrapper around brokers/trading212.py:
+    project_pending_order_admission() (2026-08-02). Leading underscore on
+    the parameter name is the Streamlit convention for "don't try to hash
+    this argument" — config is a plain dict, not needed as a cache key
+    here since there's only ever one config in play per page render."""
+    from brokers.trading212 import project_pending_order_admission
+    return project_pending_order_admission(_config)
+
+
+@st.cache_data(ttl=60)
 def _get_unconfirmed_exits_cached() -> list[dict]:
     """Thin cached wrapper around output/performance.py:get_unconfirmed_exits()."""
     return get_unconfirmed_exits()
@@ -894,13 +905,33 @@ def _render_dashboard_page(config: dict) -> None:
     if not candidates:
         st.info("No candidates currently queued.")
     else:
+        projected = _get_projected_admission_cached(config)
+        projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
+
         cdf = pd.DataFrame(candidates).copy()
         cdf["Type"] = cdf["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        cdf["Status"] = cdf["ticker"].map(lambda t: projected_by_ticker.get(t, "PROJECTION_UNAVAILABLE"))
         cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
         cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
         cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
-        cdf = cdf[["ticker", "Type", "momentum_pct", "position_gbp", "decided_at"]]
-        cdf.columns = ["Ticker", "Type", "Momentum", "Sized Position", "Decided At"]
+
+        st.caption(
+            "⚠️ **Status is a projection, not a guarantee.** Computed by replaying the same "
+            "momentum-ranked, skip-and-continue capacity check real submission uses, against "
+            "the account's real state *right now* — the actual decision only happens at real "
+            "submission time, against whatever the account's state is *at that moment*, which "
+            "can genuinely change in between (a position closing, an emergency exit)."
+        )
+        status_options = sorted(cdf["Status"].unique().tolist())
+        status_filter = st.multiselect(
+            "Filter by status", options=status_options, default=status_options,
+            key="candidate_status_filter",
+        )
+        cdf = cdf[cdf["Status"].isin(status_filter)]
+
+        cdf = cdf[["ticker", "Type", "Status", "momentum_pct", "position_gbp", "decided_at"]]
+        cdf.columns = ["Ticker", "Type", "Status", "Momentum", "Sized Position", "Decided At"]
+        st.caption(f"{len(cdf)} of {len(candidates)} candidates shown")
         st.dataframe(cdf, width="stretch", hide_index=True)
 
     st.divider()

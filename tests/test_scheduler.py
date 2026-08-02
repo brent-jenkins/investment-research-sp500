@@ -1324,3 +1324,47 @@ def test_eod_job_completed_even_when_only_the_snapshot_step_fails(db_engine, mon
     assert status["order_pipeline_ran"] is True
     assert status["snapshot_ran"] is False
     assert "t212 api down" in status["snapshot_error"]
+
+
+# ---------------------------------------------------------------------------
+# pending_orders purge wiring (2026-08-02) -- _eod_job() must call the
+# real purge_old_pending_orders() every run, in its own try/except so a
+# purge failure never blocks anything else, matching every other step here.
+# ---------------------------------------------------------------------------
+
+def test_eod_job_calls_the_real_pending_orders_purge(db_engine, monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mock_purge = mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=42)
+
+    scheduler._eod_job()
+
+    mock_purge.assert_called_once()
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["pending_orders_purged"] == 42
+
+
+def test_eod_job_completed_even_when_purge_fails(db_engine, monkeypatch, mocker):
+    """A purge failure is routine, non-trading-relevant maintenance -- it
+    must never turn an otherwise-successful EOD run into a FAILED verdict."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", side_effect=RuntimeError("boom"))
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["order_pipeline_ran"] is True
+    assert "pending_orders_purged" not in status
