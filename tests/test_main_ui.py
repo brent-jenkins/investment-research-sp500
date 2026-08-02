@@ -355,3 +355,95 @@ def test_old_charts_page_functions_are_gone_not_dormant():
     assert not hasattr(main_module, "_volume_bar_chart")
     assert not hasattr(main_module, "_GROUP_LABELS")
     assert hasattr(main_module, "_render_instruments_page")
+
+
+# ---------------------------------------------------------------------------
+# Dashboard page's EOD status badge (2026-08-02) -- the direct "did EOD
+# actually run" signal, placed at the very top of the default landing page
+# so it's genuinely checkable first thing each morning.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def dashboard_app(db_engine, monkeypatch, mocker):
+    """Renders against the REAL config.yaml (trading212_invest.enabled:
+    true in this repo) rather than trying to patch main._load_config --
+    that function is DEFINED locally in main.py (not imported), so it
+    would be silently re-defined back to the original on every AppTest
+    rerun, the same re-exec hazard documented on the instruments_app
+    fixture above. The badge renders unconditionally before any
+    trading212_invest.enabled check either way, and every downstream
+    Dashboard section's own output.performance function is already
+    "never raises, empty-safe against a blank DB" by this codebase's own
+    standing convention, so no further mocking is needed for the page to
+    render cleanly against the fresh, empty db_engine fixture."""
+    mocker.patch("data.scheduler.start_scheduler")
+    monkeypatch.setattr("main.get_engine", lambda: db_engine)
+    monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: [])
+
+    at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["page"] = "dashboard"
+    return at
+
+
+def test_dashboard_shows_no_run_recorded_when_eod_has_never_run(dashboard_app):
+    at = dashboard_app.run()
+    assert not at.exception
+    assert any("no run recorded yet" in w.value.lower() for w in at.warning)
+
+
+def test_dashboard_shows_completed_eod_status(db_engine, dashboard_app):
+    from data.scheduler import _record_eod_completion
+    from datetime import date as _date
+    _record_eod_completion("COMPLETED", _date(2026, 8, 4), price_pull_ran=True, order_pipeline_ran=True)
+
+    at = dashboard_app.run()
+    assert not at.exception
+    assert any("completed" in s.value.lower() and "2026-08-04" in s.value for s in at.success)
+
+
+def test_dashboard_shows_failed_eod_status(db_engine, dashboard_app):
+    from data.scheduler import _record_eod_completion
+    from datetime import date as _date
+    _record_eod_completion("FAILED", _date(2026, 8, 4), error="yfinance is down")
+
+    at = dashboard_app.run()
+    assert not at.exception
+    assert any("failed" in e.value.lower() and "yfinance is down" in e.value for e in at.error)
+
+
+def test_dashboard_shows_noop_eod_status(db_engine, dashboard_app):
+    from data.scheduler import _record_eod_completion
+    from datetime import date as _date
+    _record_eod_completion("NOOP_NOT_A_TRADING_WINDOW", _date(2026, 8, 1))
+
+    at = dashboard_app.run()
+    assert not at.exception
+    assert any("skipped" in i.value.lower() for i in at.info)
+
+
+def test_dashboard_shows_stale_warning_when_eod_record_is_old(db_engine, dashboard_app):
+    """A COMPLETED verdict recorded days ago must NOT render as a fresh
+    green checkmark -- that would be exactly the "plausible-looking but
+    wrong" silent-failure mode this badge exists to avoid."""
+    from datetime import datetime as _dt, timedelta as _td
+    from sqlalchemy import text as sa_text
+    import json as _json
+
+    old_payload = {
+        "status": "COMPLETED", "date": "2026-07-28",
+        "recorded_at": (_dt.utcnow() - _td(hours=72)).isoformat(),
+        "price_pull_ran": True, "order_pipeline_ran": True,
+    }
+    with db_engine.begin() as conn:
+        conn.execute(sa_text(
+            "CREATE TABLE IF NOT EXISTS system_metadata (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"
+        ))
+        conn.execute(sa_text(
+            "INSERT OR REPLACE INTO system_metadata (key, value, updated_at) VALUES ('eod_completion', :v, :t)"
+        ), {"v": _json.dumps(old_payload), "t": _dt.utcnow().isoformat()})
+
+    at = dashboard_app.run()
+    assert not at.exception
+    assert any("stale" in w.value.lower() and "72h" in w.value for w in at.warning)
+    # Must NOT also show the green "completed" success box for a stale record.
+    assert not any("completed" in s.value.lower() for s in at.success)

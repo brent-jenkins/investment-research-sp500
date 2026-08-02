@@ -1192,3 +1192,135 @@ def test_eod_job_passes_record_history_true_to_snapshot_call(monkeypatch, mocker
     mock_snap.assert_called_once()
     _, kwargs = mock_snap.call_args
     assert kwargs.get("record_history") is True
+
+
+# ---------------------------------------------------------------------------
+# _record_eod_completion() / get_eod_completion_status() -- a direct "did
+# tonight's EOD job actually run to completion" signal (2026-08-02),
+# distinct from the specific downstream alerts already built (instrument
+# resolution failures, position reconciliation, membership staleness) and
+# from the existing last_full_refresh-staleness-based OVERDUE badge, which
+# only ever infers a problem from an old timestamp.
+# ---------------------------------------------------------------------------
+
+def test_record_and_read_eod_completion_round_trips(db_engine):
+    from datetime import date as _date
+    scheduler._record_eod_completion(
+        "COMPLETED", _date(2026, 8, 4), price_pull_ran=True, order_pipeline_ran=True,
+    )
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["date"] == "2026-08-04"
+    assert status["price_pull_ran"] is True
+    assert status["order_pipeline_ran"] is True
+    assert "recorded_at" in status
+
+
+def test_get_eod_completion_status_none_when_never_recorded(db_engine):
+    assert scheduler.get_eod_completion_status() is None
+
+
+def test_record_eod_completion_never_raises_on_db_failure(db_engine, mocker):
+    mocker.patch("data.scheduler.set_metadata", side_effect=RuntimeError("db down"))
+    from datetime import date as _date
+    scheduler._record_eod_completion("COMPLETED", _date(2026, 8, 4))  # must not raise
+
+
+def test_eod_job_records_completed_on_the_normal_path(db_engine, monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))  # ordinary trading Tuesday
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["price_pull_ran"] is True
+    assert status["order_pipeline_ran"] is True
+    assert status["snapshot_ran"] is True
+
+
+def test_eod_job_records_noop_on_a_non_trading_window(db_engine, monkeypatch, mocker):
+    """A pathological >10-day closure -- neither today nor any of the next
+    10 days is a trading day. Confirmed via a real, unmocked forward scan
+    landing genuinely outside NYSE's actual holiday calendar depth by
+    directly monkeypatching _has_upcoming_trading_day itself, since a real
+    10-day NYSE gap essentially never occurs and isn't worth constructing."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    monkeypatch.setattr(scheduler, "_is_scheduled_trading_day", lambda d: False)
+    monkeypatch.setattr(scheduler, "_has_upcoming_trading_day", lambda d: False)
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "NOOP_NOT_A_TRADING_WINDOW"
+
+
+def test_eod_job_records_failed_when_pull_incremental_raises(db_engine, monkeypatch, mocker):
+    """The core case this signal exists for: an unhandled exception escapes
+    a step that was NOT individually wrapped in its own try/except at the
+    _eod_job() level (pull_incremental() itself) -- before this feature,
+    this would silently kill the job with no explicit record anywhere."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", side_effect=RuntimeError("yfinance is down"))
+    mock_pipeline = mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "FAILED"
+    assert "yfinance is down" in status["error"]
+    assert status["price_pull_ran"] is False
+    # The job must genuinely stop, not limp forward -- neither the order
+    # pipeline nor the account snapshot should have run after the crash.
+    mock_pipeline.assert_not_called()
+    mock_snap.assert_not_called()
+
+
+def test_eod_job_records_failed_when_order_pipeline_raises(db_engine, monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline", side_effect=RuntimeError("boom"))
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "FAILED"
+    assert status["price_pull_ran"] is True  # the pull itself succeeded before the crash
+    assert status["order_pipeline_ran"] is False
+    mock_snap.assert_not_called()
+
+
+def test_eod_job_completed_even_when_only_the_snapshot_step_fails(db_engine, monkeypatch, mocker):
+    """The T212 snapshot fetch is already individually wrapped in its own
+    try/except inside _eod_job() -- a failure there must still record an
+    overall COMPLETED verdict (with snapshot_ran=False), not FAILED, since
+    the actual trading-relevant work (price pull + order pipeline) did
+    complete."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot", side_effect=RuntimeError("t212 api down"))
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["order_pipeline_ran"] is True
+    assert status["snapshot_ran"] is False
+    assert "t212 api down" in status["snapshot_error"]

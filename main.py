@@ -748,6 +748,69 @@ def _value_history_chart(rows: list[dict]) -> go.Figure:
     return _apply_dark_theme(fig)
 
 
+def _render_eod_status_badge() -> None:
+    """A direct, unmissable "did tonight's EOD job actually run to
+    completion" signal (2026-08-02) — distinct from and in addition to the
+    specific downstream alerts already built (instrument resolution
+    failures, position reconciliation, membership staleness) and from the
+    Status page's existing last_full_refresh-staleness-based OVERDUE
+    badge, which only ever infers a problem from an old timestamp rather
+    than stating a direct verdict for the most recent run. Placed at the
+    very top of the Dashboard page — the default landing page — so it's
+    genuinely checkable first thing each morning, not something a reader
+    has to know to go looking for on the Status page.
+
+    Read from data.scheduler.get_eod_completion_status() (system_metadata
+    key "eod_completion", written by _eod_job() itself). Never raises —
+    an inability to read this signal must not break the rest of the
+    Dashboard page.
+
+    Staleness is checked explicitly, not trusted blindly — the job now
+    fires every single day (even a non-trading day records a genuine
+    NOOP_NOT_A_TRADING_WINDOW verdict, see _eod_job()'s own docstring), so
+    a healthy system always has a record less than ~30 hours old. Without
+    this check, a scheduler that had been down for days would still show
+    yesterday's — or last week's — green "✅ completed" verdict, silently
+    reading as fresh when it is not: exactly the "plausible-looking but
+    wrong" failure mode this signal exists to avoid, not reproduce.
+    """
+    from datetime import datetime as _dt
+    from data.scheduler import get_eod_completion_status
+
+    try:
+        status = get_eod_completion_status()
+    except Exception:
+        status = None
+
+    if status is None:
+        st.warning("⚪ **EOD status:** no run recorded yet.")
+        return
+
+    when = status.get("date", "?")
+    recorded_at_raw = status.get("recorded_at")
+    age_hours = None
+    if recorded_at_raw:
+        try:
+            age_hours = (_dt.utcnow() - _dt.fromisoformat(recorded_at_raw)).total_seconds() / 3600.0
+        except (ValueError, TypeError):
+            age_hours = None
+
+    if age_hours is not None and age_hours > 30:
+        st.warning(
+            f"⚠️ **EOD status is stale** — last recorded {age_hours:.0f}h ago ({when}, "
+            f"{status['status']}). The scheduler may not have run recently — check the Status page."
+        )
+        return
+
+    if status["status"] == "COMPLETED":
+        pull = "price pull ran" if status.get("price_pull_ran") else "price pull skipped (non-trading day)"
+        st.success(f"✅ **EOD {when}: completed** — {pull}, order pipeline ran.")
+    elif status["status"] == "FAILED":
+        st.error(f"❌ **EOD {when}: FAILED** — {status.get('error', 'unknown error')}")
+    else:  # NOOP_NOT_A_TRADING_WINDOW
+        st.info(f"⚪ **EOD {when}: skipped** — not a trading window (expected, not an error).")
+
+
 def _render_dashboard_page(config: dict) -> None:
     """Render the Dashboard: account balance, account-value history, top
     winning/losing closed trades, the queued-candidate list, and
@@ -758,6 +821,7 @@ def _render_dashboard_page(config: dict) -> None:
     account-level overview, not per-position or per-ticker detail."""
     _render_page_wordmark("Dashboard")
     st.markdown("## Dashboard")
+    _render_eod_status_badge()
 
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):

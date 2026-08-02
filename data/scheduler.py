@@ -523,6 +523,39 @@ def _monday_premarket_job() -> None:
     _run_analysis_pipeline(config, get_all_tickers(config), run_type=RUN_ANALYSIS_ONLY)
 
 
+_EOD_COMPLETION_KEY = "eod_completion"
+
+
+def _record_eod_completion(status: str, run_date: date, **details) -> None:
+    """Write a definitive, directly-checkable verdict for tonight's EOD run
+    to system_metadata under _EOD_COMPLETION_KEY — status is one of
+    COMPLETED / FAILED / NOOP_NOT_A_TRADING_WINDOW. This is the "did EOD
+    actually run" signal (2026-08-02): distinct from the specific
+    downstream alerts already built (instrument-resolution failures,
+    position reconciliation, membership staleness) and from the existing
+    last_full_refresh-staleness-based OVERDUE badge, which only ever
+    infers a problem from an old timestamp rather than stating a direct
+    verdict for the most recent run. Never raises — a failure to record
+    this signal must never mask whatever the real EOD outcome was.
+    """
+    try:
+        payload = {"status": status, "date": run_date.isoformat(),
+                   "recorded_at": datetime.utcnow().isoformat(), **details}
+        set_metadata(_EOD_COMPLETION_KEY, json.dumps(payload))
+    except Exception as exc:
+        logger.warning("Could not record EOD completion status: %s", exc)
+
+
+def get_eod_completion_status() -> "dict | None":
+    """Read back the most recent _record_eod_completion() payload, or None
+    if the EOD job has never run since this feature shipped. Never raises."""
+    try:
+        raw = get_metadata_str(_EOD_COMPLETION_KEY)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
 def _eod_job() -> None:
     """Daily, 21:30 UTC — market-calendar-gated (2026-08-02), not a Mon-Fri
     cron filter. Two independently-gated steps, not one combined gate:
@@ -568,6 +601,10 @@ def _eod_job() -> None:
             "EOD job — %s is not a trading day and no trading day falls in the "
             "next 10 days — nothing to do.", today_utc,
         )
+        _record_eod_completion(
+            "NOOP_NOT_A_TRADING_WINDOW", today_utc,
+            today_is_trading_day=today_is_trading_day, should_queue_candidates=should_queue_candidates,
+        )
         return
 
     logger.info("Scheduled end-of-day refresh starting (21:30 UTC)…")
@@ -576,64 +613,97 @@ def _eod_job() -> None:
         set_metadata("last_scheduled_run_name", "End of Day")
     except Exception as _exc:
         logger.warning("Could not stamp last_scheduled_run: %s", _exc)
-    config = _load_config()
 
-    if today_is_trading_day:
-        ticker_exchange = _build_ticker_exchange_map(config)
-        unique_exchanges = set(ticker_exchange.values())
-        open_exchanges: dict[str, bool] = {
-            exch: _is_exchange_open(exch, today_utc)
-            for exch in unique_exchanges
-        }
-
-        open_tickers:    list[str] = []
-        skipped_tickers: list[str] = []
-        for ticker, exchange in ticker_exchange.items():
-            if ticker in _ALWAYS_PULL or exchange in _ALWAYS_OPEN_EXCHANGES or open_exchanges[exchange]:
-                open_tickers.append(ticker)
-            else:
-                logger.info("Skipping %s — %s closed today (%s).", ticker, exchange, today_utc)
-                skipped_tickers.append(ticker)
-
-        if open_tickers:
-            logger.info(
-                "EOD refresh — pulling %d assets (%d skipped, market closed).",
-                len(open_tickers), len(skipped_tickers),
-            )
-            results = pull_incremental(tickers=open_tickers)
-            total_rows = sum(results.values())
-            logger.info("Data pull complete — %d new rows across %d assets.", total_rows, len(open_tickers))
-
-            try:
-                set_metadata("last_full_refresh", datetime.utcnow().isoformat())
-            except Exception as exc:
-                logger.warning("Could not stamp last_full_refresh: %s", exc)
-
-            try:
-                set_metadata("last_pull_rows", str(total_rows))
-                set_metadata("last_pull_ticker_count", str(len([v for v in results.values() if v > 0])))
-            except Exception as exc:
-                logger.warning("Could not stamp last_pull_rows: %s", exc)
-        else:
-            logger.info("All markets closed today (%s) — skipping data pull.", today_utc)
-    else:
-        logger.info(
-            "EOD job — %s is not a scheduled NYSE trading day; skipping the price "
-            "pull, still running candidate selection for the upcoming trading day.",
-            today_utc,
-        )
-
-    run_type = RUN_FULL if should_queue_candidates else RUN_ANALYSIS_ONLY
-    _run_analysis_pipeline(config, get_all_tickers(config), run_type)
-
+    # A direct "did tonight's EOD job actually run to completion" signal
+    # (2026-08-02) — distinct from and in addition to the specific
+    # downstream alerts already built (instrument-resolution failures,
+    # position reconciliation, membership staleness). Everything below
+    # this point already has its own internal try/except per step, but
+    # nothing at the OUTER level previously recorded a definitive
+    # COMPLETED/FAILED verdict for the run as a whole — an unhandled
+    # exception escaping pull_incremental() or _run_analysis_pipeline()
+    # itself (neither wrapped at this level) would silently kill the job
+    # with no explicit record anywhere, only the ABSENCE of a fresh
+    # last_full_refresh stamp for a caller to infer from. This wraps the
+    # whole body in one outer try/except purely to make that verdict
+    # explicit and checkable first thing each morning — it does not change
+    # any individual step's own existing error handling.
+    details: dict = {
+        "today_is_trading_day": today_is_trading_day,
+        "should_queue_candidates": should_queue_candidates,
+        "price_pull_ran": False, "price_pull_rows": None,
+        "order_pipeline_ran": False, "snapshot_ran": False,
+    }
     try:
-        # record_history=True (2026-08-02) — only this call, the EOD job's
-        # own daily snapshot, also records a dated account_value_history
-        # row. See _fetch_t212_snapshot()'s and AccountValueHistory's own
-        # docstrings for why the dispatcher/hourly calls below don't.
-        _fetch_t212_snapshot(config, record_history=True)
+        config = _load_config()
+
+        if today_is_trading_day:
+            ticker_exchange = _build_ticker_exchange_map(config)
+            unique_exchanges = set(ticker_exchange.values())
+            open_exchanges: dict[str, bool] = {
+                exch: _is_exchange_open(exch, today_utc)
+                for exch in unique_exchanges
+            }
+
+            open_tickers:    list[str] = []
+            skipped_tickers: list[str] = []
+            for ticker, exchange in ticker_exchange.items():
+                if ticker in _ALWAYS_PULL or exchange in _ALWAYS_OPEN_EXCHANGES or open_exchanges[exchange]:
+                    open_tickers.append(ticker)
+                else:
+                    logger.info("Skipping %s — %s closed today (%s).", ticker, exchange, today_utc)
+                    skipped_tickers.append(ticker)
+
+            if open_tickers:
+                logger.info(
+                    "EOD refresh — pulling %d assets (%d skipped, market closed).",
+                    len(open_tickers), len(skipped_tickers),
+                )
+                results = pull_incremental(tickers=open_tickers)
+                total_rows = sum(results.values())
+                logger.info("Data pull complete — %d new rows across %d assets.", total_rows, len(open_tickers))
+                details["price_pull_ran"] = True
+                details["price_pull_rows"] = total_rows
+
+                try:
+                    set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+                except Exception as exc:
+                    logger.warning("Could not stamp last_full_refresh: %s", exc)
+
+                try:
+                    set_metadata("last_pull_rows", str(total_rows))
+                    set_metadata("last_pull_ticker_count", str(len([v for v in results.values() if v > 0])))
+                except Exception as exc:
+                    logger.warning("Could not stamp last_pull_rows: %s", exc)
+            else:
+                logger.info("All markets closed today (%s) — skipping data pull.", today_utc)
+        else:
+            logger.info(
+                "EOD job — %s is not a scheduled NYSE trading day; skipping the price "
+                "pull, still running candidate selection for the upcoming trading day.",
+                today_utc,
+            )
+
+        run_type = RUN_FULL if should_queue_candidates else RUN_ANALYSIS_ONLY
+        _run_analysis_pipeline(config, get_all_tickers(config), run_type)
+        details["order_pipeline_ran"] = True
+
+        try:
+            # record_history=True (2026-08-02) — only this call, the EOD job's
+            # own daily snapshot, also records a dated account_value_history
+            # row. See _fetch_t212_snapshot()'s and AccountValueHistory's own
+            # docstrings for why the dispatcher/hourly calls below don't.
+            _fetch_t212_snapshot(config, record_history=True)
+            details["snapshot_ran"] = True
+        except Exception as exc:
+            logger.error("T212 snapshot fetch after EOD failed: %s", exc)
+            details["snapshot_error"] = str(exc)
     except Exception as exc:
-        logger.error("T212 snapshot fetch after EOD failed: %s", exc)
+        logger.error("EOD job failed with an unhandled exception: %s", exc, exc_info=True)
+        _record_eod_completion("FAILED", today_utc, error=str(exc), **details)
+        return
+
+    _record_eod_completion("COMPLETED", today_utc, **details)
 
 
 def _trade_alert_job() -> None:
