@@ -32,7 +32,6 @@ from typing import Optional
 
 def evaluate_exit_reason(
     *,
-    is_member: Optional[bool],
     crisis_now: Optional[bool],
     price: Optional[float],
     stop_price: Optional[float],
@@ -44,24 +43,39 @@ def evaluate_exit_reason(
     currently calls for exit. Priority order (first match wins), matching
     the validated backtest exactly:
 
-        1. CRISIS_EXIT   — today is a raw (>=7%) S&P 500 crisis day
-        2. INDEX_REMOVAL — no longer a genuine index member (never true
-                            for an ETF — is_member already folds that in,
-                            see analysis/universe.py:is_member()'s ETF
-                            short-circuit)
-        3. STOP_LOSS     — price has reached the ATR stop fixed at entry
-        4. SIGNAL_OFF    — trailing 12-month momentum has turned non-positive
-        5. MAX_HOLDING   — the per-ticker holding-days backstop is reached
+        1. CRISIS_EXIT — today is a raw (>=7%) S&P 500 crisis day
+        2. STOP_LOSS   — price has reached the ATR stop fixed at entry
+        3. SIGNAL_OFF  — trailing 12-month momentum has turned non-positive
+        4. MAX_HOLDING — the per-ticker holding-days backstop is reached
 
-    `is_member`/`sig_on`/`crisis_now` of False specifically (not merely
-    falsy) is what triggers INDEX_REMOVAL/SIGNAL_OFF/(crisis is checked as
-    `is True`) — None is treated as "unknown, don't trigger this check",
-    never as an affirmative trigger.
+    `sig_on`/`crisis_now` of False specifically (not merely falsy) is what
+    triggers SIGNAL_OFF/(crisis is checked as `is True`) — None is treated
+    as "unknown, don't trigger this check", never as an affirmative trigger.
+
+    Index membership is deliberately NOT an exit trigger here (removed
+    2026-08-02 — see CLAUDE.md's "let momentum, not index removal, govern
+    already-open positions" section). Membership still gates what can be
+    newly OPENED (passes_entry_gate() below, unaffected by this change) —
+    but once a position is open, a ticker leaving the S&P 500 is a fact
+    about the INDEX, not about the ticker's own trading behaviour, and is
+    no different in kind from every other reason this system deliberately
+    doesn't act on (no take-profit, no position-size cap): closing a
+    genuinely winning position for a reason unrelated to its own momentum,
+    stop, or holding period contradicts the "let winners run" principle
+    every other exit rule here already follows. An already-open position
+    is now governed purely by its own trading behaviour — crisis, stop,
+    signal, holding period — never by whether the index itself still lists
+    it. A real 2026-08-02 investigation of every historical INDEX_REMOVAL
+    exit (2007-2026, real membership history + real price data) found this
+    was not a rare edge case: 91% of those exits had genuinely positive —
+    often strongly rising — momentum at the moment of forced closure, i.e.
+    SIGNAL_OFF would NOT have already produced the same outcome. Genuine
+    delisting/bankruptcy/acquisition is a different situation, handled by
+    reconcile_positions_with_broker() (brokers/trading212.py) regardless of
+    index membership status — untouched by this change.
     """
     if crisis_now is True:
         return "CRISIS_EXIT"
-    if is_member is False:
-        return "INDEX_REMOVAL"
     if stop_price is not None and price is not None and price <= stop_price:
         return "STOP_LOSS"
     if sig_on is False:

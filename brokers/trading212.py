@@ -1725,9 +1725,12 @@ def maybe_exit_positions(config: dict) -> None:
             # output/performance.py's display path. See CLAUDE.md's
             # "Live/backtest decision-logic parity" section for why this is
             # a shared function rather than an independently hand-written
-            # copy of the same if/elif chain.
+            # copy of the same if/elif chain. Membership (state["is_member"])
+            # is deliberately not passed here — it no longer participates in
+            # exit decisions (see evaluate_exit_reason()'s own docstring);
+            # it still gates NEW entries in maybe_place_orders() below.
             exit_reason = evaluate_exit_reason(
-                is_member=state["is_member"], crisis_now=state["crisis_now"],
+                crisis_now=state["crisis_now"],
                 price=state["price"], stop_price=stop_price, sig_on=state["sig_on"],
                 holding_days=holding_days, max_holding_days=max_hold,
             )
@@ -1889,6 +1892,16 @@ def _locally_believed_open_positions() -> dict[str, dict]:
     except Exception as exc:
         logger.warning("_locally_believed_open_positions: query failed: %s", exc)
         return {}
+
+
+def get_held_research_tickers() -> set[str]:
+    """Every research ticker (not t212_ticker) this system's own order
+    history implies is currently held — a thin, public wrapper around
+    _locally_believed_open_positions() so other modules (data/ingestion.py's
+    price-pull ticker list) can reuse the exact same "what do we believe is
+    open" query rather than re-deriving it. Never raises (the underlying
+    query already isn't); returns an empty set on any failure."""
+    return {v["ticker"] for v in _locally_believed_open_positions().values()}
 
 
 def _most_recent_sell_order_since(t212_ticker: str, since: Optional[str]) -> Optional[dict]:

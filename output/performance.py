@@ -223,21 +223,25 @@ def get_brief_cards(
         # against a zero/missing live quote incorrectly reading as a
         # STOP_LOSS breach (0 <= any positive stop_price) -- passed as
         # price=None in that case so the shared function's own "unknown,
-        # don't trigger" handling applies.
+        # don't trigger" handling applies. `is_member` is NOT passed to
+        # evaluate_exit_reason() -- membership no longer affects an
+        # already-open position's exit status (see that function's own
+        # docstring) -- it is still surfaced on the card below as
+        # "current_is_member" for informational display only.
         price_for_stop_check = current_price if current_price > 0 else None
         exit_reason = evaluate_exit_reason(
-            is_member=is_member, crisis_now=crisis_now,
+            crisis_now=crisis_now,
             price=price_for_stop_check, stop_price=stop_price, sig_on=sig_on,
             holding_days=days_held, max_holding_days=max_hold,
         )
         status = {
-            "CRISIS_EXIT": "CRISIS EXIT", "INDEX_REMOVAL": "INDEX REMOVAL",
+            "CRISIS_EXIT": "CRISIS EXIT",
             "STOP_LOSS": "STOP LOSS", "SIGNAL_OFF": "SIGNAL OFF",
             "MAX_HOLDING": "MAX HOLDING",
         }.get(exit_reason, "ON TRACK")
 
         status_priority = {
-            "CRISIS EXIT": 4, "INDEX REMOVAL": 3, "STOP LOSS": 3,
+            "CRISIS EXIT": 4, "STOP LOSS": 3,
             "SIGNAL OFF": 2, "MAX HOLDING": 1, "ON TRACK": 0,
         }[status]
 

@@ -102,10 +102,14 @@ def test_crisis_blocks_new_entries_during_cooldown():
         assert not (0 <= gap <= 5), f"entry at {t['entry_date']} falls inside the post-crisis cooldown"
 
 
-def test_index_removal_force_exits_a_stock_position(mocker):
-    """A stock whose S&P 500 membership ends mid-holding must be
-    force-exited that day via INDEX_REMOVAL, mirroring the AMD/Beiersdorf
-    gap already verified in the research clone."""
+def test_index_removal_no_longer_force_exits_an_already_open_stock_position(mocker):
+    """Changed 2026-08-02 (see analysis/decision.py:evaluate_exit_reason()'s
+    own docstring) -- a stock whose S&P 500 membership ends mid-holding is
+    NO LONGER force-exited on that account. Momentum stays on and price
+    keeps rising the whole way through, so the position must ride straight
+    past the removal date and close on its own MAX_HOLDING backstop (30
+    trading days by default), exactly as if membership had never changed --
+    membership now only gates what can be newly OPENED."""
     n = 100
     dates = pd.date_range("2020-01-01", periods=n, freq="D")
     close = pd.Series([100.0 + i * 0.1 for i in range(n)], index=dates)
@@ -122,18 +126,35 @@ def test_index_removal_force_exits_a_stock_position(mocker):
 
     trades = v2b.simulate_trades(frame, "SOMESTOCK", _CONFIG, _flat_gspc(n), is_etf=False)
     assert trades
-    assert trades[0]["exit_reason"] == "INDEX_REMOVAL"
-    assert trades[0]["exit_date"] == removal_date
+    assert trades[0]["exit_reason"] == "MAX_HOLDING"
+    assert trades[0]["exit_date"] > removal_date
+    assert trades[0]["holding_days"] == 30
+
+
+def test_non_member_ticker_still_cannot_be_newly_entered(mocker):
+    """Membership is unaffected as an ENTRY gate by the 2026-08-02 change --
+    a stock that is never a genuine index member must never open a
+    position at all, regardless of how positive its momentum signal is."""
+    n = 60
+    frame = _frame(n=n, signal_always_on=True)
+    mocker.patch.object(v2u, "is_member", return_value=False)
+
+    trades = v2b.simulate_trades(frame, "NOTAMEMBER", _CONFIG, _flat_gspc(n), is_etf=False)
+    assert trades == []
 
 
 def test_etf_never_gated_by_membership_even_if_is_member_would_say_no(mocker):
-    """is_etf=True must bypass the membership check entirely -- an ETF
-    trade should never see INDEX_REMOVAL."""
+    """is_etf=True must bypass the membership check entirely for ENTRY
+    purposes. INDEX_REMOVAL itself no longer exists as an exit reason at
+    all (removed 2026-08-02) for any ticker, ETF or stock -- this
+    assertion is now trivially true everywhere, kept as a direct
+    regression guard against that string ever reappearing."""
     n = 60
     frame = _frame(n=n, signal_always_on=True)
     mocker.patch.object(v2u, "is_member", return_value=False)
 
     trades = v2b.simulate_trades(frame, "VOO", _CONFIG, _flat_gspc(n), is_etf=True)
+    assert trades  # entered despite is_member=False, since is_etf bypasses the entry check
     assert all(t["exit_reason"] != "INDEX_REMOVAL" for t in trades)
 
 

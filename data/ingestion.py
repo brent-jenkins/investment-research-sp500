@@ -29,8 +29,8 @@ def _load_config() -> dict:
 
 
 def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
-    """Return one dict per tracked asset, uniform shape, from both
-    monitoring-only and tradeable sources:
+    """Return one dict per tracked asset, uniform shape, from three
+    sources:
 
     - `reference_tickers:` (^GSPC, GBPUSD=X, EURUSD=X) -- ticker/name/
       exchange only; these never have an execution mapping.
@@ -41,6 +41,18 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
       candidate. pull_incremental() already does a full-history fetch the
       first time a ticker has no stored data at all, so a brand-new index
       entrant needs nothing beyond appearing in this list.
+    - Every ticker with a currently-open position (brokers/trading212.py:
+      get_held_research_tickers()), regardless of today's membership
+      status. Without this, a held ticker that drops out of the live
+      candidate pool the moment it loses S&P 500 membership would also
+      drop out of THIS list -- silently starving pull_incremental() of
+      that ticker, so its price data (and therefore its momentum signal)
+      would stop updating entirely for as long as the position stays
+      open. That would make "let momentum, not index removal, govern an
+      already-open position" (see analysis/decision.py) unimplementable:
+      there would be nothing to compute momentum from. A ticker can be
+      in this set and NOT in get_live_stock_candidates() at the same
+      time -- that is exactly the case this merge exists for.
 
     Callers that only need the ticker symbols should use get_all_tickers()
     below; callers that need name/exchange should use this directly.
@@ -49,18 +61,28 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
         config = _load_config()
 
     entries: list[dict] = [dict(e) for e in config.get("reference_tickers", [])]
+    already = {e["ticker"] for e in entries}
 
     # Best-effort: a DB not yet initialised (very first startup, before
     # init_db() has run) must not break the merge for callers that only
     # need reference_tickers.
     try:
         from analysis.universe import get_live_stock_candidates
-        already = {e["ticker"] for e in entries}
         for ticker in get_live_stock_candidates():
             if ticker not in already:
                 entries.append({"ticker": ticker, "name": ticker, "exchange": "NYSE"})
+                already.add(ticker)
     except Exception as exc:
         logger.warning("Could not load live stock candidates for price ingestion: %s", exc)
+
+    try:
+        from brokers.trading212 import get_held_research_tickers
+        for ticker in get_held_research_tickers():
+            if ticker not in already:
+                entries.append({"ticker": ticker, "name": ticker, "exchange": "NYSE"})
+                already.add(ticker)
+    except Exception as exc:
+        logger.warning("Could not load held-position tickers for price ingestion: %s", exc)
 
     return entries
 

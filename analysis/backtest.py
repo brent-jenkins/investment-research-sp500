@@ -310,8 +310,11 @@ def simulate_trades(
         # brokers/trading212.py, simulate_portfolio(),
         # simulate_portfolio_compounding(), and output/performance.py. See
         # CLAUDE.md's "Live/backtest decision-logic parity" section.
+        # `is_member` is not passed here (2026-08-02) — membership no
+        # longer governs an already-open position's exit; it is still
+        # used above for this same row's entry gate.
         exit_reason = evaluate_exit_reason(
-            is_member=is_member, crisis_now=crisis_now, price=price,
+            crisis_now=crisis_now, price=price,
             stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
             max_holding_days=max_hold,
         )
@@ -538,9 +541,6 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
             row = st["rows"][dt]
             price = float(row["close"])
             sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
-            is_member = st["is_etf"] or universe.is_member(
-                ticker, dt.date() if hasattr(dt, "date") else dt
-            )
             crisis_now = bool(st["raw_crisis"].loc[dt])
 
             entry_price = ot["entry_price"]
@@ -548,9 +548,12 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
             holding_days = (dt - ot["entry_date"]).days
 
             # Shared exit-priority function — see simulate_trades()'s
-            # identical comment above.
+            # identical comment above. Membership is not computed here at
+            # all (2026-08-02) — it no longer participates in an
+            # already-open position's exit; Phase B below still computes
+            # its own is_member for entry-gate purposes.
             exit_reason = evaluate_exit_reason(
-                is_member=is_member, crisis_now=crisis_now, price=price,
+                crisis_now=crisis_now, price=price,
                 stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
                 max_holding_days=st["max_hold"],
             )
@@ -1001,9 +1004,6 @@ def simulate_portfolio_compounding(
             row = st["rows"][dt]
             price = float(row["close"])
             sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
-            is_member = st["is_etf"] or universe.is_member(
-                ticker, dt.date() if hasattr(dt, "date") else dt
-            )
             crisis_now = bool(st["raw_crisis"].loc[dt])
 
             entry_price = ot["entry_price"]
@@ -1011,9 +1011,12 @@ def simulate_portfolio_compounding(
             holding_days = (dt - ot["entry_date"]).days
 
             # Shared exit-priority function — see simulate_trades()'s
-            # identical comment above.
+            # identical comment above. Membership is not computed here at
+            # all (2026-08-02) — it no longer participates in an
+            # already-open position's exit; the admission helper above
+            # still computes its own is_member for entry-gate purposes.
             exit_reason = evaluate_exit_reason(
-                is_member=is_member, crisis_now=crisis_now, price=price,
+                crisis_now=crisis_now, price=price,
                 stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
                 max_holding_days=st["max_hold"],
             )
@@ -1378,17 +1381,18 @@ def simulate_portfolio_compounding_mtm(
             if ot is None:
                 continue
             sig_on = bool(row["signal"]) if pd.notna(row["signal"]) else False
-            is_member = st["is_etf"] or universe.is_member(
-                ticker, dt.date() if hasattr(dt, "date") else dt
-            )
             crisis_now = bool(st["raw_crisis"].loc[dt])
 
             entry_price = ot["entry_price"]
             stop_price = ot["stop_price"]
             holding_days = (dt - ot["entry_date"]).days
 
+            # Membership is not computed here at all (2026-08-02) — it no
+            # longer participates in an already-open position's exit; the
+            # admission helper for this group still computes its own
+            # is_member for entry-gate purposes.
             exit_reason = evaluate_exit_reason(
-                is_member=is_member, crisis_now=crisis_now, price=price,
+                crisis_now=crisis_now, price=price,
                 stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
                 max_holding_days=st["max_hold"],
             )

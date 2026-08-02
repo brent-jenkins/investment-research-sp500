@@ -6505,6 +6505,122 @@ and 3 new tests in `tests/test_scheduler.py` (wiring, and that a
 reconciliation failure doesn't block the exit check or snapshot refresh
 sharing its hourly slot). Full suite: 429 passing.
 
+### Let momentum, not index removal, govern already-open positions (2026-08-02)
+
+`INDEX_REMOVAL` sat second in `evaluate_exit_reason()`'s exit-priority
+chain, above `STOP_LOSS`/`SIGNAL_OFF` — meaning a genuinely winning
+position was force-closed the moment its ticker lost S&P 500 membership,
+for a reason unrelated to its own trading behaviour. Inconsistent with
+this system's own "no take-profit, no position-size cap, let winners run"
+philosophy elsewhere. **Scope, precisely: this only ever concerns "removed
+from the index but still a real, actively-traded, listed company."**
+Genuine delisting/acquisition/bankruptcy is a different situation, already
+handled by `reconcile_positions_with_broker()` (see "Live position
+reconciliation" above) regardless of index status — untouched by this
+change.
+
+**Part A — a real, confirmed dependency, fixed first.** `data/ingestion.py:
+get_all_watchlist_entries()` (the source of the daily price-pull ticker
+list) merged `reference_tickers` with `analysis.universe.
+get_live_stock_candidates()` only — the membership-gated live candidate
+pool. A ticker that lost membership would drop out of that pool and
+therefore out of the price-pull list entirely, silently starving
+`pull_incremental()` of updates for it — making momentum impossible to
+compute for an already-open position the moment it lost membership. This
+would have made the rest of this change unimplementable. Fixed: a new
+`brokers/trading212.py:get_held_research_tickers()` (a thin public wrapper
+around the existing `_locally_believed_open_positions()` query — reused,
+not duplicated) is now also merged into `get_all_watchlist_entries()`,
+regardless of today's membership status. A deferred (function-body, not
+module-level) import is used on both sides to avoid a circular import
+between `data/ingestion.py` and `brokers/trading212.py` (which already
+imports `get_price_df` from `data.ingestion` at module level).
+
+**Part A2 — checked against real historical data before assuming
+rarity.** Reconstructed the real S&P 500 membership history directly from
+the same source `analysis/universe.py` uses (`fja05680/sp500`, full
+1996–2026 CSV) and found every genuine removal event between 2007-01-01
+and 2026-06-30 (457 events, ~448 distinct tickers). For each, re-ran the
+actual production backtest engine (`analysis.backtest.simulate_trades()`,
+`analysis.decision.evaluate_exit_reason()` unmodified at the time of the
+check) against real Yahoo Finance price history to see whether the
+strategy would genuinely have had an open position at the moment of
+removal, and what momentum showed. 285 of 448 tickers (64%) had no usable
+price history at all (long-delisted symbols Yahoo no longer serves) — of
+the 163 with usable data, 34 produced a real `INDEX_REMOVAL` exit (33
+within the 2007–2026 window). **Result: 30 of 33 (91%) had genuinely
+positive momentum at the moment of forced closure — 20 of those were
+actively *rising*, not just marginally positive (momentum up to +347%,
+median +24%).** Only 3 were already negative/off, the case where
+`SIGNAL_OFF` would have already produced the same outcome regardless.
+This refuted the working hypothesis that most removals follow sustained
+weakness — the opposite was true. Recognizable examples of a healthy,
+rising position force-closed purely by `INDEX_REMOVAL`: BMC Software
+(+347%), T-Mobile US (+67%), CIEN (+69%), Andeavor (+49%), Molex (+46%).
+Many of these are acquisition-driven removals (a company bought at a
+premium pops in price, then leaves the index as the deal closes) — a
+common, legitimate removal pathway, not an anomaly in the sample.
+
+**Part B — the decision-logic change.** `analysis/decision.py:
+evaluate_exit_reason()` no longer accepts an `is_member` parameter at
+all, and no longer checks membership anywhere in its priority chain —
+which is now CRISIS_EXIT → STOP_LOSS → SIGNAL_OFF → MAX_HOLDING only.
+`passes_entry_gate()` is completely unchanged — membership still gates
+every new entry, including re-entry into a ticker whose prior position
+has since fully exited. All 5 call sites (`brokers/trading212.py:
+maybe_exit_positions()`; `analysis/backtest.py`'s four simulation engines
+— `simulate_trades()`, `simulate_portfolio()`, `simulate_portfolio_
+compounding()`, `simulate_portfolio_compounding_mtm()`; `output/
+performance.py:get_brief_cards()`'s display path) had their `is_member=`
+keyword argument removed from the `evaluate_exit_reason()` call — in three
+of `analysis/backtest.py`'s Phase-A (exit) loops, `is_member` was computed
+*solely* for that call and is now removed entirely rather than left as a
+dead, unused local (Phase B's own entry-gate computation of `is_member`,
+a separate call, is unaffected). `output/performance.py`'s status/
+status_priority display dicts had their now-unreachable `"INDEX_REMOVAL"`/
+`"INDEX REMOVAL"` entries removed for the same reason — the card's
+`current_is_member` field itself is kept, purely informational.
+`main.py`'s `_STATUS_COLOURS`/`_STATUS_ICONS` maps were deliberately left
+untouched (harmless dead entries in an untested file — not worth the
+risk of touching more of `main.py` for a cosmetic no-op).
+
+**Confirmed unaffected, not assumed:** `passes_entry_gate()` still
+requires `is_member is True` for any new entry, verified both by reading
+the function (unchanged) and by a new test
+(`test_non_member_ticker_still_cannot_be_newly_entered`).
+`reconcile_positions_with_broker()` (genuine delisting/acquisition
+handling) has zero reference to `is_member`/`evaluate_exit_reason`/
+`analysis.universe` anywhere in its body — confirmed via direct grep — and
+every one of its existing tests (`tests/test_execution.py`'s
+`test_reconcile_*`) passed unchanged, with no modification needed.
+
+**Test coverage.** `tests/test_decision.py`: `evaluate_exit_reason()`
+raises `TypeError` on a stray `is_member=` kwarg (a structural guard
+against the parameter quietly reappearing with a no-op default); a
+position with positive momentum, price above stop, and holding days under
+the limit produces no exit at all. `tests/test_backtest.py`: a stock
+whose membership ends mid-holding, with momentum staying positive, no
+longer force-exits — it rides to its normal `MAX_HOLDING` backstop
+instead; a non-member ticker still cannot be newly entered.
+`tests/test_execution.py`: `maybe_exit_positions()` end-to-end confirms
+`is_member=False` alone (nothing else firing) places no SELL order at
+all, and that `STOP_LOSS`/`SIGNAL_OFF` still fire normally regardless of
+membership; 5 new tests for `get_held_research_tickers()` and the
+`get_all_watchlist_entries()` merge (held-but-non-candidate ticker
+included, no duplication when also a live candidate, empty/closed-position
+cases). `tests/test_live_backtest_parity.py`: replaces the old
+INDEX_REMOVAL parity scenario with one confirming live order placement
+and the backtest engine still agree that a membership-losing position
+rides to `MAX_HOLDING`. `tests/test_performance.py`: `get_brief_cards()`
+shows `"ON TRACK"` (not `"INDEX REMOVAL"`, which no longer exists as a
+possible status) for a non-member ticker with nothing else wrong, while
+`current_is_member` still reports the true membership state; `STOP_LOSS`
+still wins over `SIGNAL_OFF` regardless of membership.
+
+No database write of any kind was needed for this change (pure
+decision-logic + price-pull-list code) — no `.backup` was required.
+Full local suite: **513 passing**, 0 failed.
+
 ### Market-calendar-aware scheduling (2026-08-02)
 
 `scheduled_eod` and `membership_refresh` moved from a Mon-Fri `CronTrigger`

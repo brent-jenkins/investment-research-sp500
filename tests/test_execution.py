@@ -644,19 +644,45 @@ def test_exit_priority_crisis_wins_over_everything(db_engine, v2_mocks, mocker):
     assert row[0] == "CRISIS_EXIT"
 
 
-def test_exit_priority_index_removal_before_stop_and_signal(db_engine, v2_mocks, mocker):
+def test_lost_membership_no_longer_forces_an_exit_on_its_own(db_engine, v2_mocks, mocker):
+    """Changed 2026-08-02 -- is_member=False alone (crisis/stop/signal-off/
+    max-holding all otherwise quiet) must NOT close the position any more.
+    A held ticker that loses S&P 500 membership is still tracked and
+    priced normally; it simply isn't force-exited on that basis. Membership
+    now only gates NEW entries (see maybe_place_orders() tests below)."""
+    _run_exit(
+        db_engine, v2_mocks, mocker,
+        ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        frame=_bullish_frame(),      # positive momentum -- SIGNAL_OFF would not fire
+        stop_price=0.01,             # far below price -- STOP_LOSS would not fire
+        days_ago=1, max_holding_days=30,  # nowhere near MAX_HOLDING
+        is_etf=False, is_member=False,
+        crisis_now=False,
+    )
+    v2_mocks.place_market_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row is None, "no SELL order should ever have been placed for this position"
+
+
+def test_lost_membership_still_exits_normally_once_a_real_exit_condition_fires(db_engine, v2_mocks, mocker):
+    """The flip side of the test above -- losing membership doesn't make a
+    position immune to its OWN normal exit conditions either. STOP_LOSS
+    (checked before SIGNAL_OFF in priority) must still fire exactly as if
+    membership had never changed."""
     _run_exit(
         db_engine, v2_mocks, mocker,
         ticker="AAPL", t212_ticker="AAPL_US_EQ",
         frame=_bearish_frame(),   # would also be SIGNAL_OFF
-        stop_price=99999.0,       # would also be STOP_LOSS
+        stop_price=99999.0,       # guarantees price <= stop_price -- STOP_LOSS fires
         is_etf=False, is_member=False,
         crisis_now=False,
     )
     row = db_engine.connect().execute(sa_text(
         "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
     )).fetchone()
-    assert row[0] == "INDEX_REMOVAL"
+    assert row[0] == "STOP_LOSS"
 
 
 def test_exit_priority_stop_loss_before_signal_off(db_engine, v2_mocks, mocker):
@@ -1999,6 +2025,87 @@ def _reconcile_config(enabled=True) -> dict:
         "trading212_invest": {"enabled": enabled, "live": False},
         "notifications": {"email": {"enabled": False}},
     }
+
+
+# ---------------------------------------------------------------------------
+# get_held_research_tickers() (2026-08-02) -- the public wrapper around
+# _locally_believed_open_positions() that data/ingestion.py's price-pull
+# ticker list now merges in, so a held ticker's price data keeps updating
+# even after it loses S&P 500 membership. See CLAUDE.md's "let momentum,
+# not index removal, govern already-open positions" section.
+# ---------------------------------------------------------------------------
+
+def test_get_held_research_tickers_returns_ticker_for_open_position(db_engine):
+    from brokers.trading212 import get_held_research_tickers
+
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=1.0, days_ago=5, is_etf=False)
+
+    assert get_held_research_tickers() == {"AAPL"}
+
+
+def test_get_held_research_tickers_empty_when_nothing_open(db_engine):
+    from brokers.trading212 import get_held_research_tickers
+
+    assert get_held_research_tickers() == set()
+
+
+def test_get_held_research_tickers_excludes_a_closed_position(db_engine):
+    """A BUY followed by a later FILLED SELL for the same t212_ticker is no
+    longer believed open -- matches _locally_believed_open_positions()'s
+    own semantics exactly, since this is a thin wrapper around it."""
+    from brokers.trading212 import get_held_research_tickers
+
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=1.0, days_ago=10, is_etf=False)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, fill_price, filled_quantity,
+                 status, is_etf, account_type, currency_code, placed_at, filled_at, created_at)
+            VALUES ('AAPL', 'AAPL_US_EQ', 'SELL', 10, 100.0, 10, 'FILLED', 0, 'DEMO', 'USD',
+                    :now, :now, :now)
+        """), {"now": (datetime.utcnow() - timedelta(days=1)).isoformat()})
+
+    assert get_held_research_tickers() == set()
+
+
+def test_get_all_watchlist_entries_includes_held_ticker_no_longer_a_live_candidate(db_engine, mocker):
+    """The critical dependency check (2026-08-02): a ticker with a
+    currently-open position must appear in get_all_watchlist_entries() --
+    and therefore in the daily price-pull ticker list -- even when
+    get_live_stock_candidates() (membership-gated) no longer returns it.
+    Without this, a held ticker's price data (and therefore its momentum
+    signal) would silently stop updating the moment it lost S&P 500
+    membership, making "let momentum, not index removal, govern an
+    already-open position" unimplementable."""
+    from data.ingestion import get_all_watchlist_entries
+
+    _seed_open_position(db_engine, ticker="REMOVEDCO", t212_ticker="REMOVEDCO_US_EQ",
+                         stop_price=1.0, days_ago=5, is_etf=False)
+    # REMOVEDCO deliberately absent -- it just lost membership, so the
+    # live candidate pool no longer includes it.
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL", "MSFT"])
+
+    entries = get_all_watchlist_entries({"reference_tickers": []})
+    tickers = [e["ticker"] for e in entries]
+
+    assert "REMOVEDCO" in tickers
+    assert "AAPL" in tickers and "MSFT" in tickers
+    assert len(tickers) == len(set(tickers))
+
+
+def test_get_all_watchlist_entries_held_ticker_never_duplicated_if_also_a_live_candidate(db_engine, mocker):
+    from data.ingestion import get_all_watchlist_entries
+
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=1.0, days_ago=5, is_etf=False)
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL"])
+
+    entries = get_all_watchlist_entries({"reference_tickers": []})
+    tickers = [e["ticker"] for e in entries]
+
+    assert tickers.count("AAPL") == 1
 
 
 def test_reconcile_disabled_or_missing_creds_is_noop(db_engine, v2_mocks, monkeypatch):

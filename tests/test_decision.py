@@ -17,7 +17,7 @@ from analysis.decision import (
 
 def _exit(**overrides):
     base = dict(
-        is_member=True, crisis_now=False, price=100.0, stop_price=90.0,
+        crisis_now=False, price=100.0, stop_price=90.0,
         sig_on=True, holding_days=1, max_holding_days=30,
     )
     base.update(overrides)
@@ -25,11 +25,34 @@ def _exit(**overrides):
 
 
 def test_crisis_wins_over_everything():
-    assert _exit(crisis_now=True, is_member=False, price=50.0, holding_days=999) == "CRISIS_EXIT"
+    assert _exit(crisis_now=True, price=50.0, holding_days=999) == "CRISIS_EXIT"
 
 
-def test_index_removal_before_stop_and_signal():
-    assert _exit(is_member=False, price=50.0, sig_on=False) == "INDEX_REMOVAL"
+def test_evaluate_exit_reason_has_no_is_member_parameter():
+    """Index membership was removed from the exit-priority chain entirely
+    (2026-08-02, see this function's own docstring) -- membership now
+    ONLY gates new entries (passes_entry_gate() below), never an
+    already-open position's exit. Confirmed structurally, not just by
+    absence of behaviour: passing is_member at all must raise, so a
+    future accidental re-introduction of the parameter (with a default
+    that silently does nothing) can't quietly slip back in unnoticed."""
+    import pytest
+    with pytest.raises(TypeError):
+        evaluate_exit_reason(
+            is_member=False, crisis_now=False, price=100.0, stop_price=90.0,
+            sig_on=True, holding_days=1, max_holding_days=30,
+        )
+
+
+def test_no_exit_regardless_of_membership_when_momentum_stop_and_holding_are_all_fine():
+    """The direct behavioural confirmation of the change: a position with
+    positive momentum, price above its stop, and holding days under the
+    limit produces NO exit -- there is no way to even express "this
+    ticker just lost index membership" to evaluate_exit_reason() any
+    more, so a real-world removal with the position otherwise healthy
+    can never force a close. This is the exact scenario the 2026-08-02
+    historical investigation found in 91% of past INDEX_REMOVAL exits."""
+    assert _exit() is None
 
 
 def test_stop_loss_before_signal_off_and_max_holding():
@@ -60,13 +83,6 @@ def test_none_price_or_stop_never_triggers_stop_loss():
 def test_none_holding_days_or_max_never_triggers_max_holding():
     assert _exit(holding_days=None, max_holding_days=30) is None
     assert _exit(holding_days=999, max_holding_days=None) is None
-
-
-def test_unknown_is_member_none_does_not_trigger_index_removal():
-    """None means "unknown", not "confirmed removed" -- only a definite
-    False triggers INDEX_REMOVAL (matters for output/performance.py's
-    display path, which can have incomplete data for a ticker)."""
-    assert _exit(is_member=None) is None
 
 
 def test_unknown_sig_on_none_does_not_trigger_signal_off():

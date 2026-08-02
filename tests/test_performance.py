@@ -413,7 +413,32 @@ def test_brief_cards_crisis_takes_priority(db_engine, monkeypatch, mocker):
     assert cards[0]["status"] == "CRISIS EXIT"
 
 
-def test_brief_cards_index_removal_before_stop_and_signal(db_engine, monkeypatch, mocker):
+def test_brief_cards_lost_membership_alone_does_not_change_status(db_engine, monkeypatch, mocker):
+    """Changed 2026-08-02 -- membership no longer participates in the live
+    status classification at all (see analysis/decision.py:
+    evaluate_exit_reason()'s own docstring). is_member=False, with the
+    position otherwise healthy, must still read ON TRACK -- "INDEX
+    REMOVAL" no longer exists as a possible status. Membership is still
+    shown on the card (current_is_member), purely informational."""
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    mocker.patch("brokers.trading212.Trading212Client._fx_rates", staticmethod(lambda: (1.27, 1.08)))
+
+    _seed_buy_fill(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=50.0, is_etf=False, days_ago=10)
+    _seed_resolution(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ")
+    _fake_snapshot(mocker, "AAPL_US_EQ", 5, 100.0, 110.0)  # above stop, price rising
+
+    status_rows = [{"ticker": "AAPL", "sig_on": True, "is_member": False, "crisis_now": False}]
+
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
+    assert cards[0]["status"] == "ON TRACK"
+    assert cards[0]["current_is_member"] is False
+
+
+def test_brief_cards_lost_membership_still_shows_stop_loss_when_genuinely_hit(db_engine, monkeypatch, mocker):
+    """The flip side -- losing membership doesn't make a position immune
+    to its own genuine exit conditions either. STOP_LOSS still wins over
+    SIGNAL_OFF exactly as before, unaffected by is_member=False."""
     monkeypatch.setenv("T212_API_KEY", "k")
     monkeypatch.setenv("T212_API_SECRET", "s")
     mocker.patch("brokers.trading212.Trading212Client._fx_rates", staticmethod(lambda: (1.27, 1.08)))
@@ -425,7 +450,7 @@ def test_brief_cards_index_removal_before_stop_and_signal(db_engine, monkeypatch
     status_rows = [{"ticker": "AAPL", "sig_on": False, "is_member": False, "crisis_now": False}]
 
     cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
-    assert cards[0]["status"] == "INDEX REMOVAL"
+    assert cards[0]["status"] == "STOP LOSS"
 
 
 def test_brief_cards_stop_loss_before_signal_off(db_engine, monkeypatch, mocker):

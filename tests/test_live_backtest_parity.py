@@ -433,11 +433,31 @@ def test_exit_parity_max_holding(db_engine, mocker, monkeypatch):
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="MAX_HOLDING")
 
 
-def test_exit_parity_index_removal(db_engine, mocker, monkeypatch):
+def test_exit_parity_lost_membership_no_longer_forces_exit_rides_to_max_holding(db_engine, mocker, monkeypatch):
+    """Changed 2026-08-02 (see analysis/decision.py:evaluate_exit_reason()'s
+    own docstring, CLAUDE.md's "let momentum, not index removal, govern
+    already-open positions" section) -- index membership no longer
+    participates in an already-open position's exit decision at all. This
+    replaces the old test_exit_parity_index_removal, which parity-tested a
+    trigger (INDEX_REMOVAL) that no longer exists. Confirms BOTH the
+    backtest engine and live order placement agree on the new behaviour: a
+    stock that loses S&P 500 membership soon after entry, with momentum
+    staying positive the whole time, is NOT force-closed on that basis --
+    it rides all the way to its own MAX_HOLDING backstop instead, exactly
+    as if membership had never changed."""
     ticker, t212_ticker = "PXSTOCK", "PXSTOCK_EQ"
-    frame = _price_frame(310, 100.0, 0.0015)  # pure uptrend -- membership is the only trigger
-    gspc = _calm_gspc_frame(310)
-    removal_date = pd.Timestamp(frame["date"].iloc[309])  # the final row
+    # entry lands at row 252 (the first day with a full 252-day momentum
+    # lookback); stock_max_holding_days=100 (calendar days) puts the exit
+    # comfortably past row 300, so the frame truncated AT the exit date --
+    # not just the full frame -- still satisfies _ticker_state()'s own
+    # >=300-rows "enough history" gate on the live side. Mirrors
+    # test_exit_parity_max_holding's own proven parameters exactly.
+    n_days = 400
+    frame = _price_frame(n_days, 100.0, 0.0015)  # pure uptrend throughout
+    gspc = _calm_gspc_frame(n_days)
+    # Membership is lost soon after entry -- well before the 100-day
+    # MAX_HOLDING backstop this scenario expects to fire instead.
+    removal_date = pd.Timestamp(frame["date"].iloc[260])
 
     def _is_member_side_effect(t, check_date):
         return pd.Timestamp(check_date) < removal_date
@@ -451,11 +471,9 @@ def test_exit_parity_index_removal(db_engine, mocker, monkeypatch):
     # (mocked above), but is kept so PXSTOCK reads as a genuine tracked
     # stock rather than an untracked research-only ticker.
     mocker.patch("analysis.universe.STOCK_MEMBERSHIP", {"PXSTOCK": []})
-    # A generous stock max-holding so MAX_HOLDING can never preempt the
-    # index-removal trigger this scenario is actually testing.
-    cfg = _config(ticker, t212_ticker, is_etf=False, stock_max_holding_days=500, mocker=mocker, db_engine=db_engine)
+    cfg = _config(ticker, t212_ticker, is_etf=False, stock_max_holding_days=100, mocker=mocker, db_engine=db_engine)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=False,
-                         frame=frame, gspc=gspc, cfg=cfg, expected_reason="INDEX_REMOVAL")
+                         frame=frame, gspc=gspc, cfg=cfg, expected_reason="MAX_HOLDING")
 
 
 # ---------------------------------------------------------------------------
