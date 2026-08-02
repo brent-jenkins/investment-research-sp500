@@ -353,6 +353,62 @@ def test_shares_outstanding_as_of_is_cached_across_calls(db_engine, mocker):
     spy.assert_not_called()
 
 
+def test_close_price_as_of_is_cached_across_calls(db_engine, mocker):
+    """Mirrors test_shares_outstanding_as_of_is_cached_across_calls() --
+    _close_price_as_of() must query price_data at most once per ticker
+    (on its first lookup), never once per call. This is the regression
+    guard for the 2026-08-01 connection-pooling fix (see
+    _get_price_series()'s own docstring): confirmed to genuinely fail
+    against the pre-fix implementation (a fresh get_engine() call on
+    every _close_price_as_of() call), and to pass against the fix."""
+    _seed_price(db_engine, "AAPL", date(2020, 1, 1), 10.0)
+    mc._close_price_as_of("AAPL", date(2020, 6, 1))  # populate cache
+
+    spy = mocker.patch.object(mc, "get_engine")
+    mc._close_price_as_of("AAPL", date(2020, 6, 1))
+    spy.assert_not_called()
+
+
+def test_market_cap_bulk_ranking_creates_bounded_not_linear_connections(db_engine, mocker):
+    """The exact real-world failure this fix closes: a bulk ranking
+    operation (many market_cap() calls across a small set of tickers,
+    each ticker looked up repeatedly across many reconstitution dates)
+    must hit get_engine() a BOUNDED number of times -- at most twice per
+    distinct ticker (once for its shares series, once for its price
+    series) -- never once per market_cap() call. Confirmed (2026-08-01)
+    against the real, pre-fix code: 100 market_cap() lookups across 5
+    tickers produced 105 get_engine() calls (linear in lookup count, not
+    ticker count) -- this test's own bound (<= 2 * n_tickers) would have
+    failed against that, and passes against the fix."""
+    tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+    dates = [date(2020, 1, d) for d in range(1, 21)]  # 20 dates
+    for t in tickers:
+        _seed_shares(db_engine, t, date(2019, 1, 1), 1000.0)
+        _seed_price(db_engine, t, date(2019, 1, 1), 10.0)
+
+    real_get_engine = mc.get_engine
+    call_count = {"n": 0}
+
+    def _counting_get_engine():
+        call_count["n"] += 1
+        return real_get_engine()
+
+    mocker.patch.object(mc, "get_engine", side_effect=_counting_get_engine)
+
+    for t in tickers:
+        for d in dates:
+            mc.market_cap(t, d)  # 100 total lookups (5 tickers x 20 dates)
+
+    assert call_count["n"] <= 2 * len(tickers), (
+        f"get_engine() was called {call_count['n']} times for "
+        f"{len(tickers) * len(dates)} market_cap() lookups across only "
+        f"{len(tickers)} distinct tickers -- expected at most "
+        f"{2 * len(tickers)} (one shares-series query + one price-series "
+        f"query per ticker), got a count that grows with lookup count "
+        f"instead of ticker count."
+    )
+
+
 # ---------------------------------------------------------------------------
 # market_cap() -- shares x price, no look-ahead, None when either is missing
 # ---------------------------------------------------------------------------

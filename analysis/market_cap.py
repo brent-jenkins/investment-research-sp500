@@ -66,6 +66,7 @@ date actually used for any given study — determined from the real fetch
 results for the study's full candidate pool, not assumed from these four
 tickers alone.
 """
+import bisect
 import logging
 import statistics
 import time
@@ -136,6 +137,7 @@ PREDECESSOR_CIKS: dict[str, str] = {
 
 _cik_cache: Optional[dict[str, str]] = None
 _shares_cache: dict[str, list[tuple[date, float]]] = {}
+_price_cache: dict[str, list[tuple[date, float]]] = {}
 
 
 def _headers() -> dict:
@@ -143,14 +145,16 @@ def _headers() -> dict:
 
 
 def clear_caches() -> None:
-    """Drop both in-process caches (CIK map and per-ticker shares series).
-    Call after a fresh backfill_shares_outstanding() run in the same
-    process, mirroring analysis/universe.py:clear_membership_cache()'s
-    rationale -- without this, a stale cache entry could outlive the DB
-    write that was meant to replace it."""
+    """Drop all three in-process caches (CIK map, per-ticker shares series,
+    per-ticker close-price series). Call after a fresh
+    backfill_shares_outstanding() run in the same process, mirroring
+    analysis/universe.py:clear_membership_cache()'s rationale -- without
+    this, a stale cache entry could outlive the DB write that was meant to
+    replace it."""
     global _cik_cache
     _cik_cache = None
     _shares_cache.clear()
+    _price_cache.clear()
 
 
 def fetch_cik_map(force: bool = False) -> dict[str, str]:
@@ -754,26 +758,60 @@ def shares_outstanding_as_of(ticker: str, as_of: date) -> Optional[float]:
     return result
 
 
-def _close_price_as_of(ticker: str, as_of: date) -> Optional[float]:
-    """Most recent stored close price on or before *as_of*, from
-    price_data (already fetched by data/ingestion.py -- no new price
-    fetch needed here). Uses SQLite's date() function for the comparison,
-    not a raw string `<=`, matching the convention documented in
-    CLAUDE.md's "T212 P&L reconstruction" section (a naive-datetime
-    Python string and a DateTime column's stringified form don't always
-    compare correctly as raw text).
+def _get_price_series(ticker: str) -> list[tuple[date, float]]:
+    """Read *ticker*'s full stored close-price history from price_data
+    (already fetched by data/ingestion.py -- no new price fetch needed
+    here), sorted ascending by date -- served from an in-process cache
+    after the first call (see clear_caches()). Mirrors
+    _get_shares_series()'s exact "one query per ticker, cache the whole
+    series" shape, for the same reason: market_cap() is called once per
+    (ticker, as_of) pair across a multi-year, multi-ticker ranking
+    operation, and the naive per-call query this replaced was confirmed
+    (2026-08-01) to open a fresh DB connection on every single call --
+    ~30,000 connections for one ranking step, most of them for tickers
+    already queried moments earlier. One query per ticker (not per
+    call) is what actually fixes that, the same way _get_shares_series()
+    already fixed the identical shape of problem for shares-outstanding
+    lookups.
     """
+    if ticker in _price_cache:
+        return _price_cache[ticker]
+
     engine = get_engine()
     with engine.connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             text(
-                "SELECT close FROM price_data WHERE ticker = :t "
-                "AND date(date) <= date(:d) AND close IS NOT NULL AND close > 0 "
-                "ORDER BY date DESC LIMIT 1"
+                "SELECT date, close FROM price_data WHERE ticker = :t "
+                "AND close IS NOT NULL AND close > 0"
             ),
-            {"t": ticker, "d": as_of.isoformat()},
-        ).fetchone()
-    return float(row[0]) if row is not None and row[0] is not None else None
+            {"t": ticker},
+        ).fetchall()
+
+    def _to_date(raw) -> date:
+        return raw if isinstance(raw, date) else datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+
+    out: list[tuple[date, float]] = [(_to_date(d), float(c)) for d, c in rows]
+    out.sort(key=lambda pair: pair[0])
+    _price_cache[ticker] = out
+    return out
+
+
+def _close_price_as_of(ticker: str, as_of: date) -> Optional[float]:
+    """Most recent stored close price on or before *as_of*, read from the
+    in-process, per-ticker cached series (_get_price_series()) via a
+    binary search (bisect.bisect_right()) against its sorted dates,
+    rather than a fresh SQL query on every call -- see
+    _get_price_series()'s own docstring for why. O(log n) per lookup
+    against an already-cached series instead of a DB round-trip per
+    lookup; the DB is still hit exactly once per ticker, on that
+    ticker's first lookup.
+    """
+    series = _get_price_series(ticker)
+    if not series:
+        return None
+    dates = [d for d, _ in series]
+    idx = bisect.bisect_right(dates, as_of) - 1
+    return series[idx][1] if idx >= 0 else None
 
 
 def market_cap(ticker: str, as_of: date) -> Optional[float]:
