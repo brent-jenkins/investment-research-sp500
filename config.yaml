@@ -5,9 +5,13 @@
 # "V1 removal" sections for the history behind this shape.
 watchlist:
   # Trimmed 2026-07-31 to exactly what the momentum + crisis-override system
-  # needs: its own 73-ticker universe (see `instruments:` below and
-  # analysis/universe.py:ALL_TICKERS), ^GSPC (crisis-override reference
-  # index), and GBPUSD=X/EURUSD=X (FX conversion for non-GBP positions).
+  # needs: its own live-tradeable universe (see `instruments:` below --
+  # 40 stocks as of the 2026-08-02 ETF-sleeve removal, see CLAUDE.md's "ETF
+  # sleeve removed from live trading" section; analysis/universe.py:
+  # ALL_TICKERS is a separate, larger 73-ticker research/backtest universe
+  # that still includes the 33-ETF sleeve, deliberately untouched by that
+  # removal), ^GSPC (crisis-override reference index), and GBPUSD=X/
+  # EURUSD=X (FX conversion for non-GBP positions).
   # core is monitoring-only and deliberately stays separate from
   # `instruments:` below -- none of these three ever has (or ever will have)
   # an execution mapping; see CLAUDE.md's "Unified instrument structure"
@@ -44,10 +48,14 @@ watchlist:
 # corrupted live pricing, but _log_order()'s currency_code falls back to
 # this field when the live API lookup fails, so it's worth keeping accurate.
 instruments:
+  # ETF sleeve removed entirely 2026-08-02 -- see CLAUDE.md's "ETF sleeve
+  # removed from live trading" section. All 40 remaining entries are stocks
+  # (is_etf: false throughout -- the field is kept rather than dropped so a
+  # config predating this removal, or a future re-addition, doesn't need a
+  # schema change; nothing currently reads it as anything but a constant).
   AAPL:  {name: "Apple", exchange: "NYSE", is_etf: false, t212_instrument_id: AAPL_US_EQ, currency: USD}
   ADBE:  {name: "Adobe", exchange: "NYSE", is_etf: false, t212_instrument_id: ADBE_US_EQ, currency: USD}
   AMD:   {name: "Advanced Micro Devices", exchange: "NYSE", is_etf: false, t212_instrument_id: AMD_US_EQ, currency: USD}
-  AMLP:  {name: "Alerian MLP ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SMLPd_EQ, currency: EUR}
   AMZN:  {name: "Amazon", exchange: "NYSE", is_etf: false, t212_instrument_id: AMZN_US_EQ, currency: USD}
   AVGO:  {name: "Broadcom", exchange: "NYSE", is_etf: false, t212_instrument_id: AVGO_US_EQ, currency: USD}
   BAC:   {name: "Bank of America", exchange: "NYSE", is_etf: false, t212_instrument_id: BAC_US_EQ, currency: USD}
@@ -56,66 +64,34 @@ instruments:
   CRM:   {name: "Salesforce", exchange: "NYSE", is_etf: false, t212_instrument_id: CRM_US_EQ, currency: USD}
   CVX:   {name: "Chevron", exchange: "NYSE", is_etf: false, t212_instrument_id: CVX_US_EQ, currency: USD}
   DIS:   {name: "Walt Disney Company", exchange: "NYSE", is_etf: false, t212_instrument_id: DIS_US_EQ, currency: USD}
-  EEM:   {name: "iShares MSCI Emerging Markets ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: JEEMd_EQ, currency: EUR}
-  EMB:   {name: "iShares JP Morgan EM Bond ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IEMBl_EQ, currency: USD}
-  EWG:   {name: "iShares MSCI Germany ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: VGERd_EQ, currency: EUR}
-  EWJ:   {name: "iShares MSCI Japan ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SGJPl_EQ, currency: GBP}
-  EWZ:   {name: "iShares MSCI Brazil ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IBZLa_EQ, currency: EUR}
-  FXI:   {name: "iShares China Large-Cap ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: LCCGl_EQ, currency: GBP}
   GE:    {name: "GE Aerospace", exchange: "NYSE", is_etf: false, t212_instrument_id: GE_US_EQ, currency: USD}
-  GLD:   {name: "SPDR Gold Shares", exchange: "NYSE", is_etf: true, t212_instrument_id: WGLDl_EQ, currency: USD}
   GOLD:  {name: "Barrick Gold", exchange: "NYSE", is_etf: false, t212_instrument_id: GOLD_US_EQ, currency: USD}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/universe.py docstring)
   GOOGL: {name: "Alphabet (Class A)", exchange: "NYSE", is_etf: false, t212_instrument_id: GOOGL_US_EQ, currency: USD}
   GS:    {name: "Goldman Sachs", exchange: "NYSE", is_etf: false, t212_instrument_id: GS_US_EQ, currency: USD}
   HD:    {name: "Home Depot", exchange: "NYSE", is_etf: false, t212_instrument_id: HD_US_EQ, currency: USD}
-  HYG:   {name: "iShares iBoxx High Yield Corporate Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: XUHEd_EQ, currency: EUR}
-  IBB:   {name: "iShares Biotechnology ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: FBTUl_EQ, currency: USD}
-  IEF:   {name: "iShares 7-10 Year Treasury Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: TREXl_EQ, currency: USD}
-  INDA:  {name: "iShares MSCI India ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IINDl_EQ, currency: GBP}
   ISRG:  {name: "Intuitive Surgical", exchange: "NYSE", is_etf: false, t212_instrument_id: ISRG_US_EQ, currency: USD}
-  IWM:   {name: "iShares Russell 2000 ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: RU2Kl_EQ, currency: GBP}
   JNJ:   {name: "Johnson & Johnson", exchange: "NYSE", is_etf: false, t212_instrument_id: JNJ_US_EQ, currency: USD}
   JPM:   {name: "JP Morgan Chase", exchange: "NYSE", is_etf: false, t212_instrument_id: JPM_US_EQ, currency: USD}
-  KBE:   {name: "SPDR S&P Bank ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: BNKTa_EQ, currency: USD}
   LIN:   {name: "Linde plc", exchange: "NYSE", is_etf: false, t212_instrument_id: LIN_US_EQ, currency: USD}
   LLY:   {name: "Eli Lilly", exchange: "NYSE", is_etf: false, t212_instrument_id: LLY_US_EQ, currency: USD}
-  LQD:   {name: "iShares Investment Grade Corporate Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: VDCPl_EQ, currency: USD}
   MA:    {name: "Mastercard", exchange: "NYSE", is_etf: false, t212_instrument_id: MA_US_EQ, currency: USD}
   META:  {name: "Meta Platforms", exchange: "NYSE", is_etf: false, t212_instrument_id: FB_US_EQ, currency: USD}  # T212 never renamed this instrument's own ticker after Facebook->Meta; shortName/name confirm it's the right instrument (name: "Meta Platforms")
   MRK:   {name: "Merck", exchange: "NYSE", is_etf: false, t212_instrument_id: MRK_US_EQ, currency: USD}
   MSFT:  {name: "Microsoft", exchange: "NYSE", is_etf: false, t212_instrument_id: MSFT_US_EQ, currency: USD}
-  MUB:   {name: "iShares National Muni Bond ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: MUNIl_EQ, currency: USD}
   NEM:   {name: "Newmont Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: NEM_US_EQ, currency: USD}
   NFLX:  {name: "Netflix", exchange: "NYSE", is_etf: false, t212_instrument_id: NFLX_US_EQ, currency: USD}
   NVDA:  {name: "NVIDIA", exchange: "NYSE", is_etf: false, t212_instrument_id: NVDA_US_EQ, currency: USD}
   ORCL:  {name: "Oracle Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: ORCL_US_EQ, currency: USD}
-  PDBC:  {name: "Invesco Optimum Yield Diversified Commodity Strategy", exchange: "NYSE", is_etf: true, t212_instrument_id: XCMCd_EQ, currency: EUR}
   PFE:   {name: "Pfizer", exchange: "NYSE", is_etf: false, t212_instrument_id: PFE_US_EQ, currency: USD}
   PG:    {name: "Procter & Gamble", exchange: "NYSE", is_etf: false, t212_instrument_id: PG_US_EQ, currency: USD}
   QCOM:  {name: "Qualcomm", exchange: "NYSE", is_etf: false, t212_instrument_id: QCOM_US_EQ, currency: USD}
   RTX:   {name: "RTX Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: UTX_US_EQ, currency: USD}  # T212 retains the pre-merger "UTX" (United Technologies) instrument ticker; shortName/name confirm it (shortName: "RTX", name: "RTX")
-  SKYY:  {name: "First Trust Cloud Computing ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SKYEa_EQ, currency: EUR}
-  SLV:   {name: "iShares Silver Trust", exchange: "NYSE", is_etf: true, t212_instrument_id: PHAGa_EQ, currency: EUR}
-  SOXX:  {name: "iShares Semiconductor ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: SEMGl_EQ, currency: GBX}
   SPGI:  {name: "S&P Global", exchange: "NYSE", is_etf: false, t212_instrument_id: SPGI_US_EQ, currency: USD}
-  TIP:   {name: "iShares TIPS Bond ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: IBC5d_EQ, currency: EUR}
-  TLT:   {name: "iShares 20+ Year Treasury Bond", exchange: "NYSE", is_etf: true, t212_instrument_id: IDGAl_EQ, currency: GBP}
   TMO:   {name: "Thermo Fisher Scientific", exchange: "NYSE", is_etf: false, t212_instrument_id: TMO_US_EQ, currency: USD}
   TSLA:  {name: "Tesla", exchange: "NYSE", is_etf: false, t212_instrument_id: TSLA_US_EQ, currency: USD}
   UNH:   {name: "UnitedHealth Group", exchange: "NYSE", is_etf: false, t212_instrument_id: UNH_US_EQ, currency: USD}
   V:     {name: "Visa", exchange: "NYSE", is_etf: false, t212_instrument_id: V_US_EQ, currency: USD}
-  VGK:   {name: "Vanguard FTSE Europe ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: H4ZEd_EQ, currency: EUR}
-  VOO:   {name: "Vanguard S&P 500 ETF", exchange: "NYSE", is_etf: true, t212_instrument_id: I50Dl_EQ, currency: GBP}
   WMT:   {name: "Walmart", exchange: "NYSE", is_etf: false, t212_instrument_id: WMT_US_EQ, currency: USD}
-  XLB:   {name: "Materials Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLBl_EQ, currency: USD}
-  XLE:   {name: "Energy Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLEl_EQ, currency: USD}
-  XLF:   {name: "Financial Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLFl_EQ, currency: USD}  # remapped 2026-07-31 -- STZXs_EQ ("SPDR MSCI Europe Financials") was a wrong-underlying mapping (European, not US) inherited verbatim from V1 and never caught until a real live position exposed it. SXLFl_EQ ("SPDR S&P U.S. Financials Select Sector (Acc)", ISIN IE00BWBXM500, USD) is the genuinely correct instrument, verified live -- see CLAUDE.md's "V2 live execution" ETF mapping audit section.
-  XLI:   {name: "Industrial Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLIl_EQ, currency: USD}
-  XLK:   {name: "Technology Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLKl_EQ, currency: USD}  # remapped 2026-07-31 -- XDWTl_EQ ("Xtrackers MSCI World Information Technology") was a wrong-scope mapping (GLOBAL tech, not US-only). SXLKl_EQ ("State Street SPDR S&P U.S. Technology Select Sector (Acc)", ISIN IE00BWBXM948, USD) is the genuinely correct instrument, same Select Sector family as every sibling XL* mapping -- see CLAUDE.md's "XLK mapping resolution" section.
-  XLP:   {name: "Consumer Staples Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLPl_EQ, currency: USD}
-  XLU:   {name: "Utilities Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLUl_EQ, currency: USD}
-  XLV:   {name: "Health Care Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: IUHCl_EQ, currency: USD}
-  XLY:   {name: "Consumer Discretionary Select Sector", exchange: "NYSE", is_etf: true, t212_instrument_id: SXLYl_EQ, currency: USD}
   XOM:   {name: "ExxonMobil", exchange: "NYSE", is_etf: false, t212_instrument_id: XOM_US_EQ, currency: USD}
 
 data:
@@ -308,41 +284,42 @@ trading212_invest:
   # even considered a new-entry candidate at all (signal computed, VaR
   # sized, queued into pending_orders / included in a backtest run's
   # ticker universe). This is a strictly EARLIER, BROADER cut than
-  # etf_submission_enabled / stock_submission_enabled below, which only
-  # gate the final "place the order with the broker" step for a decision
-  # that has already been computed and queued. Disabling *_trading_enabled
+  # stock_submission_enabled below, which only gates the final "place the
+  # order with the broker" step for a decision that has already been
+  # computed and queued (etf_submission_enabled was removed alongside
+  # etf_trading_enabled 2026-08-02 -- see below). Disabling *_trading_enabled
   # also force-disables the matching *_submission_enabled (a master
   # override) -- there is nothing coherent about "not a candidate at all"
   # plus "but still try to submit it".
   #
-  # Both default true (absent = enabled) so a config predating this
-  # feature behaves exactly as before. Never gates exits -- an already-open
-  # position in a disabled asset class is still monitored for its normal
-  # stop-loss/signal-off/crisis/max-holding exit, same as
-  # pause_new_entries above.
-  etf_trading_enabled: true
+  # Defaults true (absent = enabled) so a config predating this feature
+  # behaves exactly as before. Never gates exits -- an already-open position
+  # is still monitored for its normal stop-loss/signal-off/crisis/
+  # max-holding exit, same as pause_new_entries above.
+  #
+  # etf_trading_enabled was removed entirely 2026-08-02, not merely set to
+  # false -- see CLAUDE.md's "ETF sleeve removed from live trading" section.
+  # With zero is_etf: true entries left in `instruments:` above, the flag
+  # had nothing left to gate; is_asset_class_enabled() still accepts an
+  # is_etf argument (analysis.universe.ETF_TICKERS still exists for the
+  # backtest/research engines -- a separate, deliberately untouched system,
+  # see that section) and still defaults an absent etf_trading_enabled key
+  # to True, so removing the key here is a pure no-op for live trading, not
+  # a behaviour change.
   stock_trading_enabled: true
   # Exchange-aware order submission (2026-07-31) -- see CLAUDE.md's
   # "Exchange-aware order submission" section. EOD still computes signals
   # and queues entry decisions into pending_orders exactly as before (as
-  # long as etf_trading_enabled / stock_trading_enabled above admit the
-  # ticker as a candidate in the first place); these two flags gate the
-  # separate exchange-timed jobs that actually submit them
-  # (submit_pending_etf_orders() at 07:00 UTC / LSE open,
-  # submit_pending_stock_orders() at 13:30 UTC / NYSE open).
+  # long as stock_trading_enabled above admits the ticker as a candidate in
+  # the first place); this flag gates the exchange-timed job that actually
+  # submits them (submit_pending_stock_orders() at 13:30 UTC / NYSE open).
   #
-  # ETF submission stays PAUSED (explicitly false) until this mechanism has
-  # been deployed and verified live -- do not flip this to true as part of
-  # deploying the mechanism itself; that is a separate, later decision.
-  # ETF trading CANDIDACY remains enabled (etf_trading_enabled: true above)
-  # -- this is the deliberate "shadow / dry-run" state described in
-  # is_asset_class_enabled()'s docstring: ETF decisions are computed,
-  # momentum-ranked, and queued for audit/research, but never reach the
-  # broker while this stays false.
-  etf_submission_enabled: false
-  # Stock submission continues as today (no change in behaviour requested
-  # for stocks) -- defaults true even if this key were removed, but kept
-  # explicit for symmetry with etf_submission_enabled above.
+  # etf_submission_enabled and the 07:00 UTC / LSE-open ETF submission job
+  # it used to gate were both removed entirely 2026-08-02, not merely left
+  # paused -- see CLAUDE.md's "ETF sleeve removed from live trading"
+  # section. Stock submission continues as today (no change in behaviour
+  # requested for stocks) -- defaults true even if this key were removed,
+  # but kept explicit.
   stock_submission_enabled: true
   # Submission-time sanity check: if a ticker's price has moved more than
   # this fraction since the EOD decision was made, skip submission and log

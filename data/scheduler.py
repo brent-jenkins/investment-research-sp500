@@ -5,9 +5,6 @@ Run schedule (UTC unless noted):
                        from Friday's EOD run, then run the order-logic-only pipeline
                        so Friday's still-open orders are re-evaluated before markets
                        reopen (see _monday_premarket_job())
-  07:00  ETF order submission (weekdays) — submit queued ETF entries during LSE's
-                       own real trading session (see "Exchange-aware order
-                       submission" in CLAUDE.md); ships paused by default
   13:30  Stock order submission (weekdays) — submit queued stock entries during
                        NYSE's own regular open
   21:15  Membership refresh — refresh point-in-time index-membership windows
@@ -31,6 +28,14 @@ exact same 07:00 minute and again at 13:00/14:00 either side of 13:30 — so
 neither run added anything the hourly cadence didn't already cover. See
 CLAUDE.md's "Pre-market/US-open scheduled runs removed" section for the
 full investigation.
+
+The 07:00 UTC ETF order submission job (LSE regular open) was removed
+2026-08-02 alongside the rest of the ETF sleeve — see CLAUDE.md's "ETF
+sleeve removed from live trading" section. `instruments:` (config.yaml) no
+longer has any ETF entry, so the EOD decide phase can never queue an ETF
+pending_orders row for this job to have submitted in the first place —
+keeping a job registered with structurally nothing to ever do is dead
+weight, not a harmless no-op.
 
 Every scheduled trading run calls brokers/trading212.py:maybe_place_orders()
 (which itself calls maybe_exit_positions() first) — there is no separate
@@ -551,29 +556,6 @@ def _weekly_summary_job() -> None:
         logger.error("Weekly summary job failed: %s", exc, exc_info=True)
 
 
-def _etf_order_submission_job() -> None:
-    """07:00 UTC weekdays (LSE regular open) — submit queued ETF entry
-    decisions from pending_orders.
-
-    Signal computation and decision-queuing already happened at the prior
-    EOD run (brokers.trading212:maybe_place_orders()); this job only submits
-    whatever is still PENDING for ETFs, with its own price-sanity check
-    against the price recorded at decide time. See CLAUDE.md's
-    "Exchange-aware order submission" section — ETF submission ships
-    disabled by default (trading212_invest.etf_submission_enabled) until
-    manually verified, so this job is a no-op until that flag is set.
-    """
-    logger.info("ETF order submission job starting (07:00 UTC, LSE open)…")
-    config = _load_config()
-    try:
-        from brokers.trading212 import submit_pending_etf_orders  # noqa: PLC0415
-        n = submit_pending_etf_orders(config)
-        if n:
-            logger.info("ETF submission: %d order(s) placed.", n)
-    except Exception as exc:
-        logger.error("ETF order submission failed: %s", exc, exc_info=True)
-
-
 def _stock_order_submission_job() -> None:
     """13:30 UTC weekdays (NYSE regular open) — submit queued stock entry
     decisions from pending_orders.
@@ -773,19 +755,14 @@ def start_scheduler() -> BackgroundScheduler:
 
     # Exchange-aware order submission (2026-07-31) — see CLAUDE.md's
     # "Exchange-aware order submission" section. Decision-queuing happens at
-    # EOD (unchanged, folded into maybe_place_orders() via the jobs above);
-    # these two jobs submit whatever is still PENDING, each only for its own
-    # asset class, during that exchange's own real trading session, rather
-    # than everything firing at one fixed 21:30 UTC time regardless of
-    # instrument.
-    _scheduler.add_job(
-        _etf_order_submission_job,
-        trigger=CronTrigger(hour=7, minute=0, day_of_week="mon-fri", timezone=tz),
-        id="etf_order_submission",
-        replace_existing=True,
-    )
-    logger.info("Scheduled ETF order submission at 07:00 %s weekdays (LSE open).", tz)
-
+    # EOD (unchanged, folded into maybe_place_orders() via the job above).
+    # The sibling 07:00 UTC / LSE-open ETF submission job was removed
+    # entirely 2026-08-02 alongside the rest of the ETF sleeve — see
+    # CLAUDE.md's "ETF sleeve removed from live trading" section — since
+    # there is no longer any ETF ticker in `instruments:` for the EOD
+    # decide phase to ever queue in the first place; a submission job with
+    # nothing to submit is dead weight, not a harmless no-op worth keeping
+    # registered.
     _scheduler.add_job(
         _stock_order_submission_job,
         trigger=CronTrigger(hour=13, minute=30, day_of_week="mon-fri", timezone=tz),

@@ -2066,12 +2066,24 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
 
 
 def submit_pending_etf_orders(config: dict) -> int:
-    """07:00 UTC weekdays (LSE open) — submit queued ETF entry decisions.
+    """No scheduler job calls this any more (2026-08-02) — see CLAUDE.md's
+    "ETF sleeve removed from live trading" section. `instruments:`
+    (config.yaml) has no ETF entry left, so the EOD decide phase can never
+    queue an is_etf=True pending_orders row for this to submit — in
+    production this is permanently a no-op (`_load_pending_orders(True)`
+    returns `[]`).
 
-    ETF submission ships disabled by default (trading212_invest.
-    etf_submission_enabled must be explicitly set true) — see CLAUDE.md's
-    "Exchange-aware order submission" section for why this stays paused
-    until manually verified.
+    Kept, rather than deleted outright, as a thin `is_etf=True` entry point
+    into the shared `_submit_pending_orders()` machinery — the same
+    function `submit_pending_stock_orders()` calls with `is_etf=False` —
+    because the existing test suite (tests/test_execution.py,
+    tests/test_scheduler.py, tests/test_comprehensive_replay_parity.py)
+    exercises `_submit_pending_orders()`'s generic capacity/price-sanity/
+    quantity-resolution behaviour through this exact call shape, and
+    rewriting that coverage onto the stock-only entry point would be a
+    large, purely mechanical change for no behavioural benefit. This is
+    dead code in production, not disabled functionality — it is never
+    reached by any live code path.
     """
     return _submit_pending_orders(config, is_etf=True)
 

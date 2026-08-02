@@ -359,11 +359,12 @@ def test_scheduler_registers_membership_refresh_job(monkeypatch):
         scheduler.stop_scheduler()
 
 
-def test_scheduler_registers_etf_and_stock_submission_jobs(monkeypatch):
-    """start_scheduler() must register etf_order_submission at 07:00 UTC
-    (LSE open) and stock_order_submission at 13:30 UTC (NYSE open), both
-    weekdays only -- see CLAUDE.md's "Exchange-aware order submission"
-    section for why submission is split from EOD decide-phase timing."""
+def test_scheduler_registers_stock_submission_job_not_etf(monkeypatch):
+    """start_scheduler() must register stock_order_submission at 13:30 UTC
+    (NYSE open), weekdays only. etf_order_submission must NOT be
+    registered at all -- removed entirely 2026-08-02 alongside the rest of
+    the ETF sleeve (see CLAUDE.md's "ETF sleeve removed from live
+    trading" section), not merely left disabled."""
     fake_config = {
         "scheduler": {
             "timezone": "UTC",
@@ -383,12 +384,8 @@ def test_scheduler_registers_etf_and_stock_submission_jobs(monkeypatch):
             assert job is not None, f"job '{job_id}' was not registered"
             return next(str(f) for f in job.trigger.fields if f.name == name)
 
-        etf_job = sched.get_job("etf_order_submission")
-        assert etf_job is not None
-        assert etf_job.func is scheduler._etf_order_submission_job
-        assert field("etf_order_submission", "day_of_week") == "mon-fri"
-        assert field("etf_order_submission", "hour") == "7"
-        assert field("etf_order_submission", "minute") == "0"
+        assert sched.get_job("etf_order_submission") is None
+        assert not hasattr(scheduler, "_etf_order_submission_job")
 
         stock_job = sched.get_job("stock_order_submission")
         assert stock_job is not None
@@ -471,22 +468,6 @@ def test_weekly_summary_job_never_raises_on_failure(mocker):
     mocker.patch("output.briefing.send_weekly_summary_email", side_effect=RuntimeError("SMTP is down"))
 
     scheduler._weekly_summary_job()  # must not raise
-
-
-def test_etf_order_submission_job_calls_submit_pending_etf_orders(mocker):
-    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
-    mock_submit = mocker.patch("brokers.trading212.submit_pending_etf_orders", return_value=2)
-
-    scheduler._etf_order_submission_job()
-
-    mock_submit.assert_called_once_with({"k": "v"})
-
-
-def test_etf_order_submission_job_never_raises_on_failure(mocker):
-    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
-    mocker.patch("brokers.trading212.submit_pending_etf_orders", side_effect=RuntimeError("boom"))
-
-    scheduler._etf_order_submission_job()  # must not raise
 
 
 def test_stock_order_submission_job_calls_submit_pending_stock_orders(mocker):

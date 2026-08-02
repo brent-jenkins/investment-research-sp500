@@ -5932,6 +5932,174 @@ disposable research clone — nothing was committed to the real
 record, alongside the preserved trade-level CSV exports (per the
 trade-level-preservation standing requirement).
 
+**The live-code recommendation above is now moot — superseded, not
+implemented (2026-08-02).** See "ETF sleeve removed from live trading"
+below: the ETF sleeve was removed from live trading entirely the same
+day, using this study's 76.3%→2.6% capacity-share finding as the primary
+evidence. With zero ETF tickers left as live candidates, there is no
+ETF-vs-stock priority question left for `brokers/trading212.py` to
+resolve — a combined-momentum-ranking submission-time reconciliation
+would have nothing to reconcile. This recommendation is not being carried
+forward as unfinished work; it is closed by the removal, not deferred
+past it.
+
+### ETF sleeve removed from live trading (2026-08-02)
+
+**Decision made: drop ETFs from live trading entirely.** All 33 ETF
+entries were removed from `config.yaml`'s `instruments:` section — not
+disabled via `trading212_invest.etf_trading_enabled` (which already
+existed as a flag-based off-switch, see "Clean, independent ETF/stock
+trading switches" above), genuinely removed, so the ETF sleeve is no
+longer a live candidate under any config state. `trading212_invest`'s
+live-execution scope is now 40 US large-cap stocks only.
+
+**Why genuine removal, not a flag.** This system already has an
+established, explicitly-stated "flag, don't delete" convention (see the
+many "kept, not removed" decisions throughout this file — `GOLD` kept as
+a permanently-zero-eligible candidate, `SKIPPED_PRICE_MOVED`/
+`REJECTED_CAPACITY` recording a decision rather than discarding it, the
+GARCH-stop/HMM-gate precedent of removing *rejected research*, not live
+config). ETFs are a deliberate exception to that convention, for the same
+reasoning already applied earlier this session to removing SEC EDGAR
+market-cap gating from the live path rather than merely disabling it: a
+disabled-but-present ETF sleeve is a permanent, standing explainability
+cost on a system that has spent this entire rebuild converging toward
+"exactly one signal, one universe, one execution path" (see "V2
+architecture" above) — a `false` flag sitting in config.yaml forces every
+future reader of this file, every future audit, and every future
+due-diligence conversation to re-explain *why* 33 ETF mappings still
+exist and are still exercised by every backtest/validation code path even
+though none of them can ever place a live order. Given the evidence below
+was already decisive, carrying that explainability cost indefinitely — on
+the promise of a future re-enable that may never happen — was judged not
+worth it. If the ETF sleeve is ever reconsidered, re-adding the 33
+`instruments:` entries (git history has the exact block verbatim, see
+commit `56733d3` and earlier) is a config change, not a re-engineering
+effort.
+
+**The exact evidence this rests on** — from "ETF/stock fair-competition
+study" immediately above, the same day: under today's real live
+mechanism (ETFs guaranteed full priority admission before any stock is
+even evaluated, purely because ETF submission is timed to LSE's 07:00 UTC
+open and stock submission to NYSE's 13:30 UTC open — an artifact of
+exchange-hours timing, never a designed merit judgment), ETFs captured
+**76.3% of deployed capacity and 65.8% of total P&amp;L**, with 31 of 33
+ETFs winning at least one slot. Once ranked on **momentum alone**,
+combined fairly against ~500 real stock candidates with no asset-class
+priority at all, ETF capacity share **collapsed to 2.6%** (P&amp;L share
+0.7%), and only **8 of 33** ETFs ever won a single slot (`EWZ`, `FXI`,
+`SKYY`, `SLV`, `SOXX`, `TLT`, `XLE`, `XLK`). This is direct, quantified
+evidence that the ETF sleeve's entire current footprint in this system is
+overwhelmingly a consequence of guaranteed scheduling priority, not
+demonstrated momentum merit against the stock universe this system
+already trades.
+
+**What this decision explicitly does NOT claim — stated directly, not
+implied away.** The fair-competition study itself was equally direct that
+a pure momentum ranking has no mechanism to value genuine crash-hedging
+or non-equity correlation at all — that is a portfolio-construction
+question, not something a momentum score can see, by construction. Of the
+10 ETFs with no stock substitute anywhere in this system (`GLD`/`SLV`/
+`PDBC` — commodities; `TLT`/`IEF`/`TIP`/`MUB`/`LQD`/`HYG`/`EMB` — seven
+bond/credit buckets), only 2 (`SLV`, `TLT`) won any capacity under fair
+competition — the other 8 winning zero is expected, not damning, exactly
+because momentum ranking structurally cannot see the drawdown-protection
+value those instruments might genuinely provide in a crisis the momentum
+signal itself doesn't anticipate. **That question — whether the
+non-equity ETFs earn their place on a dimension other than momentum, i.e.
+genuine portfolio-level drawdown protection — was still open and
+untested at the moment this decision was made.** This is a deliberate
+choice to act on decisive partial evidence (the capacity-share/P&amp;L
+finding) given the live-trading deadline, not a claim that every question
+about the ETF sleeve's value was answered first. The separate, already-
+queued non-equity-ETF drawdown-protection test (cheap, could inform a
+future reconsideration of this decision) remains queued and unrun — it
+does **not** gate this decision, and this removal should not be read as
+having pre-empted or answered it.
+
+**Part B — what removing the sleeve made unnecessary, simplified
+alongside the removal, not left running for nothing to do:**
+
+- **The 07:00 UTC / LSE-open ETF order submission scheduler job
+  (`etf_order_submission`, `data/scheduler.py:_etf_order_submission_job()`)
+  was removed entirely**, not merely left registered against an empty
+  queue. With no ETF entry left in `instruments:`, the EOD decide phase
+  (`brokers/trading212.py:maybe_place_orders()`) can never queue an
+  `is_etf=True` `pending_orders` row again — a submission job with
+  structurally nothing to ever submit is dead weight, not a harmless
+  no-op worth keeping registered and documented as a live schedule entry.
+  `submit_pending_stock_orders()` (13:30 UTC / NYSE open) is completely
+  unaffected and continues exactly as before.
+- **`submit_pending_etf_orders()` itself was kept, not deleted, as a
+  documented dead code path** — a one-line `is_etf=True` entry point into
+  the shared `_submit_pending_orders()` machinery that
+  `submit_pending_stock_orders()` also calls with `is_etf=False`. It is
+  unreachable in production (no scheduler job calls it), but the existing
+  test suite (`tests/test_execution.py`,
+  `tests/test_comprehensive_replay_parity.py`) exercises
+  `_submit_pending_orders()`'s generic capacity/price-sanity/quantity-
+  resolution behaviour through this exact call shape; rewriting that
+  coverage onto the stock-only entry point would have been a large,
+  purely mechanical change for no behavioural benefit. Its docstring now
+  states plainly that it is dead code, not disabled functionality.
+- **The "LSE exchange-hours mismatch mitigation" design** — the whole
+  reason a separate 07:00 UTC ETF submission job existed rather than one
+  fixed 21:30 UTC submission time for every instrument (see "Exchange-
+  aware order submission" above) — is now moot for the same reason: there
+  is no LSE-listed UCITS wrapper left in the live candidate pool for its
+  own trading session to matter.
+- **General currency-conversion code was deliberately left untouched, not
+  ripped out.** EUR/GBP/GBX handling in `get_instrument_price_gbp()` and
+  `_to_gbp()` is currency-generic infrastructure, not ETF-specific
+  complexity — it happened to only be exercised in practice by
+  EUR/GBP/GBX-denominated ETFs (every one of the 40 remaining stocks is
+  USD-denominated), but the code itself has no ETF-only branch and would
+  correctly handle any future non-USD stock exactly as it does today.
+  Removing genuinely reusable currency-conversion capability for zero
+  behavioural benefit — every remaining instrument being USD is a fact
+  about today's candidate pool, not a property this code depends on —
+  would have been overreach, not simplification.
+- **The fair-competition study's live-code recommendation is confirmed
+  moot** (also stated inline in that section above): the recommended
+  combined ETF/stock momentum-ranking-with-submission-time-reconciliation
+  mechanism for `brokers/trading212.py` is not being built. With zero ETF
+  candidates, there is no ETF-vs-stock priority question left to resolve.
+- **Deliberately NOT touched**: `analysis/universe.py`'s `ETF_TICKERS`
+  tuple and `ALL_TICKERS` (still 73 tickers, 33 ETF + 40 stock) remain
+  exactly as they were — this is the research/backtest universe, a
+  separate system from the live `instruments:` candidate pool by design
+  (see "Unified instrument structure" above for why these were always two
+  different things), and every historical CLAUDE.md finding that depends
+  on the 73-ticker backtest universe (the phased-rebuild validation, the
+  full-500 study, the fair-competition study itself) stays exactly
+  reproducible. `is_asset_class_enabled()` (`analysis/decision.py`) also
+  keeps its `is_etf` parameter and `etf_trading_enabled`/
+  `stock_trading_enabled` config-key structure unchanged in code — only
+  the config KEYS were removed from `config.yaml`, which is a pure no-op
+  for live trading (an absent key still defaults to `True`, and there is
+  simply no ticker left with `is_etf=True` in the live `instruments:` map
+  for that default to ever matter).
+
+**Verification, direct not inferred.** `config["instruments"]` now
+contains exactly 40 tickers, zero with `is_etf: true`, with zero overlap
+against `analysis.universe.ETF_TICKERS` — checked programmatically
+against the real, current `config.yaml`, not assumed from the diff.
+`brokers/trading212.py:maybe_place_orders()`'s decide-phase loop iterates
+`config.get("instruments", {})` directly (not `analysis.universe.
+ALL_TICKERS`), so this same check is a direct proof the live candidate
+pool is now stock-only — there is no separate code path that could still
+smuggle an ETF ticker into a live decision.
+
+**Test suite and deploy.** Full local suite passing after the removal
+(472 tests — one pre-existing test, `test_get_all_watchlist_entries_
+combines_core_and_instruments`, asserted `"XLK" in tickers` and was
+updated to assert `"AAPL"` instead, since it was directly checking the
+now-removed ETF sleeve's presence; `tests/test_scheduler.py`'s ETF-
+submission-job tests were replaced with a single test confirming
+`etf_order_submission` is never registered and `_etf_order_submission_job`
+no longer exists, rather than testing removed behaviour). Deployed the
+same day — see the deploy log for the exact commit and timestamp.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

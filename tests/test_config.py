@@ -117,7 +117,7 @@ def test_get_all_watchlist_entries_combines_core_and_instruments(config):
     assert len(entries) == len(config["watchlist"]["core"]) + len(config["instruments"])
     assert "^GSPC" in tickers
     assert "GBPUSD=X" in tickers
-    assert "XLK" in tickers
+    assert "AAPL" in tickers
     assert "GOLD" in tickers
 
 

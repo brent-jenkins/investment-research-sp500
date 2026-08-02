@@ -68,7 +68,7 @@ is_weekday() {
 }
 
 if is_weekday && in_range "$now_hm" 0645 0715; then
-  blackout_label="ETF order submission runs at 07:00 UTC weekdays (Monday also cancels stale weekend orders first)"
+  blackout_label="Monday pre-market job runs at 07:00 UTC on Mondays (cancels stale weekend orders, then re-runs order logic) -- the ETF order submission job that used to also run in this window was removed 2026-08-02 alongside the rest of the ETF sleeve, see CLAUDE.md's \"ETF sleeve removed from live trading\""
 elif is_weekday && in_range "$now_hm" 1315 1400; then
   blackout_label="Stock order submission job runs at 13:30 UTC weekdays"
 elif is_weekday && in_range "$now_hm" 2100 2200; then
