@@ -33,7 +33,7 @@ import yaml
 from analysis.backtest import compute_metrics, equity_curve_gbp
 from analysis.universe import MEMBERSHIP_STALE_HOURS, is_membership_refresh_stale
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
-from data.ingestion import get_all_tickers, get_all_watchlist_entries, get_price_df, pull_incremental
+from data.ingestion import get_all_tickers, get_all_watchlist_entries, pull_incremental
 from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
@@ -437,67 +437,6 @@ def _apply_dark_theme(fig: go.Figure) -> go.Figure:
     return fig
 
 
-def _candlestick_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
-    """Build a Plotly candlestick chart for a ticker, with 20/50-day SMA overlays."""
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Candlestick(
-            x=df["date"],
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name=ticker,
-            increasing_line_color="#26a69a",
-            decreasing_line_color="#ef5350",
-        )
-    )
-
-    df_valid = df[df["close"].notna() & (df["close"] > 0)]
-    for window, colour in ((20, "#f59e0b"), (50, "#6366f1")):
-        if len(df_valid) >= window:
-            sma = df_valid["close"].rolling(window).mean()
-            fig.add_trace(
-                go.Scatter(
-                    x=df_valid["date"],
-                    y=sma,
-                    mode="lines",
-                    name=f"SMA {window}",
-                    line=dict(color=colour, width=1.2),
-                )
-            )
-
-    fig.update_layout(
-        title=f"{name} ({ticker})",
-        xaxis_title="Date",
-        yaxis_title="Price",
-        xaxis_rangeslider_visible=False,
-        height=500,
-        margin=dict(l=40, r=20, t=50, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
-    )
-    return _apply_dark_theme(fig)
-
-
-def _volume_bar_chart(df: pd.DataFrame) -> go.Figure:
-    """Build a volume bar chart coloured by daily direction."""
-    colours = [
-        "#26a69a" if c >= o else "#ef5350"
-        for c, o in zip(df["close"], df["open"])
-    ]
-    fig = go.Figure(
-        go.Bar(x=df["date"], y=df["volume"], marker_color=colours, name="Volume")
-    )
-    fig.update_layout(
-        yaxis_title="Volume",
-        height=180,
-        margin=dict(l=40, r=20, t=10, b=30),
-        showlegend=False,
-    )
-    return _apply_dark_theme(fig)
-
-
 # ---------------------------------------------------------------------------
 # Trade card / cached wrappers
 # ---------------------------------------------------------------------------
@@ -681,77 +620,73 @@ def _initialise() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Charts landing (grouped asset cards)
+# Instruments page (2026-08-02, replaces Charts) — a filterable list of
+# every currently-tracked instrument, sourced from the same live, dynamic
+# candidate pool everything else now reads from
+# (data.ingestion.get_all_watchlist_entries(), which merges
+# reference_tickers with analysis.universe.get_live_stock_candidates()).
+# The old Charts page (grouped landing cards + a per-ticker candlestick
+# detail view) only ever showed the three monitoring-only reference
+# tickers as its own card group -- not useful now that the live candidate
+# pool is the full, dynamic ~503-ticker S&P 500, and rendering ~503
+# individual candlestick-capable cards would be a much larger, differently-
+# scoped UI than this page's actual job (a searchable reference list, with
+# Yahoo Finance doing the charting). Removed entirely, not left dormant.
 # ---------------------------------------------------------------------------
 
-_GROUP_LABELS = {
-    "reference_tickers": "Core (index / FX reference)",
-}
+def _render_instruments_page(config: dict) -> None:
+    """Searchable table of every tracked instrument -- ticker, name, and a
+    direct link to its Yahoo Finance quote page. No in-app price chart --
+    Yahoo Finance's own quote page already does that; this page's job is
+    "what's tracked and where do I look it up," not charting.
 
+    The "Name" column reflects whatever name source already exists in
+    get_all_watchlist_entries() -- a real display name for reference
+    tickers (e.g. ^GSPC), but currently just the ticker symbol itself for
+    the ~503 dynamic S&P 500 candidates, since this codebase has no
+    company-name lookup/store for that pool. Stated here rather than
+    silently presented as a real company-name lookup.
+    """
+    from urllib.parse import quote as _url_quote
 
-def _render_charts_landing(config: dict) -> None:
-    """Grouped asset cards shown on Charts before any ticker is selected."""
-    from sqlalchemy import text as sa_text
+    _render_page_wordmark("Instruments")
+    st.markdown("## Instruments")
+    st.caption(
+        "Every instrument this system currently tracks — sourced live from the same dynamic "
+        "S&P 500 candidate pool (`get_live_stock_candidates()`) live order placement itself reads, "
+        "plus the core index/FX reference tickers. Click through to Yahoo Finance for a price chart."
+    )
 
-    _render_page_wordmark("Charts")
-    st.markdown("## Charts")
-    st.caption("Select an asset to view its price chart.")
+    entries = get_all_watchlist_entries(config)
+    rows = sorted(
+        (
+            {
+                "Ticker": e["ticker"],
+                "Name": e.get("name", e["ticker"]),
+                "Yahoo Finance": f"https://finance.yahoo.com/quote/{_url_quote(e['ticker'], safe='')}",
+            }
+            for e in entries
+        ),
+        key=lambda r: r["Ticker"],
+    )
 
-    _all_tickers_cl = [e["ticker"] for e in get_all_watchlist_entries(config)]
+    search = st.text_input(
+        "Search by ticker or name", value="", placeholder="e.g. AAPL, S&P 500, momentum…",
+    )
+    if search.strip():
+        _q = search.strip().lower()
+        rows = [r for r in rows if _q in r["Ticker"].lower() or _q in r["Name"].lower()]
 
-    # Fetch last two closes per ticker in one query for 1-day change
-    _chg_map_cl: dict[str, float] = {}
-    try:
-        with get_engine().connect() as _conn_cl:
-            _price_rows_cl = _conn_cl.execute(sa_text(
-                "WITH ranked AS ("
-                "  SELECT ticker, close,"
-                "         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn"
-                "  FROM price_data"
-                ") SELECT ticker, close, rn FROM ranked WHERE rn <= 2"
-            )).mappings().all()
-        _lat_cl: dict[str, float] = {}
-        _prv_cl: dict[str, float] = {}
-        for _row_cl in _price_rows_cl:
-            _tk_cl, _cl_cl, _rn_cl = _row_cl["ticker"], _row_cl["close"], _row_cl["rn"]
-            if _rn_cl == 1:
-                _lat_cl[_tk_cl] = _cl_cl
-            else:
-                _prv_cl[_tk_cl] = _cl_cl
-        for _tk_cl in _lat_cl:
-            if _tk_cl in _prv_cl and _prv_cl[_tk_cl] > 0:
-                _chg_map_cl[_tk_cl] = (_lat_cl[_tk_cl] - _prv_cl[_tk_cl]) / _prv_cl[_tk_cl] * 100
-    except Exception:
-        pass
+    st.caption(f"{len(rows)} of {len(entries)} instruments shown")
 
-    # Rendering the full dynamic live candidate pool (potentially ~500
-    # tickers) as individual grouped cards here would be a much larger UX
-    # change than a config cleanup should make -- _all_tickers_cl above
-    # already includes those dynamic tickers for this page's other
-    # purposes (1-day change lookups etc.), just not as their own card
-    # group.
-    _groups_cl: dict[str, list] = {"reference_tickers": config.get("reference_tickers", [])}
-
-    for group_key, group_label in _GROUP_LABELS.items():
-        group = _groups_cl.get(group_key, [])
-        if not group:
-            continue
-        st.markdown(f"#### {group_label}")
-        cols = st.columns(4)
-        for i, entry in enumerate(sorted(group, key=lambda e: e["ticker"])):
-            ticker  = entry["ticker"]
-            name    = entry["name"]
-            _chg    = _chg_map_cl.get(ticker)
-            _chg_str = f"  {_chg:+.2f}%" if _chg is not None else ""
-            with cols[i % 4]:
-                if st.button(
-                    f"**{ticker}**  \n{name}{_chg_str}",
-                    key=f"cl_{ticker}",
-                    width="stretch",
-                ):
-                    st.session_state["selected_ticker"] = ticker
-                    st.rerun()
-        st.markdown("")
+    st.dataframe(
+        pd.DataFrame(rows, columns=["Ticker", "Name", "Yahoo Finance"]),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Yahoo Finance": st.column_config.LinkColumn(display_text="View on Yahoo Finance →"),
+        },
+    )
 
     _render_footer()
 
@@ -2226,10 +2161,10 @@ def main() -> None:
         """, unsafe_allow_html=True)
         st.divider()
 
-        _PAGES = ["Dashboard", "Charts", "Performance", "Backtest", "Status"]
+        _PAGES = ["Dashboard", "Instruments", "Performance", "Backtest", "Status"]
         _PAGE_KEYS = {
             "Dashboard":      "dashboard",
-            "Charts":         "charts",
+            "Instruments":    "instruments",
             "Performance":    "performance",
             "Backtest":       "backtest",
             "Status":         "status",
@@ -2277,72 +2212,8 @@ def main() -> None:
         _render_backtest_page(config)
         return
 
-    # Charts page
-    selected = st.session_state.get("selected_ticker")
-
-    if selected is None:
-        _render_charts_landing(config)
-        return
-
-    name = watchlist.get(selected, selected)
-
-    if st.button("← All Assets", key="charts_back"):
-        st.session_state["selected_ticker"] = None
-        st.rerun()
-
-    _render_page_wordmark("Charts")
-    st.markdown(f"## {name}")
-    st.caption(f"Ticker: **{selected}**")
-
-    _RANGE_DAYS = {"1Y": 365, "3Y": 1095, "5Y": 1826, "10Y": 3652}
-    if st.session_state.get("_chart_range_ticker") != selected:
-        st.session_state["chart_range"] = "1Y"
-        st.session_state["_chart_range_ticker"] = selected
-
-    chart_range = st.radio(
-        "Range",
-        list(_RANGE_DAYS.keys()),
-        index=list(_RANGE_DAYS.keys()).index(st.session_state.get("chart_range", "1Y")),
-        horizontal=True,
-        label_visibility="collapsed",
-        key="chart_range",
-    )
-
-    df = get_price_df(selected, days=_RANGE_DAYS[chart_range])
-
-    if df.empty:
-        st.warning(
-            f"No price data found for **{selected}**. "
-            f"Data is refreshed automatically at {_uk_sched_time(21,30)} — use Manual Controls on the Status page to trigger an immediate pull."
-        )
-        _render_footer()
-        return
-
-    latest = df.iloc[-1]
-    prev = df.iloc[-2] if len(df) > 1 else latest
-    daily_chg = (latest["close"] - prev["close"]) / prev["close"] * 100
-    this_year = latest["date"].year
-    ytd_rows = df[df["date"].dt.year == this_year]
-    ytd_chg = (latest["close"] - ytd_rows.iloc[0]["close"]) / ytd_rows.iloc[0]["close"] * 100 if len(ytd_rows) > 1 else 0.0
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Last Close", f"{latest['close']:,.2f}")
-    col2.metric("Daily Change", f"{daily_chg:+.2f}%", delta=f"{daily_chg:+.2f}%")
-    col3.metric("YTD Return", f"{ytd_chg:+.2f}%", delta=f"{ytd_chg:+.2f}%")
-    col4.metric("Volume", f"{latest['volume']:,.0f}")
-
-    st.plotly_chart(_candlestick_chart(df, selected, name), width="stretch")
-    st.plotly_chart(_volume_bar_chart(df), width="stretch")
-
-    with st.expander("Raw OHLCV data"):
-        display_df = df.copy()
-        display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
-        st.dataframe(
-            display_df.sort_values("date", ascending=False).reset_index(drop=True),
-            width="stretch",
-        )
-
-    _render_footer()
+    # Instruments page (2026-08-02, replaces Charts)
+    _render_instruments_page(config)
 
 
 if __name__ == "__main__":

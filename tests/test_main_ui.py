@@ -259,3 +259,99 @@ def test_backtest_page_shows_both_drawdown_conventions_distinctly(app):
     assert any("-11.23" in v for v in metric_values)  # test peak-relative
     all_text = " ".join(m.value for m in at.markdown) + " ".join(c.value for c in at.caption)
     assert "peak-relative" in all_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Instruments page (2026-08-02, replaces Charts) -- a searchable list of
+# every tracked instrument, sourced from the same dynamic live candidate
+# pool everything else now reads from (get_all_watchlist_entries()).
+# ---------------------------------------------------------------------------
+
+_SAMPLE_WATCHLIST_ENTRIES = [
+    {"ticker": "^GSPC", "name": "S&P 500", "exchange": "NYSE"},
+    {"ticker": "AAPL", "name": "AAPL", "exchange": "NYSE"},
+    {"ticker": "MSFT", "name": "MSFT", "exchange": "NYSE"},
+]
+
+
+@pytest.fixture
+def instruments_app(db_engine, monkeypatch, mocker):
+    """Same import-ordering discipline as the `app` fixture above -- see
+    its own docstring for why every monkeypatch/mocker.patch call must
+    happen before AppTest.from_file("main.py") is constructed, not after.
+
+    Patches data.ingestion.get_all_watchlist_entries (the SOURCE module),
+    not main.get_all_watchlist_entries -- AppTest re-execs main.py's own
+    top-level `from data.ingestion import ... get_all_watchlist_entries
+    ...` import statement on every .run(), which would silently re-bind a
+    main-level patch back to the real function. Patching the upstream
+    source survives that re-exec, the same reason main.get_engine's own
+    patch above works via data.database.get_engine already being patched
+    by the db_engine fixture itself.
+    """
+    mocker.patch("data.scheduler.start_scheduler")
+    monkeypatch.setattr("main.get_engine", lambda: db_engine)
+    monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: list(_SAMPLE_WATCHLIST_ENTRIES))
+
+    at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["page"] = "instruments"
+    return at
+
+
+def test_instruments_page_reachable_via_sidebar_navigation(instruments_app):
+    at = instruments_app.run()
+    assert not at.exception
+    assert any("Instruments" in m.value for m in at.markdown)
+
+
+def test_instruments_page_shows_every_tracked_ticker_from_the_live_pool(instruments_app):
+    """Sourced from get_all_watchlist_entries() -- the same dynamic pool
+    (reference_tickers + get_live_stock_candidates()) everything else now
+    reads from, not a static list."""
+    at = instruments_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"^GSPC", "AAPL", "MSFT"}
+    assert "finance.yahoo.com/quote/AAPL" in df.loc[df["Ticker"] == "AAPL", "Yahoo Finance"].iloc[0]
+    # Reference tickers with special characters (^, =) are URL-encoded in
+    # the link, but shown raw in the Ticker column.
+    assert "%5EGSPC" in df.loc[df["Ticker"] == "^GSPC", "Yahoo Finance"].iloc[0]
+
+
+def test_instruments_page_search_filters_by_ticker_or_name(instruments_app):
+    at = instruments_app.run()
+    at.text_input[0].set_value("MSFT").run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"MSFT"}
+
+
+def test_instruments_page_search_is_case_insensitive_and_matches_name(instruments_app):
+    at = instruments_app.run()
+    at.text_input[0].set_value("s&p 500").run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"^GSPC"}
+
+
+def test_sidebar_nav_has_instruments_not_charts(instruments_app):
+    at = instruments_app.run()
+    nav_options = at.radio[0].options
+    assert "Instruments" in nav_options
+    assert "Charts" not in nav_options
+
+
+def test_old_charts_page_functions_are_gone_not_dormant():
+    """The old Charts page (grouped landing cards + per-ticker candlestick
+    detail view) must be removed entirely, not left as unreachable dead
+    code -- confirmed directly against the real module, not inferred from
+    the nav list alone."""
+    import main as main_module
+    assert not hasattr(main_module, "_render_charts_landing")
+    assert not hasattr(main_module, "_candlestick_chart")
+    assert not hasattr(main_module, "_volume_bar_chart")
+    assert not hasattr(main_module, "_GROUP_LABELS")
+    assert hasattr(main_module, "_render_instruments_page")
