@@ -5580,6 +5580,41 @@ original full-500 study. Nothing pushed as a result of the investigation
 itself (pure analysis, no code/config change); this write-up is the
 durable record.
 
+**Second, independent reproduction (2026-08-02) — exact match, the
+finding is settled.** Per this file's own reproducibility standard, a
+finding this consequential got the same second-reproduction scrutiny
+curated-40 and rolling-40 each received — using two genuinely different
+implementation techniques from the first build, not a re-run of the same
+script: the 503-candidate membership windows were rebuilt via a
+vectorized pandas pivot + run-length-encoding approach (instead of the
+original per-ticker `_reconstruct_windows()` loop), and the reset-at-
+boundary engine via an AST-transformation splice of the balance-reset
+check (instead of the original `inspect.getsource()` + textual anchor
+replace) — verified byte-identical to the real, unmodified production
+function before being trusted for anything. Cross-checking the
+independently-rebuilt membership windows against production's real data
+for all 503 candidates (not a sample) found exactly one mismatch —
+**META** — traced to the second build searching only for the literal
+ticker "META" and missing its entire 2013–2022 "FB" era, which
+production's real `_reconstruct_windows()` correctly merges via
+`_KNOWN_TICKER_RENAMES` (Facebook→Meta was a ticker rename, 2022-06-09,
+not a membership lapse). Fixed by merging the legacy ticker's history
+before windowing, the identical semantic reached by a different
+mechanism; re-verified 0/503 mismatches afterward. With that one bug
+caught and closed *before* it could contaminate the comparison, the full
+independent pipeline reproduced every figure — trades, £-endings, win
+rate, PF, Sharpe, CAGR, max drawdown, and the full market-cap-tier
+composition breakdown down to the exact ticker-level percentages (90.0%
+of traded tickers outside curated-40, 81.9% of trades, 84.6% of
+profit) — **exactly, to the penny, with no residual gap left to
+explain**. This is a stronger reproduction outcome than either
+curated-40's (still an unresolved ~35% gap between its original and
+re-verified figures) or rolling-40's (a small, traced-and-fixed ~2%
+drift from one SEC filing tie-break affecting 2 of 67 quarters) — the
+full-500 finding should now be treated as at least as settled as
+rolling-40's, and did not require a second independent build to correct
+anything about its own headline conclusion.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
