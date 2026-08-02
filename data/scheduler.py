@@ -65,7 +65,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from data.database import get_metadata_str, set_metadata
-from data.ingestion import get_all_tickers, pull_incremental
+from data.ingestion import get_all_tickers, get_all_watchlist_entries, pull_incremental
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +109,24 @@ def _load_config() -> dict:
 
 
 def _build_ticker_exchange_map(config: dict) -> dict[str, str]:
-    """Return {ticker: exchange_calendar_name} for every watchlist entry."""
-    mapping: dict[str, str] = {}
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for entry in assets:
-            if isinstance(entry, dict) and "ticker" in entry:
-                mapping[entry["ticker"]] = entry.get("exchange", "NYSE")
-    return mapping
+    """Return {ticker: exchange_calendar_name} for every tracked ticker --
+    reference_tickers plus the full dynamic live candidate pool.
+
+    Found and fixed 2026-08-02: this used to hand-roll its own, narrower
+    merge (reading only config.get("watchlist", {}), which covered the 3
+    reference tickers alone) instead of reusing
+    data/ingestion.py:get_all_watchlist_entries() -- the SAME "one shared
+    merge, not two independently hand-written copies" bug shape this
+    project has hit repeatedly. The practical effect: _eod_job() below
+    calls pull_incremental(tickers=open_tickers), where open_tickers came
+    from this map -- so the EOD job's actual price pull was silently
+    limited to ^GSPC/GBPUSD=X/EURUSD=X only, never refreshing price data
+    for any of the dynamic S&P 500 candidates get_live_stock_candidates()
+    returns. Reusing get_all_watchlist_entries() here closes that gap by
+    construction -- every ticker it returns already carries a real
+    "exchange" field (reference tickers explicitly, dynamic candidates as
+    "NYSE" per data/ingestion.py's own default)."""
+    return {e["ticker"]: e.get("exchange", "NYSE") for e in get_all_watchlist_entries(config)}
 
 
 def _is_exchange_open(calendar_name: str, check_date: date) -> bool:

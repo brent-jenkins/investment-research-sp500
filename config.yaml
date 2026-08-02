@@ -1,88 +1,26 @@
-# Trimmed 2026-07-31 -- this file now configures exactly one system: a
-# 12-month-momentum long/flat signal with a rare-firing crisis circuit
-# breaker (analysis/signals.py, analysis/crisis.py, analysis/universe.py,
-# analysis/backtest.py). See CLAUDE.md's "V2 architecture" and
-# "V1 removal" sections for the history behind this shape.
-watchlist:
-  # Trimmed 2026-07-31 to exactly what the momentum + crisis-override system
-  # needs: `instruments:` below is now empty (2026-08-02) -- the live
-  # tradeable universe is sourced dynamically instead, from
-  # analysis/universe.py:get_live_stock_candidates() (the full,
-  # daily-refreshed S&P 500 stock membership), see CLAUDE.md's "wire the
-  # momentum-only, full-S&P-500 selection into live execution" section.
-  # analysis/universe.py:ALL_TICKERS remains a separate, frozen 73-ticker
-  # research/backtest universe (33 ETFs + the original 40-stock curated
-  # list) kept exactly as it was for historical reproducibility -- see
-  # CLAUDE.md's "ETF sleeve removed from live trading" section for why the
-  # live and research universes are deliberately two separate systems.
-  # core below still covers ^GSPC (crisis-override reference index) and
-  # GBPUSD=X/EURUSD=X (FX conversion for non-GBP positions).
-  # core is monitoring-only and deliberately stays separate from
-  # `instruments:` below -- none of these three ever has (or ever will have)
-  # an execution mapping; see CLAUDE.md's "Unified instrument structure"
-  # section. The six-module confluence system this watchlist used to serve
-  # (112 assets across 21 groups) has been removed; nothing reads those
-  # tickers anymore.
-  core:
-    - {ticker: "^GSPC", name: "S&P 500", exchange: "NYSE"}
-    - {ticker: "GBPUSD=X", name: "GBP/USD", exchange: "FX"}
-    - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
+# This file configures exactly one system: a 12-month-momentum long/flat
+# signal with a rare-firing crisis circuit breaker. See CLAUDE.md's "V2
+# architecture" section for the design and validation history.
 
-# One record per tradeable instrument -- consolidated 2026-07-31 from what
-# used to be two separately-maintained structures (watchlist.trading's
-# ticker/name/exchange, and trading212_invest.instrument_mapping's nested
-# ticker/currency/is_etf) into a single source of truth per instrument. The
-# duplication meant nothing structurally enforced the two staying in sync;
-# XLF's and XLK's wrong T212 mappings were only ever found by accident,
-# during an unrelated investigation, and could just as easily have been a
-# ticker present in one structure but silently missing from the other. See
-# CLAUDE.md's "Unified instrument structure" section for the full
-# consolidation and tests/test_config.py for the structural validation that
-# still makes an incomplete manual entry impossible to miss, should one
-# ever be added back here.
-#
-# The nested `ticker` field from the old instrument_mapping was renamed to
-# `t212_instrument_id` -- the old name collided confusingly with the
-# watchlist's own top-level `ticker` key (the research ticker), one meaning
-# "our symbol for this instrument" and the other meaning "T212's own
-# internal instrument ID for it".
-#
-# Emptied entirely 2026-08-02 -- the hand-curated 40-stock list this used
-# to hold (each entry verified manually, once) was replaced by a genuinely
-# dynamic live candidate pool: analysis/universe.py:
-# get_live_stock_candidates() (the full, daily-refreshed S&P 500 stock
-# membership) plus brokers/trading212.py:resolve_and_cache_instrument()
-# (T212 instrument-ID resolution verified against real get_instruments()
-# metadata, automatically, the first time any ticker becomes a live
-# candidate -- not a one-time manual pass). See CLAUDE.md's "wire the
-# momentum-only, full-S&P-500 selection into live execution" section.
-# GOLD (Barrick Mining) does NOT need a manual entry here to stay
-# "kept, not removed" -- it remains fully documented as a permanently
-# zero-eligible candidate in analysis/universe.py:STOCK_MEMBERSHIP (empty
-# membership window, verified never a genuine S&P 500 constituent), which
-# is what correctly keeps it out of the live candidate pool automatically
-# (is_member() is always False for it) rather than requiring a redundant
-# static override here.
-#
-# Left as a top-level key (not deleted) so every existing config.get(
-# "instruments", {}) call site keeps behaving exactly the same whether the
-# key is present-and-empty or absent entirely, and so a manual, ad-hoc
-# override entry can still be added here later without a schema change if
-# ever genuinely needed.
-instruments: {}
+# Monitoring-only reference tickers -- never have an execution mapping.
+# ^GSPC is the crisis-override reference index; GBPUSD=X/EURUSD=X convert
+# non-GBP positions. The live tradeable universe is sourced dynamically
+# (analysis/universe.py:get_live_stock_candidates(), the daily-refreshed
+# S&P 500 stock membership) -- see CLAUDE.md's "wire the momentum-only,
+# full-S&P-500 selection into live execution" section. The frozen
+# research/backtest universe (analysis/universe.py:ALL_TICKERS) is a
+# separate, deliberately untouched system.
+reference_tickers:
+  - {ticker: "^GSPC", name: "S&P 500", exchange: "NYSE"}
+  - {ticker: "GBPUSD=X", name: "GBP/USD", exchange: "FX"}
+  - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
 
 data:
-  # How many calendar days of history to fetch on initial load for any asset
-  # that has no existing data in the database.  7150 = ~19.6 years, reaching
-  # back to 2007-01-01 (raised from 3650/~10y on 2026-07-30 alongside
-  # data.ingestion:backfill_price_history() extending existing tickers'
-  # history back to the same date -- see CLAUDE.md's "Historical data
-  # extension" section); yfinance returns from the asset's listing date if
-  # this precedes it, so newer ETFs are handled gracefully either way.
+  # Calendar days of history to fetch on a ticker's first download.
+  # 7150 (~19.6y) reaches back to 2007-01-01; yfinance falls back to the
+  # asset's real listing date if that precedes it.
   history_days: 7150
-  # Seconds to wait between yfinance requests to avoid throttling
-  rate_limit_seconds: 2.5
-  # Retry attempts on failed fetch
+  rate_limit_seconds: 2.5   # delay between yfinance requests
   max_retries: 5
 
 database:
@@ -90,21 +28,10 @@ database:
 
 scheduler:
   timezone: "UTC"
-  # One daily run on weekdays (Mon-Fri), plus the hourly trade-alert job and
-  # the Monday-only stale-order cancellation (both registered directly in
-  # data/scheduler.py:start_scheduler(), not driven by this `runs:` dict):
-  #   21:30 UTC  End of day  — full data refresh + order logic (the only run that pulls prices)
-  #
-  # The 07:00 (Tue-Fri) pre-market and 13:30 US-open "analysis only" runs
-  # that used to also live here were removed 2026-07-31 -- confirmed
-  # genuinely redundant, not assumed: both ever did was call
-  # maybe_exit_positions(), which the hourly trade_alert_check job already
-  # calls at the exact same 07:00 minute and within 30-60 minutes of 13:30
-  # either way. The pre-market job's own data pull (for exchanges that
-  # "just closed") had separately become a permanent no-op, since the
-  # current instruments: universe is exclusively NYSE/FX-listed -- see
-  # CLAUDE.md's "Pre-market/US-open scheduled runs removed" section for
-  # the full investigation.
+  # The only scheduled run driven by this dict; the hourly trade-alert job
+  # and the Monday-only stale-order cancellation are registered directly
+  # in data/scheduler.py:start_scheduler(). EOD is the only run that pulls
+  # prices.
   runs:
     eod:
       hour: 21
@@ -113,9 +40,8 @@ scheduler:
       type: "full"
 
 signals:
-  # The only key read anywhere in the surviving momentum/crisis-override
-  # system -- analysis/backtest.py:precompute_ticker() and
-  # brokers/trading212.py both read this for ATR-based stop-loss sizing.
+  # ATR period for stop-loss sizing -- read by analysis/backtest.py and
+  # brokers/trading212.py.
   atr_period: 14
 
 notifications:
@@ -124,185 +50,73 @@ notifications:
     smtp_host: "smtp-relay.brevo.com"
     smtp_port: 587
     smtp_user: "your-smtp-login@example.com"
-    smtp_password: ""  # Set via SMTP_PASSWORD env var
+    smtp_password: ""  # set via SMTP_PASSWORD env var
     from_address: "hello@example.com"
-    to_addresses:          # List of recipient addresses
+    to_addresses:
       - "you@example.com"
-    alert_cooldown_hours: 8  # Minimum hours between auto-sent alert emails
+    alert_cooldown_hours: 8  # minimum hours between auto-sent alert emails
 
 backtest:
-  # Notional account size VaR position sizing uses inside simulate_trades().
-  # simulate_trades() runs one ticker at a time with no shared, compounding
-  # cross-ticker portfolio balance, so this stays constant for every entry
-  # across a whole run rather than growing/shrinking the way a real account
-  # would.
+  # Notional account size VaR sizing uses inside simulate_trades(), which
+  # runs one ticker at a time with no shared, compounding cross-ticker
+  # balance -- so this stays constant for a whole run rather than
+  # growing/shrinking the way a real account would.
   starting_capital_gbp: 50000
-  # atr_stop_multiplier -- read directly by analysis/volatility.py:
-  # _resolve_entry_stop(), the single shared function both live order
-  # placement (brokers/trading212.py) and every backtest engine
-  # (analysis/backtest.py) call for entry-stop sizing -- there is no
-  # separate live-side copy of this value anywhere, so this key IS what
-  # live uses, not a number that merely happens to match it. Verified
-  # structurally, not just asserted in this comment -- see
-  # tests/test_live_backtest_parity.py's atr_stop_multiplier parity tests.
-  atr_stop_multiplier: 2.0       # stop loss = entry +/- N x ATR
-  # fallback_max_holding_days was removed 2026-08-02 -- consolidated into
-  # trading212_invest.stock_max_holding_days below, which now governs every
-  # non-ETF ticker (curated STOCK_MEMBERSHIP name or otherwise) uniformly.
-  # See analysis/universe.py:get_max_holding_days()'s own docstring for the
-  # full rationale (this key and stock_max_holding_days were two separately-
-  # set values that were only coincidentally equal, not structurally linked
-  # -- the same fragility class as the is_etf-inference fix earlier the
-  # same day).
+  # Stop-loss distance = entry +/- N x ATR. Read directly by
+  # analysis/volatility.py:_resolve_entry_stop(), the single function both
+  # live order placement and every backtest engine call -- there is no
+  # separate live-side copy.
+  atr_stop_multiplier: 2.0
 
-# Live execution config for the momentum + crisis-override system -- see
-# CLAUDE.md's "V2 architecture -- phased rebuild" section for the full
-# validation history behind this design (a single 12-month-momentum signal,
-# long/flat, no regime classifier, plus a rare-firing single-day >=7% crisis
-# circuit breaker).
+# Live execution config for the momentum + crisis-override system. See
+# CLAUDE.md's "V2 architecture" section for the validation history behind
+# this design (a single 12-month-momentum signal, long/flat, no regime
+# classifier, plus a rare-firing single-day >=7% crisis circuit breaker).
 trading212_invest:
   enabled: true
-  live: false               # NEVER set true -- place_market_order() blocks it in code regardless
-  # pause_new_entries was set true 2026-07-31 while a real pricing bug
-  # (get_instrument_price_gbp() never getting a live T212 quote) and a
-  # missing exception-isolation gap in the BUY loop were investigated and
-  # fixed -- see CLAUDE.md's "Live pricing bug, exception isolation, and ETF
-  # mapping audit" section. Both fixes deployed and verified live; new order
-  # placement resumes as of this change (key removed rather than left as
-  # `false`, since brokers/trading212.py's check is `if t212_cfg.get(...)`,
-  # so an absent key already means "not paused" -- no reason to keep a dead
-  # flag around).
-  # max_total_deployed -- percentage of the account's CURRENT total value
-  # (client.get_account_summary()["totalValue"], fetched fresh on every
-  # decide/submit call -- a genuinely compounding balance, not a fixed
-  # reference figure) that may be deployed at once. Read identically by
-  # live order placement (brokers/trading212.py) and by the backtest
-  # engine's own default, live-matching simulation
-  # (analysis/backtest.py:simulate_portfolio_compounding(), invoked by
-  # analysis/validation.py:run_full_validation() whenever no explicit
-  # engine override is passed) -- one shared key, one shared meaning,
-  # deliberately -- see CLAUDE.md's "Live execution switched to the
-  # compounding two-parameter scheme" section for why this file previously
-  # let live and backtest silently diverge on this exact question.
+  live: false   # NEVER set true -- place_market_order() blocks it in code regardless
+  # Percentage of the account's CURRENT total value (fetched fresh on
+  # every decide/submit call) that may be deployed at once. Read
+  # identically by live order placement and the backtest engine's default
+  # simulation -- one shared key, one shared meaning.
   max_total_deployed: 0.5
-  # per_trade_pct -- the VaR sizing ceiling for a single new entry, as a
-  # percentage of the account's CURRENT total value (same compounding
-  # balance as max_total_deployed above) rather than a fixed GBP figure.
-  # Replaces max_position_gbp for live order placement (2026-08-01) --
-  # validated via a 20-combination sweep against real 2007-2026 production
-  # data (per_trade_pct in {2,3,5,7,10}% x max_total_deployed in
-  # {50,65,75,90}%); 5% is the sole combination that reproduces the
-  # canonical 14/16-block failure pattern (see CLAUDE.md's "Compounding
-  # portfolio backtest" section for the full sweep and the reservations
-  # that come with this recommendation -- it is not an unqualified "beats
-  # the market" result).
+  # VaR sizing ceiling for a single new entry, as a percentage of the
+  # account's current total value rather than a fixed GBP figure.
+  # Position count is an emergent consequence of this and
+  # max_total_deployed together, not a separately-enforced cap.
   per_trade_pct: 0.05
-  # max_open_positions and max_position_gbp are RETIRED (2026-08-01) --
-  # neither key exists in this file any more, and nothing reads them from
-  # config. Position count is an emergent consequence of per_trade_pct and
-  # max_total_deployed together, not a third, independently-enforced rule;
-  # the per-trade ceiling is per_trade_pct above, not a fixed £ figure. The
-  # two older backtest engines that used to read these keys
-  # (analysis/backtest.py:simulate_trades() / simulate_portfolio(), still
-  # explicitly selectable via run_full_validation(uncapped=True) /
-  # run_full_validation(portfolio_mode=True) to reproduce the "Current
-  # baseline" / "Portfolio-capped validation findings" figures already
-  # published in CLAUDE.md) now have the historical £2,500 / 20-position
-  # values frozen directly into their own code as fallback defaults, so
-  # removing these keys here does not break that reproducibility -- see
-  # CLAUDE.md's "Live execution switched to the compounding two-parameter
-  # scheme" section for the full rationale.
-  # absolute_max_position_gbp -- a rarely-binding SAFETY ceiling, added
-  # 2026-08-01 after a genuine unbounded-compounding defect was found in
-  # simulate_portfolio_compounding_mtm() (see CLAUDE.md's "Mark-to-market
-  # unbounded compounding defect" section). This is NOT a reintroduction
-  # of the retired max_position_gbp above -- that was rejected as a
-  # PRIMARY sizing driver (too blunt, saturated VaR differentiation for
-  # low-volatility names -- see "Compounding portfolio backtest" in
-  # CLAUDE.md). This is a backstop that should almost never bind under
-  # normal operation: per_trade_pct * current account value still governs
-  # sizing in every ordinary case; this only intervenes if that figure
-  # somehow becomes absurd (e.g. a still-open position's own unrealized
-  # appreciation feeding back into the sizing of BRAND NEW, unrelated
-  # entries -- the exact defect this was added to close). Set high enough
-  # (20x+ a realistic account size) that it is inert for any plausible
-  # real compounding trajectory, while still decisively breaking the
-  # exponential-feedback shape of the defect it exists to catch. Read
-  # identically by live order placement and both compounding backtest
-  # engines -- one shared key, one shared meaning, matching every other
-  # sizing parameter in this section.
+  # Rarely-binding safety ceiling -- per_trade_pct governs sizing in every
+  # ordinary case; this only intervenes if that figure somehow becomes
+  # absurd. Set high enough (20x+ a realistic account size) to be inert
+  # under normal operation.
   absolute_max_position_gbp: 1000000
-  # Position sizing -- Historical VaR, scaled to each ticker's own holding
+  # Historical VaR position sizing, scaled to each ticker's own holding
   # period via the square-root-of-time rule
   # (analysis/volatility.py:_var_position_size_core()) -- position size
-  # scales inversely with a ticker's own volatility rather than giving every
-  # ticker the same flat allocation.
+  # scales inversely with a ticker's own volatility.
   var_confidence: 0.95
   var_lookback_days: 252
   max_risk_pct: 0.01
   min_position_gbp: 50
-  # Max holding days -- analysis/universe.py:get_max_holding_days() dispatches
-  # on ETF_TICKERS membership (analysis/universe.py), NOT on `instruments:`
-  # registration: ETFs get the longer 90d backstop below; every other
-  # ticker (a curated stock, a market-cap-ranked rolling-universe research
-  # candidate, or any other non-ETF ticker) gets the single
-  # stock_max_holding_days value -- see get_max_holding_days()'s own
-  # docstring for the full rationale, including why this was consolidated
-  # from a three-way split into two values on 2026-08-02.
+  # Max holding days for the FROZEN research/backtest universe's ETF
+  # sleeve only (analysis/universe.py:ETF_TICKERS) -- not read for
+  # anything live. The live candidate pool is stocks-only (the ETF sleeve
+  # was removed from live trading entirely); every live ticker uses
+  # stock_max_holding_days below.
   max_holding_days: 90
+  # Max holding days for every live candidate (analysis/universe.py:
+  # get_max_holding_days() dispatches on ETF_TICKERS membership, not on
+  # any config.yaml registration).
   stock_max_holding_days: 30
-  # Clean, independent ETF/stock trading switches (2026-08-01) -- see
-  # CLAUDE.md's "Clean, independent ETF/stock trading switches" section and
-  # analysis/decision.py:is_asset_class_enabled() (the single shared
-  # function both live order placement and the backtest engine read this
-  # through -- see that function's own docstring for the full rationale).
-  #
-  # These gate ENTRY CANDIDACY -- whether a ticker in this asset class is
-  # even considered a new-entry candidate at all (signal computed, VaR
-  # sized, queued into pending_orders / included in a backtest run's
-  # ticker universe). This is a strictly EARLIER, BROADER cut than
-  # stock_submission_enabled below, which only gates the final "place the
-  # order with the broker" step for a decision that has already been
-  # computed and queued (etf_submission_enabled was removed alongside
-  # etf_trading_enabled 2026-08-02 -- see below). Disabling *_trading_enabled
-  # also force-disables the matching *_submission_enabled (a master
-  # override) -- there is nothing coherent about "not a candidate at all"
-  # plus "but still try to submit it".
-  #
-  # Defaults true (absent = enabled) so a config predating this feature
-  # behaves exactly as before. Never gates exits -- an already-open position
-  # is still monitored for its normal stop-loss/signal-off/crisis/
-  # max-holding exit, same as pause_new_entries above.
-  #
-  # etf_trading_enabled was removed entirely 2026-08-02, not merely set to
-  # false -- see CLAUDE.md's "ETF sleeve removed from live trading" section.
-  # With zero is_etf: true entries left in `instruments:` above, the flag
-  # had nothing left to gate; is_asset_class_enabled() still accepts an
-  # is_etf argument (analysis.universe.ETF_TICKERS still exists for the
-  # backtest/research engines -- a separate, deliberately untouched system,
-  # see that section) and still defaults an absent etf_trading_enabled key
-  # to True, so removing the key here is a pure no-op for live trading, not
-  # a behaviour change.
+  # Gates entry CANDIDACY -- whether a ticker is even considered a new
+  # entry candidate at all (signal computed, VaR sized, queued). Defaults
+  # true (absent = enabled). Never gates exits.
   stock_trading_enabled: true
-  # Exchange-aware order submission (2026-07-31) -- see CLAUDE.md's
-  # "Exchange-aware order submission" section. EOD still computes signals
-  # and queues entry decisions into pending_orders exactly as before (as
-  # long as stock_trading_enabled above admits the ticker as a candidate in
-  # the first place); this flag gates the exchange-timed job that actually
-  # submits them (submit_pending_stock_orders() at 13:30 UTC / NYSE open).
-  #
-  # etf_submission_enabled and the 07:00 UTC / LSE-open ETF submission job
-  # it used to gate were both removed entirely 2026-08-02, not merely left
-  # paused -- see CLAUDE.md's "ETF sleeve removed from live trading"
-  # section. Stock submission continues as today (no change in behaviour
-  # requested for stocks) -- defaults true even if this key were removed,
-  # but kept explicit.
+  # Gates the exchange-timed submission job (submit_pending_stock_orders()
+  # at 13:30 UTC / NYSE open) for a decision already computed and queued
+  # by stock_trading_enabled above -- a strictly later, narrower cut.
   stock_submission_enabled: true
   # Submission-time sanity check: if a ticker's price has moved more than
-  # this fraction since the EOD decision was made, skip submission and log
-  # clearly rather than execute on a stale decision (same "fail loud, don't
-  # guess" principle as the 2026-07-31 pricing-bug fix). 3% is comfortably
-  # above ordinary day-to-day noise for a diversified ETF or large-cap
-  # stock, but well below a genuine earnings-surprise/macro-shock gap --
-  # see CLAUDE.md for the full rationale.
+  # this fraction since the EOD decision was made, skip submission rather
+  # than execute on a stale decision.
   price_sanity_threshold_pct: 0.03

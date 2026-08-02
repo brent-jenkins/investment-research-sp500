@@ -32,47 +32,27 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
     """Return one dict per tracked asset, uniform shape, from both
     monitoring-only and tradeable sources:
 
-    - `watchlist.core` (^GSPC, GBPUSD=X, EURUSD=X) -- ticker/name/exchange
-      only; these never have an execution mapping and never will (see
-      config.yaml's own comment on `watchlist:`).
-    - top-level `instruments:` -- ticker/name/exchange plus the execution
-      fields (is_etf, t212_instrument_id, currency).
+    - `reference_tickers:` (^GSPC, GBPUSD=X, EURUSD=X) -- ticker/name/
+      exchange only; these never have an execution mapping.
+    - The dynamic live candidate pool (analysis/universe.py:
+      get_live_stock_candidates(), the daily-refreshed S&P 500 stock
+      membership) -- merged in so price history exists for every genuine
+      current index member before it's ever evaluated as a trading
+      candidate. pull_incremental() already does a full-history fetch the
+      first time a ticker has no stored data at all, so a brand-new index
+      entrant needs nothing beyond appearing in this list.
 
-    Consolidated 2026-07-31 from what used to be two separately-maintained
-    structures (watchlist.trading + trading212_invest.instrument_mapping)
-    -- see CLAUDE.md's "Unified instrument structure" section. Callers that
-    only need the ticker symbols should use get_all_tickers() below;
-    callers that need name/exchange/execution fields should use this
-    directly rather than re-deriving the merge themselves.
+    Callers that only need the ticker symbols should use get_all_tickers()
+    below; callers that need name/exchange should use this directly.
     """
     if config is None:
         config = _load_config()
 
-    entries: list[dict] = []
-    for assets in config.get("watchlist", {}).values():
-        if not isinstance(assets, list):
-            continue
-        for asset in assets:
-            if isinstance(asset, dict) and "ticker" in asset:
-                entries.append(dict(asset))
+    entries: list[dict] = [dict(e) for e in config.get("reference_tickers", [])]
 
-    for ticker, raw in config.get("instruments", {}).items():
-        if isinstance(raw, dict):
-            entries.append({"ticker": ticker, **raw})
-
-    # Dynamic S&P 500 live candidate pool (2026-08-02) -- `instruments:`
-    # above is now typically empty (the hand-curated 40-ticker list was
-    # removed in favour of the full, dynamically-refreshed index
-    # membership -- see analysis/universe.py:get_live_stock_candidates()
-    # and CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into
-    # live execution" section). Merged in here so price history actually
-    # exists for every genuine current index member before it's ever
-    # evaluated as a trading candidate -- pull_incremental() already does
-    # a full-history fetch the first time a ticker has no stored data at
-    # all, so a brand-new index entrant needs nothing beyond appearing in
-    # this list. Best-effort: a DB not yet initialised (very first
-    # startup, before init_db() has run) must not break the watchlist
-    # merge for callers that only need watchlist.core + instruments.
+    # Best-effort: a DB not yet initialised (very first startup, before
+    # init_db() has run) must not break the merge for callers that only
+    # need reference_tickers.
     try:
         from analysis.universe import get_live_stock_candidates
         already = {e["ticker"] for e in entries}
@@ -86,7 +66,7 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
 
 
 def get_all_tickers(config: Optional[dict] = None) -> list[str]:
-    """Return a flat list of every ticker symbol in the watchlist + instruments."""
+    """Return a flat list of every tracked ticker symbol (reference tickers + live candidates)."""
     return [e["ticker"] for e in get_all_watchlist_entries(config)]
 
 

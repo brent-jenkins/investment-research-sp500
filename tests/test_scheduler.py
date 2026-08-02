@@ -90,6 +90,47 @@ def _patch_common(monkeypatch, *, now_hour, now_minute, last_refresh_hours_ago, 
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
 
 
+# ---------------------------------------------------------------------------
+# _build_ticker_exchange_map() (2026-08-02 fix) -- used to hand-roll its own
+# merge over config.get("watchlist", {}) alone, covering only the 3
+# reference tickers. _eod_job() below builds its actual price-pull ticker
+# list from this map's own keys, so the bug meant the EOD job's real price
+# pull was silently limited to ^GSPC/GBPUSD=X/EURUSD=X, never refreshing
+# price data for any of the dynamic S&P 500 candidates
+# get_live_stock_candidates() returns. Fixed by reusing
+# data/ingestion.py:get_all_watchlist_entries() -- the same function
+# get_all_tickers() already correctly delegates to.
+# ---------------------------------------------------------------------------
+
+def test_build_ticker_exchange_map_includes_dynamic_candidates(mocker):
+    mocker.patch(
+        "data.scheduler.get_all_watchlist_entries",
+        return_value=[
+            {"ticker": "^GSPC", "name": "S&P 500", "exchange": "NYSE"},
+            {"ticker": "GBPUSD=X", "name": "GBP/USD", "exchange": "FX"},
+            {"ticker": "AAPL", "name": "AAPL", "exchange": "NYSE"},
+            {"ticker": "MSFT", "name": "MSFT", "exchange": "NYSE"},
+        ],
+    )
+
+    mapping = scheduler._build_ticker_exchange_map({})
+
+    assert mapping == {
+        "^GSPC": "NYSE", "GBPUSD=X": "FX", "AAPL": "NYSE", "MSFT": "NYSE",
+    }
+
+
+def test_build_ticker_exchange_map_defaults_missing_exchange_to_nyse(mocker):
+    mocker.patch(
+        "data.scheduler.get_all_watchlist_entries",
+        return_value=[{"ticker": "NEWCO", "name": "NEWCO"}],  # no "exchange" key
+    )
+
+    mapping = scheduler._build_ticker_exchange_map({})
+
+    assert mapping == {"NEWCO": "NYSE"}
+
+
 def test_missed_eod_detected(monkeypatch):
     """Stale last_full_refresh (25h ago) + current time inside the 21:45-23:59
     catch-up window -> the catch-up pipeline runs with run_type='full'."""

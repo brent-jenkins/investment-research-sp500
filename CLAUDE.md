@@ -6100,6 +6100,197 @@ submission-job tests were replaced with a single test confirming
 no longer exists, rather than testing removed behaviour). Deployed the
 same day — see the deploy log for the exact commit and timestamp.
 
+### Market-cap infrastructure removed (2026-08-02)
+
+`analysis/market_cap.py` and the `market_cap_history` table (see "Market-cap
+data infrastructure — deployed, not wired to live trading" above) were
+removed entirely, code and data both — not left as unused-but-present
+infrastructure. Checked directly before removing anything, not assumed:
+`grep -rln "market_cap|MarketCapHistory"` across every production `.py`
+file found exactly two hits — the module itself and its own `data/
+database.py` model definition — confirming `market_cap()` was never called
+from any live decision-making path (`brokers/trading212.py`, the dynamic
+candidate pool, the instrument-resolution logic) and nothing else in the
+codebase imported from it. The full-500/top-100/top-150 universe-broadening
+studies and the fair-competition study that used SEC EDGAR market-cap data
+all worked from their own extracted copies inside disposable research
+clones — never production's real file or table — so removing the
+production copy costs nothing for reproducing any of those findings; their
+own write-ups already state the exact formula/data needed per this file's
+"Research reproducibility standard".
+
+Verified on the production server directly (not assumed): `market_cap_history`
+existed with 25,573 rows (matching the original backfill's own count). DB
+backed up first (`investment_research_pre_marketcap_removal_<timestamp>.db`),
+then the table dropped via a direct `DROP TABLE IF EXISTS`. `tests/
+test_market_cap.py` (88 tests) removed alongside the module; `tests/
+conftest.py`'s `_GET_ENGINE_BINDINGS` had its `analysis.market_cap.get_engine`
+entry removed (the module no longer exists to patch). Full suite: 415
+passing after removal (down from 503, matching the 88 removed tests).
+
+### ETF pricing-path audit and manual-seed mechanism removed (2026-08-02)
+
+Direct follow-up to "ETF sleeve removed from live trading" above — that
+task's own UI change initially *relabelled* `audit_etf_pricing_paths()`'s
+Status-page expander as "currently inert" rather than removing it, on the
+same "flag, don't delete" reasoning this file applies to genuinely
+reversible states elsewhere. That reasoning doesn't hold here: the T212
+demo account was reset the same day specifically for a clean start, the
+system has never placed a real live order, and there is no historical ETF
+trade data this mechanism's presence would be preserving. A "0 ETF
+positions, currently inert" display reads as a dormant capability that
+could be switched back on, not as a decision that's been made and closed
+— the same standard already applied to the EDGAR/market-cap removal above
+and the `instruments:` config entries themselves.
+
+Removed entirely, not relabelled: `audit_etf_pricing_paths()`,
+`seed_instrument_price_gbp()`, and `get_cached_price_entry()`
+(`brokers/trading212.py`), plus the Status page's whole "ETF pricing-path
+audit" + "Seed a manual price" UI block (`main.py`). Checked each
+function's real callers before removing (not assumed dead): `get_cached_
+price_entry()` was called only by the audit function; `seed_instrument_
+price_gbp()` and `audit_etf_pricing_paths()` were called only by the one
+UI block being removed. `_get_cached_price_gbp()` (the private, bare-float
+cache read `get_instrument_price_gbp()`'s own tier-2 path uses) and
+`_cache_last_known_price_gbp()` were kept — these are genuinely generic,
+still-live infrastructure (a stock currently unheld but priced before via
+a real fill still uses this cache tier), unlike the audit/seed mechanism,
+which existed specifically because an ETF/UCITS wrapper has no automated
+fallback price path at all — a problem that only ever applied to ETFs,
+and ETFs no longer exist as live candidates.
+
+**A real bug found in passing, while checking the removed block's call
+site.** The "Instrument mapping" expander directly above the ETF audit
+block had already been rewired (same day, earlier in this session) to
+read from the dynamic `instrument_resolutions` table instead of the old
+static `config["instruments"]` dict — but the ETF audit/seed block below
+it still referenced the old `mapping_full` local variable, which no
+longer existed anywhere in scope. This block was already silently broken
+(a `NameError` waiting to fire the next time anyone opened that expander)
+before this task started; removing it fixes that bug as a side effect
+rather than needing a separate patch.
+
+A second, related stale reference was found and fixed the same way:
+`_submit_pending_orders()`'s locked-out-ETF warning log message (`brokers/
+trading212.py`) pointed operators at "Status page → T212 Invest Account →
+ETF pricing-path audit → Seed a manual price" — a UI path that no longer
+exists. This branch is itself structurally unreachable in production now
+(no `is_etf=True` row can ever be queued — see "ETF sleeve removed from
+live trading" above), kept only because `submit_pending_etf_orders()`
+itself is deliberately kept as documented dead code for the shared
+capacity/price-sanity logic's test coverage. The message was reworded to
+state plainly this should never occur in production, rather than pointing
+to a removed recovery path.
+
+9 tests removed alongside the functions (`tests/test_execution.py`:
+5 `seed_instrument_price_gbp` tests, 2 cache-tier interaction tests,
+2 `audit_etf_pricing_paths` tests); the one remaining test that checked
+the locked-out-ETF warning's exact wording
+(`test_locked_out_etf_with_positive_signal_is_a_clean_logged_skip_not_a_silent_failure`)
+was updated to match the reworded message rather than removed, since the
+underlying exception-isolation behaviour it verifies is still real and
+still worth covering. Full suite: 406 passing.
+
+### config.yaml restructure — flattened reference tickers, removed `instruments:`, and a real EOD price-pull bug found along the way (2026-08-02)
+
+Four related cleanups to config.yaml, done together since they all touch
+the same file, plus one genuine production bug found and fixed while
+verifying the second cleanup was safe.
+
+**`instruments: {}` removed entirely.** Verified safe first, not assumed:
+(1) grepped for direct `config["instruments"]` indexing (which would raise
+`KeyError` on a fully-removed key) across every production file — none
+found; `brokers/trading212.py`, `data/ingestion.py`, and `main.py` all used
+`.get("instruments", {})`, which returns the identical `{}` whether the
+key is present-and-empty or absent entirely, so removing it is a pure
+no-op for all three; (2) `tests/test_config.py` DID use direct indexing in
+five places against the real config.yaml (it would have broken) — those
+tests were rewritten rather than left to fail, since the underlying thing
+they validated (a hand-curated instrument mapping's structural integrity)
+no longer exists to validate at all now that the mapping is fully dynamic.
+
+**`watchlist: {core: [...]}` flattened to a top-level `reference_tickers:`
+list.** `watchlist:` had exactly one child (`core`) left once `instruments:`
+moved out to its own top-level key on 2026-07-31 — the wrapper added
+nothing. Every reader updated: `data/ingestion.py:get_all_watchlist_entries()`
+now reads `config.get("reference_tickers", [])` directly instead of
+iterating `config.get("watchlist", {}).values()`; `main.py`'s Charts
+landing page grouping and `_build_watchlist()` updated to match.
+
+**The real bug: `data/scheduler.py:_build_ticker_exchange_map()` was
+never actually merged with the dynamic candidate pool at all.** Found
+while updating this function for the `watchlist:` flattening (Part B's own
+"update every reader" requirement) — it had always hand-rolled its own
+merge over `config.get("watchlist", {})` alone (predating even the
+`instruments:` split, since `instruments:` was never nested under
+`watchlist:` to begin with), rather than reusing `data/ingestion.py:
+get_all_watchlist_entries()`, the one function that correctly includes the
+dynamic live candidate pool. The practical effect, traced all the way
+through: `_eod_job()` builds its actual price-pull ticker list
+(`open_tickers`) directly from this map's own keys, then calls
+`pull_incremental(tickers=open_tickers)` — an *explicit* ticker list that
+bypasses `pull_incremental()`'s own default (`get_all_tickers(config)`,
+which correctly includes the dynamic pool) entirely. This means the EOD
+job's real price pull has been silently limited to the 3 reference tickers
+(`^GSPC`, `GBPUSD=X`, `EURUSD=X`) — **never actually refreshing price data
+for any of the dynamic S&amp;P 500 stock candidates** `get_live_stock_
+candidates()` returns, since the day the dynamic candidate pool went live
+(see "wire the momentum-only, full-S&amp;P-500 selection into live
+execution" above). No test existed for `_build_ticker_exchange_map()` or
+an EOD price-pull scenario at all, which is why this went uncaught.
+
+Fixed by having `_build_ticker_exchange_map()` reuse `get_all_watchlist_entries()`
+directly — every entry it returns already carries a real `exchange` field
+(reference tickers explicitly, dynamic candidates as `"NYSE"` per
+`data/ingestion.py`'s own default), so the fix is a direct call, not a
+re-derivation. Two new regression tests added
+(`tests/test_scheduler.py::test_build_ticker_exchange_map_includes_dynamic_candidates`,
+`..._defaults_missing_exchange_to_nyse`). This bug predates today's
+session — it was never introduced by the dynamic-candidate-pool wiring
+itself, only exposed by auditing every reader while flattening
+`watchlist:` — but its practical consequence (stale price data for the
+entire live stock universe) is corrected as of this fix, deployed the same
+day as the rest of this section.
+
+**Comments trimmed to functional-only.** Every remaining comment in
+config.yaml previously did two jobs — explain what a key does now, and
+narrate the full incident history of how it got that way (dates, bug
+names, section-by-section CLAUDE.md cross-references). The second job is
+already this file's own job; duplicating it in config.yaml just made the
+file harder to scan for no benefit. Every comment trimmed to a brief,
+current-state explanation of what the key does and why it's set the way
+it is, with CLAUDE.md pointed to only where a comment would otherwise be
+meaningless without the context (e.g. the "V2 architecture" pointer on
+`trading212_invest:`'s own header comment).
+
+**`max_holding_days: 90` (under `trading212_invest:`) reworded to state
+plainly it's research-only.** With zero ETFs in the live candidate pool,
+this value is read only by the frozen research/backtest universe's ETF
+sleeve (`analysis/universe.py:ETF_TICKERS`, via `get_max_holding_days()`)
+— never for anything live. Left in place under `trading212_invest:` rather
+than moved to `backtest:` (the backtest engine already reads this exact
+key, under this exact section, by design — see "Live/backtest decision-
+logic parity" above for why holding-limit logic is deliberately shared
+between live and backtest through one function rather than two config
+locations), but the comment now says directly that it's the frozen
+research universe's value, not a live parameter, so it doesn't read as an
+active live setting to a future reader.
+
+**Part E (`stock_` prefix drop) — skipped, not attempted.** `stock_trading_
+enabled`/`stock_submission_enabled`/`stock_max_holding_days` have no ETF
+sibling left to disambiguate from, so dropping the prefix is purely
+cosmetic. Checked the blast radius before deciding: `grep -rln` for these
+three keys found 5 production files (`analysis/decision.py`, `analysis/
+universe.py`, `analysis/validation.py`, `brokers/trading212.py`, plus
+config.yaml itself) and 7 test files reading them. Renaming touches every
+one of those call sites for zero functional benefit, while three other
+substantive changes were already landing in the same session — judged not
+worth the risk/effort ratio right now. Left as a documented, deliberate
+skip, not an oversight; revisit if this section is touched again for an
+unrelated reason.
+
+Full suite: 404 passing after all four parts plus the bug fix.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
