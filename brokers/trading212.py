@@ -1830,9 +1830,12 @@ def maybe_exit_positions(config: dict) -> None:
 
 def _locally_believed_open_positions() -> dict[str, dict]:
     """{t212_ticker: {"ticker": ..., "buy_id": ..., "entry_price": ...,
-    "quantity": ...}} for every t212_ticker whose latest FILLED BUY has no
-    later FILLED SELL — i.e. what THIS system's own order history implies
-    is still an open position, independent of what T212 currently shows.
+    "quantity": ..., "buy_filled_at": ...}} for every t212_ticker whose
+    latest FILLED BUY has no later FILLED SELL — i.e. what THIS system's
+    own order history implies is still an open position, independent of
+    what T212 currently shows. buy_filled_at is the anchor
+    _most_recent_sell_order_since() uses to find any SELL attempt (of any
+    status, not just FILLED) tied to the current holding.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -1841,7 +1844,8 @@ def _locally_believed_open_positions() -> dict[str, dict]:
         with eng.connect() as conn:
             rows = conn.execute(sa_text("""
                 SELECT io.t212_ticker, io.ticker, io.id AS buy_id,
-                       io.fill_price AS entry_price, io.filled_quantity AS quantity
+                       io.fill_price AS entry_price, io.filled_quantity AS quantity,
+                       io.filled_at AS buy_filled_at
                 FROM invest_orders io
                 WHERE io.direction = 'BUY' AND io.status = 'FILLED'
                 AND io.id = (
@@ -1860,6 +1864,46 @@ def _locally_believed_open_positions() -> dict[str, dict]:
     except Exception as exc:
         logger.warning("_locally_believed_open_positions: query failed: %s", exc)
         return {}
+
+
+def _most_recent_sell_order_since(t212_ticker: str, since: Optional[str]) -> Optional[dict]:
+    """The most recent SELL order (ANY status — PLACED/FILLED/FAILED/
+    REJECTED/CANCELLED) for *t212_ticker* placed since *since* (the
+    current holding's BUY fill time), or None if this system has no SELL
+    attempt on record for it at all.
+
+    This is the direct order-ID check BROKER_CLOSED_NO_SELL uses (2026-08-02)
+    to distinguish two genuinely different situations that a position
+    simply being absent from T212's live positions list cannot tell apart
+    on its own:
+      - We placed a SELL (it has a real T212 order_id) that just hasn't
+        resolved to FILLED in our own records yet — T212's positions list
+        is a real-time read, but poll_placed_orders()'s order-status
+        lookup has a documented lag on this account (see "Broker
+        integration" above: "T212's demo account has been observed
+        leaving a market SELL sitting in PLACED for 60+ hours before
+        poll_placed_orders() ever sees it resolve"). The position being
+        gone from get_positions() while our own SELL is still PLACED is
+        exactly that lag, not a mystery.
+      - No SELL order — no order_id — exists anywhere in this system's
+        history for the position. There is nothing here that could
+        explain the closure; the broker acted without us.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            row = conn.execute(sa_text("""
+                SELECT order_id, status, placed_at FROM invest_orders
+                WHERE t212_ticker = :t AND direction = 'SELL'
+                AND (:since IS NULL OR placed_at > :since)
+                ORDER BY placed_at DESC LIMIT 1
+            """), {"t": t212_ticker, "since": since}).mappings().first()
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.warning("_most_recent_sell_order_since: query failed for %s: %s", t212_ticker, exc)
+        return None
 
 
 def invalidate_stale_instrument_resolutions(
@@ -1959,20 +2003,67 @@ def reconcile_positions_with_broker(config: dict) -> dict:
 
     believed_open = _locally_believed_open_positions()
 
-    # BROKER_CLOSED_NO_SELL — we believe it's open, T212 doesn't show it
-    # held, and we never placed a SELL that could have closed it.
+    # BROKER_CLOSED_NO_SELL — we believe it's open (no FILLED SELL on
+    # record), T212 doesn't show it held. Direct order-ID check (2026-08-02)
+    # before flagging: does ANY SELL order — of any status, not just
+    # FILLED — exist for this position since its BUY? This is the
+    # difference between "T212 acted with no order from us at all" (a
+    # genuine broker-side event, no order_id anywhere) and "we placed a
+    # SELL, it just hasn't resolved to FILLED locally yet" (a real T212
+    # order_id exists, PLACED, awaiting poll_placed_orders() — routine
+    # lag, not a mystery). See _most_recent_sell_order_since()'s own
+    # docstring for the documented lag this distinguishes against.
     for t212_ticker, info in believed_open.items():
         if t212_ticker in positions_by_t212:
             continue  # genuinely still held — no discrepancy
-        note = (
-            f"{info['ticker']} ({t212_ticker}): our order history's latest FILLED BUY "
-            f"(qty {info.get('quantity')}, entry price {info.get('entry_price')}) has no "
-            "matching FILLED SELL, but T212's live positions list does not show it held. "
-            "This system never placed a SELL for it. Most likely a cash-out acquisition "
-            "the broker processed automatically. Exact proceeds are NOT known from any "
-            "T212 endpoint this system calls — verify manually against T212's own "
-            "transaction history and reconcile pnl by hand if needed."
-        )
+
+        recent_sell = _most_recent_sell_order_since(t212_ticker, info.get("buy_filled_at"))
+
+        if recent_sell and recent_sell["status"] == "PLACED":
+            # We have a real T212 order_id for this — the position being
+            # gone is consistent with that order having actually filled;
+            # poll_placed_orders() (which runs earlier in the same hourly
+            # cycle) just hasn't caught up to the terminal status yet.
+            # Not a discrepancy — never flag this as a broker-side mystery.
+            logger.info(
+                "%s (%s): believed open with no FILLED SELL, but a PLACED "
+                "SELL order_id=%s already exists — likely resolving via "
+                "poll_placed_orders(), not a broker-side closure. Skipping.",
+                info["ticker"], t212_ticker, recent_sell["order_id"],
+            )
+            continue
+
+        if recent_sell:
+            # A SELL order_id exists but did NOT resolve to FILLED in our
+            # records (FAILED/REJECTED/CANCELLED) — genuinely worth
+            # flagging, but this is a materially different, more specific
+            # situation than "no order at all": either that order actually
+            # filled on T212's side despite our recorded status (a
+            # reconciliation mismatch worth investigating directly), or a
+            # broker-side event coincided with a failed attempt. Named
+            # explicitly rather than folded into the generic case.
+            note = (
+                f"{info['ticker']} ({t212_ticker}): our order history's latest FILLED BUY "
+                f"(qty {info.get('quantity')}, entry price {info.get('entry_price')}) has no "
+                "matching FILLED SELL, and T212's live positions list does not show it held. "
+                f"A SELL order WAS attempted (order_id={recent_sell['order_id']}, recorded "
+                f"status={recent_sell['status']}) but did not resolve to FILLED in our records "
+                "— verify directly whether that order actually filled on T212's side despite "
+                "the recorded status, before assuming this was a broker-side event (e.g. a "
+                "cash-out acquisition) unrelated to our own attempt."
+            )
+        else:
+            note = (
+                f"{info['ticker']} ({t212_ticker}): our order history's latest FILLED BUY "
+                f"(qty {info.get('quantity')}, entry price {info.get('entry_price')}) has no "
+                "matching FILLED SELL, but T212's live positions list does not show it held. "
+                "No SELL order of ANY status exists anywhere in this system's history for it "
+                "— no order_id to explain the closure. Most likely a cash-out acquisition the "
+                "broker processed automatically. Exact proceeds are NOT known from any T212 "
+                "endpoint this system calls — verify manually against T212's own transaction "
+                "history and reconcile pnl by hand if needed."
+            )
+
         _record_reconciliation_event(
             event_type="BROKER_CLOSED_NO_SELL", t212_ticker=t212_ticker,
             ticker=info["ticker"], quantity=info.get("quantity"), note=note,

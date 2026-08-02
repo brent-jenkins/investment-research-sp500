@@ -6420,6 +6420,46 @@ Called from `reconcile_positions_with_broker()`, reusing the same live
 `get_positions()` read the other two checks already need rather than a
 second T212 API call.
 
+**`BROKER_CLOSED_NO_SELL` refined to check for a real T212 order_id
+directly (2026-08-02), not just infer from local order-history structure.**
+The original version above flagged `BROKER_CLOSED_NO_SELL` purely from
+"no FILLED SELL exists locally" + "T212 doesn't show it held" — it never
+checked whether an actual T212 order_id existed for a SELL attempt that
+just hadn't resolved to FILLED locally yet. This was a real precision gap,
+not a hypothetical: `poll_placed_orders()` runs earlier in the same hourly
+`_trade_alert_job()` cycle, but this account has a *documented* lag on
+order-status resolution (see "Broker integration" above — "T212's demo
+account has been observed leaving a market SELL sitting in PLACED for 60+
+hours before poll_placed_orders() ever sees it resolve"). If `get_positions()`
+(a real-time read) already shows a position gone because our own SELL
+genuinely filled on T212's side, but the async order-status endpoint
+hasn't caught up yet, the old check would misfire — flagging a routine,
+already-in-progress exit as a mystery broker-side event.
+
+`_most_recent_sell_order_since(t212_ticker, since)` looks up the most
+recent SELL order **of any status** (not just FILLED) for the position
+since its BUY, giving `reconcile_positions_with_broker()` a genuine
+three-way read instead of a binary one:
+- **A `PLACED` order_id exists** — the position's absence is consistent
+  with that order having filled; this is `poll_placed_orders()` lag, not
+  a discrepancy. Skipped entirely — no event recorded, no alert.
+- **A `FAILED`/`REJECTED`/`CANCELLED` order_id exists** — still flagged
+  (this genuinely wasn't resolved successfully in our own records), but
+  the note now names the real order_id and its recorded status
+  explicitly, and states the correct next step plainly: verify directly
+  whether that specific order actually filled on T212's side despite the
+  recorded status, before assuming an unrelated broker-side event.
+- **No SELL order of any status exists** — the original, clean case:
+  genuinely no order_id anywhere to explain the closure. Flagged with the
+  same cash-out-acquisition note as before.
+
+This is the direct order-ID check itself — matching or absence of a real
+T212 order_id — not a stylistic rewording of the same inference. Covered
+by 2 new tests: the PLACED-order skip case (confirms zero event recorded,
+zero alert sent) and the REJECTED-order case (confirms the event still
+fires but the note names the specific order_id and status). Full suite:
+431 passing.
+
 **How this runs going forward — not a one-time fix.**
 `reconcile_positions_with_broker()` is wired into the hourly
 `_trade_alert_job()` (`data/scheduler.py`) alongside `maybe_exit_positions()`

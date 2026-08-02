@@ -1957,6 +1957,67 @@ def test_reconcile_broker_closed_no_sell(db_engine, v2_mocks, mocker):
     mock_alert.assert_called_once()
 
 
+def test_reconcile_broker_closed_skips_when_placed_sell_order_pending(db_engine, v2_mocks, mocker):
+    """2026-08-02 order-ID-aware refinement: if a real T212 order_id
+    already exists for a SELL on this position (status still PLACED --
+    not yet resolved via poll_placed_orders(), which has a documented lag
+    on this account), the position being gone from T212's live positions
+    is consistent with that order having actually filled -- must NOT be
+    flagged as a broker-side mystery, and must NOT alert."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
+    _seed_resolutions_from_mapping(db_engine, {"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD"}})
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0, days_ago=5, is_etf=True)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, order_id, direction, status, placed_at, created_at)
+            VALUES ('VOO', 'I50Dl_EQ', 'real-t212-order-id-123', 'SELL', 'PLACED', :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+    v2_mocks.get_positions.return_value = []  # T212 shows nothing held -- consistent with that SELL having filled
+
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["broker_closed_no_sell"] == []
+    count = db_engine.connect().execute(sa_text(
+        "SELECT COUNT(*) FROM position_reconciliations WHERE t212_ticker='I50Dl_EQ'"
+    )).scalar()
+    assert count == 0
+    mock_alert.assert_not_called()
+
+
+def test_reconcile_broker_closed_notes_order_id_when_sell_attempted_but_not_filled(db_engine, v2_mocks, mocker):
+    """A SELL order_id exists but resolved to REJECTED (not FILLED) in our
+    records, yet the position is gone from T212 anyway -- still flagged
+    (this is genuinely unresolved), but the note must name the real
+    order_id and its recorded status explicitly rather than reading as a
+    clean, order-free broker-side closure -- a materially different,
+    more specific situation."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
+    _seed_resolutions_from_mapping(db_engine, {"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD"}})
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0, days_ago=5, is_etf=True)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, order_id, direction, status, placed_at, created_at)
+            VALUES ('VOO', 'I50Dl_EQ', 'real-t212-order-id-456', 'SELL', 'REJECTED', :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+    v2_mocks.get_positions.return_value = []
+
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["broker_closed_no_sell"] == ["VOO"]
+    row = db_engine.connect().execute(sa_text(
+        "SELECT note FROM position_reconciliations WHERE t212_ticker='I50Dl_EQ'"
+    )).fetchone()
+    assert "real-t212-order-id-456" in row[0]
+    assert "REJECTED" in row[0]
+    mock_alert.assert_called_once()
+
+
 def test_reconcile_unrecognized_position(db_engine, v2_mocks, mocker):
     """T212 shows an instrument held that has no VERIFIED mapping at all --
     a stock-swap acquisition converting a previously-tracked position into
