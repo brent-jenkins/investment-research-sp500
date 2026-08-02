@@ -6485,6 +6485,118 @@ and 3 new tests in `tests/test_scheduler.py` (wiring, and that a
 reconciliation failure doesn't block the exit check or snapshot refresh
 sharing its hourly slot). Full suite: 429 passing.
 
+### Market-calendar-aware scheduling (2026-08-02)
+
+`scheduled_eod` and `membership_refresh` moved from a Mon-Fri `CronTrigger`
+day-of-week filter to firing **every single day**, with a genuine
+NYSE-calendar check as the first thing each job does once it fires. A
+plain weekday filter already skipped weekends correctly, but had zero
+concept of a market holiday (Thanksgiving, Christmas, ...) — it would
+still fire the full order-decide pipeline on any weekday regardless of
+whether NYSE was actually open that day.
+
+**Confirmed this was a real, live bug, not a theoretical one.** Before
+this fix, `_eod_job()`'s per-ticker exchange check only decided *which
+tickers* to pull that day — `_ALWAYS_PULL`/`_ALWAYS_OPEN_EXCHANGES`
+(FX/crypto reference tickers) guaranteed `open_tickers` was never empty
+even on a day NYSE itself was closed, so the job always fell through to
+`_run_analysis_pipeline(..., RUN_FULL)` regardless — meaning on a weekday
+market holiday, this system was placing real order-decide logic against
+stale price data (no genuine NYSE close had happened that day) every
+single time one occurred.
+
+**The gate — `_is_scheduled_trading_day(check_date)` (`data/scheduler.py`)**
+reuses the existing `_is_exchange_open("NYSE", check_date)` helper
+(itself already backed by `pandas_market_calendars`, used elsewhere in
+this module for the EOD job's own per-exchange ticker-pull decisions) —
+the same "reuse a maintained, purpose-built source instead of a
+hand-rolled list that can go stale" lesson already applied to S&P 500
+membership tracking itself (`analysis/universe.py`, the `fja05680/sp500`
+dataset) rather than a manually-maintained holiday calendar. NYSE is the
+only calendar this system's live decisions genuinely depend on now — the
+entire ETF sleeve was removed from live trading 2026-08-02 (see "ETF
+sleeve removed from live trading" above), so every live candidate is a
+US-listed equity.
+
+**Deliberately structured for a future extended-hours session, not just
+today's requirement.** The scheduler registration itself must fire daily
+with no day-of-week filter at all — this is the load-bearing part of the
+design, not an implementation detail. If the trigger stayed Mon-Fri, the
+job would never wake up on a Sunday to check anything, which would
+structurally exclude a future extended-hours scenario (some platforms
+already offer Sunday-evening pre-market data) before the job ever got the
+chance to decide differently for it. `_is_scheduled_trading_day()` is kept
+as its own named function (rather than inlining `_is_exchange_open("NYSE",
+...)` at each call site) specifically so a future session-aware version
+of this check is a change to one function, not a change to the scheduler
+registration or either job's control flow. Not built now — only the
+standard NYSE regular session is checked today — but the structure doesn't
+foreclose it.
+
+**Both jobs use the identical gate, verified directly** (not just
+asserted): a dedicated test (`test_eod_and_membership_refresh_use_the_
+identical_gate`) inspects both functions' source and confirms both call
+`_is_scheduled_trading_day(today_utc)` — the same "one shared function,
+not two independently hand-written copies" discipline this project has
+already been burned by more than once (see `analysis/decision.py`'s own
+docstring for the original four instances).
+
+**A third, directly-related bug found and fixed as part of this same
+change, not left for later.** `_check_missed_eod_run()` (the startup-time
+catch-up mechanism, called once when the scheduler process starts) calls
+`_run_analysis_pipeline()` directly rather than going through `_eod_job()`
+— so it did **not** automatically inherit the new gate, and still had its
+own, separate, hardcoded `now_utc.weekday() >= 5` guard with the identical
+"no holiday awareness" gap. Worse: this change *increases* the chance of
+this actually firing wrong — under the old always-run EOD behaviour,
+`last_full_refresh` rarely went stale on a weekday holiday (the job ran
+regardless); now that `_eod_job()` correctly no-ops on a holiday,
+`last_full_refresh` legitimately stays stale from the last real trading
+day, which is exactly the condition `_check_missed_eod_run()` reacts to.
+A service restart during its 21:45-23:59 UTC catch-up window on a genuine
+market holiday would have read that expected staleness as a "missed run"
+and fired a real catch-up — including real order placement — against
+stale data on a day the market is actually closed. Fixed by replacing the
+standalone weekday check with the same `_is_scheduled_trading_day()` call
+`_eod_job()`/`_membership_refresh_job()` use — one shared gate across all
+three call sites now, not three independently-maintained ones.
+
+**A related test-hygiene finding, worth recording since it's the exact
+failure shape to watch for again.** Six pre-existing `_membership_refresh_
+job()` tests never froze "today" at all — they implicitly depended on
+whichever real calendar day the suite happened to run on. Adding the
+calendar gate exposed this immediately: 3 hard-failed the moment the
+suite ran on a real Sunday, but 3 more were worse — they kept *passing*,
+only because their own assertions (`assert_not_called()`, "must not
+raise") were trivially satisfied once the gate silently short-circuited
+the job before ever reaching the logic they claimed to test. All six
+fixed by freezing `scheduler.datetime` to an explicitly chosen, verified
+real trading day (2026-08-04) rather than leaving them to depend on the
+day the suite happens to execute on. Checked programmatically afterward
+across every test in the file that calls `_eod_job()`/`_membership_
+refresh_job()`/`_check_missed_eod_run()` (17 total) to confirm every one
+now freezes the date — zero remaining exposure — and the full suite was
+re-run successfully on a genuine real Sunday as the strongest possible
+confirmation.
+
+Covered by 17 tests in `tests/test_scheduler.py`: `_is_scheduled_trading_
+day()` directly against real, independently-verified dates (an ordinary
+Tuesday, Thanksgiving, a Saturday — no mocking of `pandas_market_calendars`
+itself, exercising the genuine library); both jobs' registration confirmed
+to carry no `day_of_week` filter (`field(...) == "*"`); the registered
+`scheduled_eod` trigger's own `get_next_fire_time()` computed across a
+real Friday-to-Saturday boundary to prove it genuinely would fire on a
+weekend (not just that the raw cron field looks unfiltered); both jobs'
+no-op behaviour on a real holiday and a real weekend, and normal operation
+on an ordinary weekday, all proven at the decision layer (real downstream
+functions asserted called/not-called, not just that the internal logic
+*would* handle it correctly if reached); and the `_check_missed_eod_run()`
+holiday-non-firing regression. Full suite: 443 passing.
+
+Deployed 2026-08-02 (commit range to follow in the deploy log); production
+DB backed up first per this session's standing discipline, even though
+this change touches scheduling logic only, no data.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

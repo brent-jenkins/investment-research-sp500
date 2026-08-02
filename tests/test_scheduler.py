@@ -190,6 +190,37 @@ def test_no_missed_eod_on_fresh_install(monkeypatch):
     assert calls == []
 
 
+def test_missed_eod_not_triggered_on_market_holiday(monkeypatch):
+    """2026-08-02 fix -- _check_missed_eod_run() used to guard only against
+    Saturday/Sunday (a plain weekday() >= 5 check), not genuine market
+    holidays. A service restart during the 21:45-23:59 UTC window on a
+    real NYSE holiday, with last_full_refresh stale from the last real
+    trading day (correctly stale, since _eod_job() itself now legitimately
+    no-ops on a holiday), must NOT be misread as a "missed" EOD run and
+    must NOT fire a real catch-up (which places live orders) against
+    stale price data on a day the market is genuinely closed. Frozen to
+    2026-11-26 (Thanksgiving, a Thursday -- weekday() == 3, so the OLD
+    weekday-only guard would have let this through), 22:00 UTC (inside
+    the catch-up window), last_full_refresh 25h stale (over the 20h
+    threshold) -- every OTHER condition this function checks says "fire
+    the catch-up"; only the new calendar gate should stop it."""
+    calls: list = []
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 11, 26, hour=22, minute=0))
+    last_dt = datetime(2026, 11, 26, 22, 0) - timedelta(hours=25)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: last_dt.isoformat())
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+    monkeypatch.setattr(scheduler, "get_all_tickers", lambda config: ["AAPL"])
+    monkeypatch.setattr(
+        scheduler, "_run_analysis_pipeline",
+        lambda config, tickers, run_type: calls.append((config, tickers, run_type)),
+    )
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+
+    scheduler._check_missed_eod_run({"some": "config"})
+
+    assert calls == []
+
+
 # ---------------------------------------------------------------------------
 # Monday pre-market job — stale weekend order cancellation + fresh order run.
 #
@@ -358,7 +389,12 @@ def test_scheduler_registers_monday_job_mon_only_fixed_at_0700(monkeypatch):
         assert field("monday_premarket", "day_of_week") == "mon"
         assert field("monday_premarket", "hour") == "7"
         assert field("monday_premarket", "minute") == "0"
-        assert field("scheduled_eod", "day_of_week") == "mon-fri"
+        # scheduled_eod is registered with NO day_of_week filter as of
+        # 2026-08-02 -- it fires every day and decides for itself,
+        # internally, via _is_scheduled_trading_day() (see that function's
+        # own docstring and the dedicated calendar-gating tests below).
+        # APScheduler's CronTrigger renders an unset field as "*".
+        assert field("scheduled_eod", "day_of_week") == "*"
 
         # The removed Tue-Fri pre-market and 13:30 US-open jobs must not
         # come back under any job id.
@@ -371,7 +407,9 @@ def test_scheduler_registers_monday_job_mon_only_fixed_at_0700(monkeypatch):
 def test_scheduler_registers_membership_refresh_job(monkeypatch):
     """start_scheduler() must actually register membership_refresh on the
     schedule -- not just leave refresh_membership_from_source() callable in
-    isolation. Fires 15 minutes ahead of the 21:30 EOD job, weekdays only."""
+    isolation. Fires 15 minutes ahead of the 21:30 EOD job daily -- no
+    day_of_week filter as of 2026-08-02, same market-calendar gate as
+    scheduled_eod (see the dedicated calendar-gating tests below)."""
     fake_config = {
         "scheduler": {
             "timezone": "UTC",
@@ -393,7 +431,8 @@ def test_scheduler_registers_membership_refresh_job(monkeypatch):
         def field(name: str) -> str:
             return next(str(f) for f in job.trigger.fields if f.name == name)
 
-        assert field("day_of_week") == "mon-fri"
+        # No day_of_week filter -- fires daily, gated internally.
+        assert field("day_of_week") == "*"
         assert field("hour") == "21"
         assert field("minute") == "15"
     finally:
@@ -527,7 +566,15 @@ def test_stock_order_submission_job_never_raises_on_failure(mocker):
     scheduler._stock_order_submission_job()  # must not raise
 
 
-def test_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
+def test_membership_refresh_job_calls_refresh_and_logs_changes(monkeypatch, mocker, caplog):
+    # Frozen to a real, verified ordinary trading day (2026-08-04, a
+    # Tuesday) -- see the calendar-gating tests further below. Without
+    # this, the market-calendar gate added 2026-08-02 short-circuits the
+    # whole job before mock_refresh is ever called whenever this suite
+    # happens to run on a real weekend/holiday, and the test would pass
+    # vacuously (refresh simply never attempted) rather than genuinely
+    # exercising the refresh-and-log behaviour it claims to cover.
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
     mock_refresh = mocker.patch(
         "analysis.universe.refresh_membership_from_source",
         return_value={"checked": 40, "changed": [{"ticker": "XYZ", "old": [], "new": [("2026-01-01", "2026-12-31")]}], "errors": []},
@@ -544,7 +591,8 @@ def test_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
     assert any("XYZ" in r.message for r in caplog.records)
 
 
-def test_membership_refresh_job_never_raises_on_failure(mocker):
+def test_membership_refresh_job_never_raises_on_failure(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
     mocker.patch(
         "analysis.universe.refresh_membership_from_source",
         side_effect=RuntimeError("network down"),
@@ -564,13 +612,17 @@ def test_membership_refresh_job_never_raises_on_failure(mocker):
 # check_wikipedia_lag() docstrings for the full rationale.
 # ---------------------------------------------------------------------------
 
-def test_membership_refresh_job_sends_alert_when_stale(mocker):
+def test_membership_refresh_job_sends_alert_when_stale(monkeypatch, mocker):
     """When is_membership_refresh_stale() says stale, the job must call
     send_membership_staleness_alert() with the real age and threshold --
     is_membership_refresh_stale() itself is mocked here so this test is
     immune to which real weekday/time it happens to run on (its own
     formula is covered directly, and deterministically, in
-    tests/test_universe.py)."""
+    tests/test_universe.py). The job's own market-calendar gate (2026-08-02)
+    is a separate, earlier decision -- still frozen to a real trading day
+    here so this test doesn't depend on which day it happens to run on
+    either."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
     mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
     stale_last_success = datetime.utcnow() - timedelta(hours=96)
     mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=stale_last_success)
@@ -588,7 +640,8 @@ def test_membership_refresh_job_sends_alert_when_stale(mocker):
     assert cfg == {"notifications": {"email": {"enabled": True}}}
 
 
-def test_membership_refresh_job_does_not_alert_when_not_stale(mocker):
+def test_membership_refresh_job_does_not_alert_when_not_stale(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
     mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
     mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=datetime.utcnow())
     mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=False)
@@ -600,7 +653,8 @@ def test_membership_refresh_job_does_not_alert_when_not_stale(mocker):
     mock_alert.assert_not_called()
 
 
-def test_membership_refresh_job_alert_never_raises_when_alert_itself_fails(mocker):
+def test_membership_refresh_job_alert_never_raises_when_alert_itself_fails(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
     mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
     mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=None)
     mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=True)
@@ -611,7 +665,8 @@ def test_membership_refresh_job_alert_never_raises_when_alert_itself_fails(mocke
     scheduler._membership_refresh_job()  # must not raise
 
 
-def test_membership_refresh_job_calls_wikipedia_lag_check(mocker):
+def test_membership_refresh_job_calls_wikipedia_lag_check(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
     mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
     mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=datetime.utcnow())
     mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=False)
@@ -750,3 +805,183 @@ def test_trade_alert_job_reconciliation_failure_does_not_block_snapshot(mocker):
 
     mock_exit.assert_called_once()
     mock_snap.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Market-calendar-aware scheduling (2026-08-02) -- scheduled_eod and
+# membership_refresh both moved from a Mon-Fri cron day_of_week filter to
+# firing every single day, with a genuine NYSE-calendar gate
+# (_is_scheduled_trading_day()) checked first thing inside each job. See
+# CLAUDE.md's dedicated section for the full reasoning, including why a
+# plain weekday filter has no concept of a market holiday and why this
+# leaves room for a future extended-hours session.
+#
+# Real, unmocked pandas_market_calendars NYSE data is used throughout --
+# not a stubbed calendar -- so these tests exercise the genuine library,
+# not an assumption about what it would say. Verified directly before
+# writing these tests: 2026-11-26 (Thanksgiving) and 2026-08-01 (Saturday)
+# both compute as closed; 2026-08-04 (an ordinary Tuesday) computes as open.
+# ---------------------------------------------------------------------------
+
+def _frozen_date_at(year: int, month: int, day: int, hour: int = 21, minute: int = 30):
+    """A datetime subclass whose .now(tz) always returns the given fixed
+    calendar date/time -- unlike _frozen_datetime() above (hardcoded to
+    the module-level _NOW_DATE constant), this lets each calendar-gating
+    test pick a specific, real, independently-verified date."""
+    fixed = datetime(year, month, day, hour, minute, 0)
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.replace(tzinfo=tz) if tz else fixed
+
+    return _Frozen
+
+
+def test_is_scheduled_trading_day_true_on_ordinary_weekday():
+    from datetime import date
+    assert scheduler._is_scheduled_trading_day(date(2026, 8, 4)) is True  # Tuesday
+
+
+def test_is_scheduled_trading_day_false_on_real_market_holiday():
+    from datetime import date
+    assert scheduler._is_scheduled_trading_day(date(2026, 11, 26)) is False  # Thanksgiving
+
+
+def test_is_scheduled_trading_day_false_on_weekend():
+    from datetime import date
+    assert scheduler._is_scheduled_trading_day(date(2026, 8, 1)) is False  # Saturday
+
+
+def test_eod_and_membership_refresh_use_the_identical_gate():
+    """Both jobs must be genuinely aligned -- not two independently
+    hand-written checks that could drift apart, the exact "one shared
+    function, not two that are merely supposed to agree" lesson this
+    project has already been burned by more than once."""
+    import inspect
+    eod_src = inspect.getsource(scheduler._eod_job)
+    membership_src = inspect.getsource(scheduler._membership_refresh_job)
+    assert "_is_scheduled_trading_day(today_utc)" in eod_src
+    assert "_is_scheduled_trading_day(today_utc)" in membership_src
+
+
+def test_scheduled_eod_trigger_actually_fires_on_a_real_weekend_date(monkeypatch):
+    """Confirms the registration itself, not just the internal logic --
+    the trigger's own computed next-fire-time must land on a genuine
+    Saturday, proving the job gets the chance to wake up and decide for
+    itself rather than being excluded by a cron day_of_week filter before
+    it ever runs. This is what "no day_of_week filter" (asserted as
+    field(...) == "*" in the registration tests above) actually buys."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        job = sched.get_job("scheduled_eod")
+        assert job is not None
+        # 2026-07-31 21:30 UTC is a Friday (just past that day's own fire
+        # time) -- the very next fire time must be Saturday 2026-08-01
+        # 21:30 UTC if the trigger genuinely has no weekday restriction.
+        just_after_friday = datetime(2026, 7, 31, 21, 31, tzinfo=timezone.utc)
+        next_fire = job.trigger.get_next_fire_time(None, just_after_friday)
+        assert next_fire is not None
+        assert next_fire.date() == datetime(2026, 8, 1).date()  # Saturday
+    finally:
+        scheduler.stop_scheduler()
+
+
+def _mock_eod_dependencies(mocker):
+    """Deliberately does NOT mock _is_exchange_open() or the job-level
+    _is_scheduled_trading_day() gate that reuses it -- both must run
+    against the real, unmocked pandas_market_calendars NYSE data so these
+    tests genuinely exercise calendar awareness, not an assumption about
+    what it would say."""
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mock_pull = mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mock_pipeline = mocker.patch("data.scheduler._run_analysis_pipeline")
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    return mock_pull, mock_pipeline, mock_snap
+
+
+def test_eod_job_noop_on_real_market_holiday(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 11, 26))  # Thanksgiving
+    mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
+
+    scheduler._eod_job()
+
+    mock_pull.assert_not_called()
+    mock_pipeline.assert_not_called()
+    mock_snap.assert_not_called()
+
+
+def test_eod_job_noop_on_weekend(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1))  # Saturday
+    mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
+
+    scheduler._eod_job()
+
+    mock_pull.assert_not_called()
+    mock_pipeline.assert_not_called()
+    mock_snap.assert_not_called()
+
+
+def test_eod_job_runs_normally_on_ordinary_weekday(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))  # Tuesday
+    mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
+
+    scheduler._eod_job()
+
+    mock_pull.assert_called_once()
+    mock_pipeline.assert_called_once()
+    mock_snap.assert_called_once()
+
+
+def _mock_membership_refresh_dependencies(mocker):
+    mock_refresh = mocker.MagicMock(return_value={"changed": [], "errors": []})
+    mocker.patch("analysis.universe.refresh_membership_from_source", mock_refresh)
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=None)
+    mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=False)
+    mock_lag = mocker.patch("analysis.universe.check_wikipedia_lag")
+    return mock_refresh, mock_lag
+
+
+def test_membership_refresh_job_noop_on_real_market_holiday(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 11, 26))
+    mock_refresh, mock_lag = _mock_membership_refresh_dependencies(mocker)
+
+    scheduler._membership_refresh_job()
+
+    mock_refresh.assert_not_called()
+    mock_lag.assert_not_called()
+
+
+def test_membership_refresh_job_noop_on_weekend(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1))
+    mock_refresh, mock_lag = _mock_membership_refresh_dependencies(mocker)
+
+    scheduler._membership_refresh_job()
+
+    mock_refresh.assert_not_called()
+    mock_lag.assert_not_called()
+
+
+def test_membership_refresh_job_runs_normally_on_ordinary_weekday(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mock_refresh, mock_lag = _mock_membership_refresh_dependencies(mocker)
+
+    scheduler._membership_refresh_job()
+
+    mock_refresh.assert_called_once()
+    mock_lag.assert_called_once()

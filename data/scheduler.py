@@ -154,6 +154,49 @@ def _is_exchange_open(calendar_name: str, check_date: date) -> bool:
         return True
 
 
+def _is_scheduled_trading_day(check_date: date) -> bool:
+    """True if *check_date* is a genuine NYSE trading day — the market-
+    calendar gate _eod_job()/_membership_refresh_job() each check first,
+    before doing anything else, once they fire (2026-08-02).
+
+    Both jobs are now registered to fire every single day (no day-of-week
+    filter at the trigger level in start_scheduler() — see that function's
+    own comments) specifically so this check runs and gets to make its own
+    decision daily, rather than a cron day-of-week filter silently
+    excluding Saturday/Sunday before either job ever has the chance to
+    decide anything. A plain Mon-Fri filter also has no concept of a
+    market holiday (Thanksgiving, Christmas, ...) at all — it would either
+    fail or behave oddly running the full order pipeline against stale
+    price data on a weekday NYSE closure. pandas_market_calendars (via the
+    existing _is_exchange_open() helper, same NYSE calendar — every ETF
+    was removed from live trading 2026-08-02, see CLAUDE.md's "ETF sleeve
+    removed from live trading" section, so NYSE is the only calendar this
+    system's live decisions genuinely depend on now) is the real,
+    purpose-built source of truth here — the same "reuse a maintained,
+    purpose-built source instead of a hand-rolled list that can go stale"
+    lesson already applied to S&P 500 membership tracking itself
+    (analysis/universe.py, the fja05680/sp500 dataset) rather than a
+    manually-maintained holiday calendar.
+
+    Deliberately kept as its own named function rather than inlining
+    `_is_exchange_open("NYSE", check_date)` at each call site: this
+    answers a different question from _is_exchange_open()'s own per-
+    ticker "which exchanges are open today, so which tickers should be
+    pulled" role further inside _eod_job() — this one decides whether the
+    JOB should run AT ALL today. Keeping it separate and named is what
+    makes room for a genuinely different answer in the future — some
+    platforms already offer extended-hours trading with prices updating
+    Sunday evening, and a job that already wakes up daily and asks this
+    exact question is positioned to answer differently for that case
+    (a different calendar, a session-type parameter, a config flag) with
+    no change to the scheduler registration itself. Not built now — this
+    only ever checks the standard NYSE regular-session calendar today —
+    but the structure doesn't foreclose it the way a hardcoded weekday
+    cron trigger would have.
+    """
+    return _is_exchange_open("NYSE", check_date)
+
+
 def _fetch_t212_snapshot(config: dict) -> None:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
@@ -401,7 +444,24 @@ def _monday_premarket_job() -> None:
 
 
 def _eod_job() -> None:
-    """21:30 UTC — pull incremental data for open exchanges, then run the full order pipeline."""
+    """Daily, 21:30 UTC — market-calendar-gated (2026-08-02), not a Mon-Fri
+    cron filter. Pull incremental data for open exchanges, then run the
+    full order pipeline — but only on a genuine NYSE trading day.
+
+    Registered in start_scheduler() to fire every single day now, with no
+    day_of_week restriction at the trigger level — the check below is the
+    FIRST thing this job does once it fires, deciding for itself whether
+    there's anything to do today rather than being excluded by a cron
+    filter before it ever gets the chance to decide. See
+    _is_scheduled_trading_day()'s own docstring for the full reasoning,
+    including the deliberate room this leaves for a future extended-hours
+    session this system doesn't yet support.
+    """
+    today_utc: date = datetime.now(timezone.utc).date()
+    if not _is_scheduled_trading_day(today_utc):
+        logger.info("EOD job — %s is not a scheduled NYSE trading day, nothing to do.", today_utc)
+        return
+
     logger.info("Scheduled end-of-day refresh starting (21:30 UTC)…")
     try:
         set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
@@ -411,7 +471,6 @@ def _eod_job() -> None:
     config = _load_config()
     ticker_exchange = _build_ticker_exchange_map(config)
 
-    today_utc: date = datetime.now(timezone.utc).date()
     unique_exchanges = set(ticker_exchange.values())
     open_exchanges: dict[str, bool] = {
         exch: _is_exchange_open(exch, today_utc)
@@ -512,11 +571,19 @@ def _trade_alert_job() -> None:
 
 
 def _membership_refresh_job() -> None:
-    """21:15 UTC weekdays — refresh point-in-time S&P 500 membership windows
-    from source, 15 minutes before the 21:30 EOD job's live trading decisions
-    run, so ticker eligibility is never computed against stale membership
-    data (a ticker's real S&P 500 addition/removal must reach the
-    eligibility check before it can affect that day's entries/exits).
+    """Daily, 21:15 UTC — market-calendar-gated (2026-08-02), not a Mon-Fri
+    cron filter, same NYSE calendar and same _is_scheduled_trading_day()
+    gate as _eod_job() so the two jobs can never disagree about whether
+    today counts. Refresh point-in-time S&P 500 membership windows from
+    source 15 minutes before the 21:30 EOD job's own live trading
+    decisions run, so ticker eligibility is never computed against stale
+    membership data (a ticker's real S&P 500 addition/removal must reach
+    the eligibility check before it can affect that day's entries/exits)
+    — but only on a genuine trading day, matching EOD's own gate exactly.
+
+    Registered in start_scheduler() to fire every single day now, with no
+    day_of_week restriction at the trigger level — see
+    _is_scheduled_trading_day()'s own docstring for the full reasoning.
 
     refresh_membership_from_source() is already internally "never raises"
     (per-ticker failures are caught and logged, not propagated) — the outer
@@ -540,6 +607,11 @@ def _membership_refresh_job() -> None:
        data's own upstream source, not independent verification). Flags
        only; never blocks anything.
     """
+    today_utc: date = datetime.now(timezone.utc).date()
+    if not _is_scheduled_trading_day(today_utc):
+        logger.info("Membership refresh job — %s is not a scheduled NYSE trading day, nothing to do.", today_utc)
+        return
+
     from analysis.universe import (  # noqa: PLC0415
         MEMBERSHIP_STALE_HOURS,
         check_wikipedia_lag,
@@ -647,15 +719,29 @@ def _check_missed_eod_run(config: dict) -> None:
     If last_full_refresh has never been recorded (fresh install, no data
     yet), skip silently — there's nothing to catch up on.
 
-    The Saturday/Sunday guard is preserved from the previous version: no EOD
-    job is ever scheduled on a weekend, so a stale last_full_refresh there
-    is expected, not missed.
-
-    The catch-up runs in a daemon thread so start_scheduler() returns promptly.
+    Market-calendar gate (2026-08-02) — same _is_scheduled_trading_day()
+    check _eod_job() itself uses, not a standalone weekday guard. This
+    function calls _run_analysis_pipeline() directly rather than going
+    through _eod_job() (it's a startup-time catch-up, not the real 21:30
+    cron firing), so it does NOT automatically inherit _eod_job()'s own
+    gate — it needs this check explicitly, or a service restart during
+    the 21:45-23:59 UTC window on a genuine market holiday would see
+    last_full_refresh stale (correctly so, since the real EOD job no-ops
+    on a holiday) and incorrectly conclude a run was "missed", firing a
+    real catch-up — including real order placement — against stale price
+    data on a day the market is actually closed. This is a materially
+    more likely failure mode after 2026-08-02 than before it: previously
+    the EOD job ran its full decide phase unconditionally on every
+    weekday regardless of holiday status (a separate bug in its own
+    right, fixed the same day — see CLAUDE.md's "market-calendar-aware
+    scheduling" section), so last_full_refresh rarely if ever went stale
+    on a weekday holiday under the old behaviour. Replaces the previous
+    plain Saturday/Sunday weekday() check — the calendar check already
+    covers weekends too, so nothing is lost, only holidays gained.
     """
     now_utc = datetime.now(timezone.utc)
 
-    if now_utc.weekday() >= 5:  # Saturday (5) or Sunday (6) — no scheduled EOD
+    if not _is_scheduled_trading_day(now_utc.date()):
         return
 
     last_refresh_str = get_metadata_str("last_full_refresh")
@@ -737,6 +823,13 @@ def start_scheduler() -> BackgroundScheduler:
         "eod": _eod_job,
     }
 
+    # No day_of_week filter (2026-08-02, see _is_scheduled_trading_day()'s
+    # own docstring) — every job registered through this loop now fires
+    # daily and decides for itself, internally, whether today is a real
+    # NYSE trading day. A cron day-of-week filter has no concept of a
+    # market holiday and would silently exclude Saturday/Sunday before the
+    # job ever got the chance to make that decision itself — the opposite
+    # of what this loop's jobs (currently just "eod") need.
     for run_name, run_cfg in sched_cfg["runs"].items():
         job_fn = _JOB_FNS.get(run_name)
         if job_fn is None:
@@ -747,14 +840,13 @@ def start_scheduler() -> BackgroundScheduler:
             trigger=CronTrigger(
                 hour=run_cfg["hour"],
                 minute=run_cfg["minute"],
-                day_of_week="mon-fri",
                 timezone=tz,
             ),
             id=f"scheduled_{run_name}",
             replace_existing=True,
         )
         logger.info(
-            "Scheduled '%s' job at %02d:%02d %s (mon-fri).",
+            "Scheduled '%s' job at %02d:%02d %s daily (NYSE-calendar-gated internally).",
             run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz,
         )
 
@@ -830,19 +922,22 @@ def start_scheduler() -> BackgroundScheduler:
     # sched_cfg["runs"]["eod"] — unlike the Monday pre-market job (which
     # deliberately tracks the pre_market slot if it's ever retimed), this
     # job's only requirement is "shortly before EOD", not "exactly N
-    # minutes before whatever EOD currently is".
+    # minutes before whatever EOD currently is". No day_of_week filter
+    # (2026-08-02, matching the EOD loop above) — fires daily, gated
+    # internally by the same _is_scheduled_trading_day() NYSE check EOD
+    # itself uses, so the two jobs can never disagree about whether today
+    # counts.
     _scheduler.add_job(
         _membership_refresh_job,
         trigger=CronTrigger(
             hour=21,
             minute=15,
-            day_of_week="mon-fri",
             timezone=tz,
         ),
         id="membership_refresh",
         replace_existing=True,
     )
-    logger.info("Scheduled membership refresh at 21:15 %s weekdays.", tz)
+    logger.info("Scheduled membership refresh at 21:15 %s daily (NYSE-calendar-gated internally).", tz)
 
     # Weekly summary — Sunday 09:00 *Europe/London*, not this scheduler's
     # own default UTC timezone (`tz` above). CronTrigger's own `timezone`
