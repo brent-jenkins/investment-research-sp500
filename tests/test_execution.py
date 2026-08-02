@@ -45,12 +45,42 @@ def _bullish_with_crisis_today() -> pd.DataFrame:
     return _price_frame(400, 100.0, 0.0015, last_day_shock=-0.09)
 
 
-def _config(mapping=None, enabled=True) -> dict:
+def _seed_resolutions_from_mapping(engine, mapping: dict) -> None:
+    """Seed VERIFIED instrument_resolutions rows matching *mapping* --
+    maybe_place_orders()/maybe_exit_positions() now resolve each ticker's
+    T212 instrument mapping from this DB-backed cache
+    (brokers/trading212.py:resolve_and_cache_instrument()/
+    _load_all_verified_instrument_resolutions()) rather than reading a
+    static config.yaml `instruments:` dict. See CLAUDE.md's "wire the
+    momentum-only, full-S&P-500 selection into live execution" section."""
+    with engine.begin() as conn:
+        for ticker, raw in mapping.items():
+            conn.execute(sa_text("""
+                INSERT INTO instrument_resolutions
+                    (ticker, t212_instrument_id, currency, status, note, attempted_at, resolved_at)
+                VALUES (:t, :tt, :ccy, 'VERIFIED', 'seeded for test', :now, :now)
+            """), {
+                "t": ticker, "tt": raw["t212_instrument_id"],
+                "ccy": raw.get("currency", "USD"), "now": datetime.utcnow().isoformat(),
+            })
+
+
+def _config(mapping=None, enabled=True, mocker=None, db_engine=None) -> dict:
     if mapping is None:
         mapping = {
             "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
             "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
         }
+    # The live candidate pool (analysis.universe.get_live_stock_candidates())
+    # and each ticker's T212 instrument mapping (instrument_resolutions) are
+    # both DB/live-derived now, not read from config["instruments"] -- see
+    # _seed_resolutions_from_mapping()'s own docstring. Mocked/seeded here,
+    # from the same *mapping* every existing call site already passes, so
+    # each test needs only to also pass mocker=mocker, db_engine=db_engine.
+    if mocker is not None:
+        mocker.patch("analysis.universe.get_live_stock_candidates", return_value=list(mapping.keys()))
+    if db_engine is not None:
+        _seed_resolutions_from_mapping(db_engine, mapping)
     return {
         "instruments": mapping,
         "trading212_invest": {
@@ -172,7 +202,7 @@ def test_pause_new_entries_blocks_buy_but_still_exits(db_engine, v2_mocks, mocke
     mocker.patch("analysis.universe.is_member", return_value=True)
     v2_mocks.get_positions.return_value = []  # nothing open -- exit phase is a no-op but must run
 
-    cfg = _config()
+    cfg = _config(mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["pause_new_entries"] = True
     maybe_place_orders(cfg, run_type="full")
 
@@ -194,7 +224,8 @@ def test_entry_fires_when_all_three_conditions_hold(db_engine, v2_mocks, mocker)
     _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -223,7 +254,8 @@ def test_entry_sizing_ceiling_scales_with_live_account_value(db_engine, v2_mocks
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["var_lookback_days"] = 30
     cfg["trading212_invest"]["per_trade_pct"] = 0.05
 
@@ -261,7 +293,8 @@ def test_entry_blocked_when_momentum_negative(db_engine, v2_mocks, mocker):
     from brokers.trading212 import maybe_place_orders
 
     _mock_price_data(mocker, {"VOO": _bearish_frame()})
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -273,7 +306,8 @@ def test_entry_blocked_when_stock_not_index_member(db_engine, v2_mocks, mocker):
     _mock_price_data(mocker, {"AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=False)
 
-    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}})
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -289,7 +323,8 @@ def test_entry_blocked_during_crisis_cooldown_window(db_engine, v2_mocks, mocker
     mocker.patch("analysis.crisis.is_entry_blocked", return_value=True)
     mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -304,7 +339,8 @@ def test_etf_always_eligible_regardless_of_membership_check(db_engine, v2_mocks,
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
     spy = mocker.patch("analysis.universe.is_member", return_value=False)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     v2_mocks.place_market_order.assert_not_called()
@@ -322,7 +358,8 @@ def test_decide_phase_skips_ticker_with_existing_unresolved_pending_order(db_eng
     mocker.patch("analysis.universe.is_member", return_value=True)
     _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     assert len(_pending_rows(db_engine, status="PENDING")) == 1  # still just the seeded one
@@ -352,7 +389,7 @@ def test_decide_phase_queues_regardless_of_deployed_cap(db_engine, v2_mocks, moc
     _mock_price_data(mocker, frames)
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config(mapping=_n_ticker_mapping(5))
+    cfg = _config(mapping=_n_ticker_mapping(5), mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["max_total_deployed"] = 0.5  # already exceeded (60%)
     maybe_place_orders(cfg, run_type="full")
 
@@ -380,13 +417,20 @@ def test_etf_trading_disabled_excludes_etf_candidacy_but_leaves_stocks_untouched
     as if the ETF didn't exist in the universe at all."""
     from brokers.trading212 import maybe_place_orders
 
+    # A real live candidate pool (analysis.universe.get_live_stock_candidates())
+    # would never include an ETF ticker any more (ETFs were removed from
+    # live trading 2026-08-02) -- VOO is used here anyway, mocked directly
+    # into the candidate pool, purely to exercise maybe_place_orders()'s own
+    # is_asset_class_enabled(is_etf=ticker in universe.ETF_TICKERS, ...)
+    # gate defensively (VOO is still a real member of universe.ETF_TICKERS),
+    # not because this scenario can occur in production today.
     _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
     cfg = _config(mapping={
         "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
         "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-    })
+    }, mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["etf_trading_enabled"] = False
     maybe_place_orders(cfg, run_type="full")
 
@@ -397,13 +441,16 @@ def test_etf_trading_disabled_excludes_etf_candidacy_but_leaves_stocks_untouched
 def test_stock_trading_disabled_excludes_stock_candidacy_but_leaves_etfs_untouched(db_engine, v2_mocks, mocker):
     from brokers.trading212 import maybe_place_orders
 
+    # See the identical note in the sibling test above -- VOO is mocked
+    # into the candidate pool purely to exercise the candidacy gate
+    # defensively, not because a live-discovered ETF candidate can occur.
     _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
     cfg = _config(mapping={
         "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
         "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-    })
+    }, mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["stock_trading_enabled"] = False
     maybe_place_orders(cfg, run_type="full")
 
@@ -427,7 +474,8 @@ def test_disabled_asset_class_never_reaches_signal_computation(db_engine, v2_moc
     mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["etf_trading_enabled"] = False
     maybe_place_orders(cfg, run_type="full")
 
@@ -449,7 +497,7 @@ def test_decide_phase_calls_the_shared_asset_class_gate(db_engine, v2_mocks, moc
     _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config()  # default mapping: VOO (ETF) + AAPL (stock)
+    cfg = _config(mocker=mocker, db_engine=db_engine)  # default mapping: VOO (ETF) + AAPL (stock)
     maybe_place_orders(cfg, run_type="full")
 
     assert spy.call_count == 2  # once per ticker in the mapping
@@ -470,7 +518,8 @@ def test_trading_enabled_with_submission_disabled_is_a_coherent_shadow_state(db_
     _mock_price_data(mocker, {"VOO": _bullish_frame()})
     mocker.patch("analysis.universe.is_member", return_value=True)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     # Neither etf_trading_enabled nor etf_submission_enabled set explicitly
     # -- defaults are True / False respectively.
     maybe_place_orders(cfg, run_type="full")
@@ -551,7 +600,8 @@ def _run_exit(db_engine, v2_mocks, mocker, *, ticker, t212_ticker, frame, stop_p
     _seed_open_position(db_engine, ticker=ticker, t212_ticker=t212_ticker,
                         stop_price=stop_price, days_ago=days_ago, is_etf=is_etf)
 
-    cfg = _config(mapping={ticker: {"t212_instrument_id": t212_ticker, "currency": "USD", "is_etf": is_etf}})
+    cfg = _config(mapping={ticker: {"t212_instrument_id": t212_ticker, "currency": "USD", "is_etf": is_etf}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_exit_positions(cfg)
 
 
@@ -675,7 +725,8 @@ def test_exit_skips_duplicate_when_placed_sell_order_exists(db_engine, v2_mocks,
             VALUES ('VOO', 'I50Dl_EQ', 'SELL', 'PLACED', :now, :now)
         """), {"now": datetime.utcnow().isoformat()})
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
+    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+                  mocker=mocker, db_engine=db_engine)
     maybe_exit_positions(cfg)
 
     v2_mocks.place_market_order.assert_not_called()
@@ -955,7 +1006,7 @@ def test_api_error_never_raises(db_engine, v2_mocks, mocker):
     v2_mocks.get_account_summary.side_effect = RuntimeError("T212 is down")
     mocker.patch("brokers.trading212._send_t212_error_email")  # avoid real email attempt
 
-    maybe_place_orders(_config(), run_type="full")  # must not raise
+    maybe_place_orders(_config(mocker=mocker, db_engine=db_engine), run_type="full")  # must not raise
 
 
 def test_exit_api_error_never_raises(db_engine, v2_mocks, mocker):
@@ -964,7 +1015,7 @@ def test_exit_api_error_never_raises(db_engine, v2_mocks, mocker):
     v2_mocks.get_positions.side_effect = RuntimeError("T212 is down")
     mocker.patch("brokers.trading212._send_t212_error_email")
 
-    maybe_exit_positions(_config())  # must not raise
+    maybe_exit_positions(_config(mocker=mocker, db_engine=db_engine))  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1443,7 +1494,7 @@ def test_buy_loop_one_ticker_exception_does_not_stop_the_rest(db_engine, v2_mock
     cfg = _config(mapping={
         "VOO":  {"t212_instrument_id": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
         "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-    })
+    }, mocker=mocker, db_engine=db_engine)
     maybe_place_orders(cfg, run_type="full")
 
     # VOO's exception must not have stopped AAPL from still being queued.
@@ -1476,7 +1527,7 @@ def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_m
     cfg = _config(mapping={
         "VOO":  {"t212_instrument_id": "I50Dl_EQ",  "currency": "USD", "is_etf": True},
         "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-    })
+    }, mocker=mocker, db_engine=db_engine)
     maybe_exit_positions(cfg)
 
     # VOO's exception must not have stopped AAPL from still being exited.

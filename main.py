@@ -784,10 +784,16 @@ def _render_charts_landing(config: dict) -> None:
     except Exception:
         pass
 
-    # `instruments:` is a dict keyed by ticker (execution fields included),
-    # not a watchlist-shaped list -- converted to the same list-of-dicts
-    # shape as watchlist.core here so this grouping/rendering loop below
-    # can treat both groups identically.
+    # `instruments:` is empty now (2026-08-02, see CLAUDE.md's "wire the
+    # momentum-only, full-S&P-500 selection into live execution" section)
+    # -- this grouped-card display only ever grouped the OLD hand-curated
+    # 40-stock list under its own "Instruments" header; that group is
+    # simply empty/absent now, a deliberate consequence, not a bug.
+    # Rendering the full dynamic live candidate pool (potentially ~500
+    # tickers) as individual grouped cards here would be a much larger UX
+    # change than this task's scope -- _all_tickers_cl above already
+    # includes those dynamic tickers for this page's other purposes
+    # (1-day change lookups etc.), just not as their own card group.
     _groups_cl: dict[str, list] = dict(config.get("watchlist", {}))
     _groups_cl["instruments"] = [
         {**raw, "ticker": t} for t, raw in config.get("instruments", {}).items()
@@ -1242,12 +1248,19 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         )
     else:
         t212_live = t212_cfg.get("live", False)
-        mapping   = config.get("instruments", {})
+        # Dynamic live candidate pool (2026-08-02) -- config["instruments"]
+        # is empty now, see CLAUDE.md's "wire the momentum-only,
+        # full-S&P-500 selection into live execution" section.
+        try:
+            from analysis.universe import get_live_stock_candidates
+            candidate_count = len(get_live_stock_candidates())
+        except Exception:
+            candidate_count = 0
         st.markdown(
             f'<span style="background:{"#f97316" if t212_live else "#6366f1"};color:#fff;'
             f'padding:2px 8px;border-radius:4px;font-size:0.78rem;font-weight:600">'
             f'{"LIVE" if t212_live else "DEMO"}</span> '
-            f'{len(mapping)} tickers · '
+            f'{candidate_count} tickers · '
             f'max {float(t212_cfg.get("per_trade_pct", 0.05)) * 100:.0f}% of account/order · '
             f'max {int(float(t212_cfg.get("max_total_deployed", 0.5)) * 100)}% deployed '
             f'(position count is emergent — no separate cap)',
@@ -1401,24 +1414,59 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
             else:
                 st.caption("No orders recorded yet.")
 
-            mapping_full = config.get("instruments", {})
-            if mapping_full:
-                with st.expander(f"Instrument mapping ({len(mapping_full)} tickers)"):
+            # Instrument mapping is resolved dynamically now (2026-08-02) --
+            # see CLAUDE.md's "wire the momentum-only, full-S&P-500
+            # selection into live execution" section. Shows every ticker
+            # ever resolved (any status), not just today's live candidates
+            # -- a FAILED row is exactly what needs manual review, and a
+            # formerly-eligible ticker's VERIFIED row must stay visible for
+            # as long as a position might still be open against it.
+            from brokers.trading212 import load_all_instrument_resolutions
+            resolutions = load_all_instrument_resolutions()
+            if resolutions:
+                n_verified = sum(1 for r in resolutions if r["status"] == "VERIFIED")
+                n_failed = sum(1 for r in resolutions if r["status"] == "FAILED")
+                n_pending = sum(1 for r in resolutions if r["status"] == "PENDING")
+                label = f"Instrument mapping ({n_verified} verified"
+                if n_failed:
+                    label += f", {n_failed} failed — needs review"
+                if n_pending:
+                    label += f", {n_pending} pending retry"
+                label += ")"
+                with st.expander(label):
                     map_rows = [
                         {
-                            "Ticker": rt,
-                            "T212 Instrument": (raw.get("t212_instrument_id") if isinstance(raw, dict) else raw),
-                            "Currency": (raw.get("currency", "USD") if isinstance(raw, dict) else "USD"),
-                            "Type": "ETF" if (isinstance(raw, dict) and raw.get("is_etf")) else "STOCK",
+                            "Ticker": r["ticker"],
+                            "T212 Instrument": r["t212_instrument_id"] or "—",
+                            "Currency": r["currency"] or "—",
+                            "Status": r["status"],
+                            "Note": r["note"] or "",
                         }
-                        for rt, raw in mapping_full.items()
+                        for r in resolutions
                     ]
-                    st.dataframe(pd.DataFrame(map_rows), width="stretch", hide_index=True)
+                    st.dataframe(
+                        pd.DataFrame(map_rows).style.map(
+                            lambda v: "color:#16a34a" if v == "VERIFIED"
+                            else ("color:#dc2626" if v == "FAILED"
+                            else ("color:#d97706" if v == "PENDING" else "")),
+                            subset=["Status"],
+                        ),
+                        width="stretch", hide_index=True,
+                    )
+            else:
+                st.caption("No instrument resolutions recorded yet — none needed until the first live candidate is evaluated.")
 
             # --- ETF pricing-path audit + manual seed control -------------
             from brokers.trading212 import audit_etf_pricing_paths, seed_instrument_price_gbp
 
-            with st.expander("ETF pricing-path audit"):
+            with st.expander("ETF pricing-path audit (currently inert — no ETFs in live trading)"):
+                st.caption(
+                    "The ETF sleeve was removed from live trading entirely (2026-08-02) — "
+                    "this audit always reports 0 rows now, and the seed form below has "
+                    "nothing to target. Kept visible rather than removed in case the ETF "
+                    "sleeve is ever reconsidered, at which point this becomes live again "
+                    "automatically."
+                )
                 st.caption(
                     "get_instrument_price_gbp()'s 3-tier pricing (live position → cached "
                     "price → refusal) means an ETF with no current holding and no cached "
@@ -1872,11 +1920,21 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 def _asset_type_map(config: dict) -> dict[str, str]:
-    """Map research ticker -> 'ETF' or 'STOCK' via the top-level instruments: section."""
+    """Map research ticker -> 'ETF' or 'STOCK'.
+
+    Sourced from every VERIFIED T212 instrument resolution now (2026-08-02
+    -- config.yaml's `instruments:` section is empty, see CLAUDE.md's
+    "wire the momentum-only, full-S&P-500 selection into live execution"
+    section) rather than a static config dict. Every resolved ticker is a
+    stock in practice today -- the ETF sleeve was removed from live
+    trading entirely -- but this reads genuinely per-ticker rather than
+    assuming that, in case a future re-addition ever changes it."""
+    from brokers.trading212 import load_all_instrument_resolutions
     asset_types: dict[str, str] = {}
-    for rt, raw in config.get("instruments", {}).items():
-        is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
-        asset_types[rt] = "ETF" if is_etf else "STOCK"
+    for r in load_all_instrument_resolutions():
+        if r["status"] != "VERIFIED":
+            continue
+        asset_types[r["ticker"]] = "STOCK"
     return asset_types
 
 

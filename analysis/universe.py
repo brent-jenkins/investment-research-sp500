@@ -255,6 +255,38 @@ def is_member(ticker: str, check_date: date) -> bool:
     return any(start <= check_date <= end for start, end in windows)
 
 
+def get_live_stock_candidates(as_of: Optional[date] = None) -> list[str]:
+    """Return every ticker that is a genuine, currently-eligible LIVE
+    trading candidate — the full, dynamically-refreshed S&P 500 stock
+    membership, not the fixed STOCK_MEMBERSHIP/ALL_TICKERS constants above
+    (those stay frozen for backtest/research reproducibility — see
+    CLAUDE.md's "ETF sleeve removed from live trading" section for why the
+    live and research universes are deliberately two separate systems, a
+    split that predates this function and is unaffected by it).
+
+    Sourced entirely from the DB — every ticker refresh_membership_from_
+    source() has ever discovered (universe_membership, via
+    _all_source_tickers()) plus STOCK_MEMBERSHIP's own keys (so this still
+    returns something sensible on a fresh install before the first refresh
+    has run), filtered to genuine current membership via is_member(). ETFs
+    are excluded — the live ETF sleeve was removed entirely 2026-08-02 (see
+    CLAUDE.md), and ETF_TICKERS itself has no membership concept to filter
+    on in the first place.
+
+    There is no separate onboarding job: a brand-new S&P 500 entrant
+    appears here automatically the next time the existing daily 21:15 UTC
+    membership-refresh job runs and discovers it, with no code change and
+    no manual step.
+    """
+    as_of = as_of or datetime.utcnow().date()
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT DISTINCT ticker FROM universe_membership")).fetchall()
+    all_known = {r[0] for r in rows} | set(STOCK_MEMBERSHIP.keys())
+    all_known -= set(ETF_TICKERS)
+    return sorted(t for t in all_known if is_member(t, as_of))
+
+
 def get_max_holding_days(ticker: str, config: dict) -> int:
     """Return the max holding days for *ticker*, matching live automation limits.
 
@@ -369,11 +401,44 @@ def _reconstruct_windows(csv_text: str, ticker: str) -> list[tuple[date, date]]:
     return windows
 
 
+def _all_source_tickers(csv_text: str) -> set[str]:
+    """Every unique ticker symbol that has ever appeared in any row of the
+    source CSV -- the full historical roster, not just the tickers already
+    known to STOCK_MEMBERSHIP.
+
+    Added 2026-08-02 so refresh_membership_from_source() can discover
+    genuinely NEW S&P 500 entrants automatically. Before this, the refresh
+    only ever reconciled windows for tickers already present in the fixed,
+    hand-curated STOCK_MEMBERSHIP dict -- a company joining the index for
+    the first time was never picked up by any scheduled job, however
+    recently it ran, because nothing was ever watching for a ticker that
+    ISN'T already on the list. This is what actually makes "the daily
+    membership refresh already exists, no new job needed" true for live
+    trading against the full index rather than a fixed 40-name subset.
+    """
+    all_syms: set[str] = set()
+    for line in csv_text.splitlines()[1:]:
+        if not line.strip():
+            continue
+        comma = line.find(",")
+        if comma == -1:
+            continue
+        tickers_s = line[comma + 1:].strip().strip('"')
+        all_syms |= set(tickers_s.split(","))
+    all_syms.discard("")
+    return all_syms
+
+
 def refresh_membership_from_source(config: Optional[dict] = None) -> dict:
     """Re-fetch the source dataset and reconcile stored membership windows
-    for every candidate stock against it. Detects both new removals (a
-    ticker's most recent window's end_date moves earlier / becomes closed)
-    and new re-additions (a new window opens after a prior close).
+    for every candidate stock against it -- STOCK_MEMBERSHIP's original 40
+    curated tickers, PLUS (2026-08-02) every other ticker ever seen in the
+    source CSV (via _all_source_tickers() above), so a genuinely new S&P
+    500 entrant gets tracked automatically the same day it first appears
+    in the source, not just the 40 names this project happened to hand-pick
+    back in July. Detects both new removals (a ticker's most recent
+    window's end_date moves earlier / becomes closed) and new re-additions
+    (a new window opens after a prior close).
 
     Returns a summary dict: {"checked": N, "changed": [...], "errors": [...]}.
     Never raises on a per-ticker failure — one bad symbol doesn't block the
@@ -404,7 +469,17 @@ def refresh_membership_from_source(config: Optional[dict] = None) -> dict:
     engine = get_engine()
     fetched_at = datetime.utcnow()
 
-    for ticker in STOCK_MEMBERSHIP:
+    # Legacy symbols (e.g. "FB") merge into their rename target ("META")
+    # via _reconstruct_windows()'s own _KNOWN_TICKER_RENAMES lookup -- they
+    # must never be tracked as a separate, standalone ticker here, or the
+    # old symbol would show up as its own permanently-closed candidate.
+    # ETF_TICKERS never appears in this stock-membership source at all in
+    # practice, but excluded defensively for the same reason.
+    legacy_symbols = set(_KNOWN_TICKER_RENAMES.keys())
+    discovered = _all_source_tickers(csv_text) - legacy_symbols - set(ETF_TICKERS)
+    tracked_tickers = sorted(set(STOCK_MEMBERSHIP.keys()) | discovered)
+
+    for ticker in tracked_tickers:
         summary["checked"] += 1
         try:
             new_windows = _reconstruct_windows(csv_text, ticker)

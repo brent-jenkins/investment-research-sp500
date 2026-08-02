@@ -591,6 +591,7 @@ def test_membership_refresh_job_calls_wikipedia_lag_check(mocker):
 def test_run_analysis_pipeline_calls_order_placement(mocker):
     mocker.patch("data.scheduler.set_metadata")
     mock_orders = mocker.patch("brokers.trading212.maybe_place_orders")
+    mocker.patch("brokers.trading212.get_failed_instrument_resolutions", return_value=[])
 
     scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")
 
@@ -600,8 +601,65 @@ def test_run_analysis_pipeline_calls_order_placement(mocker):
 def test_run_analysis_pipeline_order_failure_does_not_raise(mocker):
     mocker.patch("data.scheduler.set_metadata")
     mocker.patch("brokers.trading212.maybe_place_orders", side_effect=RuntimeError("boom"))
+    mocker.patch("brokers.trading212.get_failed_instrument_resolutions", return_value=[])
 
     scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _run_analysis_pipeline()'s FAILED-instrument-resolution alert (2026-08-02)
+# -- without this, a genuinely tradeable candidate excluded by
+# resolve_and_cache_instrument()'s "flag for review, never auto-retry a
+# genuine mismatch" contract would just sit in instrument_resolutions until
+# someone happened to open the Status page. See CLAUDE.md's "wire the
+# momentum-only, full-S&P-500 selection into live execution" section.
+# ---------------------------------------------------------------------------
+
+def test_run_analysis_pipeline_alerts_on_failed_resolutions(mocker):
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("brokers.trading212.maybe_place_orders")
+    failed = [{"ticker": "ZZZZ", "note": "no match found"}]
+    mocker.patch("brokers.trading212.get_failed_instrument_resolutions", return_value=failed)
+    mock_alert = mocker.patch("output.briefing.send_instrument_resolution_failure_alert")
+
+    scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")
+
+    mock_alert.assert_called_once_with(failed, {"k": "v"})
+
+
+def test_run_analysis_pipeline_does_not_alert_when_nothing_failed(mocker):
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("brokers.trading212.maybe_place_orders")
+    mocker.patch("brokers.trading212.get_failed_instrument_resolutions", return_value=[])
+    mock_alert = mocker.patch("output.briefing.send_instrument_resolution_failure_alert")
+
+    scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")
+
+    mock_alert.assert_not_called()
+
+
+def test_run_analysis_pipeline_alert_failure_never_raises(mocker):
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("brokers.trading212.maybe_place_orders")
+    mocker.patch("brokers.trading212.get_failed_instrument_resolutions",
+                 side_effect=RuntimeError("db down"))
+
+    scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "full")  # must not raise
+
+
+def test_run_analysis_pipeline_checks_for_failures_even_on_analysis_only_run(mocker):
+    """A still-unresolved FAILED ticker from a prior EOD run must keep
+    being re-flagged (subject to its own cooldown) on every scheduled run,
+    not just the run_type='full' run that could have produced it."""
+    mocker.patch("data.scheduler.set_metadata")
+    mocker.patch("brokers.trading212.maybe_place_orders")
+    failed = [{"ticker": "ZZZZ", "note": "no match found"}]
+    mocker.patch("brokers.trading212.get_failed_instrument_resolutions", return_value=failed)
+    mock_alert = mocker.patch("output.briefing.send_instrument_resolution_failure_alert")
+
+    scheduler._run_analysis_pipeline({"k": "v"}, ["AAPL"], "analysis_only")
+
+    mock_alert.assert_called_once_with(failed, {"k": "v"})
 
 
 # ---------------------------------------------------------------------------

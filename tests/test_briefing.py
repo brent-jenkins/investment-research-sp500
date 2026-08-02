@@ -14,6 +14,7 @@ from output.briefing import (
     _smtp_send,
     _weekly_summary_html,
     _weekly_summary_text,
+    send_instrument_resolution_failure_alert,
     send_membership_staleness_alert,
     send_weekly_summary_email,
 )
@@ -452,6 +453,127 @@ def test_membership_staleness_alert_uses_its_own_cooldown_key_not_shared_with_ot
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
     sent, _ = send_membership_staleness_alert(96.0, 48.0, _config())
+
+    assert sent is True
+
+
+# ---------------------------------------------------------------------------
+# send_instrument_resolution_failure_alert() (2026-08-02) -- alerts when a
+# genuinely tradeable candidate has a FAILED T212 instrument-ID resolution,
+# so it doesn't just sit silently excluded in instrument_resolutions until
+# someone happens to open the Status page. Same cooldown/enabled-gating
+# shape as send_membership_staleness_alert() above, deliberately its own
+# separate cooldown key.
+# ---------------------------------------------------------------------------
+
+_INSTRUMENT_RESOLUTION_FAILURE_KEY = "instrument_resolution_failure_email_last_sent"
+
+
+def _failed_row(ticker="ZZZZ", note="no US-listed equity instrument found with shortName == ZZZZ"):
+    return {"ticker": ticker, "note": note}
+
+
+def test_instrument_resolution_failure_alert_empty_list_never_sends(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, detail = send_instrument_resolution_failure_alert([], _config())
+
+    assert sent is False
+    assert "no failed" in detail.lower()
+    smtp_cls.assert_not_called()
+
+
+def test_instrument_resolution_failure_alert_disabled_skips_cleanly(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, _ = send_instrument_resolution_failure_alert([_failed_row()], _config(enabled=False))
+
+    assert sent is False
+    smtp_cls.assert_not_called()
+
+
+def test_instrument_resolution_failure_alert_sends_on_first_occurrence(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_instrument_resolution_failure_alert([_failed_row()], _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_instrument_resolution_failure_alert_names_the_ticker_and_note(db_engine, mocker):
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    send_instrument_resolution_failure_alert(
+        [_failed_row(ticker="ZZZZ", note="ambiguous -- 2 US-listed equity instruments matched")],
+        _config(),
+    )
+
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = _email_pkg.message_from_string(raw)
+    decoded_parts = [
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    ]
+    combined = " ".join(decoded_parts)
+    assert "ZZZZ" in combined
+    assert "ambiguous" in combined
+
+
+def test_instrument_resolution_failure_alert_second_occurrence_within_cooldown_is_skipped(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_instrument_resolution_failure_alert([_failed_row()], cfg)
+    mock_server.sendmail.reset_mock()
+
+    send_instrument_resolution_failure_alert([_failed_row()], cfg)
+
+    mock_server.sendmail.assert_not_called()
+
+
+def test_instrument_resolution_failure_alert_sends_again_once_cooldown_has_elapsed(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    stale_last_sent = (datetime.utcnow() - timedelta(hours=9)).isoformat()
+    set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_KEY, stale_last_sent)
+
+    cfg = _config()
+    cfg["notifications"]["email"]["alert_cooldown_hours"] = 8
+    send_instrument_resolution_failure_alert([_failed_row()], cfg)
+
+    mock_server.sendmail.assert_called_once()
+
+
+def test_instrument_resolution_failure_alert_disabled_does_not_consume_cooldown(db_engine, mocker):
+    mocker.patch("output.briefing.smtplib.SMTP")
+
+    send_instrument_resolution_failure_alert([_failed_row()], _config(enabled=False))
+
+    from data.database import get_metadata_str
+    assert get_metadata_str(_INSTRUMENT_RESOLUTION_FAILURE_KEY) is None
+
+
+def test_instrument_resolution_failure_alert_uses_its_own_cooldown_key_not_shared_with_others(db_engine, mocker):
+    """A membership-staleness or T212-error-alert cooldown already in
+    effect must never suppress this alert."""
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
+    set_metadata(_MEMBERSHIP_STALENESS_KEY, datetime.utcnow().isoformat())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_instrument_resolution_failure_alert([_failed_row()], _config())
 
     assert sent is True
     mock_server.sendmail.assert_called_once()

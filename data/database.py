@@ -280,6 +280,47 @@ class PendingOrder(Base):
     created_at       = Column(DateTime, default=datetime.utcnow)
 
 
+class InstrumentResolution(Base):
+    """T212 instrument-ID mapping for a live-trading candidate ticker,
+    verified against T212's own get_instruments() metadata before the
+    ticker is ever allowed to trade — see
+    brokers/trading212.py:resolve_and_cache_instrument() and
+    resolve_instrument_candidate() for the mechanism. Replaces the old
+    hand-curated config.yaml `instruments:` mapping (verified manually,
+    once, for a fixed 40 tickers) now that the live candidate pool is the
+    full, dynamically-refreshed S&P 500 membership
+    (analysis/universe.py:get_live_stock_candidates()) — new index
+    entrants need this resolved automatically, not by another manual pass.
+
+    status:
+      VERIFIED — t212_instrument_id/currency confirmed against T212's own
+                 metadata (a shortName match on a real US-listed equity
+                 instrument, the same check that would have caught the
+                 XLF/XLK wrong-instrument bug immediately had it existed
+                 then — see CLAUDE.md's ETF mapping audit section).
+                 Safe to trade.
+      FAILED   — checked against real T212 metadata and no confident,
+                 unambiguous match was found. Excluded from trading,
+                 flagged for manual review via `note`. Never
+                 auto-retried — a human needs to look at it (delete the
+                 row, or a future admin action, to force re-resolution).
+      PENDING  — resolution has not yet succeeded for an OPERATIONAL
+                 reason (get_instruments() call failed/errored), not a
+                 genuine mismatch — retried automatically on the next
+                 attempt. Excluded from trading until it resolves.
+    """
+
+    __tablename__ = "instrument_resolutions"
+
+    ticker              = Column(String(20), primary_key=True)
+    t212_instrument_id  = Column(String(64))
+    currency            = Column(String(10))
+    status              = Column(String(16), nullable=False, default="PENDING")
+    note                = Column(Text)
+    attempted_at        = Column(DateTime, default=datetime.utcnow)
+    resolved_at         = Column(DateTime)
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -458,6 +499,7 @@ def init_db() -> None:
         InvestOrder,
         Pnl,
         PendingOrder,
+        InstrumentResolution,
         SystemMetadata,
         SchemaMigration,
     )

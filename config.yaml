@@ -5,13 +5,18 @@
 # "V1 removal" sections for the history behind this shape.
 watchlist:
   # Trimmed 2026-07-31 to exactly what the momentum + crisis-override system
-  # needs: its own live-tradeable universe (see `instruments:` below --
-  # 40 stocks as of the 2026-08-02 ETF-sleeve removal, see CLAUDE.md's "ETF
-  # sleeve removed from live trading" section; analysis/universe.py:
-  # ALL_TICKERS is a separate, larger 73-ticker research/backtest universe
-  # that still includes the 33-ETF sleeve, deliberately untouched by that
-  # removal), ^GSPC (crisis-override reference index), and GBPUSD=X/
-  # EURUSD=X (FX conversion for non-GBP positions).
+  # needs: `instruments:` below is now empty (2026-08-02) -- the live
+  # tradeable universe is sourced dynamically instead, from
+  # analysis/universe.py:get_live_stock_candidates() (the full,
+  # daily-refreshed S&P 500 stock membership), see CLAUDE.md's "wire the
+  # momentum-only, full-S&P-500 selection into live execution" section.
+  # analysis/universe.py:ALL_TICKERS remains a separate, frozen 73-ticker
+  # research/backtest universe (33 ETFs + the original 40-stock curated
+  # list) kept exactly as it was for historical reproducibility -- see
+  # CLAUDE.md's "ETF sleeve removed from live trading" section for why the
+  # live and research universes are deliberately two separate systems.
+  # core below still covers ^GSPC (crisis-override reference index) and
+  # GBPUSD=X/EURUSD=X (FX conversion for non-GBP positions).
   # core is monitoring-only and deliberately stays separate from
   # `instruments:` below -- none of these three ever has (or ever will have)
   # an execution mapping; see CLAUDE.md's "Unified instrument structure"
@@ -33,7 +38,8 @@ watchlist:
 # ticker present in one structure but silently missing from the other. See
 # CLAUDE.md's "Unified instrument structure" section for the full
 # consolidation and tests/test_config.py for the structural validation that
-# now makes an incomplete entry impossible to miss.
+# still makes an incomplete manual entry impossible to miss, should one
+# ever be added back here.
 #
 # The nested `ticker` field from the old instrument_mapping was renamed to
 # `t212_instrument_id` -- the old name collided confusingly with the
@@ -41,58 +47,29 @@ watchlist:
 # "our symbol for this instrument" and the other meaning "T212's own
 # internal instrument ID for it".
 #
-# currency values are the T212 instrument's OWN live currencyCode, verified
-# 2026-07-31 against get_instruments() (see CLAUDE.md's ETF mapping audit)
-# -- get_instrument_price_gbp()'s live-position pricing path reads
-# currencyCode from the API directly so an incorrect value here never
-# corrupted live pricing, but _log_order()'s currency_code falls back to
-# this field when the live API lookup fails, so it's worth keeping accurate.
-instruments:
-  # ETF sleeve removed entirely 2026-08-02 -- see CLAUDE.md's "ETF sleeve
-  # removed from live trading" section. All 40 remaining entries are stocks
-  # (is_etf: false throughout -- the field is kept rather than dropped so a
-  # config predating this removal, or a future re-addition, doesn't need a
-  # schema change; nothing currently reads it as anything but a constant).
-  AAPL:  {name: "Apple", exchange: "NYSE", is_etf: false, t212_instrument_id: AAPL_US_EQ, currency: USD}
-  ADBE:  {name: "Adobe", exchange: "NYSE", is_etf: false, t212_instrument_id: ADBE_US_EQ, currency: USD}
-  AMD:   {name: "Advanced Micro Devices", exchange: "NYSE", is_etf: false, t212_instrument_id: AMD_US_EQ, currency: USD}
-  AMZN:  {name: "Amazon", exchange: "NYSE", is_etf: false, t212_instrument_id: AMZN_US_EQ, currency: USD}
-  AVGO:  {name: "Broadcom", exchange: "NYSE", is_etf: false, t212_instrument_id: AVGO_US_EQ, currency: USD}
-  BAC:   {name: "Bank of America", exchange: "NYSE", is_etf: false, t212_instrument_id: BAC_US_EQ, currency: USD}
-  CAT:   {name: "Caterpillar", exchange: "NYSE", is_etf: false, t212_instrument_id: CAT_US_EQ, currency: USD}
-  COST:  {name: "Costco", exchange: "NYSE", is_etf: false, t212_instrument_id: COST_US_EQ, currency: USD}
-  CRM:   {name: "Salesforce", exchange: "NYSE", is_etf: false, t212_instrument_id: CRM_US_EQ, currency: USD}
-  CVX:   {name: "Chevron", exchange: "NYSE", is_etf: false, t212_instrument_id: CVX_US_EQ, currency: USD}
-  DIS:   {name: "Walt Disney Company", exchange: "NYSE", is_etf: false, t212_instrument_id: DIS_US_EQ, currency: USD}
-  GE:    {name: "GE Aerospace", exchange: "NYSE", is_etf: false, t212_instrument_id: GE_US_EQ, currency: USD}
-  GOLD:  {name: "Barrick Gold", exchange: "NYSE", is_etf: false, t212_instrument_id: GOLD_US_EQ, currency: USD}  # Barrick Mining — verified live but permanently zero-eligible (empty STOCK_MEMBERSHIP window, never a genuine S&P 500 constituent — see analysis/universe.py docstring)
-  GOOGL: {name: "Alphabet (Class A)", exchange: "NYSE", is_etf: false, t212_instrument_id: GOOGL_US_EQ, currency: USD}
-  GS:    {name: "Goldman Sachs", exchange: "NYSE", is_etf: false, t212_instrument_id: GS_US_EQ, currency: USD}
-  HD:    {name: "Home Depot", exchange: "NYSE", is_etf: false, t212_instrument_id: HD_US_EQ, currency: USD}
-  ISRG:  {name: "Intuitive Surgical", exchange: "NYSE", is_etf: false, t212_instrument_id: ISRG_US_EQ, currency: USD}
-  JNJ:   {name: "Johnson & Johnson", exchange: "NYSE", is_etf: false, t212_instrument_id: JNJ_US_EQ, currency: USD}
-  JPM:   {name: "JP Morgan Chase", exchange: "NYSE", is_etf: false, t212_instrument_id: JPM_US_EQ, currency: USD}
-  LIN:   {name: "Linde plc", exchange: "NYSE", is_etf: false, t212_instrument_id: LIN_US_EQ, currency: USD}
-  LLY:   {name: "Eli Lilly", exchange: "NYSE", is_etf: false, t212_instrument_id: LLY_US_EQ, currency: USD}
-  MA:    {name: "Mastercard", exchange: "NYSE", is_etf: false, t212_instrument_id: MA_US_EQ, currency: USD}
-  META:  {name: "Meta Platforms", exchange: "NYSE", is_etf: false, t212_instrument_id: FB_US_EQ, currency: USD}  # T212 never renamed this instrument's own ticker after Facebook->Meta; shortName/name confirm it's the right instrument (name: "Meta Platforms")
-  MRK:   {name: "Merck", exchange: "NYSE", is_etf: false, t212_instrument_id: MRK_US_EQ, currency: USD}
-  MSFT:  {name: "Microsoft", exchange: "NYSE", is_etf: false, t212_instrument_id: MSFT_US_EQ, currency: USD}
-  NEM:   {name: "Newmont Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: NEM_US_EQ, currency: USD}
-  NFLX:  {name: "Netflix", exchange: "NYSE", is_etf: false, t212_instrument_id: NFLX_US_EQ, currency: USD}
-  NVDA:  {name: "NVIDIA", exchange: "NYSE", is_etf: false, t212_instrument_id: NVDA_US_EQ, currency: USD}
-  ORCL:  {name: "Oracle Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: ORCL_US_EQ, currency: USD}
-  PFE:   {name: "Pfizer", exchange: "NYSE", is_etf: false, t212_instrument_id: PFE_US_EQ, currency: USD}
-  PG:    {name: "Procter & Gamble", exchange: "NYSE", is_etf: false, t212_instrument_id: PG_US_EQ, currency: USD}
-  QCOM:  {name: "Qualcomm", exchange: "NYSE", is_etf: false, t212_instrument_id: QCOM_US_EQ, currency: USD}
-  RTX:   {name: "RTX Corporation", exchange: "NYSE", is_etf: false, t212_instrument_id: UTX_US_EQ, currency: USD}  # T212 retains the pre-merger "UTX" (United Technologies) instrument ticker; shortName/name confirm it (shortName: "RTX", name: "RTX")
-  SPGI:  {name: "S&P Global", exchange: "NYSE", is_etf: false, t212_instrument_id: SPGI_US_EQ, currency: USD}
-  TMO:   {name: "Thermo Fisher Scientific", exchange: "NYSE", is_etf: false, t212_instrument_id: TMO_US_EQ, currency: USD}
-  TSLA:  {name: "Tesla", exchange: "NYSE", is_etf: false, t212_instrument_id: TSLA_US_EQ, currency: USD}
-  UNH:   {name: "UnitedHealth Group", exchange: "NYSE", is_etf: false, t212_instrument_id: UNH_US_EQ, currency: USD}
-  V:     {name: "Visa", exchange: "NYSE", is_etf: false, t212_instrument_id: V_US_EQ, currency: USD}
-  WMT:   {name: "Walmart", exchange: "NYSE", is_etf: false, t212_instrument_id: WMT_US_EQ, currency: USD}
-  XOM:   {name: "ExxonMobil", exchange: "NYSE", is_etf: false, t212_instrument_id: XOM_US_EQ, currency: USD}
+# Emptied entirely 2026-08-02 -- the hand-curated 40-stock list this used
+# to hold (each entry verified manually, once) was replaced by a genuinely
+# dynamic live candidate pool: analysis/universe.py:
+# get_live_stock_candidates() (the full, daily-refreshed S&P 500 stock
+# membership) plus brokers/trading212.py:resolve_and_cache_instrument()
+# (T212 instrument-ID resolution verified against real get_instruments()
+# metadata, automatically, the first time any ticker becomes a live
+# candidate -- not a one-time manual pass). See CLAUDE.md's "wire the
+# momentum-only, full-S&P-500 selection into live execution" section.
+# GOLD (Barrick Mining) does NOT need a manual entry here to stay
+# "kept, not removed" -- it remains fully documented as a permanently
+# zero-eligible candidate in analysis/universe.py:STOCK_MEMBERSHIP (empty
+# membership window, verified never a genuine S&P 500 constituent), which
+# is what correctly keeps it out of the live candidate pool automatically
+# (is_member() is always False for it) rather than requiring a redundant
+# static override here.
+#
+# Left as a top-level key (not deleted) so every existing config.get(
+# "instruments", {}) call site keeps behaving exactly the same whether the
+# key is present-and-empty or absent entirely, and so a manual, ad-hoc
+# override entry can still be added here later without a schema change if
+# ever genuinely needed.
+instruments: {}
 
 data:
   # How many calendar days of history to fetch on initial load for any asset

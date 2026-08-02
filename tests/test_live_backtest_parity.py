@@ -94,7 +94,26 @@ def _calm_gspc_frame(n_days: int, crisis_on_last_day: bool = False) -> pd.DataFr
 
 
 def _config(ticker: str, t212_ticker: str, is_etf: bool, *, max_holding_days: int = 90,
-            stock_max_holding_days: int = 30, atr_stop_multiplier: float = 2.0) -> dict:
+            stock_max_holding_days: int = 30, atr_stop_multiplier: float = 2.0,
+            mocker=None, db_engine=None) -> dict:
+    # maybe_place_orders()/maybe_exit_positions() now source their candidate
+    # pool from analysis.universe.get_live_stock_candidates() and resolve
+    # each ticker's T212 instrument mapping from the DB-backed
+    # instrument_resolutions cache, not config["instruments"] -- see
+    # CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into live
+    # execution" section. Mocked/seeded here so every existing call site
+    # needs only to also pass mocker=mocker, db_engine=db_engine.
+    if mocker is not None:
+        mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[ticker])
+    if db_engine is not None:
+        with db_engine.begin() as conn:
+            conn.execute(sa_text("""
+                INSERT INTO instrument_resolutions
+                    (ticker, t212_instrument_id, currency, status, note, attempted_at, resolved_at)
+                VALUES (:t, :tt, 'USD', 'VERIFIED', 'seeded for test', :now, :now)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    t212_instrument_id = :tt, status = 'VERIFIED', attempted_at = :now
+            """), {"t": ticker, "tt": t212_ticker, "now": datetime.utcnow().isoformat()})
     return {
         "instruments": {
             ticker: {"t212_instrument_id": t212_ticker, "currency": "USD", "is_etf": is_etf},
@@ -204,7 +223,7 @@ def test_entry_parity_fires_when_all_three_conditions_hold(db_engine, parity_moc
     mocker.patch("analysis.universe.ETF_TICKERS", ("PXETF",))
     _mock_price_data(mocker, {ticker: frame, "^GSPC": gspc})
 
-    cfg = _config(ticker, t212_ticker, is_etf=True)
+    cfg = _config(ticker, t212_ticker, is_etf=True, mocker=mocker, db_engine=db_engine)
     gspc_close = gspc.set_index("date")["close"].astype(float)
     gspc_close.index = pd.to_datetime(gspc_close.index)
 
@@ -226,7 +245,7 @@ def test_entry_parity_blocked_when_signal_is_off(db_engine, parity_mocks, mocker
     mocker.patch("analysis.universe.ETF_TICKERS", ("PXETF",))
     _mock_price_data(mocker, {ticker: frame, "^GSPC": gspc})
 
-    cfg = _config(ticker, t212_ticker, is_etf=True)
+    cfg = _config(ticker, t212_ticker, is_etf=True, mocker=mocker, db_engine=db_engine)
     gspc_close = gspc.set_index("date")["close"].astype(float)
     gspc_close.index = pd.to_datetime(gspc_close.index)
 
@@ -246,7 +265,7 @@ def test_entry_parity_blocked_during_crisis_despite_positive_signal(db_engine, p
     mocker.patch("analysis.universe.ETF_TICKERS", ("PXETF",))
     _mock_price_data(mocker, {ticker: frame, "^GSPC": gspc})
 
-    cfg = _config(ticker, t212_ticker, is_etf=True)
+    cfg = _config(ticker, t212_ticker, is_etf=True, mocker=mocker, db_engine=db_engine)
     gspc_close = gspc.set_index("date")["close"].astype(float)
     gspc_close.index = pd.to_datetime(gspc_close.index)
 
@@ -268,7 +287,7 @@ def test_entry_parity_blocked_when_not_an_index_member(db_engine, parity_mocks, 
     gspc = _calm_gspc_frame(310)
     _mock_price_data(mocker, {ticker: frame, "^GSPC": gspc})
 
-    cfg = _config(ticker, t212_ticker, is_etf=False)
+    cfg = _config(ticker, t212_ticker, is_etf=False, mocker=mocker, db_engine=db_engine)
     gspc_close = gspc.set_index("date")["close"].astype(float)
     gspc_close.index = pd.to_datetime(gspc_close.index)
 
@@ -368,7 +387,7 @@ def test_exit_parity_crisis(db_engine, mocker, monkeypatch):
     gspc = _price_frame(400, 4000.0, 0.0003, last_day_shock=-0.09)  # crisis on the S&P, last day
     # A generous max-holding so MAX_HOLDING can never preempt the crisis
     # trigger this scenario is actually testing.
-    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=500)
+    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=500, mocker=mocker, db_engine=db_engine)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=True,
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="CRISIS_EXIT")
 
@@ -382,7 +401,7 @@ def test_exit_parity_stop_loss(db_engine, mocker, monkeypatch):
     # suppresses the live side of the comparison.
     frame = _price_frame(310, 100.0, 0.0015, last_day_shock=-0.20)
     gspc = _calm_gspc_frame(310)
-    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=500)
+    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=500, mocker=mocker, db_engine=db_engine)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=True,
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="STOP_LOSS")
 
@@ -394,7 +413,7 @@ def test_exit_parity_signal_off(db_engine, mocker, monkeypatch):
     gspc = _calm_gspc_frame(520)
     # Wide ATR stop and a generous max-holding so the long decline resolves
     # via SIGNAL_OFF rather than STOP_LOSS or MAX_HOLDING firing first.
-    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=999, atr_stop_multiplier=50.0)
+    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=999, atr_stop_multiplier=50.0, mocker=mocker, db_engine=db_engine)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=True,
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="SIGNAL_OFF")
 
@@ -409,7 +428,7 @@ def test_exit_parity_max_holding(db_engine, mocker, monkeypatch):
     # >=300-rows "enough history" gate on the live side.
     frame = _price_frame(400, 100.0, 0.0015)  # pure uptrend -- nothing else ever fires
     gspc = _calm_gspc_frame(400)
-    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=100)
+    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=100, mocker=mocker, db_engine=db_engine)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=True,
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="MAX_HOLDING")
 
@@ -434,7 +453,7 @@ def test_exit_parity_index_removal(db_engine, mocker, monkeypatch):
     mocker.patch("analysis.universe.STOCK_MEMBERSHIP", {"PXSTOCK": []})
     # A generous stock max-holding so MAX_HOLDING can never preempt the
     # index-removal trigger this scenario is actually testing.
-    cfg = _config(ticker, t212_ticker, is_etf=False, stock_max_holding_days=500)
+    cfg = _config(ticker, t212_ticker, is_etf=False, stock_max_holding_days=500, mocker=mocker, db_engine=db_engine)
     _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker, t212_ticker=t212_ticker, is_etf=False,
                          frame=frame, gspc=gspc, cfg=cfg, expected_reason="INDEX_REMOVAL")
 
@@ -487,7 +506,7 @@ def test_entry_parity_stop_price_uses_configured_atr_multiplier_not_a_hardcoded_
         with db_engine.begin() as conn:
             conn.execute(sa_text("DELETE FROM pending_orders"))
 
-        cfg = _config(ticker, t212_ticker, is_etf=True, atr_stop_multiplier=multiplier)
+        cfg = _config(ticker, t212_ticker, is_etf=True, atr_stop_multiplier=multiplier, mocker=mocker, db_engine=db_engine)
 
         backtest_trade = _run_backtest_and_get_first_trade(frame, gspc_close, ticker, cfg, is_etf=True)
         expected_stop = backtest_trade["entry_price"] * (1 - backtest_trade["stop_distance_pct"] / 100.0)

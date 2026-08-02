@@ -60,6 +60,28 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
         if isinstance(raw, dict):
             entries.append({"ticker": ticker, **raw})
 
+    # Dynamic S&P 500 live candidate pool (2026-08-02) -- `instruments:`
+    # above is now typically empty (the hand-curated 40-ticker list was
+    # removed in favour of the full, dynamically-refreshed index
+    # membership -- see analysis/universe.py:get_live_stock_candidates()
+    # and CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into
+    # live execution" section). Merged in here so price history actually
+    # exists for every genuine current index member before it's ever
+    # evaluated as a trading candidate -- pull_incremental() already does
+    # a full-history fetch the first time a ticker has no stored data at
+    # all, so a brand-new index entrant needs nothing beyond appearing in
+    # this list. Best-effort: a DB not yet initialised (very first
+    # startup, before init_db() has run) must not break the watchlist
+    # merge for callers that only need watchlist.core + instruments.
+    try:
+        from analysis.universe import get_live_stock_candidates
+        already = {e["ticker"] for e in entries}
+        for ticker in get_live_stock_candidates():
+            if ticker not in already:
+                entries.append({"ticker": ticker, "name": ticker, "exchange": "NYSE"})
+    except Exception as exc:
+        logger.warning("Could not load live stock candidates for price ingestion: %s", exc)
+
     return entries
 
 

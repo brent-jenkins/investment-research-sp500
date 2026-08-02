@@ -33,27 +33,28 @@ def _price_frame(n_days: int, start_price: float, daily_drift: float) -> pd.Data
     })
 
 
-def _config(mapping=None) -> dict:
-    if mapping is None:
-        mapping = {
-            "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
-            "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-        }
-    return {"instruments": mapping, "trading212_invest": {}}
+def _config() -> dict:
+    return {"trading212_invest": {}}
 
 
 # ---------------------------------------------------------------------------
-# get_ticker_status
+# get_ticker_status — tickers now come from
+# analysis.universe.get_live_stock_candidates() (the dynamic, DB-backed
+# live candidate pool), not a static config.yaml `instruments:` mapping —
+# see CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into
+# live execution" section. Mocked directly rather than seeded via the DB,
+# since these tests only care about get_ticker_status()'s own per-ticker
+# behaviour, not universe membership reconstruction (already covered by
+# tests/test_universe.py).
 # ---------------------------------------------------------------------------
 
-def test_ticker_status_empty_mapping_returns_empty():
-    assert get_ticker_status({"instruments": {}}) == []
+def test_ticker_status_empty_mapping_returns_empty(mocker):
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])
+    assert get_ticker_status(_config()) == []
 
 
 def test_ticker_status_gspc_unavailable_returns_empty(mocker):
-    mocker.patch("output.performance.get_price_df" if False else "data.ingestion.get_price_df",
-                 return_value=pd.DataFrame())
-    # patch the actual import site used inside the function (deferred import)
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
     mocker.patch("analysis.signals.compute_signal_series")
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=pd.DataFrame())
@@ -66,15 +67,14 @@ def test_ticker_status_bullish_ticker_reports_long(mocker):
     def _fake_get_price_df(ticker, days=8000):
         return bullish.copy()
 
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", side_effect=_fake_get_price_df)
     mocker.patch("analysis.universe.is_member", return_value=True)
     mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
     mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
 
-    rows = get_ticker_status(_config(mapping={
-        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
-    }))
+    rows = get_ticker_status(_config())
     assert len(rows) == 1
     r = rows[0]
     assert r["sig_on"] is True
@@ -91,12 +91,11 @@ def test_ticker_status_insufficient_history_flagged(mocker):
     def _fake_get_price_df(ticker, days=8000):
         return short_frame.copy()
 
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", side_effect=_fake_get_price_df)
 
-    rows = get_ticker_status(_config(mapping={
-        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
-    }))
+    rows = get_ticker_status(_config())
     assert len(rows) == 1
     assert rows[0]["insufficient_history"] is True
     assert rows[0]["sig_on"] is None
@@ -110,16 +109,14 @@ def test_ticker_status_per_ticker_exception_does_not_break_others(mocker):
             raise RuntimeError("boom")
         return bullish.copy()
 
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO", "AAPL"])
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", side_effect=_fake_get_price_df)
     mocker.patch("analysis.universe.is_member", return_value=True)
     mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
     mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
 
-    rows = get_ticker_status(_config(mapping={
-        "VOO":  {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
-        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
-    }))
+    rows = get_ticker_status(_config())
     by_ticker = {r["ticker"]: r for r in rows}
     assert by_ticker["VOO"]["insufficient_history"] is True
     assert by_ticker["AAPL"]["insufficient_history"] is False
@@ -199,16 +196,29 @@ def _fake_snapshot(mocker, t212_ticker, quantity, avg_price, current_price):
     mocker.patch("output.performance.get_metadata_str", return_value=json.dumps(positions))
 
 
+def _seed_resolution(engine, *, ticker, t212_ticker, currency="USD"):
+    """Seed one VERIFIED row into instrument_resolutions — replaces the
+    old static config.yaml `instruments:` mapping these tests used to
+    pass via _config(mapping=...). See CLAUDE.md's "wire the momentum-
+    only, full-S&P-500 selection into live execution" section."""
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO instrument_resolutions
+                (ticker, t212_instrument_id, currency, status, note, attempted_at, resolved_at)
+            VALUES (:t, :tt, :ccy, 'VERIFIED', 'seeded for test', :now, :now)
+        """), {"t": ticker, "tt": t212_ticker, "ccy": currency, "now": datetime.utcnow().isoformat()})
+
+
 def test_brief_cards_no_credentials_returns_empty(db_engine, monkeypatch):
     monkeypatch.delenv("T212_API_KEY", raising=False)
     monkeypatch.delenv("T212_API_SECRET", raising=False)
     assert get_brief_cards(_config()) == []
 
 
-def test_brief_cards_no_mapping_returns_empty(db_engine, monkeypatch):
+def test_brief_cards_no_verified_resolutions_returns_empty(db_engine, monkeypatch):
     monkeypatch.setenv("T212_API_KEY", "k")
     monkeypatch.setenv("T212_API_SECRET", "s")
-    assert get_brief_cards({"instruments": {}}) == []
+    assert get_brief_cards(_config()) == []
 
 
 def test_brief_cards_crisis_takes_priority(db_engine, monkeypatch, mocker):
@@ -217,12 +227,12 @@ def test_brief_cards_crisis_takes_priority(db_engine, monkeypatch, mocker):
     mocker.patch("brokers.trading212.Trading212Client._fx_rates", staticmethod(lambda: (1.27, 1.08)))
 
     _seed_buy_fill(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=99999.0, is_etf=True)
+    _seed_resolution(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ")
     _fake_snapshot(mocker, "I50Dl_EQ", 10, 100.0, 105.0)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     status_rows = [{"ticker": "VOO", "sig_on": True, "is_member": True, "crisis_now": True}]
 
-    cards = get_brief_cards(cfg, ticker_status_rows=status_rows)
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
     assert len(cards) == 1
     assert cards[0]["status"] == "CRISIS EXIT"
 
@@ -233,12 +243,12 @@ def test_brief_cards_index_removal_before_stop_and_signal(db_engine, monkeypatch
     mocker.patch("brokers.trading212.Trading212Client._fx_rates", staticmethod(lambda: (1.27, 1.08)))
 
     _seed_buy_fill(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=99999.0, is_etf=False)
+    _seed_resolution(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ")
     _fake_snapshot(mocker, "AAPL_US_EQ", 5, 100.0, 90.0)
 
-    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}})
     status_rows = [{"ticker": "AAPL", "sig_on": False, "is_member": False, "crisis_now": False}]
 
-    cards = get_brief_cards(cfg, ticker_status_rows=status_rows)
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
     assert cards[0]["status"] == "INDEX REMOVAL"
 
 
@@ -248,12 +258,12 @@ def test_brief_cards_stop_loss_before_signal_off(db_engine, monkeypatch, mocker)
     mocker.patch("brokers.trading212.Trading212Client._fx_rates", staticmethod(lambda: (1.27, 1.08)))
 
     _seed_buy_fill(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=95.0, is_etf=True)
+    _seed_resolution(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ")
     _fake_snapshot(mocker, "I50Dl_EQ", 10, 100.0, 90.0)  # price 90 <= stop 95
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     status_rows = [{"ticker": "VOO", "sig_on": False, "is_member": True, "crisis_now": False}]
 
-    cards = get_brief_cards(cfg, ticker_status_rows=status_rows)
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
     assert cards[0]["status"] == "STOP LOSS"
 
 
@@ -265,12 +275,12 @@ def test_brief_cards_signal_off_before_max_holding(db_engine, monkeypatch, mocke
 
     _seed_buy_fill(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0,
                     is_etf=True, days_ago=999)  # would also trigger MAX_HOLDING
+    _seed_resolution(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ")
     _fake_snapshot(mocker, "I50Dl_EQ", 10, 100.0, 105.0)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     status_rows = [{"ticker": "VOO", "sig_on": False, "is_member": True, "crisis_now": False}]
 
-    cards = get_brief_cards(cfg, ticker_status_rows=status_rows)
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
     assert cards[0]["status"] == "SIGNAL OFF"
 
 
@@ -282,12 +292,12 @@ def test_brief_cards_max_holding_when_nothing_else_fires(db_engine, monkeypatch,
 
     _seed_buy_fill(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0,
                     is_etf=True, days_ago=999)
+    _seed_resolution(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ")
     _fake_snapshot(mocker, "I50Dl_EQ", 10, 100.0, 105.0)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     status_rows = [{"ticker": "VOO", "sig_on": True, "is_member": True, "crisis_now": False}]
 
-    cards = get_brief_cards(cfg, ticker_status_rows=status_rows)
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
     assert cards[0]["status"] == "MAX HOLDING"
 
 
@@ -299,12 +309,12 @@ def test_brief_cards_on_track_when_nothing_fires(db_engine, monkeypatch, mocker)
 
     _seed_buy_fill(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0,
                     is_etf=True, days_ago=1)
+    _seed_resolution(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ")
     _fake_snapshot(mocker, "I50Dl_EQ", 10, 100.0, 105.0)
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
     status_rows = [{"ticker": "VOO", "sig_on": True, "is_member": True, "crisis_now": False}]
 
-    cards = get_brief_cards(cfg, ticker_status_rows=status_rows)
+    cards = get_brief_cards(_config(), ticker_status_rows=status_rows)
     assert cards[0]["status"] == "ON TRACK"
     assert cards[0]["unreal_pct"] == pytest.approx(5.0)
 
@@ -314,8 +324,8 @@ def test_brief_cards_skips_ticker_with_no_open_position(db_engine, monkeypatch, 
     monkeypatch.setenv("T212_API_SECRET", "s")
     mocker.patch("output.performance.get_metadata_str", return_value="[]")
 
-    cfg = _config(mapping={"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}})
-    assert get_brief_cards(cfg, ticker_status_rows=[]) == []
+    _seed_resolution(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ")
+    assert get_brief_cards(_config(), ticker_status_rows=[]) == []
 
 
 # ---------------------------------------------------------------------------

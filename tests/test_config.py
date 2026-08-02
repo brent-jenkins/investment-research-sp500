@@ -9,6 +9,18 @@ one top-level `instruments:` section, one record per tradeable
 instrument. These tests load the real config.yaml (not a synthetic
 fixture) so a future incomplete entry is loudly caught here rather than
 discovered live, the same way the original mapping errors were.
+
+Emptied entirely 2026-08-02 (see CLAUDE.md's "wire the momentum-only,
+full-S&P-500 selection into live execution" section) -- the live
+candidate pool and each ticker's T212 instrument mapping are both sourced
+dynamically now (analysis/universe.py:get_live_stock_candidates(),
+brokers/trading212.py:resolve_and_cache_instrument()), not from a
+hand-curated list here. The structural-validation tests below
+(required-fields/sane-values/no-duplicate-IDs) are kept, not deleted --
+`instruments:` can still legitimately hold a manual, ad-hoc override
+entry in future without a schema change, and these tests would catch an
+incomplete one exactly as before; they simply have nothing to check
+against on an empty dict today.
 """
 from pathlib import Path
 
@@ -34,10 +46,14 @@ def test_old_duplicated_structures_are_gone(config):
     assert "instrument_mapping" not in config["trading212_invest"]
 
 
-def test_instruments_section_exists_and_is_nonempty(config):
+def test_instruments_section_exists_as_an_empty_dict(config):
+    """`instruments:` is intentionally empty now (2026-08-02) -- the live
+    candidate pool is dynamic (see this file's own module docstring). The
+    key itself is kept present, not deleted, so config.get("instruments",
+    {}) call sites behave identically whether it's present-and-empty or
+    absent."""
     assert "instruments" in config
-    assert isinstance(config["instruments"], dict)
-    assert len(config["instruments"]) > 0
+    assert config["instruments"] == {}
 
 
 def test_every_instrument_has_all_required_fields(config):
@@ -79,15 +95,19 @@ def test_no_duplicate_t212_instrument_ids(config):
     assert not dupes, f"duplicate t212_instrument_id values: {dupes}"
 
 
-def test_gold_preserved_as_permanently_ineligible(config):
+def test_gold_preserved_as_permanently_ineligible():
     """GOLD (Barrick Mining) is a real, deliberate exception -- verified
-    live but permanently zero-eligible (empty STOCK_MEMBERSHIP window,
-    never a genuine S&P 500 constituent). It must stay visible in the
-    structure, not be silently dropped during any future edit."""
-    assert "GOLD" in config["instruments"]
-    gold = config["instruments"]["GOLD"]
-    assert gold["is_etf"] is False
-    assert gold["t212_instrument_id"] == "GOLD_US_EQ"
+    live but permanently zero-eligible. It no longer needs a manual
+    config.yaml `instruments:` entry to stay "kept, not removed" (that
+    override mechanism no longer exists here at all, see this file's own
+    module docstring) -- it stays fully documented and excluded from the
+    live candidate pool automatically via its empty STOCK_MEMBERSHIP
+    window (analysis/universe.py), which is what actually keeps is_member()
+    False for it. Also covered directly in tests/test_universe.py; kept
+    here too as a config-adjacent sanity check since GOLD's exclusion used
+    to live in this file's own structure."""
+    from analysis.universe import STOCK_MEMBERSHIP
+    assert STOCK_MEMBERSHIP["GOLD"] == []
 
 
 def test_watchlist_core_never_has_execution_fields(config):
@@ -107,18 +127,40 @@ def test_watchlist_core_tickers_never_appear_in_instruments(config):
     assert not (core_tickers & config["instruments"].keys())
 
 
-def test_get_all_watchlist_entries_combines_core_and_instruments(config):
+def test_get_all_watchlist_entries_combines_core_and_dynamic_candidates(config, db_engine, mocker):
+    """`instruments:` is empty now (2026-08-02) -- get_all_watchlist_entries()
+    merges watchlist.core with the dynamic live candidate pool
+    (analysis.universe.get_live_stock_candidates()) instead. Mocked
+    directly here rather than relying on real universe_membership content,
+    since this file's own job is validating config.yaml's structure, not
+    re-testing universe discovery (already covered in
+    tests/test_universe.py)."""
     from data.ingestion import get_all_watchlist_entries
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL", "MSFT"])
 
     entries = get_all_watchlist_entries(config)
     tickers = [e["ticker"] for e in entries]
 
-    assert len(tickers) == len(set(tickers)), "duplicate tickers across watchlist.core + instruments"
-    assert len(entries) == len(config["watchlist"]["core"]) + len(config["instruments"])
+    assert len(tickers) == len(set(tickers)), "duplicate tickers across watchlist.core + dynamic candidates"
+    assert len(entries) == len(config["watchlist"]["core"]) + 2
     assert "^GSPC" in tickers
     assert "GBPUSD=X" in tickers
     assert "AAPL" in tickers
-    assert "GOLD" in tickers
+    assert "MSFT" in tickers
+
+
+def test_get_all_watchlist_entries_no_dynamic_candidates_falls_back_to_core_only(config, db_engine, mocker):
+    """A fresh install (no universe_membership rows yet, `instruments:`
+    empty) must not crash -- just returns watchlist.core alone."""
+    from data.ingestion import get_all_watchlist_entries
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])
+
+    entries = get_all_watchlist_entries(config)
+    tickers = [e["ticker"] for e in entries]
+
+    assert tickers == ["^GSPC", "GBPUSD=X", "EURUSD=X"]
 
 
 def test_get_all_tickers_matches_get_all_watchlist_entries(config):

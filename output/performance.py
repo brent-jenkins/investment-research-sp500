@@ -22,18 +22,19 @@ def get_ticker_status(config: dict) -> list[dict]:
     a raw crisis day / inside the crisis entry-block window.
 
     Recomputes momentum from full price history for every ticker in the
-    top-level `instruments:` section (config.yaml, consolidated 2026-07-31
-    from watchlist.trading + trading212_invest.instrument_mapping — see
-    CLAUDE.md's "Unified instrument structure" section) — the same
-    per-ticker cost brokers/trading212.py's own _ticker_state() pays once
-    per scheduled run. Callers on a page render should cache this (see
-    main.py:_get_ticker_status()'s st.cache_data wrapper).
+    live, dynamically-refreshed S&P 500 candidate pool
+    (analysis/universe.py:get_live_stock_candidates() — replaces the old
+    static config.yaml `instruments:` list, see CLAUDE.md's "wire the
+    momentum-only, full-S&P-500 selection into live execution" section) —
+    the same per-ticker cost brokers/trading212.py's own _ticker_state()
+    pays once per scheduled run. Callers on a page render should cache
+    this (see main.py:_get_ticker_status()'s st.cache_data wrapper).
     """
     from analysis import crisis, signals, universe
     from data.ingestion import get_price_df
 
-    mapping = config.get("instruments", {})
-    if not mapping:
+    tickers = universe.get_live_stock_candidates()
+    if not tickers:
         return []
 
     try:
@@ -47,8 +48,13 @@ def get_ticker_status(config: dict) -> list[dict]:
         return []
 
     rows: list[dict] = []
-    for ticker, raw in mapping.items():
-        is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
+    for ticker in tickers:
+        # The live candidate pool is stocks only — the ETF sleeve was
+        # removed from live trading entirely 2026-08-02 (see CLAUDE.md's
+        # "ETF sleeve removed from live trading" section). Kept as an
+        # explicit field (rather than dropped) for shape compatibility
+        # with existing consumers of this dict.
+        is_etf = False
         try:
             df = get_price_df(ticker, days=8000)
             if df.empty or len(df) < 300:
@@ -94,13 +100,15 @@ def get_brief_cards(
     """Return enriched trade-card dicts for open positions.
 
     Reads the scheduler-maintained t212_positions_snapshot (one shared T212
-    account) filtered to the top-level `instruments:` section (config.yaml,
-    consolidated 2026-07-31 from watchlist.trading + trading212_invest.
-    instrument_mapping — see CLAUDE.md's "Unified instrument structure"
-    section), plus entry context (momentum_pct, stop_price) from
-    invest_orders. Status mirrors brokers/trading212.py's own exit
-    precedence exactly: crisis > index-removal > stop-loss > signal-off >
-    max-holding.
+    account) filtered to every VERIFIED T212 instrument resolution ever
+    recorded (brokers/trading212.py:_load_all_verified_instrument_
+    resolutions() — replaces the old static config.yaml `instruments:`
+    dict now that the live candidate pool is the full, dynamic S&P 500;
+    see CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into
+    live execution" section), plus entry context (momentum_pct,
+    stop_price) from invest_orders. Status mirrors brokers/trading212.py's
+    own exit precedence exactly: crisis > index-removal > stop-loss >
+    signal-off > max-holding.
 
     ticker_status_rows lets a caller pass in an already-computed
     get_ticker_status() result (e.g. main.py's cached version) instead of
@@ -111,20 +119,21 @@ def get_brief_cards(
 
     from analysis.decision import evaluate_exit_reason
     from analysis.universe import get_max_holding_days
+    from brokers.trading212 import _load_all_verified_instrument_resolutions
 
     if not (os.environ.get("T212_API_KEY", "") and os.environ.get("T212_API_SECRET", "")):
         return []
 
     t212_cfg = config.get("trading212_invest", {})
-    mapping = config.get("instruments", {})
-    if not mapping:
+    resolved = _load_all_verified_instrument_resolutions()
+    if not resolved:
         return []
 
-    reverse_map: dict[str, tuple[str, bool]] = {}
-    for rt, raw in mapping.items():
-        t212_ticker = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
-        is_etf = bool(raw.get("is_etf", False)) if isinstance(raw, dict) else False
-        reverse_map[t212_ticker] = (rt, is_etf)
+    # ETFs were removed from live trading entirely (2026-08-02) — every
+    # resolved ticker is a stock, so is_etf is always False here now.
+    reverse_map: dict[str, tuple[str, bool]] = {
+        t212_ticker: (r["ticker"], False) for t212_ticker, r in resolved.items()
+    }
 
     pos_raw = get_metadata_str("t212_positions_snapshot")
     positions: Optional[list] = None

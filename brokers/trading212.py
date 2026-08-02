@@ -652,14 +652,26 @@ class Trading212Client:
 # ---------------------------------------------------------------------------
 
 def audit_etf_pricing_paths(config: dict, client: Optional["Trading212Client"] = None) -> list[dict]:
-    """Report, per ETF in the top-level `instruments:` section (config.yaml,
-    consolidated 2026-07-31 from watchlist.trading + trading212_invest.
-    instrument_mapping — see CLAUDE.md's "Unified instrument structure"
-    section), whether it currently has a viable pricing path: held (live
-    position -> tier 1), cached (a prior live-position read or a manual
-    seed still within _LAST_PRICE_CACHE_MAX_AGE_DAYS -> tier 2), or neither
-    -> "locked out" (get_instrument_price_gbp() would return 0.0 and refuse
-    to size a new entry, per that method's is_etf=True refusal — see its
+    """Permanently inert since 2026-08-02 — always returns [] now.
+
+    config["instruments"] is empty (the ETF sleeve was removed from live
+    trading entirely, see CLAUDE.md's "ETF sleeve removed from live
+    trading" section), so `etf_entries` below is always empty too. Kept,
+    not deleted, purely as documented dead code — the Status page's own
+    "ETF pricing-path audit" expander still calls this and degrades
+    gracefully (an empty result, no crash); removing this function outright
+    would mean also removing that UI section and its "Seed a manual price"
+    control, a larger change than this task's scope. If the ETF sleeve is
+    ever reconsidered for live trading, this becomes live again with no
+    code change needed.
+
+    Original docstring, describing what it did while `instruments:` still
+    held ETF entries: report, per ETF in that section, whether it
+    currently has a viable pricing path: held (live position -> tier 1),
+    cached (a prior live-position read or a manual seed still within
+    _LAST_PRICE_CACHE_MAX_AGE_DAYS -> tier 2), or neither -> "locked out"
+    (get_instrument_price_gbp() would return 0.0 and refuse to size a new
+    entry, per that method's is_etf=True refusal — see its
     docstring).
 
     Read-only — never places an order, never writes anything. *client* lets
@@ -1192,6 +1204,266 @@ def _load_gspc_close() -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# T212 instrument-ID resolution (2026-08-02) — the live candidate pool is
+# now the full, dynamically-refreshed S&P 500 (analysis/universe.py:
+# get_live_stock_candidates()), not the old fixed 40-ticker config.yaml
+# `instruments:` mapping — see CLAUDE.md's "wire the momentum-only,
+# full-S&P-500 selection into live execution" section. That old mapping's
+# t212_instrument_id/currency fields were verified manually, once, for 40
+# tickers; a genuinely dynamic candidate pool needs this done
+# automatically, for any ticker, the first time it ever becomes a live
+# candidate — and needs it VERIFIED against T212's real metadata, not
+# guessed, since the naming convention doesn't always hold (META resolves
+# to FB_US_EQ, RTX to UTX_US_EQ) and a wrong guess has already caused a
+# real live bug once (XLF/XLK, see CLAUDE.md's ETF mapping audit section).
+# ---------------------------------------------------------------------------
+
+def resolve_instrument_candidate(ticker: str, instruments: list[dict]) -> dict:
+    """Pure matching logic — no API/DB access. Given a research *ticker*
+    and an already-fetched T212 `get_instruments()` list, return a
+    resolution result: {"status": "VERIFIED"|"FAILED",
+    "t212_instrument_id": str|None, "currency": str|None, "note": str}.
+
+    T212's own `shortName` field for a US-listed equity instrument
+    reliably tracks the company's REAL, current ticker symbol even when
+    the underlying instrument ID (the `ticker` field, which T212 never
+    renames post-listing) is a legacy/pre-merger name — confirmed against
+    both of this project's known real exceptions: META resolves via
+    FB_US_EQ (shortName "META"), RTX via UTX_US_EQ (shortName "RTX"). This
+    is the single decisive check both steps below rely on — the same
+    check that would have caught XLF's/XLK's wrong-instrument ETF
+    mappings immediately had it existed then, since it verifies what the
+    metadata actually MEANS rather than trusting a naming convention or
+    an existing mapping at face value.
+
+    1. Guess `{TICKER}_US_EQ` — the convention that already held for 38 of
+       the 40 previously hand-curated tickers. If that exact instrument
+       exists AND its shortName equals *ticker*, verified immediately —
+       the common case, one lookup.
+    2. Otherwise (the guess doesn't exist, OR it exists but its shortName
+       does NOT match — a genuinely wrong guess, never silently accepted),
+       search every US-listed equity instrument for one whose shortName
+       equals *ticker*. Exactly one match → verified via that instrument
+       instead. Zero matches → FAILED (not found). More than one match →
+       FAILED (ambiguous) — never guess between duplicates.
+
+    Never raises — a malformed instrument dict (missing keys) is treated
+    as simply not matching, not as an error the caller must handle.
+    """
+    ticker_u = ticker.strip().upper()
+    guess_id = f"{ticker_u}_US_EQ"
+
+    def _short(inst: dict) -> str:
+        return str(inst.get("shortName") or "").strip().upper()
+
+    def _tid(inst: dict) -> str:
+        return str(inst.get("ticker") or "")
+
+    guess = next((i for i in instruments if _tid(i) == guess_id), None)
+    if guess is not None and _short(guess) == ticker_u:
+        return {
+            "status": "VERIFIED",
+            "t212_instrument_id": guess_id,
+            "currency": guess.get("currencyCode") or "USD",
+            "note": f"matched {guess_id} via naming convention, shortName confirms",
+        }
+
+    candidates = [
+        i for i in instruments
+        if _tid(i).endswith("_US_EQ") and _short(i) == ticker_u
+    ]
+    if len(candidates) == 1:
+        match = candidates[0]
+        return {
+            "status": "VERIFIED",
+            "t212_instrument_id": _tid(match),
+            "currency": match.get("currencyCode") or "USD",
+            "note": f"matched {_tid(match)} via shortName search (naming convention did not apply)",
+        }
+    if len(candidates) == 0:
+        return {
+            "status": "FAILED",
+            "t212_instrument_id": None,
+            "currency": None,
+            "note": f"no US-listed equity instrument found with shortName == {ticker_u}",
+        }
+    return {
+        "status": "FAILED",
+        "t212_instrument_id": None,
+        "currency": None,
+        "note": (
+            f"ambiguous — {len(candidates)} US-listed equity instruments matched "
+            f"shortName {ticker_u}: {[_tid(c) for c in candidates]}"
+        ),
+    }
+
+
+def _load_instrument_resolution(ticker: str) -> Optional[dict]:
+    """Read the cached resolution row for *ticker*, or None if it has
+    never been attempted."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine as _get_engine
+        with _get_engine().connect() as conn:
+            row = conn.execute(sa_text(
+                "SELECT status, t212_instrument_id, currency, note "
+                "FROM instrument_resolutions WHERE ticker = :t"
+            ), {"t": ticker}).mappings().first()
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.warning("Could not read instrument_resolutions for %s: %s", ticker, exc)
+        return None
+
+
+def _store_instrument_resolution(
+    ticker: str, *, status: str, t212_instrument_id: Optional[str],
+    currency: Optional[str], note: Optional[str],
+) -> None:
+    """Upsert one row into instrument_resolutions (best-effort; never
+    raises — the same contract every other DB write in this module
+    follows)."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine as _get_engine
+        now = datetime.utcnow().isoformat()
+        resolved_at = now if status in ("VERIFIED", "FAILED") else None
+        with _get_engine().begin() as conn:
+            conn.execute(sa_text("""
+                INSERT INTO instrument_resolutions
+                    (ticker, t212_instrument_id, currency, status, note, attempted_at, resolved_at)
+                VALUES (:t, :tid, :ccy, :status, :note, :now, :resolved_at)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    t212_instrument_id = :tid, currency = :ccy, status = :status,
+                    note = :note, attempted_at = :now,
+                    resolved_at = COALESCE(:resolved_at, instrument_resolutions.resolved_at)
+            """), {
+                "t": ticker, "tid": t212_instrument_id, "ccy": currency,
+                "status": status, "note": note, "now": now, "resolved_at": resolved_at,
+            })
+    except Exception as exc:
+        logger.warning("Could not store instrument resolution for %s: %s", ticker, exc)
+
+
+def resolve_and_cache_instrument(ticker: str, client: "Trading212Client") -> Optional[dict]:
+    """Return {"t212_instrument_id": str, "currency": str} for *ticker* if
+    it is verified safe to trade, or None if it must be excluded.
+
+    Durable, DB-backed cache (instrument_resolutions) — a given ticker's
+    real T212 metadata is checked at most once per status transition, not
+    on every single decide-phase run:
+      - Already VERIFIED → return the cached mapping, no API call.
+      - Already FAILED → return None. A genuine mismatch was already
+        found and flagged for manual review; never silently re-guessed on
+        a later run — same "flag, don't silently retry a bad guess"
+        standard as REJECTED_CAPACITY/SKIPPED_PRICE_MOVED.
+      - Missing, or previously PENDING (an earlier attempt failed for an
+        OPERATIONAL reason — get_instruments() itself errored, not a
+        genuine name mismatch) → attempt resolution now. If
+        get_instruments() fails again, stays PENDING and this returns
+        None (excluded from trading) — NEVER falls back to trading an
+        unverified guess just because the API call didn't succeed.
+    """
+    cached = _load_instrument_resolution(ticker)
+    if cached is not None:
+        if cached["status"] == "VERIFIED":
+            return {"t212_instrument_id": cached["t212_instrument_id"], "currency": cached["currency"]}
+        if cached["status"] == "FAILED":
+            return None
+
+    try:
+        instruments = client.get_instruments()
+        if not instruments:
+            raise RuntimeError("get_instruments() returned no data")
+    except Exception as exc:
+        logger.warning(
+            "Instrument resolution: could not fetch T212 instruments metadata for %s — %s. "
+            "Leaving PENDING, excluded from trading until resolution succeeds.",
+            ticker, exc,
+        )
+        _store_instrument_resolution(
+            ticker, status="PENDING", t212_instrument_id=None, currency=None,
+            note=f"get_instruments() failed: {exc}",
+        )
+        return None
+
+    result = resolve_instrument_candidate(ticker, instruments)
+    _store_instrument_resolution(
+        ticker, status=result["status"],
+        t212_instrument_id=result["t212_instrument_id"], currency=result["currency"],
+        note=result["note"],
+    )
+    if result["status"] == "VERIFIED":
+        logger.info("Instrument resolution: %s -> %s (%s)", ticker, result["t212_instrument_id"], result["note"])
+        return {"t212_instrument_id": result["t212_instrument_id"], "currency": result["currency"]}
+
+    logger.warning(
+        "Instrument resolution FAILED for %s — %s. Excluded from trading, flagged for review.",
+        ticker, result["note"],
+    )
+    return None
+
+
+def _load_all_verified_instrument_resolutions() -> dict[str, dict]:
+    """Return {t212_instrument_id: {"ticker": ..., "currency": ...}} for
+    every VERIFIED resolution — used by maybe_exit_positions() to match a
+    currently-held T212 position back to its research ticker.
+
+    Deliberately NOT filtered to today's live candidate pool
+    (analysis.universe.get_live_stock_candidates()): a position can still
+    be open for a ticker that has since been removed from the index (or
+    otherwise fallen out of today's candidate list) and must still be
+    correctly matched and evaluated for exit (is_member() turning False is
+    itself one of the exit triggers — INDEX_REMOVAL) — the resolution
+    itself, once verified, never expires."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine as _get_engine
+        with _get_engine().connect() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT ticker, t212_instrument_id, currency "
+                "FROM instrument_resolutions WHERE status = 'VERIFIED'"
+            )).mappings().all()
+        return {
+            r["t212_instrument_id"]: {"ticker": r["ticker"], "currency": r["currency"]}
+            for r in rows if r["t212_instrument_id"]
+        }
+    except Exception as exc:
+        logger.warning("Could not read verified instrument resolutions: %s", exc)
+        return {}
+
+
+def load_all_instrument_resolutions() -> list[dict]:
+    """Return every instrument_resolutions row (any status), sorted by
+    ticker — for operational/UI visibility (e.g. the Status page's
+    instrument-mapping display), not used by any decision-making code
+    path. VERIFIED rows show what's safe to trade and how it resolved;
+    FAILED rows are exactly what needs manual review (see
+    resolve_and_cache_instrument()'s own docstring); PENDING rows show
+    what's still waiting on an operational retry."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine as _get_engine
+        with _get_engine().connect() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT ticker, t212_instrument_id, currency, status, note, attempted_at, resolved_at "
+                "FROM instrument_resolutions ORDER BY ticker"
+            )).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        logger.warning("Could not read instrument resolutions: %s", exc)
+        return []
+
+
+def get_failed_instrument_resolutions() -> list[dict]:
+    """Every FAILED instrument_resolutions row — used by
+    data/scheduler.py's post-decide-phase check to alert (see
+    output/briefing.py:send_instrument_resolution_failure_alert()) rather
+    than let a genuinely excluded, otherwise-tradeable candidate sit
+    unnoticed in the table until someone happens to open the Status page."""
+    return [r for r in load_all_instrument_resolutions() if r["status"] == "FAILED"]
+
+
+# ---------------------------------------------------------------------------
 # Fill-status polling — called hourly and on Refresh Account
 # ---------------------------------------------------------------------------
 
@@ -1420,16 +1692,20 @@ def maybe_exit_positions(config: dict) -> None:
 
     _reconstruct_pnl(config)
 
-    mapping: dict = config.get("instruments", {})
-    if not mapping:
+    # Sourced from every VERIFIED T212 instrument resolution ever recorded
+    # (not just today's live candidate pool — see
+    # _load_all_verified_instrument_resolutions()'s own docstring for why
+    # a formerly-eligible, currently-removed ticker still needs to match
+    # correctly here) — replaces the old static config.yaml `instruments:`
+    # dict now that the candidate pool is the full, dynamic S&P 500. See
+    # CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into
+    # live execution" section.
+    resolved = _load_all_verified_instrument_resolutions()
+    if not resolved:
         return
 
-    reverse_map: dict[str, str] = {}
-    ccy_map: dict[str, str] = {}
-    for rt, raw in mapping.items():
-        t212_id = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
-        reverse_map[t212_id] = rt
-        ccy_map[t212_id] = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
+    reverse_map: dict[str, str] = {t212_id: r["ticker"] for t212_id, r in resolved.items()}
+    ccy_map: dict[str, str] = {t212_id: (r["currency"] or "USD") for t212_id, r in resolved.items()}
 
     live = t212_cfg.get("live", False)
     try:
@@ -1603,9 +1879,13 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
         _set_t212_error("API credentials not configured (T212_API_KEY / T212_API_SECRET)")
         return
 
-    mapping: dict = config.get("instruments", {})
-    if not mapping:
-        logger.info("No instruments configured — nothing to do.")
+    # Full, dynamically-refreshed S&P 500 stock candidate pool — replaces
+    # the old static config.yaml `instruments:` list. See CLAUDE.md's
+    # "wire the momentum-only, full-S&P-500 selection into live execution"
+    # section.
+    candidate_tickers = universe.get_live_stock_candidates()
+    if not candidate_tickers:
+        logger.info("No live stock candidates found (universe_membership empty/stale) — nothing to do.")
         return
 
     live = t212_cfg.get("live", False)
@@ -1649,9 +1929,9 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
     # the account's live state *at submission time*, which can genuinely
     # differ from right now (an overnight exit can free up room between
     # this EOD decide and the next session's submission).
-    for ticker, raw in mapping.items():
-        t212_ticker = raw.get("t212_instrument_id") if isinstance(raw, dict) else raw
-        instrument_currency = raw.get("currency", "USD") if isinstance(raw, dict) else "USD"
+    for ticker in candidate_tickers:
+        t212_ticker: Optional[str] = None
+        instrument_currency = "USD"
 
         # Per-ticker exception isolation (2026-07-31) — see CLAUDE.md's "V2
         # first-cycle deployment cap overshoot" / "Live pricing bug,
@@ -1686,6 +1966,21 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 entry_blocked=state["entry_blocked"],
             ):
                 continue
+
+            # T212 instrument-ID resolution — deferred until every cheaper
+            # check above (candidacy, signal presence, entry gate) has
+            # already passed, so a ticker that wouldn't qualify to trade
+            # today never burns a resolution attempt. Never trades on an
+            # unverified guess — see resolve_and_cache_instrument()'s own
+            # docstring for the VERIFIED/FAILED/PENDING cache semantics.
+            resolution = resolve_and_cache_instrument(ticker, client)
+            if resolution is None:
+                logger.debug(
+                    "%s: no verified T212 instrument mapping — excluded from trading.", ticker,
+                )
+                continue
+            t212_ticker = resolution["t212_instrument_id"]
+            instrument_currency = resolution["currency"] or "USD"
 
             if t212_ticker in positions_by_t212:
                 logger.debug("%s already held — skipping.", ticker)

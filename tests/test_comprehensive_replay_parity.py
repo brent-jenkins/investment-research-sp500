@@ -228,6 +228,29 @@ def _replay_frame(mocker, db_engine, harness: _ReplayHarness, config: dict,
 
     mocker.patch.object(v2u, "ETF_TICKERS", tuple(t for t, e in config["instruments"].items() if e["is_etf"]))
     mocker.patch.object(v2u, "is_member", return_value=True)
+    # maybe_place_orders() now sources its candidate pool from
+    # analysis.universe.get_live_stock_candidates() and resolves each
+    # ticker's T212 instrument mapping from the DB-backed
+    # instrument_resolutions cache, not config["instruments"] -- see
+    # CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into
+    # live execution" section. A real ETF ticker could never actually
+    # reach get_live_stock_candidates()'s output any more (ETFs were
+    # removed from live trading entirely 2026-08-02), but this scenario
+    # is deliberately kept as a defensive structural check: the ETF-
+    # before-stock same-day priority split this test exercises still
+    # exists in both engines (submit_pending_etf_orders() is kept as
+    # documented dead code specifically so this coverage doesn't rot),
+    # so both ETFA and STKA are still mocked into the candidate pool here.
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=list(config["instruments"].keys()))
+    with db_engine.begin() as conn:
+        for rt, raw in config["instruments"].items():
+            conn.execute(sa_text("""
+                INSERT INTO instrument_resolutions
+                    (ticker, t212_instrument_id, currency, status, note, attempted_at, resolved_at)
+                VALUES (:t, :tt, :ccy, 'VERIFIED', 'seeded for test', :now, :now)
+                ON CONFLICT(ticker) DO UPDATE SET t212_instrument_id = :tt, status = 'VERIFIED'
+            """), {"t": rt, "tt": raw["t212_instrument_id"], "ccy": raw.get("currency", "USD"),
+                   "now": datetime.utcnow().isoformat()})
     monkeypatch_sleep = mocker.patch("brokers.trading212.time.sleep", lambda *_a, **_k: None)  # noqa: F841
 
     mock_client = mocker.MagicMock()

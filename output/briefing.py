@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _UK_TZ = ZoneInfo("Europe/London")
 _LAST_WEEKLY_SUMMARY_KEY = "last_weekly_summary_sent"
 _MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY = "membership_staleness_email_last_sent"
+_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY = "instrument_resolution_failure_email_last_sent"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -455,4 +456,99 @@ def send_membership_staleness_alert(age_hours: float, threshold_hours: float, co
             set_metadata(_MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
         except Exception as exc:
             logger.warning("Could not record membership_staleness_email_last_sent: %s", exc)
+    return sent, detail
+
+
+def send_instrument_resolution_failure_alert(failed: list[dict], config: dict) -> tuple[bool, str]:
+    """Alert that one or more live candidate tickers have a FAILED T212
+    instrument-ID resolution (brokers/trading212.py:resolve_and_cache_
+    instrument()) -- a genuine, otherwise-tradeable candidate is being
+    silently excluded until a human reviews it, per that mechanism's own
+    "flag for review, never auto-retry a genuine mismatch" contract (see
+    CLAUDE.md's "wire the momentum-only, full-S&P-500 selection into live
+    execution" section). Without this alert a FAILED row would just sit in
+    instrument_resolutions until someone happened to open the Status page
+    -- the exact "sits silently wrong" gap this project's own standing
+    review discipline exists to close, and the same gap the membership-
+    staleness alert immediately above this function was built to close for
+    a different mechanism.
+
+    Gated the same two ways as send_membership_staleness_alert() (2026-08-02
+    precedent, itself following brokers/trading212.py's _send_t212_error_
+    email()): notifications.email.enabled (checked inside _smtp_send()
+    itself) and its OWN dedicated cooldown key,
+    _INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY -- deliberately
+    separate from every other email's cooldown, for the identical reason
+    every other alert here keeps its own trigger path: a persistent
+    instrument-resolution failure is a different problem from a stale
+    membership refresh, a T212 order error, or a scheduled weekly send, and
+    sharing one cooldown would let any one of them silently "use up"
+    another's alert window. Called on every scheduled run (not just the
+    EOD run that can actually produce a NEW failure) specifically so an
+    already-known, still-unresolved FAILED ticker keeps getting
+    re-flagged periodically (subject to its own cooldown) for as long as
+    it stays unresolved, not just once on the day it first failed.
+    """
+    from data.database import get_metadata_str, set_metadata
+
+    if not failed:
+        return False, "no failed resolutions"
+
+    cooldown_hours = float(config.get("notifications", {}).get("email", {}).get("alert_cooldown_hours", 8))
+    last_sent_str = get_metadata_str(_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY)
+    if last_sent_str:
+        try:
+            hours_since = (datetime.utcnow() - datetime.fromisoformat(last_sent_str)).total_seconds() / 3600
+            if hours_since < cooldown_hours:
+                logger.info(
+                    "Instrument resolution failure email skipped — within %.1fh cooldown (last sent %.1fh ago)",
+                    cooldown_hours, hours_since,
+                )
+                return False, "within cooldown"
+        except ValueError:
+            pass  # corrupt/unexpected stored value -- treat as no prior send
+
+    tickers = sorted(r["ticker"] for r in failed)
+    n = len(tickers)
+    subject = f"SP500INVEST: {n} ticker(s) failed T212 instrument resolution"
+    ticker_lines = "\n".join(
+        f"  - {r['ticker']}: {r['note'] or '(no note recorded)'}"
+        for r in sorted(failed, key=lambda r: r["ticker"])
+    )
+    text_body = (
+        f"{n} live candidate ticker(s) have a FAILED T212 instrument-ID "
+        "resolution (brokers/trading212.py:resolve_and_cache_instrument()) "
+        "-- each is a genuine, otherwise-tradeable candidate (index member, "
+        "momentum signal on) that cannot be traded because no confident, "
+        "unambiguous match was found against T212's own instrument "
+        "metadata. Excluded from trading until a human reviews it -- this "
+        "is never auto-retried, since a genuine mismatch would just "
+        "reproduce the same wrong answer.\n\n"
+        f"{ticker_lines}\n\n"
+        "Check the Status page's T212 Invest Account section (Instrument "
+        "mapping expander) to review. To force re-resolution once a fix is "
+        "identified, delete the ticker's row from the instrument_resolutions "
+        "table."
+    )
+    ticker_rows_html = "".join(
+        f"<li><b>{html.escape(r['ticker'])}</b>: {html.escape(r['note'] or '(no note recorded)')}</li>"
+        for r in sorted(failed, key=lambda r: r["ticker"])
+    )
+    html_body = (
+        f'<p style="color:#dc2626;font-weight:bold">{n} ticker(s) failed T212 instrument resolution</p>'
+        "<p>Each is a genuine, otherwise-tradeable candidate (index member, momentum "
+        "signal on) excluded from trading because no confident, unambiguous match was "
+        "found against T212's own instrument metadata. Never auto-retried -- a genuine "
+        "mismatch needs a human, not another guess.</p>"
+        f"<ul>{ticker_rows_html}</ul>"
+        "<p>Check the Status page's T212 Invest Account section (Instrument mapping "
+        "expander) to review. Delete the ticker's row from instrument_resolutions to "
+        "force re-resolution once a fix is identified.</p>"
+    )
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
+        except Exception as exc:
+            logger.warning("Could not record instrument_resolution_failure_email_last_sent: %s", exc)
     return sent, detail
