@@ -366,18 +366,24 @@ def _run_analysis_pipeline(
     except Exception as exc:
         logger.error("Order placement failed: %s", exc, exc_info=True)
 
-    # Alert on any FAILED T212 instrument resolution (2026-08-02) — without
-    # this, a genuinely tradeable candidate excluded by
-    # resolve_and_cache_instrument()'s "flag for review, never auto-retry
-    # a genuine mismatch" contract would just sit in instrument_resolutions
-    # until someone happened to open the Status page. Checked on every
-    # scheduled run (not just run_type == "full", the only run that can
-    # actually PRODUCE a new failure) so an already-known, still-unresolved
-    # failure keeps getting periodically re-flagged (subject to its own
-    # cooldown — see send_instrument_resolution_failure_alert()) for as
-    # long as it stays unresolved, not just once on the day it first
-    # failed. Own try/except so a failure here never blocks/masks the
-    # order placement result above.
+    # Alert on any FAILED T212 instrument resolution (2026-08-02, dedup
+    # fixed 2026-08-02) — without this, a genuinely tradeable candidate
+    # excluded by resolve_and_cache_instrument()'s "flag for review, never
+    # auto-retry a genuine mismatch" contract would just sit in
+    # instrument_resolutions until someone happened to open the Status
+    # page. get_failed_instrument_resolutions() always returns the FULL,
+    # current set of failed tickers — checked on every scheduled run (not
+    # just run_type == "full", the only run that can actually PRODUCE a
+    # new failure) so a NEW failure alongside an already-known one is
+    # always included and alerted on immediately, never held back by
+    # timing. send_instrument_resolution_failure_alert() uses content-based
+    # deduplication, not a time-based cooldown: it re-sends only when the
+    # failed ticker set itself has genuinely changed (a new failure, or a
+    # resolution), so an unchanged, persistent failure is never re-flagged
+    # every check cycle, and a genuinely new failure is never suppressed
+    # by a cooldown window regardless of when the last alert went out. Own
+    # try/except so a failure here never blocks/masks the order placement
+    # result above.
     try:
         from brokers.trading212 import get_failed_instrument_resolutions  # noqa: PLC0415
         failed = get_failed_instrument_resolutions()

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _UK_TZ = ZoneInfo("Europe/London")
 _LAST_WEEKLY_SUMMARY_KEY = "last_weekly_summary_sent"
 _MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY = "membership_staleness_email_last_sent"
-_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY = "instrument_resolution_failure_email_last_sent"
+_INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY = "instrument_resolution_failure_last_tickers"
 _POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY = "position_reconciliation_email_last_sent"
 
 
@@ -474,42 +474,58 @@ def send_instrument_resolution_failure_alert(failed: list[dict], config: dict) -
     staleness alert immediately above this function was built to close for
     a different mechanism.
 
-    Gated the same two ways as send_membership_staleness_alert() (2026-08-02
-    precedent, itself following brokers/trading212.py's _send_t212_error_
-    email()): notifications.email.enabled (checked inside _smtp_send()
-    itself) and its OWN dedicated cooldown key,
-    _INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY -- deliberately
-    separate from every other email's cooldown, for the identical reason
-    every other alert here keeps its own trigger path: a persistent
-    instrument-resolution failure is a different problem from a stale
-    membership refresh, a T212 order error, or a scheduled weekly send, and
-    sharing one cooldown would let any one of them silently "use up"
-    another's alert window. Called on every scheduled run (not just the
-    EOD run that can actually produce a NEW failure) specifically so an
-    already-known, still-unresolved FAILED ticker keeps getting
-    re-flagged periodically (subject to its own cooldown) for as long as
-    it stays unresolved, not just once on the day it first failed.
+    Gated the same two ways as send_membership_staleness_alert()
+    (2026-08-02 precedent, itself following brokers/trading212.py's
+    _send_t212_error_email()): notifications.email.enabled (checked
+    inside _smtp_send() itself), and -- deliberately different from every
+    other alert in this module -- content-based deduplication rather than
+    a time-based cooldown.
+
+    The caller (data/scheduler.py, immediately after the decide-phase order
+    placement) always passes the FULL, current set of FAILED rows via
+    get_failed_instrument_resolutions() -- a fresh aggregation of every
+    currently-failed ticker, never a single one -- so aggregation across
+    concurrent failures was never the gap. The real gap (found 2026-08-02,
+    verifying tonight's own alert): a time-based cooldown gates on *when*
+    the last email went out, not *what* it said. Two different tickers
+    failing within the same cooldown window would both appear in `failed`
+    on the second check, but the alert would still be skipped as "within
+    cooldown" -- silently suppressing the SECOND ticker's brand-new
+    failure for up to the full cooldown window, defeating the alert's own
+    purpose. Content-based dedup fixes this directly: the alert compares
+    the current sorted ticker set against _INSTRUMENT_RESOLUTION_FAILURE_
+    LAST_TICKERS_KEY (the set actually emailed last time), and sends
+    whenever that set has genuinely changed -- a new failure appeared, an
+    existing one resolved, or both -- regardless of how recently the last
+    email went out. An unchanged set never re-sends, no matter how many
+    times this runs (superseding the prior design's "keep re-flagging an
+    unresolved failure periodically" behaviour -- deliberately removed,
+    since a persistent, already-known failure repeating the identical
+    email every check cycle is exactly the spam a real alert should not
+    produce). When `failed` is empty, the stored set is cleared so a
+    LATER failure -- even a re-occurrence of the identical ticker -- is
+    correctly treated as new rather than compared against a stale
+    pre-resolution record.
     """
     from data.database import get_metadata_str, set_metadata
 
     if not failed:
+        try:
+            set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY, "")
+        except Exception as exc:
+            logger.warning("Could not clear instrument_resolution_failure_last_tickers: %s", exc)
         return False, "no failed resolutions"
 
-    cooldown_hours = float(config.get("notifications", {}).get("email", {}).get("alert_cooldown_hours", 8))
-    last_sent_str = get_metadata_str(_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY)
-    if last_sent_str:
-        try:
-            hours_since = (datetime.utcnow() - datetime.fromisoformat(last_sent_str)).total_seconds() / 3600
-            if hours_since < cooldown_hours:
-                logger.info(
-                    "Instrument resolution failure email skipped — within %.1fh cooldown (last sent %.1fh ago)",
-                    cooldown_hours, hours_since,
-                )
-                return False, "within cooldown"
-        except ValueError:
-            pass  # corrupt/unexpected stored value -- treat as no prior send
-
     tickers = sorted(r["ticker"] for r in failed)
+    current_set_key = json.dumps(tickers)
+    last_sent_set_key = get_metadata_str(_INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY)
+    if last_sent_set_key == current_set_key:
+        logger.info(
+            "Instrument resolution failure email skipped — failed ticker set unchanged since last alert (%s)",
+            tickers,
+        )
+        return False, "unchanged failure set"
+
     n = len(tickers)
     subject = f"SP500INVEST: {n} ticker(s) failed T212 instrument resolution"
     ticker_lines = "\n".join(
@@ -549,9 +565,9 @@ def send_instrument_resolution_failure_alert(failed: list[dict], config: dict) -
     sent, detail = _smtp_send(subject, text_body, html_body, config)
     if sent:
         try:
-            set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
+            set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY, current_set_key)
         except Exception as exc:
-            logger.warning("Could not record instrument_resolution_failure_email_last_sent: %s", exc)
+            logger.warning("Could not record instrument_resolution_failure_last_tickers: %s", exc)
     return sent, detail
 
 

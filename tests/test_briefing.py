@@ -459,15 +459,22 @@ def test_membership_staleness_alert_uses_its_own_cooldown_key_not_shared_with_ot
 
 
 # ---------------------------------------------------------------------------
-# send_instrument_resolution_failure_alert() (2026-08-02) -- alerts when a
-# genuinely tradeable candidate has a FAILED T212 instrument-ID resolution,
-# so it doesn't just sit silently excluded in instrument_resolutions until
-# someone happens to open the Status page. Same cooldown/enabled-gating
-# shape as send_membership_staleness_alert() above, deliberately its own
-# separate cooldown key.
+# send_instrument_resolution_failure_alert() (2026-08-02, dedup fixed
+# 2026-08-02) -- alerts when a genuinely tradeable candidate has a FAILED
+# T212 instrument-ID resolution, so it doesn't just sit silently excluded
+# in instrument_resolutions until someone happens to open the Status page.
+# Same enabled-gating as send_membership_staleness_alert() above, but
+# deliberately CONTENT-based deduplication (compares the current failed
+# ticker set against the set actually emailed last time), not a
+# time-based cooldown -- a time-based cooldown was found to let a second,
+# genuinely different ticker's failure go completely unalerted for the
+# length of the cooldown window if it occurred while an earlier failure's
+# cooldown was still active. Its own dedicated metadata key,
+# _INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY, deliberately separate
+# from every other alert's own state.
 # ---------------------------------------------------------------------------
 
-_INSTRUMENT_RESOLUTION_FAILURE_KEY = "instrument_resolution_failure_email_last_sent"
+_INSTRUMENT_RESOLUTION_FAILURE_KEY = "instrument_resolution_failure_last_tickers"
 
 
 def _failed_row(ticker="ZZZZ", note="no US-listed equity instrument found with shortName == ZZZZ"):
@@ -527,36 +534,104 @@ def test_instrument_resolution_failure_alert_names_the_ticker_and_note(db_engine
     assert "ambiguous" in combined
 
 
-def test_instrument_resolution_failure_alert_second_occurrence_within_cooldown_is_skipped(db_engine, mocker):
+def test_instrument_resolution_failure_alert_two_concurrent_failures_both_in_one_alert(db_engine, mocker):
+    """Two different tickers failing before the next check must both
+    appear in the SAME alert, not just whichever triggered it first --
+    direct proof of the aggregation half of this task, using real
+    ticker/note content in the sent email, not just a row count."""
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_instrument_resolution_failure_alert(
+        [
+            _failed_row(ticker="AAAA", note="no match for AAAA"),
+            _failed_row(ticker="BBBB", note="ambiguous for BBBB"),
+        ],
+        _config(),
+    )
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = _email_pkg.message_from_string(raw)
+    combined = " ".join(
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    )
+    assert "AAAA" in combined and "no match for AAAA" in combined
+    assert "BBBB" in combined and "ambiguous for BBBB" in combined
+
+
+def test_instrument_resolution_failure_alert_unchanged_set_does_not_resend(db_engine, mocker):
+    """The identical failed-ticker set across two consecutive checks must
+    not trigger a repeat email -- content-based dedup, not a cooldown
+    window, is what prevents this."""
     mock_server = mocker.MagicMock()
     mock_server.__enter__.return_value = mock_server
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
     cfg = _config()
-    send_instrument_resolution_failure_alert([_failed_row()], cfg)
+    send_instrument_resolution_failure_alert([_failed_row(ticker="ZZZZ")], cfg)
     mock_server.sendmail.reset_mock()
 
-    send_instrument_resolution_failure_alert([_failed_row()], cfg)
+    sent, detail = send_instrument_resolution_failure_alert([_failed_row(ticker="ZZZZ")], cfg)
 
+    assert sent is False
+    assert "unchanged" in detail.lower()
     mock_server.sendmail.assert_not_called()
 
 
-def test_instrument_resolution_failure_alert_sends_again_once_cooldown_has_elapsed(db_engine, mocker):
+def test_instrument_resolution_failure_alert_new_ticker_added_sends_immediately_no_cooldown_wait(db_engine, mocker):
+    """The exact gap this task closes: a SECOND, different ticker failing
+    immediately after the first (zero elapsed time -- no cooldown window
+    could possibly have expired) must still trigger a fresh alert, since
+    the failed set itself genuinely changed. A time-based cooldown would
+    have suppressed this."""
     mock_server = mocker.MagicMock()
     mock_server.__enter__.return_value = mock_server
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
-    stale_last_sent = (datetime.utcnow() - timedelta(hours=9)).isoformat()
-    set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_KEY, stale_last_sent)
-
     cfg = _config()
-    cfg["notifications"]["email"]["alert_cooldown_hours"] = 8
-    send_instrument_resolution_failure_alert([_failed_row()], cfg)
+    send_instrument_resolution_failure_alert([_failed_row(ticker="AAAA")], cfg)
+    mock_server.sendmail.reset_mock()
 
+    # Second check, same instant, but a genuinely NEW ticker also failed.
+    sent, _ = send_instrument_resolution_failure_alert(
+        [_failed_row(ticker="AAAA"), _failed_row(ticker="BBBB")], cfg,
+    )
+
+    assert sent is True
     mock_server.sendmail.assert_called_once()
 
 
-def test_instrument_resolution_failure_alert_disabled_does_not_consume_cooldown(db_engine, mocker):
+def test_instrument_resolution_failure_alert_resolution_then_new_failure_sends_fresh_alert(db_engine, mocker):
+    """A failure resolving (set shrinks to empty) followed by a genuinely
+    NEW failure -- even reusing the same ticker symbol -- must send a
+    fresh alert, not be silently treated as an already-alerted repeat."""
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_instrument_resolution_failure_alert([_failed_row(ticker="AAAA")], cfg)
+    mock_server.sendmail.reset_mock()
+
+    # Resolved -- empty list clears the stored set.
+    sent, _ = send_instrument_resolution_failure_alert([], cfg)
+    assert sent is False
+    mock_server.sendmail.assert_not_called()
+
+    # Same ticker fails again later -- must be treated as new, not compared
+    # against the stale pre-resolution record.
+    sent, _ = send_instrument_resolution_failure_alert([_failed_row(ticker="AAAA")], cfg)
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_instrument_resolution_failure_alert_disabled_does_not_record_ticker_set(db_engine, mocker):
     mocker.patch("output.briefing.smtplib.SMTP")
 
     send_instrument_resolution_failure_alert([_failed_row()], _config(enabled=False))
@@ -565,7 +640,7 @@ def test_instrument_resolution_failure_alert_disabled_does_not_consume_cooldown(
     assert get_metadata_str(_INSTRUMENT_RESOLUTION_FAILURE_KEY) is None
 
 
-def test_instrument_resolution_failure_alert_uses_its_own_cooldown_key_not_shared_with_others(db_engine, mocker):
+def test_instrument_resolution_failure_alert_uses_its_own_dedup_key_not_shared_with_others(db_engine, mocker):
     """A membership-staleness or T212-error-alert cooldown already in
     effect must never suppress this alert."""
     set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
