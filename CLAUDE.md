@@ -6291,6 +6291,160 @@ unrelated reason.
 
 Full suite: 404 passing after all four parts plus the bug fix.
 
+### Live position reconciliation (2026-08-02)
+
+**Why this needed real investigation, not just a review.** Held-position
+lifecycle handling (`brokers/trading212.py:maybe_exit_positions()`) was
+originally scoped when the live candidate pool was a fixed ~40 hand-curated
+tickers, where a held ticker becoming unavailable mid-position was rare
+enough to not be a real operational concern. That's no longer true: the
+live pool is now the full, dynamically-tracked S&P 500 (~500 tickers, see
+"wire the momentum-only, full-S&P-500 selection into live execution"
+above), where delistings, acquisitions, and other corporate actions on a
+held position will happen with real, ongoing regularity. Three scenarios
+were checked directly against the actual code, not assumed already
+covered — two real gaps and one real bug were found.
+
+**Scenario 1 — cash-out acquisition (broker converts the position to cash
+on its own): confirmed gap, fixed.** `maybe_exit_positions()`'s loop only
+ever iterates `client.get_positions()` — T212's real, current holdings —
+so a position T212 has already silently closed on its own simply never
+appears in that loop at all; nothing notices, nothing reconciles.
+Separately, `_reconstruct_pnl()` can only ever produce a `pnl` row by
+FIFO-pairing a FILLED BUY with a FILLED SELL **this system placed** — a
+broker-side closure with no SELL order from us can never produce a P&L
+record no matter how long the system keeps running. The position would
+simply vanish from tracking with zero trace.
+
+**Scenario 2 — stock-swap acquisition (position converts into a different
+instrument entirely): confirmed gap, fixed.** `maybe_exit_positions()`'s
+`reverse_map` only recognizes instruments with a VERIFIED
+`instrument_resolutions` row for some *already-tracked* research ticker.
+The swap result is, by definition, a T212 instrument this system has never
+resolved — it hits `if not ticker: continue  # not a managed instrument —
+leave it alone` and is silently ignored forever. The original ticker's
+position also disappears from `positions_by_t212` (T212's own books
+correctly show it gone), so nothing on either side of the swap was ever
+flagged.
+
+**Scenario 3 — genuine bankruptcy/delisting (no real market to sell
+into): confirmed TWO real bugs, both fixed.**
+1. `if status == "FAILED": return` — a synchronous `place_market_order()`
+   failure for ONE position halted the **entire** exit phase for that run,
+   silently leaving every OTHER open position unchecked for
+   crisis/stop-loss/signal-off/max-holding exits too. This directly
+   contradicted the very try/except it sat inside, whose own comment
+   states "one position's unhandled exception must never silently stop
+   every other open position from being checked for exit" — a FAILED
+   order status is exactly the single-position problem that principle was
+   meant to cover, and a delisted/bankrupt ticker is precisely the
+   scenario most likely to trigger it. Fixed: `continue` instead of
+   `return`, matching the per-position isolation already established
+   elsewhere in the same loop (see "Live pricing bug, exception isolation"
+   above for the original precedent this fix restores).
+2. `_has_recent_sell_order()`'s duplicate-guard cooldown covered
+   `PLACED` (unconditionally) and `FILLED`/`FAILED` (within 24h) — but
+   **not `REJECTED`**. A sell T212 initially *accepts* (status `PLACED`,
+   gets an `order_id`) and only later resolves to `REJECTED` via
+   `poll_placed_orders()` fell through both checks entirely: not
+   unconditionally blocked (no longer `PLACED`), not cooldown-blocked
+   (`REJECTED` wasn't in the covered-status set) — meaning nothing stopped
+   an immediate retry on the very next exit check, as often as hourly,
+   indefinitely, for a position that genuinely cannot be sold. Fixed:
+   added `REJECTED` to the cooldown-eligible status set.
+
+   On top of the cooldown fix, a genuinely delisted/bankrupt position
+   still shouldn't retry forever even once slowed to hourly — nothing
+   about "no real market" resolves on its own. `_count_recent_sell_
+   failures(ticker)` counts consecutive FAILED/REJECTED SELL attempts
+   since the ticker's last FILLED BUY; once it reaches
+   `_SELL_REJECTION_GIVE_UP_THRESHOLD` (3), `maybe_exit_positions()` stops
+   attempting a fresh sell for that position entirely and records a
+   `REPEATED_SELL_REJECTION` reconciliation event instead — recognizing
+   the position as likely worthless/unsellable and flagging it for manual
+   review/write-off, rather than mechanically retrying against an
+   unchanging condition.
+
+**The mechanism — `reconcile_positions_with_broker()` and the new
+`position_reconciliations` table.** Compares what this system's own order
+history implies is open (`_locally_believed_open_positions()`: the latest
+FILLED BUY per `t212_ticker` with no later FILLED SELL) against T212's
+real, live positions — flagging, never guessing, anything that doesn't
+reconcile:
+- **`BROKER_CLOSED_NO_SELL`** — we believe it's open, T212 doesn't show it
+  held, we never placed a SELL. Exact proceeds are genuinely **not known**
+  from any T212 endpoint this codebase calls (no cash-transaction/
+  corporate-action history endpoint is wired up) — `estimated_value_gbp`
+  is left null rather than fabricated; the note states plainly that manual
+  verification against T212's own transaction history is needed.
+- **`UNRECOGNIZED_POSITION`** — T212 shows an instrument held with no
+  VERIFIED mapping at all.
+- **`REPEATED_SELL_REJECTION`** — see Scenario 3 above.
+
+Each event type upserts on `(event_type, t212_ticker)` — a recurring
+discrepancy refreshes its own `note`/`last_seen_at` rather than
+accumulating duplicate rows, and deliberately never resets `status` back
+to `OPEN` once a human has set it to `ACKNOWLEDGED` (nothing in code
+transitions it automatically either way — that's a manual action, matching
+`InstrumentResolution`'s own FAILED-never-auto-retried contract). An alert
+email (`output/briefing.py:send_position_reconciliation_alert()`, same
+enabled/cooldown-gated shape as `send_instrument_resolution_failure_alert()`
+and `send_membership_staleness_alert()`, its own dedicated cooldown key)
+fires whenever a `BROKER_CLOSED_NO_SELL` or `UNRECOGNIZED_POSITION` event
+is found — `REPEATED_SELL_REJECTION` doesn't separately email, since it's
+already loud in the logs and doesn't need the same urgency (the position
+was already known to be exit-blocked before this event fires).
+
+**Instrument-resolution invalidation — real gap, confirmed and closed.**
+`resolve_and_cache_instrument()` trusts a VERIFIED row forever once
+cached, by design (see its own docstring) — it never re-checks. Ticker
+symbols get reused after a delisting/bankruptcy; if a brand-new, unrelated
+company later takes the same symbol and becomes index-eligible again,
+`resolve_and_cache_instrument()` would return the OLD company's cached
+T212 instrument ID and currency without ever re-verifying, since VERIFIED
+short-circuits any fresh lookup — the exact same "reuse a cached mapping
+without confirming it still means what it used to" class of risk already
+identified for historical market-cap data (see "Present-day market-cap
+ranking bias" and the SEC EDGAR sections above), one layer closer to live
+trading. `invalidate_stale_instrument_resolutions(live_candidate_tickers,
+held_t212_tickers)` deletes a VERIFIED row once its ticker is BOTH no
+longer a live candidate (genuinely removed from the index, not merely
+absent from a stale fetch) AND has no currently-open position — the second
+condition is essential, not optional: `_load_all_verified_instrument_
+resolutions()` deliberately reads every VERIFIED row regardless of today's
+candidate pool specifically so a formerly-eligible, now-removed ticker
+still matches correctly for its own exit check (that removal is exactly
+what triggers `INDEX_REMOVAL` in the first place) — invalidating a
+still-held position's mapping would break its very next exit check.
+Called from `reconcile_positions_with_broker()`, reusing the same live
+`get_positions()` read the other two checks already need rather than a
+second T212 API call.
+
+**How this runs going forward — not a one-time fix.**
+`reconcile_positions_with_broker()` is wired into the hourly
+`_trade_alert_job()` (`data/scheduler.py`) alongside `maybe_exit_positions()`
+and `poll_placed_orders()`, in its own `try/except` (a reconciliation
+failure must never block the exit check or snapshot refresh that share
+its slot). Same cadence as the exit check, for the same reason: this is
+safety-critical account-state visibility, not something that should wait
+for the next full (07:00/13:30/21:30) run.
+
+Covered by 24 new tests in `tests/test_execution.py` (the FAILED-halt
+regression via a two-position exit run where one fails and the other must
+still be attempted; `REJECTED`-cooldown coverage — including a same-
+calendar-date string-comparison pitfall this project has already been
+burned by once, documented under "T212 P&L reconstruction" below, avoided
+here by using multi-day rather than just-past-24h offsets in the test data
+itself; the give-up threshold both firing and not-yet-firing; all three
+`reconcile_positions_with_broker()` discrepancy types plus the
+no-discrepancy control case; both invalidation directions — deleted when
+unheld, preserved when still held; and the upsert's ACKNOWLEDGED-status
+preservation), 9 new tests in `tests/test_briefing.py` (mirroring the
+existing instrument-resolution-failure alert's own test shape exactly),
+and 3 new tests in `tests/test_scheduler.py` (wiring, and that a
+reconciliation failure doesn't block the exit check or snapshot refresh
+sharing its hourly slot). Full suite: 429 passing.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

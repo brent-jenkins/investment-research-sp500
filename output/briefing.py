@@ -23,6 +23,7 @@ _UK_TZ = ZoneInfo("Europe/London")
 _LAST_WEEKLY_SUMMARY_KEY = "last_weekly_summary_sent"
 _MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY = "membership_staleness_email_last_sent"
 _INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY = "instrument_resolution_failure_email_last_sent"
+_POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY = "position_reconciliation_email_last_sent"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -551,4 +552,78 @@ def send_instrument_resolution_failure_alert(failed: list[dict], config: dict) -
             set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
         except Exception as exc:
             logger.warning("Could not record instrument_resolution_failure_email_last_sent: %s", exc)
+    return sent, detail
+
+
+def send_position_reconciliation_alert(summary: dict, config: dict) -> tuple[bool, str]:
+    """Alert that brokers/trading212.py:reconcile_positions_with_broker()
+    found one or more discrepancies between what this system's own order
+    history implies is open and what T212's real, live positions list
+    actually shows — see that function's own docstring and CLAUDE.md's
+    "Live position reconciliation" section (2026-08-02) for the two
+    shapes this covers (a cash-out acquisition the broker closed without
+    any SELL from this system, or a stock-swap acquisition that converted
+    a held position into an unrecognized instrument). Without this alert
+    either discrepancy would sit silently in position_reconciliations
+    until someone happened to open the Status page — the same "sits
+    silently wrong" gap send_instrument_resolution_failure_alert() and
+    send_membership_staleness_alert() were each already built to close
+    for their own mechanism.
+
+    Own dedicated cooldown key, same reasoning as every other alert in
+    this file: a persistent broker-reconciliation discrepancy is a
+    different problem from a stale membership refresh or a failed
+    instrument resolution, and sharing a cooldown would let one silently
+    consume another's alert window.
+    """
+    from data.database import get_metadata_str, set_metadata
+
+    broker_closed = summary.get("broker_closed_no_sell") or []
+    unrecognized = summary.get("unrecognized_position") or []
+    if not broker_closed and not unrecognized:
+        return False, "no discrepancies"
+
+    cooldown_hours = float(config.get("notifications", {}).get("email", {}).get("alert_cooldown_hours", 8))
+    last_sent_str = get_metadata_str(_POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY)
+    if last_sent_str:
+        try:
+            hours_since = (datetime.utcnow() - datetime.fromisoformat(last_sent_str)).total_seconds() / 3600
+            if hours_since < cooldown_hours:
+                logger.info(
+                    "Position reconciliation email skipped — within %.1fh cooldown (last sent %.1fh ago)",
+                    cooldown_hours, hours_since,
+                )
+                return False, "within cooldown"
+        except ValueError:
+            pass
+
+    n = len(broker_closed) + len(unrecognized)
+    subject = f"SP500INVEST: {n} live position reconciliation discrepancy(ies)"
+
+    closed_lines = "\n".join(f"  - {t} — broker closed this position with no SELL from us" for t in sorted(broker_closed))
+    unrec_lines = "\n".join(f"  - {t} — held by T212, no recognized mapping" for t in sorted(unrecognized))
+    text_body = (
+        f"{n} discrepancy(ies) found between this system's own order history and T212's "
+        "real, live account state (brokers/trading212.py:reconcile_positions_with_broker()).\n\n"
+        + (f"Broker closed, no SELL from us (likely a cash-out acquisition):\n{closed_lines}\n\n" if closed_lines else "")
+        + (f"Unrecognized position held (likely a stock-swap acquisition):\n{unrec_lines}\n\n" if unrec_lines else "")
+        + "Check the position_reconciliations table (or a future Status page view of it) "
+        "for the full note on each — exact proceeds/identity are not guessed, only flagged "
+        "for manual review."
+    )
+    closed_html = "".join(f"<li><b>{html.escape(t)}</b> — broker closed this position with no SELL from us</li>" for t in sorted(broker_closed))
+    unrec_html = "".join(f"<li><b>{html.escape(t)}</b> — held by T212, no recognized mapping</li>" for t in sorted(unrecognized))
+    html_body = (
+        f'<p style="color:#dc2626;font-weight:bold">{n} live position reconciliation discrepancy(ies)</p>'
+        "<p>Found between this system's own order history and T212's real, live account state.</p>"
+        + (f"<p><b>Broker closed, no SELL from us (likely a cash-out acquisition):</b></p><ul>{closed_html}</ul>" if closed_html else "")
+        + (f"<p><b>Unrecognized position held (likely a stock-swap acquisition):</b></p><ul>{unrec_html}</ul>" if unrec_html else "")
+        + "<p>Check the position_reconciliations table for the full note on each.</p>"
+    )
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
+        except Exception as exc:
+            logger.warning("Could not record position_reconciliation_email_last_sent: %s", exc)
     return sent, detail

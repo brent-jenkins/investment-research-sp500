@@ -16,6 +16,7 @@ from output.briefing import (
     _weekly_summary_text,
     send_instrument_resolution_failure_alert,
     send_membership_staleness_alert,
+    send_position_reconciliation_alert,
     send_weekly_summary_email,
 )
 
@@ -574,6 +575,149 @@ def test_instrument_resolution_failure_alert_uses_its_own_cooldown_key_not_share
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
     sent, _ = send_instrument_resolution_failure_alert([_failed_row()], _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# send_position_reconciliation_alert() (2026-08-02) -- alerts when
+# brokers.trading212.reconcile_positions_with_broker() finds a discrepancy
+# between this system's own order history and T212's real, live positions
+# (a broker-closed position with no SELL from us, or an unrecognized held
+# instrument). Same cooldown/enabled-gating shape as the two alerts above,
+# deliberately its own separate cooldown key.
+# ---------------------------------------------------------------------------
+
+_POSITION_RECONCILIATION_KEY = "position_reconciliation_email_last_sent"
+
+
+def _reconciliation_summary(broker_closed=None, unrecognized=None):
+    return {
+        "broker_closed_no_sell": broker_closed or [],
+        "unrecognized_position": unrecognized or [],
+    }
+
+
+def test_position_reconciliation_alert_empty_summary_never_sends(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, detail = send_position_reconciliation_alert(_reconciliation_summary(), _config())
+
+    assert sent is False
+    assert "no discrepancies" in detail.lower()
+    smtp_cls.assert_not_called()
+
+
+def test_position_reconciliation_alert_disabled_skips_cleanly(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, _ = send_position_reconciliation_alert(
+        _reconciliation_summary(broker_closed=["ACQD"]), _config(enabled=False),
+    )
+
+    assert sent is False
+    smtp_cls.assert_not_called()
+
+
+def test_position_reconciliation_alert_sends_on_broker_closed(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_position_reconciliation_alert(
+        _reconciliation_summary(broker_closed=["ACQD"]), _config(),
+    )
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_position_reconciliation_alert_sends_on_unrecognized(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_position_reconciliation_alert(
+        _reconciliation_summary(unrecognized=["SWAPCO_US_EQ"]), _config(),
+    )
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_position_reconciliation_alert_names_both_ticker_kinds(db_engine, mocker):
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    send_position_reconciliation_alert(
+        _reconciliation_summary(broker_closed=["ACQD"], unrecognized=["SWAPCO_US_EQ"]), _config(),
+    )
+
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = _email_pkg.message_from_string(raw)
+    decoded_parts = [
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    ]
+    combined = " ".join(decoded_parts)
+    assert "ACQD" in combined
+    assert "SWAPCO_US_EQ" in combined
+
+
+def test_position_reconciliation_alert_second_occurrence_within_cooldown_is_skipped(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_position_reconciliation_alert(_reconciliation_summary(broker_closed=["ACQD"]), cfg)
+    mock_server.sendmail.reset_mock()
+
+    send_position_reconciliation_alert(_reconciliation_summary(broker_closed=["ACQD"]), cfg)
+
+    mock_server.sendmail.assert_not_called()
+
+
+def test_position_reconciliation_alert_sends_again_once_cooldown_has_elapsed(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    stale_last_sent = (datetime.utcnow() - timedelta(hours=9)).isoformat()
+    set_metadata(_POSITION_RECONCILIATION_KEY, stale_last_sent)
+
+    cfg = _config()
+    cfg["notifications"]["email"]["alert_cooldown_hours"] = 8
+    send_position_reconciliation_alert(_reconciliation_summary(broker_closed=["ACQD"]), cfg)
+
+    mock_server.sendmail.assert_called_once()
+
+
+def test_position_reconciliation_alert_disabled_does_not_consume_cooldown(db_engine, mocker):
+    mocker.patch("output.briefing.smtplib.SMTP")
+
+    send_position_reconciliation_alert(_reconciliation_summary(broker_closed=["ACQD"]), _config(enabled=False))
+
+    from data.database import get_metadata_str
+    assert get_metadata_str(_POSITION_RECONCILIATION_KEY) is None
+
+
+def test_position_reconciliation_alert_uses_its_own_cooldown_key_not_shared_with_others(db_engine, mocker):
+    """A membership-staleness, instrument-resolution-failure, or
+    T212-error-alert cooldown already in effect must never suppress this
+    alert."""
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
+    set_metadata(_MEMBERSHIP_STALENESS_KEY, datetime.utcnow().isoformat())
+    set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_KEY, datetime.utcnow().isoformat())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_position_reconciliation_alert(_reconciliation_summary(broker_closed=["ACQD"]), _config())
 
     assert sent is True
     mock_server.sendmail.assert_called_once()

@@ -461,7 +461,7 @@ def _eod_job() -> None:
 
 def _trade_alert_job() -> None:
     """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — T212 order-status poll,
-    exit check, and account snapshot refresh.
+    exit check, position reconciliation, and account snapshot refresh.
 
     Runs unconditionally on every firing:
       - T212 order-status polling (`poll_placed_orders()`) and account/positions
@@ -471,6 +471,16 @@ def _trade_alert_job() -> None:
         crisis exit, index removal, stop loss, signal-off, or max-holding exit
         closes within about an hour rather than waiting for the next full
         (07:00/13:30/21:30) run.
+      - Live position reconciliation — `brokers.trading212.reconcile_
+        positions_with_broker()` (2026-08-02) — compares what this system's
+        own order history implies is open against T212's real, live
+        positions, flagging a broker-side closure (e.g. a cash-out
+        acquisition) or an unrecognized held instrument (e.g. a stock-swap
+        acquisition) that maybe_exit_positions() has no way to notice on
+        its own. Same hourly cadence as the exit check for the same reason:
+        this is safety-critical account-state visibility, not something
+        that should wait for the next full run. See CLAUDE.md's "Live
+        position reconciliation" section.
     """
     logger.info("Trade alert check starting…")
     config = _load_config()
@@ -488,6 +498,12 @@ def _trade_alert_job() -> None:
         maybe_exit_positions(config)
     except Exception as exc:
         logger.error("Hourly exit check failed: %s", exc, exc_info=True)
+
+    try:
+        from brokers.trading212 import reconcile_positions_with_broker  # noqa: PLC0415
+        reconcile_positions_with_broker(config)
+    except Exception as exc:
+        logger.error("Hourly position reconciliation failed: %s", exc, exc_info=True)
 
     try:
         _fetch_t212_snapshot(config)

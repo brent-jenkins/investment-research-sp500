@@ -712,12 +712,14 @@ def test_trade_alert_job_calls_poll_and_exit_check(mocker):
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+    mock_reconcile = mocker.patch("brokers.trading212.reconcile_positions_with_broker")
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
 
     scheduler._trade_alert_job()
 
     mock_poll.assert_called_once()
     mock_exit.assert_called_once()
+    mock_reconcile.assert_called_once()
     mock_snap.assert_called_once()
 
 
@@ -725,8 +727,26 @@ def test_trade_alert_job_failure_does_not_block_job(mocker):
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("brokers.trading212.poll_placed_orders", side_effect=RuntimeError("boom"))
     mocker.patch("brokers.trading212.maybe_exit_positions", side_effect=RuntimeError("boom"))
+    mocker.patch("brokers.trading212.reconcile_positions_with_broker", side_effect=RuntimeError("boom"))
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
 
     scheduler._trade_alert_job()  # must not raise
 
+    mock_snap.assert_called_once()
+
+
+def test_trade_alert_job_reconciliation_failure_does_not_block_snapshot(mocker):
+    """A reconciliation-check failure must not prevent the exit check or
+    the account snapshot refresh from still running that hour -- own
+    try/except, same "one path's failure never blocks another's"
+    convention every other call in this job already follows."""
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+    mocker.patch("brokers.trading212.reconcile_positions_with_broker", side_effect=RuntimeError("boom"))
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._trade_alert_job()  # must not raise
+
+    mock_exit.assert_called_once()
     mock_snap.assert_called_once()

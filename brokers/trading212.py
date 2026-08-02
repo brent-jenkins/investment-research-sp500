@@ -826,11 +826,29 @@ def _has_recent_sell_order(ticker: str, hours: int = 24) -> bool:
         REJECTED — T212's demo account has been observed leaving a market
         SELL sitting in PLACED for 60+ hours before poll_placed_orders()
         ever sees it resolve.
-      - status IN ('FILLED', 'FAILED') AND placed_at within `hours`. Once
-        an order has actually resolved, only a short cooldown is needed —
-        to stop the hourly job and a same-window EOD call from both
-        selling the same position, or a single FAILED attempt from
-        retrying every hour instead of at most once per `hours`.
+      - status IN ('FILLED', 'FAILED', 'REJECTED') AND placed_at within
+        `hours`. Once an order has actually resolved, only a short
+        cooldown is needed — to stop the hourly job and a same-window EOD
+        call from both selling the same position, or a single FAILED
+        attempt from retrying every hour instead of at most once per
+        `hours`.
+
+        REJECTED was missing here until 2026-08-02 — a real gap, not a
+        deliberate omission: a synchronous placement failure sets local
+        status FAILED directly (covered), but a sell that T212 initially
+        ACCEPTS (status PLACED, gets an order_id) and only later resolves
+        to REJECTED via poll_placed_orders() was never in this list at
+        all — the unconditional PLACED check no longer matched once it
+        resolved, and REJECTED wasn't in the cooldown set either, so
+        nothing blocked an immediate retry on the very next exit check
+        (as often as hourly). Exactly the shape a genuinely delisted/
+        no-market ticker would hit: T212 accepts the order, later rejects
+        it (no market to fill into), and the old code would then retry
+        every single hour, indefinitely, with nothing recognizing the
+        position couldn't actually be sold. See CLAUDE.md's "Live
+        position reconciliation" section — REPEATED_SELL_REJECTION is the
+        companion fix that stops retrying altogether after several such
+        failures, rather than merely slowing the retry rate.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -842,7 +860,7 @@ def _has_recent_sell_order(ticker: str, hours: int = 24) -> bool:
                 WHERE ticker = :ticker AND direction = 'SELL'
                 AND (
                     status = 'PLACED'
-                    OR (status IN ('FILLED', 'FAILED') AND placed_at > datetime('now', :window))
+                    OR (status IN ('FILLED', 'FAILED', 'REJECTED') AND placed_at > datetime('now', :window))
                 )
                 LIMIT 1
             """), {"ticker": ticker, "window": f"-{hours} hours"}).fetchone()
@@ -850,6 +868,85 @@ def _has_recent_sell_order(ticker: str, hours: int = 24) -> bool:
     except Exception as exc:
         logger.warning("_has_recent_sell_order: check failed for %s: %s", ticker, exc)
         return False
+
+
+_SELL_REJECTION_GIVE_UP_THRESHOLD = 3
+
+
+def _count_recent_sell_failures(ticker: str) -> int:
+    """Count consecutive FAILED/REJECTED SELL attempts for *ticker* since
+    its most recent FILLED BUY (i.e. since the position now open — or
+    believed open — was entered). A FILLED SELL since that BUY would mean
+    the position already closed successfully, so this only ever counts
+    failures that happened while still trying to close the CURRENT
+    holding, never carries over from a previous, already-closed cycle.
+
+    Used by maybe_exit_positions() to recognize a position that genuinely
+    cannot be sold (no real market — bankruptcy/delisting) rather than
+    retrying forever; see _SELL_REJECTION_GIVE_UP_THRESHOLD and
+    CLAUDE.md's "Live position reconciliation" section.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            last_buy = conn.execute(sa_text("""
+                SELECT filled_at FROM invest_orders
+                WHERE ticker = :ticker AND direction = 'BUY' AND status = 'FILLED'
+                ORDER BY filled_at DESC LIMIT 1
+            """), {"ticker": ticker}).scalar()
+            if not last_buy:
+                return 0
+            row = conn.execute(sa_text("""
+                SELECT COUNT(*) FROM invest_orders
+                WHERE ticker = :ticker AND direction = 'SELL'
+                AND status IN ('FAILED', 'REJECTED')
+                AND placed_at > :last_buy
+            """), {"ticker": ticker, "last_buy": last_buy}).scalar()
+        return int(row or 0)
+    except Exception as exc:
+        logger.warning("_count_recent_sell_failures: check failed for %s: %s", ticker, exc)
+        return 0
+
+
+def _record_reconciliation_event(
+    *, event_type: str, t212_ticker: str, ticker: Optional[str] = None,
+    quantity: Optional[float] = None, estimated_value_gbp: Optional[float] = None,
+    note: str = "",
+) -> None:
+    """Upsert one position_reconciliations row — refreshes note/last_seen_at
+    on a recurring discrepancy rather than accumulating duplicates. Never
+    raises; matches this module's DB-write contract."""
+    try:
+        from sqlalchemy import text as sa_text
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from data.database import PositionReconciliation, get_engine
+        now = datetime.utcnow()
+        stmt = sqlite_insert(PositionReconciliation).values(
+            event_type=event_type, ticker=ticker, t212_ticker=t212_ticker,
+            quantity=quantity, estimated_value_gbp=estimated_value_gbp,
+            note=note, status="OPEN", detected_at=now, last_seen_at=now,
+        )
+        # Deliberately does NOT include "status" in the update -- a human
+        # who has already set a row to ACKNOWLEDGED must not have it
+        # silently flipped back to OPEN just because the underlying
+        # discrepancy is still detected on the next hourly run (which it
+        # normally will be, since nothing about "the broker closed this
+        # with no sell from us" resolves itself over time). note/quantity/
+        # last_seen_at still refresh either way, so the row stays a live,
+        # accurate record even once acknowledged.
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["event_type", "t212_ticker"],
+            set_={"note": note, "quantity": quantity, "last_seen_at": now},
+        )
+        with get_engine().begin() as conn:
+            conn.execute(stmt)
+    except Exception as exc:
+        logger.warning(
+            "_record_reconciliation_event: failed to record %s for %s: %s",
+            event_type, t212_ticker, exc,
+        )
 
 
 def _queue_pending_order(
@@ -1617,6 +1714,38 @@ def maybe_exit_positions(config: dict) -> None:
                 logger.info("%s already has a recent SELL order — skipping duplicate.", ticker)
                 continue
 
+            # Give up after repeated failures rather than retry forever
+            # (2026-08-02) — a genuinely delisted/bankrupt ticker with no
+            # real market to sell into will keep failing/getting rejected
+            # for as long as that stays true, and the old code had nothing
+            # recognizing that: it would retry on every exit check
+            # (as often as hourly once REJECTED was added to
+            # _has_recent_sell_order()'s cooldown — see that function's
+            # docstring — before that fix it retried even more often).
+            # Flag it for manual review/write-off instead of hammering
+            # T212 with a fresh doomed sell attempt every cycle. Checked
+            # before attempting a sell, not after, so the doomed attempt
+            # itself is skipped once the threshold is reached.
+            recent_failures = _count_recent_sell_failures(ticker)
+            if recent_failures >= _SELL_REJECTION_GIVE_UP_THRESHOLD:
+                _record_reconciliation_event(
+                    event_type="REPEATED_SELL_REJECTION", t212_ticker=t212_ticker,
+                    ticker=ticker, quantity=current_qty,
+                    note=(
+                        f"{recent_failures} consecutive SELL attempts have failed/been "
+                        f"rejected for {ticker} ({t212_ticker}) — likely no real market "
+                        "to sell into (delisted/bankrupt). Auto-retry stopped; needs "
+                        "manual review (write-off, or a fresh attempt once conditions "
+                        "change). exit_reason at last check: " + exit_reason
+                    ),
+                )
+                logger.warning(
+                    "%s: %d consecutive SELL failures — giving up auto-retry, "
+                    "flagged for manual review (position_reconciliations).",
+                    ticker, recent_failures,
+                )
+                continue
+
             close_qty = abs(current_qty)
             logger.info("Exiting %s (%s) — %s, qty=%.4f", ticker, t212_ticker, exit_reason, close_qty)
 
@@ -1641,8 +1770,20 @@ def maybe_exit_positions(config: dict) -> None:
             )
 
             if status == "FAILED":
-                logger.warning("Halting exit phase after sell-order failure.")
-                return
+                # Per-position isolation (2026-08-02 fix) — this used to
+                # `return`, halting the ENTIRE exit phase for every OTHER
+                # open position in the same run just because one sell
+                # order failed synchronously. That directly contradicted
+                # this same function's own stated intent (see the
+                # try/except this sits inside: "one position's unhandled
+                # exception must never silently stop every other open
+                # position from being checked for exit") — a FAILED order
+                # status is exactly the kind of single-position problem
+                # that principle was meant to cover, and a bankrupt/
+                # delisted ticker is precisely the case most likely to
+                # trigger it. `continue` to the next position instead.
+                logger.warning("Sell order failed for %s — continuing with remaining positions.", ticker)
+                continue
 
             time.sleep(0.5)
         except Exception as position_exc:
@@ -1652,6 +1793,230 @@ def maybe_exit_positions(config: dict) -> None:
                 ticker, t212_ticker, position_exc, exc_info=True,
             )
             continue
+
+
+# ---------------------------------------------------------------------------
+# Live position reconciliation (2026-08-02)
+#
+# maybe_exit_positions() above only ever iterates T212's REAL, live
+# positions list and only ever notices a position closing when THIS
+# system placed the SELL that closed it (via _reconstruct_pnl()'s FIFO
+# BUY/SELL pairing). At the ~40-hand-curated-ticker scale that gap rarely
+# mattered; at the full, dynamically-tracked ~500-ticker S&P 500 scale,
+# delistings/acquisitions/corporate actions on a held position are a
+# routine, ongoing occurrence, not a rare edge case. Two shapes this
+# system cannot notice on its own, found by investigation rather than
+# assumed already covered:
+#
+#   - A cash-out acquisition: the broker converts the position to cash
+#     on its own, without ever needing or accepting a SELL order from
+#     this system. The position simply stops appearing in
+#     client.get_positions() — maybe_exit_positions()'s loop only ever
+#     iterates positions T212 currently reports, so it never even looks
+#     at a ticker that's already gone, and never records anything.
+#   - A stock-swap acquisition: the position converts into a DIFFERENT
+#     T212 instrument entirely. maybe_exit_positions()'s reverse_map
+#     lookup only recognizes instruments with a VERIFIED
+#     instrument_resolutions row — an unmapped instrument (the swap
+#     result) hits `if not ticker: continue  # not a managed instrument
+#     — leave it alone` and is silently ignored forever.
+#
+# reconcile_positions_with_broker() closes both gaps by comparing what
+# this system's OWN order history implies is open against T212's real,
+# live state, flagging (never guessing/fabricating) anything it cannot
+# explain from its own order records alone. See CLAUDE.md's "Live
+# position reconciliation" section.
+# ---------------------------------------------------------------------------
+
+def _locally_believed_open_positions() -> dict[str, dict]:
+    """{t212_ticker: {"ticker": ..., "buy_id": ..., "entry_price": ...,
+    "quantity": ...}} for every t212_ticker whose latest FILLED BUY has no
+    later FILLED SELL — i.e. what THIS system's own order history implies
+    is still an open position, independent of what T212 currently shows.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT io.t212_ticker, io.ticker, io.id AS buy_id,
+                       io.fill_price AS entry_price, io.filled_quantity AS quantity
+                FROM invest_orders io
+                WHERE io.direction = 'BUY' AND io.status = 'FILLED'
+                AND io.id = (
+                    SELECT MAX(id) FROM invest_orders
+                    WHERE direction = 'BUY' AND status = 'FILLED'
+                    AND t212_ticker = io.t212_ticker
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM invest_orders s
+                    WHERE s.t212_ticker = io.t212_ticker
+                    AND s.direction = 'SELL' AND s.status = 'FILLED'
+                    AND s.filled_at > io.filled_at
+                )
+            """)).mappings().all()
+        return {r["t212_ticker"]: dict(r) for r in rows}
+    except Exception as exc:
+        logger.warning("_locally_believed_open_positions: query failed: %s", exc)
+        return {}
+
+
+def invalidate_stale_instrument_resolutions(
+    live_candidate_tickers: set[str], held_t212_tickers: set[str],
+) -> int:
+    """Delete any VERIFIED instrument_resolutions row for a ticker that is
+    no longer a live candidate (dropped out of get_live_stock_candidates()
+    — genuinely removed from the index, not merely absent from today's
+    universe fetch) AND has no currently-open position.
+
+    Why this matters: resolve_and_cache_instrument() trusts a VERIFIED row
+    forever once cached, never re-checking it. Ticker symbols get reused
+    after a delisting/bankruptcy/rename — if a brand-new, unrelated
+    company later takes the same symbol and becomes index-eligible again,
+    resolve_and_cache_instrument() would return the OLD company's stale
+    T212 instrument mapping (and currency) without ever re-verifying,
+    since a VERIFIED status short-circuits any fresh lookup. Deleting the
+    row here forces a genuine, shortName-verified re-resolution the next
+    time that symbol is ever considered a candidate again.
+
+    Must NOT touch a resolution for a ticker with a currently-open
+    position — _load_all_verified_instrument_resolutions() deliberately
+    reads every VERIFIED row (not just today's candidate pool) specifically
+    so a formerly-eligible, now-removed ticker still matches correctly for
+    EXIT purposes (that removal is exactly what triggers INDEX_REMOVAL in
+    the first place). held_t212_tickers must be checked, not just
+    candidate membership, or this would delete the mapping a still-open
+    position's own exit check needs on its very next run.
+
+    Returns the number of rows invalidated. Never raises.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        eng = get_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT ticker, t212_instrument_id FROM instrument_resolutions WHERE status = 'VERIFIED'"
+            )).mappings().all()
+        to_delete = [
+            r["ticker"] for r in rows
+            if r["ticker"] not in live_candidate_tickers
+            and r["t212_instrument_id"] not in held_t212_tickers
+        ]
+        if not to_delete:
+            return 0
+        with eng.begin() as conn:
+            for t in to_delete:
+                conn.execute(sa_text("DELETE FROM instrument_resolutions WHERE ticker = :t"), {"t": t})
+        logger.info(
+            "Invalidated %d stale VERIFIED instrument resolution(s) (no longer a "
+            "candidate, no open position): %s", len(to_delete), sorted(to_delete),
+        )
+        return len(to_delete)
+    except Exception as exc:
+        logger.warning("invalidate_stale_instrument_resolutions: failed: %s", exc)
+        return 0
+
+
+def reconcile_positions_with_broker(config: dict) -> dict:
+    """Compare what this system's own order history implies is open
+    against T212's real, live positions — flag (never guess) anything
+    that doesn't reconcile. Also invalidates stale instrument-resolution
+    mappings for tickers that are no longer candidates and no longer held
+    (see invalidate_stale_instrument_resolutions()), reusing the same
+    live positions read rather than a second T212 API call.
+
+    Never raises — matches this module's "never block the safety-critical
+    path" contract; a reconciliation-check failure must not prevent
+    maybe_exit_positions()/poll_placed_orders() (its usual neighbours in
+    the hourly job) from running. Returns a summary dict for logging/tests.
+    """
+    summary = {"broker_closed_no_sell": [], "unrecognized_position": [], "invalidated_resolutions": 0}
+
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return summary
+    api_key    = os.environ.get("T212_API_KEY", "")
+    api_secret = os.environ.get("T212_API_SECRET", "")
+    if not api_key or not api_secret:
+        return summary
+
+    try:
+        live = t212_cfg.get("live", False)
+        client = Trading212Client(live=live)
+        positions = client.get_positions()
+        positions_by_t212 = {p.get("ticker", ""): p for p in (positions or [])}
+    except Exception as exc:
+        logger.warning("reconcile_positions_with_broker: could not read live positions — %s", exc)
+        return summary
+
+    try:
+        resolved = _load_all_verified_instrument_resolutions()
+    except Exception as exc:
+        logger.warning("reconcile_positions_with_broker: could not read instrument resolutions — %s", exc)
+        return summary
+
+    believed_open = _locally_believed_open_positions()
+
+    # BROKER_CLOSED_NO_SELL — we believe it's open, T212 doesn't show it
+    # held, and we never placed a SELL that could have closed it.
+    for t212_ticker, info in believed_open.items():
+        if t212_ticker in positions_by_t212:
+            continue  # genuinely still held — no discrepancy
+        note = (
+            f"{info['ticker']} ({t212_ticker}): our order history's latest FILLED BUY "
+            f"(qty {info.get('quantity')}, entry price {info.get('entry_price')}) has no "
+            "matching FILLED SELL, but T212's live positions list does not show it held. "
+            "This system never placed a SELL for it. Most likely a cash-out acquisition "
+            "the broker processed automatically. Exact proceeds are NOT known from any "
+            "T212 endpoint this system calls — verify manually against T212's own "
+            "transaction history and reconcile pnl by hand if needed."
+        )
+        _record_reconciliation_event(
+            event_type="BROKER_CLOSED_NO_SELL", t212_ticker=t212_ticker,
+            ticker=info["ticker"], quantity=info.get("quantity"), note=note,
+        )
+        summary["broker_closed_no_sell"].append(info["ticker"])
+        logger.warning("Position reconciliation: BROKER_CLOSED_NO_SELL for %s — %s", info["ticker"], note)
+
+    # UNRECOGNIZED_POSITION — T212 shows it held, we have no VERIFIED
+    # mapping for it at all.
+    for t212_ticker, position in positions_by_t212.items():
+        if t212_ticker in resolved:
+            continue  # recognized — no discrepancy
+        qty = float(position.get("quantity", 0) or 0)
+        if qty <= 0:
+            continue
+        note = (
+            f"T212 shows {t212_ticker} held (qty {qty}) but this system has no VERIFIED "
+            "instrument_resolutions mapping for it. Most likely a stock-swap acquisition "
+            "that converted a previously-tracked position into this different, unmapped "
+            "instrument — check T212's own transaction history for the corporate action "
+            "and, once identified, verify/add the correct research-ticker mapping."
+        )
+        _record_reconciliation_event(
+            event_type="UNRECOGNIZED_POSITION", t212_ticker=t212_ticker,
+            quantity=qty, note=note,
+        )
+        summary["unrecognized_position"].append(t212_ticker)
+        logger.warning("Position reconciliation: UNRECOGNIZED_POSITION for %s — %s", t212_ticker, note)
+
+    if summary["broker_closed_no_sell"] or summary["unrecognized_position"]:
+        try:
+            from output.briefing import send_position_reconciliation_alert
+            send_position_reconciliation_alert(summary, config)
+        except Exception as exc:
+            logger.warning("reconcile_positions_with_broker: alert send failed: %s", exc)
+
+    try:
+        candidates = set(universe.get_live_stock_candidates())
+        held_t212 = set(positions_by_t212.keys())
+        summary["invalidated_resolutions"] = invalidate_stale_instrument_resolutions(candidates, held_t212)
+    except Exception as exc:
+        logger.warning("reconcile_positions_with_broker: resolution invalidation failed: %s", exc)
+
+    return summary
 
 
 # ---------------------------------------------------------------------------

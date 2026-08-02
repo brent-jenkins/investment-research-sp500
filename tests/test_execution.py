@@ -1665,3 +1665,398 @@ def test_stock_job_sees_capacity_already_consumed_by_etf_job_via_live_state(db_e
     v2_mocks.place_market_order.assert_not_called()
     rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
     assert len(rejected) == 1 and rejected[0]["ticker"] == "STOCK_CAND"
+
+
+# ---------------------------------------------------------------------------
+# Live position reconciliation (2026-08-02, see CLAUDE.md's "Live position
+# reconciliation" section) -- the live candidate pool is now the full,
+# dynamically-tracked ~500-ticker S&P 500, where a held position's ticker
+# becoming unavailable (delisting/acquisition) is a routine, ongoing
+# occurrence, not a rare edge case. Covers:
+#   - a synchronous sell-order failure no longer halts the whole exit loop
+#     for every OTHER open position (was: `return`, now: `continue`)
+#   - REJECTED added to _has_recent_sell_order()'s cooldown, so a sell that
+#     T212 accepts then later rejects doesn't retry every single hour
+#   - giving up (and flagging) after repeated sell failures, rather than
+#     retrying forever against a genuinely unsellable (delisted/bankrupt)
+#     position
+#   - reconcile_positions_with_broker(): a broker-side closure with no SELL
+#     from us (cash-out acquisition), and an unrecognized held instrument
+#     (stock-swap acquisition) -- neither of which maybe_exit_positions()'s
+#     own loop (which only iterates what T212 currently reports as held,
+#     matched through a VERIFIED mapping) has any way to notice on its own
+#   - stale VERIFIED instrument_resolutions invalidation once a ticker is
+#     no longer a candidate AND no longer held, so a future ticker-symbol
+#     reuse forces a fresh, re-verified resolution instead of trusting a
+#     years-old cached mapping for what could by then be a different company
+# ---------------------------------------------------------------------------
+
+def test_exit_sell_failure_does_not_halt_remaining_positions(db_engine, v2_mocks, mocker):
+    """Regression for the `if status == 'FAILED': return` bug -- a
+    synchronous sell-order failure for one position (e.g. a genuinely
+    delisted/bankrupt ticker with no market to sell into) used to halt the
+    ENTIRE exit phase, silently leaving every OTHER open position unchecked
+    for the rest of that run. Must now continue to the next position."""
+    from brokers.trading212 import maybe_exit_positions
+
+    bearish = _bearish_frame()  # signal off -> both should attempt exit
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "I50Dl_EQ", "quantity": 4.0},
+        {"ticker": "AAPL_US_EQ", "quantity": 2.0},
+    ]
+
+    def _fake_place_order(t212_ticker, qty):
+        if t212_ticker == "I50Dl_EQ":
+            raise RuntimeError("simulated T212 rejection -- no market")
+        return {"id": "mock-order-ok"}
+
+    v2_mocks.place_market_order.side_effect = _fake_place_order
+    _mock_price_data(mocker, {"VOO": bearish, "AAPL": bearish})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+    mocker.patch("brokers.trading212._send_t212_error_email")
+
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0, days_ago=5, is_etf=True)
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=1.0, days_ago=5, is_etf=False)
+
+    cfg = _config(mapping={
+        "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True},
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+    }, mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    # Both were attempted (VOO's failure did not stop AAPL from being tried).
+    assert v2_mocks.place_market_order.call_count == 2
+    voo_row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM invest_orders WHERE ticker='VOO' AND direction='SELL'"
+    )).fetchone()
+    aapl_row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM invest_orders WHERE ticker='AAPL' AND direction='SELL'"
+    )).fetchone()
+    assert voo_row[0] == "FAILED"
+    assert aapl_row[0] == "PLACED"
+
+
+def test_has_recent_sell_order_blocks_on_rejected_within_cooldown(db_engine):
+    """REJECTED (a sell T212 accepted then later rejected, via
+    poll_placed_orders()) must be covered by the same short cooldown as
+    FILLED/FAILED -- it was missing entirely before 2026-08-02, meaning a
+    rejected sell for a genuinely unsellable ticker would retry on every
+    single exit check with nothing blocking it."""
+    from brokers.trading212 import _has_recent_sell_order
+
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('DELISTED', 'DELISTED_US_EQ', 'SELL', 'REJECTED', :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+
+    assert _has_recent_sell_order("DELISTED", hours=24) is True
+
+
+def test_has_recent_sell_order_rejected_expires_after_cooldown(db_engine):
+    from brokers.trading212 import _has_recent_sell_order
+
+    # Days-old, not just-past-24h -- avoids the same T-vs-space-separated
+    # same-calendar-date string-comparison ambiguity documented elsewhere
+    # in this codebase (see the multi-day-offset test just below for the
+    # full explanation).
+    old = (datetime.utcnow() - timedelta(days=5)).isoformat()
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('DELISTED', 'DELISTED_US_EQ', 'SELL', 'REJECTED', :at, :at)
+        """), {"at": old})
+
+    assert _has_recent_sell_order("DELISTED", hours=24) is False
+
+
+def test_count_recent_sell_failures_counts_since_last_buy(db_engine):
+    from brokers.trading212 import _count_recent_sell_failures
+
+    buy_dt = datetime.utcnow() - timedelta(days=10)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, filled_at, created_at)
+            VALUES ('ZZZ', 'ZZZ_US_EQ', 'BUY', 'FILLED', :at, :at, :at)
+        """), {"at": buy_dt.isoformat()})
+        for hours_ago in (3, 2, 1):
+            at = (datetime.utcnow() - timedelta(hours=hours_ago)).isoformat()
+            conn.execute(sa_text("""
+                INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+                VALUES ('ZZZ', 'ZZZ_US_EQ', 'SELL', 'REJECTED', :at, :at)
+            """), {"at": at})
+
+    assert _count_recent_sell_failures("ZZZ") == 3
+
+
+def test_count_recent_sell_failures_zero_with_no_buy(db_engine):
+    from brokers.trading212 import _count_recent_sell_failures
+
+    assert _count_recent_sell_failures("NEVERBOUGHT") == 0
+
+
+def test_repeated_sell_rejection_gives_up_and_flags_after_threshold(db_engine, v2_mocks, mocker):
+    """After _SELL_REJECTION_GIVE_UP_THRESHOLD consecutive sell failures
+    since the last FILLED BUY, maybe_exit_positions() must stop attempting
+    a fresh sell (recognizing the position likely cannot be sold at all --
+    delisted/bankrupt, no real market) and record a REPEATED_SELL_REJECTION
+    reconciliation event instead of hammering T212 again."""
+    from brokers.trading212 import maybe_exit_positions
+
+    bearish = _bearish_frame()
+    v2_mocks.get_positions.return_value = [{"ticker": "ZZZ_US_EQ", "quantity": 5.0}]
+    _mock_price_data(mocker, {"ZZZ": bearish})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    buy_dt = datetime.utcnow() - timedelta(days=10)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, fill_price, filled_quantity,
+                 status, is_etf, momentum_pct, stop_price, account_type, currency_code,
+                 placed_at, filled_at, created_at)
+            VALUES ('ZZZ', 'ZZZ_US_EQ', 'BUY', 5, 100.0, 5, 'FILLED', 0, 0.05, 1.0, 'DEMO', 'USD', :at, :at, :at)
+        """), {"at": buy_dt.isoformat()})
+        # Multi-day offsets, not just-past-24h ones -- deliberately avoids
+        # the same T-vs-space-separated-timestamp string-comparison trap
+        # already documented elsewhere in this codebase (see CLAUDE.md's
+        # "Monday pre-market job" cutoff-comparison note and "T212 P&L
+        # reconstruction" section): a row whose placed_at shares today's
+        # calendar date with the query's own datetime('now', '-24 hours')
+        # cutoff can compare incorrectly. Days-old offsets side-step that
+        # ambiguity entirely rather than relying on getting a same-day
+        # boundary right.
+        for days_ago in (5, 4, 3):
+            at = (datetime.utcnow() - timedelta(days=days_ago)).isoformat()
+            conn.execute(sa_text("""
+                INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+                VALUES ('ZZZ', 'ZZZ_US_EQ', 'SELL', 'REJECTED', :at, :at)
+            """), {"at": at})
+
+    cfg = _config(mapping={"ZZZ": {"t212_instrument_id": "ZZZ_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.place_market_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT event_type, ticker, status FROM position_reconciliations WHERE t212_ticker='ZZZ_US_EQ'"
+    )).fetchone()
+    assert row is not None
+    assert row[0] == "REPEATED_SELL_REJECTION"
+    assert row[1] == "ZZZ"
+    assert row[2] == "OPEN"
+
+
+def test_repeated_sell_rejection_below_threshold_still_attempts(db_engine, v2_mocks, mocker):
+    """Fewer than the threshold's worth of failures must still attempt a
+    fresh sell -- the give-up behaviour is specifically for REPEATED
+    failure, not a single one."""
+    from brokers.trading212 import maybe_exit_positions
+
+    bearish = _bearish_frame()
+    v2_mocks.get_positions.return_value = [{"ticker": "ZZZ_US_EQ", "quantity": 5.0}]
+    _mock_price_data(mocker, {"ZZZ": bearish})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    buy_dt = datetime.utcnow() - timedelta(days=10)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, fill_price, filled_quantity,
+                 status, is_etf, momentum_pct, stop_price, account_type, currency_code,
+                 placed_at, filled_at, created_at)
+            VALUES ('ZZZ', 'ZZZ_US_EQ', 'BUY', 5, 100.0, 5, 'FILLED', 0, 0.05, 1.0, 'DEMO', 'USD', :at, :at, :at)
+        """), {"at": buy_dt.isoformat()})
+        at = (datetime.utcnow() - timedelta(days=5)).isoformat()  # days-old, see the note above
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('ZZZ', 'ZZZ_US_EQ', 'SELL', 'REJECTED', :at, :at)
+        """), {"at": at})
+
+    cfg = _config(mapping={"ZZZ": {"t212_instrument_id": "ZZZ_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.place_market_order.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# reconcile_positions_with_broker()
+# ---------------------------------------------------------------------------
+
+def _reconcile_config(enabled=True) -> dict:
+    return {
+        "trading212_invest": {"enabled": enabled, "live": False},
+        "notifications": {"email": {"enabled": False}},
+    }
+
+
+def test_reconcile_disabled_or_missing_creds_is_noop(db_engine, v2_mocks, monkeypatch):
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    summary = reconcile_positions_with_broker(_reconcile_config(enabled=False))
+    assert summary == {"broker_closed_no_sell": [], "unrecognized_position": [], "invalidated_resolutions": 0}
+    v2_mocks.get_positions.assert_not_called()
+
+    monkeypatch.delenv("T212_API_KEY", raising=False)
+    summary = reconcile_positions_with_broker(_reconcile_config())
+    assert summary["broker_closed_no_sell"] == []
+
+
+def test_reconcile_no_discrepancy_when_positions_match(db_engine, v2_mocks, mocker):
+    """A position we believe is open, that T212 also genuinely still shows
+    held via a recognized mapping, must produce zero reconciliation events."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
+    _seed_resolutions_from_mapping(db_engine, {"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD"}})
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0, days_ago=5, is_etf=True)
+    v2_mocks.get_positions.return_value = [{"ticker": "I50Dl_EQ", "quantity": 10.0}]
+
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["broker_closed_no_sell"] == []
+    assert summary["unrecognized_position"] == []
+    count = db_engine.connect().execute(sa_text("SELECT COUNT(*) FROM position_reconciliations")).scalar()
+    assert count == 0
+
+
+def test_reconcile_broker_closed_no_sell(db_engine, v2_mocks, mocker):
+    """We believe VOO is still open (FILLED BUY, no FILLED SELL), but T212's
+    real positions list does not show it held, and we never placed a SELL
+    -- a cash-out acquisition the broker processed automatically is exactly
+    this shape. Must be recorded, never silently missed."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
+    _seed_resolutions_from_mapping(db_engine, {"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD"}})
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", stop_price=1.0, days_ago=5, is_etf=True)
+    v2_mocks.get_positions.return_value = []  # T212 shows nothing held
+
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["broker_closed_no_sell"] == ["VOO"]
+    row = db_engine.connect().execute(sa_text(
+        "SELECT event_type, ticker, status, note FROM position_reconciliations WHERE t212_ticker='I50Dl_EQ'"
+    )).fetchone()
+    assert row is not None
+    assert row[0] == "BROKER_CLOSED_NO_SELL"
+    assert row[1] == "VOO"
+    assert row[2] == "OPEN"
+    assert "cash-out acquisition" in row[3]
+    mock_alert.assert_called_once()
+
+
+def test_reconcile_unrecognized_position(db_engine, v2_mocks, mocker):
+    """T212 shows an instrument held that has no VERIFIED mapping at all --
+    a stock-swap acquisition converting a previously-tracked position into
+    a different instrument is exactly this shape."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])
+    v2_mocks.get_positions.return_value = [{"ticker": "SWAPPEDCO_US_EQ", "quantity": 12.0}]
+
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["unrecognized_position"] == ["SWAPPEDCO_US_EQ"]
+    row = db_engine.connect().execute(sa_text(
+        "SELECT event_type, quantity, status FROM position_reconciliations WHERE t212_ticker='SWAPPEDCO_US_EQ'"
+    )).fetchone()
+    assert row is not None
+    assert row[0] == "UNRECOGNIZED_POSITION"
+    assert row[1] == 12.0
+    assert row[2] == "OPEN"
+    mock_alert.assert_called_once()
+
+
+def test_reconcile_no_alert_when_nothing_found(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])
+    v2_mocks.get_positions.return_value = []
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+
+    reconcile_positions_with_broker(_reconcile_config())
+
+    mock_alert.assert_not_called()
+
+
+def test_reconcile_invalidates_stale_resolution_when_not_held(db_engine, v2_mocks, mocker):
+    """A VERIFIED resolution for a ticker that's no longer a live candidate
+    AND has no currently-open position must be invalidated -- otherwise a
+    future reuse of the same ticker symbol by an unrelated company would
+    silently trade under the OLD company's cached T212 mapping, since
+    VERIFIED never re-checks itself."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])  # DELISTED no longer a candidate
+    _seed_resolutions_from_mapping(db_engine, {"DELISTED": {"t212_instrument_id": "DELISTED_US_EQ", "currency": "USD"}})
+    v2_mocks.get_positions.return_value = []  # and not currently held either
+
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["invalidated_resolutions"] == 1
+    row = db_engine.connect().execute(sa_text(
+        "SELECT 1 FROM instrument_resolutions WHERE ticker='DELISTED'"
+    )).fetchone()
+    assert row is None
+
+
+def test_reconcile_preserves_resolution_when_still_held(db_engine, v2_mocks, mocker):
+    """The same ticker as above, but STILL genuinely held right now -- must
+    NOT be invalidated, since maybe_exit_positions()'s own reverse_map
+    lookup needs this exact mapping on its very next run to correctly
+    match the position and fire INDEX_REMOVAL."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])  # no longer a candidate...
+    _seed_resolutions_from_mapping(db_engine, {"REMOVED": {"t212_instrument_id": "REMOVED_US_EQ", "currency": "USD"}})
+    v2_mocks.get_positions.return_value = [{"ticker": "REMOVED_US_EQ", "quantity": 3.0}]  # ...but still held
+
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["invalidated_resolutions"] == 0
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM instrument_resolutions WHERE ticker='REMOVED'"
+    )).fetchone()
+    assert row is not None and row[0] == "VERIFIED"
+
+
+def test_record_reconciliation_event_upsert_preserves_acknowledged_status(db_engine):
+    """Once a human has set an event's status to ACKNOWLEDGED, re-detecting
+    the identical discrepancy on a later reconciliation run must refresh
+    note/last_seen_at but must NOT silently flip status back to OPEN --
+    otherwise ACKNOWLEDGED would be meaningless for any discrepancy that
+    doesn't resolve itself (which BROKER_CLOSED_NO_SELL never does)."""
+    from brokers.trading212 import _record_reconciliation_event
+
+    _record_reconciliation_event(
+        event_type="BROKER_CLOSED_NO_SELL", t212_ticker="X_US_EQ", ticker="X",
+        quantity=5.0, note="first detection",
+    )
+    with db_engine.begin() as conn:
+        conn.execute(sa_text(
+            "UPDATE position_reconciliations SET status='ACKNOWLEDGED' WHERE t212_ticker='X_US_EQ'"
+        ))
+
+    _record_reconciliation_event(
+        event_type="BROKER_CLOSED_NO_SELL", t212_ticker="X_US_EQ", ticker="X",
+        quantity=5.0, note="re-detected on a later run",
+    )
+
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status, note FROM position_reconciliations WHERE t212_ticker='X_US_EQ'"
+    )).fetchone()
+    assert row[0] == "ACKNOWLEDGED"
+    assert row[1] == "re-detected on a later run"

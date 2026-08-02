@@ -255,6 +255,70 @@ class InstrumentResolution(Base):
     resolved_at         = Column(DateTime)
 
 
+class PositionReconciliation(Base):
+    """A discrepancy found between what this system's own order history
+    implies is open and what T212's real, live positions list actually
+    shows -- see brokers/trading212.py:reconcile_positions_with_broker()
+    and CLAUDE.md's "Live position reconciliation" section (2026-08-02).
+
+    Added once the live candidate pool became the full, dynamically-
+    tracked S&P 500 (~500 tickers) rather than a fixed 40 -- at that
+    scale, delistings/acquisitions/corporate actions on a held position
+    are a routine, ongoing occurrence, not a rare edge case, and
+    _reconstruct_pnl() can only ever record a closed position when THIS
+    system placed a FILLED SELL for it -- it has no way to notice a
+    position the broker closed on its own (a cash-out acquisition) or
+    converted into a different instrument (a stock-swap acquisition).
+
+    event_type:
+      BROKER_CLOSED_NO_SELL -- our own order history's latest FILLED BUY
+        for a t212_ticker has no matching FILLED SELL (we believe the
+        position is still open), but T212's real positions list does not
+        show it held, and this system never placed a SELL for it. Most
+        likely a cash-out acquisition the broker processed automatically.
+        Exact proceeds are NOT known -- estimated_value_gbp is left null
+        rather than fabricated; note explains what's known.
+      UNRECOGNIZED_POSITION -- T212 shows a currently-held instrument
+        with no VERIFIED instrument_resolutions mapping. Most likely a
+        stock-swap acquisition that converted a previously-tracked
+        position into a different, unmapped instrument.
+      REPEATED_SELL_REJECTION -- several consecutive SELL attempts for a
+        still-held position have failed or been rejected -- likely
+        delisted/bankrupt with no real market to sell into. Auto-retry
+        is stopped once this fires (see _has_recent_sell_order()) so the
+        position isn't hammered with a fresh doomed sell attempt every
+        cycle; flagged here instead for manual review/write-off.
+
+    status: OPEN (needs manual review) / ACKNOWLEDGED. Nothing in code
+    currently transitions OPEN -> ACKNOWLEDGED automatically -- that is
+    a manual action (e.g. a future Status page control), matching
+    InstrumentResolution's FAILED status, which is the same "flag for a
+    human, never auto-resolve a genuine mismatch" contract.
+
+    Upserted on (event_type, t212_ticker) while status='OPEN' so a
+    recurring discrepancy refreshes its own note/detected_at on every
+    reconciliation run rather than accumulating duplicate rows.
+    """
+
+    __tablename__ = "position_reconciliations"
+
+    id                   = Column(Integer, primary_key=True, autoincrement=True)
+    event_type           = Column(String(32), nullable=False)
+    ticker               = Column(String(20))          # our research ticker, if known
+    t212_ticker          = Column(String(64), nullable=False)
+    quantity             = Column(Float)
+    estimated_value_gbp  = Column(Float)
+    note                 = Column(Text)
+    status               = Column(String(16), nullable=False, default="OPEN")
+    detected_at          = Column(DateTime, default=datetime.utcnow)
+    last_seen_at         = Column(DateTime, default=datetime.utcnow)
+    resolved_at          = Column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint("event_type", "t212_ticker", name="uq_reconciliation_event_ticker"),
+    )
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
