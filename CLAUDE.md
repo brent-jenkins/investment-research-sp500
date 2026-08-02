@@ -5782,6 +5782,156 @@ composition figures in the section above are corrected in place rather
 than requiring a full study re-run, since the fix's effect on those
 specific 7 tickers is independently verified above.
 
+### ETF/stock fair-competition study — guaranteed priority, not merit, drives most current ETF allocation (2026-08-02)
+
+Direct follow-up to the full-500 no-gate momentum work above. Today's
+priority-admission engine ranks ETFs and stocks in two entirely separate
+lists, with every ETF fully admitted before any stock is even
+evaluated — an artifact of the exchange-timing split (real live
+submission happens at 07:00 UTC for ETFs, LSE hours, and 13:30 UTC for
+stocks, NYSE hours; see "Exchange-aware order submission" above), not a
+designed ratio. This mattered less against the old fixed 40-stock
+curated pool; it matters far more now that the direction has shifted to
+a full ~500-candidate, no-market-cap-gate approach, where far more real
+stock candidates are genuinely competing for the same limited capacity —
+a guaranteed, merit-independent ETF head start is a bigger distortion
+under that pool than it was under the narrower one.
+
+**Why this had to run before any ETF-sleeve-value test, not alongside or
+after one.** A sleeve-value test run under the current guaranteed-
+priority mechanism cannot distinguish "ETFs genuinely earn their place on
+momentum merit" from "giving *anything* guaranteed capacity access
+changes the numbers regardless of merit" — precisely the confound this
+project's own "Portfolio-capped validation findings" section already
+surfaced once, for a different pair of variants. This study exists
+specifically to remove that confound before a sleeve-value question is
+asked at all.
+
+**The core design problem, and how it was actually resolved.** A naive
+fix — rank all candidates together by momentum, but still physically
+submit ETFs at 07:00 and stocks at 13:30 — does not produce fair
+competition, it only relocates the unfairness: a lower-ranked ETF could
+still consume capacity before a higher-ranked stock ever gets its own
+turn, purely because it was evaluated first in wall-clock time. Genuine
+fairness requires deciding *who wins* using the complete, combined
+picture (both asset classes ranked together) before either submission
+job consumes any capacity — while still respecting the real reason a
+separate submission-time capacity re-check exists live (capacity can
+genuinely shift between decision and submission — a position closing, an
+emergency exit). Both principles were reconciled deliberately, not by
+picking one:
+
+- **Decision time (EOD)**: the existing `_admit_group()` capacity
+  allocator (unchanged) is now called **once**, against every eligible
+  ticker from both asset classes together, rather than twice in sequence
+  (ETF group first, stock group second). Since `_admit_group()` already
+  sorts purely by `(-momentum, idx)` with no asset-class term in that
+  key, and already resolves membership/entry-gating per ticker
+  internally, merging the input lists was sufficient — no other logic
+  needed to change. This is what actually makes the ranking fair.
+- **Submission time (live, 07:00/13:30 UTC)**: a daily-bar backtest has
+  no separable "submission moment" inside one simulated day the way live
+  trading genuinely does (real hours elapse between the two real
+  submission jobs) — so for the BACKTEST specifically, the single
+  combined admission pass already *is* the complete, correct
+  implementation of both principles together; there is no second,
+  later capacity snapshot inside one simulated day to build a check
+  against. This was stated explicitly rather than silently dropped: the
+  real, live form of this check (re-confirming a provisionally-won slot
+  against genuinely live T212 account state at each actual submission
+  job) belongs in `brokers/trading212.py`, and is flagged as a
+  recommended follow-up below — **not built or modified as part of this
+  study**, which was research-only against a disposable clone.
+
+**Verification discipline matched the day's established standard.** The
+combined-admission variant was built via AST transformation of the real,
+current `simulate_portfolio_compounding_mtm()` (production commit
+`d255f26`), not retyped. Both the untouched baseline and the new fair
+variant were confirmed byte-identical to the real function when run with
+admission logic disabled, before either was trusted for anything; the
+fair variant was separately confirmed to genuinely diverge from the real
+function on a mixed ETF+stock test set (2,286 vs. 2,130 trades),
+confirming the admission change has real, measurable effect rather than
+being a no-op.
+
+**Full comparison, reset-at-boundary basis throughout (matching the
+full-500 study's own convention — balance renormalized to £50,000 at
+2020-01-01, training-period history/eligibility unaffected), full
+503-stock + 33-ETF combined pool, test period 2020-01-01→2026-07-31:**
+
+| | Baseline (guaranteed ETF priority — today's real mechanism) | Fair (combined momentum ranking) |
+|---|---|---|
+| Test trades | 724 | 1,170 |
+| Win rate | 40.61% | 49.06% |
+| Profit factor | 1.95 | 1.75 |
+| Sharpe | 0.565 | 0.649 |
+| CAGR | 9.56% | **19.69%** |
+| Max drawdown (fixed-denominator) | −6.22% | −26.30% |
+| Max drawdown (genuine peak-relative) | −4.91% | −8.44% |
+| Test £50,000 → | £90,465.09 | **£161,436.21** |
+
+**Not a one-sided win — a real, quantified risk/return trade-off, on
+both drawdown conventions.** Fair competition more than doubles CAGR,
+but genuine peak-relative drawdown also roughly doubles (−4.91% →
+−8.44%) — the guaranteed ETF allocation under the current baseline
+provides real diversification/stability that fair competition trades
+away for higher, more stock-concentrated return. Neither figure should
+be read in isolation.
+
+**The emergent ETF/stock split — decisive, and the central finding of
+this study.**
+
+| | Baseline | Fair |
+|---|---|---|
+| ETF trades | 525 (72.5% of all trades) | **38 (3.2%)** |
+| ETF share of total P&amp;L | 65.8% | **0.7%** |
+| ETF share of deployed capacity | 76.3% | **2.6%** |
+| Distinct ETFs winning ≥1 slot | 31 of 33 | **8 of 33** |
+
+**ETFs' capacity share collapses from 76.3% to 2.6% once they have to
+earn their place on momentum alone against ~500 real stock candidates.**
+This is strong, direct evidence that the current guaranteed-priority
+architecture — not genuine ETF momentum merit — drives most of the ETF
+sleeve's present capacity share. Under fair competition, only 8 ETFs
+ever won a slot: `EWZ`, `FXI`, `SKYY`, `SLV`, `SOXX`, `TLT`, `XLE`, `XLK`.
+
+**The non-equity-exposure caveat — restated explicitly, not lost inside
+this result.** Of the 10 ETFs with no stock substitute anywhere in this
+system (`GLD`/`SLV`/`PDBC` — commodities; `TLT`/`IEF`/`TIP`/`MUB`/`LQD`/
+`HYG`/`EMB` — seven separate bond/credit buckets), **only 2 (`SLV`,
+`TLT`) won any capacity at all under fair competition; the other 8 won
+zero.** This is expected, not a contradiction of the finding above: a
+pure momentum ranking has no mechanism to value genuine crash-hedging or
+non-equity correlation at all — that is a portfolio-construction
+concept, not something a momentum score can see, by construction.
+**"ETFs barely win capacity under merit-based competition" is not
+evidence the ETF sleeve has no value** — it is evidence that pure
+momentum ranking cannot see the specific value these 10 instruments
+provide. This has to be weighed on its own, separate terms before any
+real decision to trim the sleeve, not concluded away by this result.
+
+**Flagged explicitly as the natural next step, not attempted here.**
+Any future ETF-sleeve-value test must be re-run under this fair-
+competition mechanism, not the current guaranteed-priority one, for the
+exact reason stated above — a value test under guaranteed priority
+cannot separate real merit from the confound. Separately, a genuine
+**live-code recommendation** (research finding only, nothing built or
+changed): `brokers/trading212.py`'s real decide/submit split should adopt
+the identical principle — decide provisional admission using a combined
+momentum ranking across both asset classes at EOD decision time, then
+have each real submission job (07:00 UTC ETF, 13:30 UTC stock) confirm
+its own provisionally-won slots still fit given genuinely live T212
+account state at that later time, rather than the current architecture
+where ETF submission consumes capacity first purely because it is
+scheduled earlier in the day.
+
+Full local test suite: 447 passing, confirmed before and after (this
+study's new AST-transformed engine variant lives only in the now-deleted
+disposable research clone — nothing was committed to the real
+`analysis/backtest.py`). Nothing pushed; this write-up is the durable
+record, alongside the preserved trade-level CSV exports (per the
+trade-level-preservation standing requirement).
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
