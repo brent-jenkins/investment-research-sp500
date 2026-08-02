@@ -10,6 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **The rule.** Prose is for *why* a threshold was chosen, not for *what* the threshold is. Any write-up that reports a pass/fail outcome, an adopt/reject decision, or a validated result must state the exact rule that produced it — inequality, operator, and number — inline or in a code block, before the backing implementation is removed. "Materially," "meaningfully," "roughly," "significantly," "close to," and similar words are acceptable around a stated number (e.g. "materially worse (42.9% vs. 41.2%)") but must never stand in *for* the number or the comparison operator itself.
 
+**Extended 2026-08-02 — preserve full trade-level output, not just the formula.** The rule above closes the "what was the exact threshold" gap; it does not close a second, related gap the curated-40-vs-rolling-40 investigation (2026-08-02, see "V2 stock universe broadening" and its follow-on sections) ran directly into: a fresh, independent reproduction of curated-40's test-period backtest could prove the *methodology* was internally deterministic (two runs, 8.5 hours apart, produced byte-identical results) but could not explain why it differed by ~35% from a previously-cited headline figure (£442,558.70 vs. a reproduced £288,323.01), because only the methodology description and an aggregate summary survived from the original run — the disposable research clone that produced the original trade-level output had already been deleted by the time anyone needed to diff against it. Knowing the formula was not enough; without the original trades themselves (ticker, entry/exit date, price, P&L, exit reason — the same shape `backtest_trades`/`t212_pnl` already store for every real run), there was nothing concrete left to trace a discrepancy against, only two competing aggregate numbers and no way to arbitrate between them.
+
+**The rule.** Before a research clone backing a finding that ships as a *headline figure* — a number this file cites, a number a decision gets made from, a number a future comparison will be benchmarked against — is deleted, its full trade-level output must be preserved somewhere durable, not just the methodology that produced it. This does not apply to every intermediate research step or exploratory dead end (most of this file's "researched, not adopted" sections never needed this and still don't); it applies specifically to whatever number actually gets cited going forward. "Durable" means outside the disposable clone itself — a CSV/parquet export committed alongside the write-up, a row-set written to a table in the real (non-disposable) database, or an equivalent that survives the clone's own deletion — not a description detailed enough that a reader assumes it could be regenerated identically on demand, which is exactly the assumption this incident showed doesn't hold in practice (regenerating it independently is necessary but not sufficient for auditing a *specific* prior figure, only for establishing a new one). Applied going forward, not retroactively — the two figures already in tension here (£442,558.70 and £288,323.01) cannot be reconciled after the fact, precisely because neither one's underlying trades survived to be diffed.
+
 ## Live/backtest decision-logic parity (2026-08-01) — protected architectural invariant
 
 **There is exactly one implementation of any given trading decision — never two hand-written copies that are merely supposed to agree.** "Decision logic" means anything that determines *what should happen*: what qualifies for entry, how a position is sized, which candidates win when capacity is scarce, what triggers an exit and in what priority. It does not mean *execution mechanics* — live legitimately needs a real broker-API call (`Trading212Client`), retry/back-off, and DB bookkeeping that the backtest simulates instead; that split is fine and is not what this rule is about. Anywhere the *same decision* has to be made by both live order placement (`brokers/trading212.py`) and the backtest engine (`analysis/backtest.py`), both must call one shared function — never two independently-written expressions of the same rule.
@@ -5125,6 +5129,183 @@ run against the already-implemented fixes). All three items are genuinely
 resolved — not documented as accepted/known limitations — verified by
 tests that exercise the real fixed code paths, not just asserted fixed.
 Nothing pushed; committed locally only.
+
+### Curated-40 vs. rolling-40 reproduction investigation (2026-08-02)
+
+Direct follow-up to the "V2 stock universe broadening" / "V2 moderate
+stock universe expansion" family of sections above, using the same
+market-cap-ranked candidate pool for a genuinely rolling (quarterly-
+reconstituted top-40-by-market-cap) universe compared against curated-40,
+under the mark-to-market compounding engine
+(`simulate_portfolio_compounding_mtm()` — the engine confirmed to
+actually match live trading, not the frozen/cost-basis engines used for
+earlier reproducibility baselines elsewhere in this file).
+
+**Four root-cause findings, each checked against real trade-level data,
+not assumed from the aggregate gap alone:**
+
+1. **GOLD generates zero trades in curated-40 — confirmed clean, not a
+   bug.** Checked directly against curated-40's full trade list and its
+   test-period subset: 0 trades either way. Of curated-40's 40 tickers,
+   only 39 ever traded; GOLD is the sole exception, exactly matching its
+   permanently-empty `STOCK_MEMBERSHIP` window (see "V2 architecture" and
+   "Present-day market-cap ranking bias" above for why GOLD is kept in
+   the list at all despite never being a real S&amp;P 500 constituent).
+   `passes_entry_gate()` rejects it consistently.
+2. **META's contribution is real but not dominant.** 39 test-period
+   trades, +£19,583.67, **8.2%** of curated-40's test-period P&amp;L —
+   the 4th-largest single-ticker contributor, behind NVDA (13.3%), AMD
+   (10.9%), and AVGO (10.2%). META is structurally excluded from
+   rolling-40 by a known SEC/XBRL data gap (`market_cap_history` has zero
+   rows for it — see "Market-cap data infrastructure" above for the "44
+   genuinely unresolvable" tickers this belongs to). Recovering META's
+   market-cap data would narrow curated-40's advantage somewhat but would
+   not close it alone — NVDA+AMD+AVGO+META together are 47.4% of
+   curated-40's total test-period profit, several comparably-sized
+   contributors, not one outsized confound.
+3. **Concentration — broad-based in both variants, at the trade level.**
+   Top-1/3/5 tickers' share of test-period P&amp;L: curated-40 (39 traded
+   tickers) 13.3% / 34.3% / 49.6%; rolling-40 (78 traded tickers) 11.1% /
+   28.5% / 41.1%. Curated-40 is somewhat more concentrated by *ticker*
+   (mechanically, from trading a fixed, narrower universe throughout),
+   but at the *trade* level both variants are almost identically
+   un-concentrated (top-20 winning trades ≈17-18% of winning P&amp;L in
+   both cases) — neither variant's edge rests on a handful of blowout
+   trades.
+4. **Does market-cap rank predict trade quality? Mixed evidence, no
+   forced conclusion.** "Core" rolling-universe members (top-40 in ≥50%
+   of the 67 quarterly reconstitutions, 2009-12-31→2026-06-30) show a
+   higher win rate than "marginal" boundary-hugging members (49.3% vs.
+   44.0%) but a *lower* average return per trade (1.22% vs. 1.83%) — rank
+   predicts eligibility consistency, not clearly per-trade magnitude, and
+   the marginal bucket's sample (216 trades across 48 tickers) is too
+   thin to trust that reversal as a stable effect. A separate check
+   against the top-100/150 broadening studies' data (a different engine,
+   only directionally informative) found no sharp quality cliff right at
+   the rank-40 boundary specifically.
+
+**A genuine, real bug found and fixed as a byproduct of this
+investigation — see "Live pricing bug..." precedent for the same class
+of fix.** The naive per-ticker market-cap ranking loop
+(`analysis/market_cap.py:market_cap()`, via `_close_price_as_of()`)
+opened a fresh SQLAlchemy connection on every single call — confirmed to
+produce ~30,000 connections for one ranking step, and to leave a
+comparable real workload still unfinished after 15+ minutes. Fixed
+2026-08-02 by mirroring `_get_shares_series()`'s existing per-ticker
+cache pattern: a new `_price_cache`, populated by one query per ticker
+(the ticker's full ascending close-price history), with
+`_close_price_as_of()` rewritten to `bisect.bisect_right()` against the
+cached series instead of a SQL round-trip per call.
+`get_engine()`'s own global `NullPool` behaviour is unchanged (deliberate,
+for Streamlit's multi-threaded-rerun safety — see "Database writes"
+below). Verified before/after: 105 `get_engine()` calls → 10, for an
+identical 100-lookup/5-ticker workload; at real production scale, 30,753
+genuine `market_cap()` calls completed in 51.2 seconds. Two regression
+tests (`tests/test_market_cap.py`) confirmed to genuinely fail against
+the pre-fix code (temporarily restored via `git stash` and re-tested,
+not merely reasoned about) before being confirmed to pass against the
+fix: `test_close_price_as_of_is_cached_across_calls` (mirrors the
+existing shares-cache test) and
+`test_market_cap_bulk_ranking_creates_bounded_not_linear_connections`
+(asserts `get_engine()` call count stays `≤ 2×ticker_count` regardless of
+lookup count).
+
+**A second real fragility found and fixed the same way — see
+"Consolidated fixes" below for the full writeup.**
+`analysis/universe.py:get_max_holding_days()` used to route curated
+`STOCK_MEMBERSHIP` tickers and every other non-ETF ticker through two
+*separately-configured* values (`trading212_invest.stock_max_holding_days`
+and `backtest.fallback_max_holding_days`) that happened to both be 30 —
+coincidentally equal, not structurally linked, the exact same fragility
+class as the `is_etf`-inference bug fixed earlier the same day. This
+investigation's own data showed the "fallback" path was not an edge case
+at all: 82 of rolling-40's 115 ever-admitted tickers (71%) — real S&amp;P
+500 stocks simply outside the curated `STOCK_MEMBERSHIP` dict — hit it as
+their everyday, dominant path. Consolidated to one value.
+
+**Reproducibility gap — found, investigated honestly, and only partially
+explained.** Two fully independent reproductions of curated-40's
+test-period backtest (same code, same config, same window, run 8.5 hours
+apart) produced byte-identical results to each other
+(**£288,323.01**), proving the methodology is internally deterministic —
+but both came in **~35% below** a previously-cited headline figure of
+**£442,558.70**. NVDA/AMD/AVGO/META (the four largest contributors) were
+diffed trade-by-trade between the two reproductions and matched to the
+penny — ruling out ordinary data accumulation as the cause of any
+divergence *between the two reproductions themselves* (there wasn't
+one). The gap against the *original* £442,558.70 figure could not be
+traced, because the original run's trade-level output no longer exists
+— only its methodology and an aggregate summary survived the deletion of
+the research clone that produced it (see the new "Extended 2026-08-02"
+paragraph under "Research reproducibility standard" above, added
+directly because of this gap). **Correction, stated plainly**: an
+earlier verbal report of this investigation characterized the two
+reproductions matching each other as proof the figure was stable "across
+a real production EOD cycle" / "spanning genuine production data
+updates." **That characterization was wrong and is corrected here.** The
+two reproduction runs were both taken within a single Saturday-to-Sunday
+window, during which no EOD job fires at all (see the scheduler table at
+the top of this file) — no real data changed between them. What was
+actually proven is narrower and still genuinely useful: the code is
+internally deterministic (identical inputs reliably produce identical
+outputs), not that the £288,323.01 figure is stable against real,
+changing data. Rolling-40's own reproduction (a single attempt so far,
+**£162,567.27** against an original **£159,558.73**, ~2% apart) has not
+yet received the same two-independent-reproduction scrutiny curated-40's
+figure did.
+
+**Current standing, until a genuine post-EOD-cycle reproduction is
+run:** treat **£288,323.01** as curated-40's currently-trustworthy
+test-period figure; treat the original **£442,558.70** as unverifiable
+against current data (its provenance can no longer be audited) rather
+than wrong outright. **The real outstanding verification — reproducing
+either figure again after a genuine Monday EOD cycle has actually run,
+to see whether real data movement (not just code determinism) narrows or
+widens either gap — has not been attempted and is explicitly out of
+scope for the work done on 2026-08-02; it can only be done after 21:30
+UTC Monday at the earliest.**
+
+### Consolidated fixes from the curated-40 investigation (2026-08-02)
+
+Four items from the investigation above, applied for real (not left as
+disposable-clone-only findings):
+
+- **`analysis/market_cap.py` connection-pooling fix** — see the
+  investigation section above for the full before/after numbers and
+  regression-test detail. Landed in the real module, not a throwaway
+  script.
+- **`get_max_holding_days()` consolidation** — `analysis/universe.py`
+  now dispatches purely on `ETF_TICKERS` membership (90 days) vs.
+  everything else (a single `trading212_invest.stock_max_holding_days`,
+  default 30) — `STOCK_MEMBERSHIP` membership no longer affects the
+  holding-day cap at all, only `is_member()`'s own separate eligibility
+  check. `config.yaml`'s `backtest.fallback_max_holding_days` key is
+  removed (both it and `stock_max_holding_days` were already 30 in
+  production, so this is a pure fragility fix with zero effect on any
+  already-computed backtest result — verified directly: `AAPL` (curated),
+  `VOO` (ETF), and `MU` (a real stock outside `STOCK_MEMBERSHIP`, exactly
+  the dominant rolling-universe-research case) all resolve to the
+  identical values before and after). Every test that previously
+  exercised the removed fallback branch (`tests/test_universe.py`,
+  `tests/test_portfolio_backtest.py`) was updated to exercise the
+  consolidated single-value dispatch instead, not deleted.
+- **Research reproducibility standard extended** — see the new
+  "Extended 2026-08-02" paragraph above: a finding that ships as a
+  headline figure now needs its full trade-level output preserved
+  somewhere durable (not just the methodology) before its disposable
+  research clone is deleted.
+- **The false "spans a real production EOD cycle" claim corrected** —
+  see the investigation section above; it was never previously committed
+  to this file in that wrong form (it existed only as a verbal report),
+  so this is its first, corrected appearance in the permanent record,
+  not a retraction of prior committed text.
+
+Full local suite: 434 passing (432 + the 2 new `market_cap.py`
+regression tests) after all four changes together. Nothing pushed;
+committed locally only, per this session's standing practice. The real
+post-Monday-EOD reproduction check remains genuinely outstanding — not
+attempted as part of this work, and not attemptable before 21:30 UTC
+Monday at the earliest.
 
 ### Broker integration — Trading212 Invest
 
