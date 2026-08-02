@@ -198,6 +198,32 @@ def _is_scheduled_trading_day(check_date: date) -> bool:
     return _is_exchange_open("NYSE", check_date)
 
 
+def _has_upcoming_trading_day(from_date: date, lookahead_days: int = 10) -> bool:
+    """True if a genuine NYSE trading day falls anywhere in the
+    `lookahead_days` calendar days strictly after `from_date` (checks
+    `from_date + 1` through `from_date + lookahead_days`).
+
+    This is deliberately NOT "is `from_date + 1` a trading day" — every
+    Friday's literal tomorrow is Saturday, so a single-day-ahead check
+    would incorrectly say "nothing to do" on the single most common case
+    (queuing Friday night for Monday), not just the holiday-shifted edge
+    case. A short, bounded lookahead instead answers the real question —
+    "is there an upcoming session worth queuing candidates for at all" —
+    and naturally, uniformly covers every real gap NYSE actually has
+    (an ordinary weekend, a single-day holiday, a holiday-adjacent long
+    weekend) with no special-casing, since none of those ever run longer
+    than a few consecutive calendar days. 10 days is a generous margin
+    over the longest real NYSE closure on record, so in practice this
+    resolves to True on every date except a genuinely pathological,
+    extended shutdown — see `_eod_job()`'s own docstring for why that
+    matters and what happens if it's ever False.
+    """
+    for offset in range(1, lookahead_days + 1):
+        if _is_scheduled_trading_day(from_date + timedelta(days=offset)):
+            return True
+    return False
+
+
 def _fetch_t212_snapshot(config: dict) -> None:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
@@ -446,21 +472,49 @@ def _monday_premarket_job() -> None:
 
 def _eod_job() -> None:
     """Daily, 21:30 UTC — market-calendar-gated (2026-08-02), not a Mon-Fri
-    cron filter. Pull incremental data for open exchanges, then run the
-    full order pipeline — but only on a genuine NYSE trading day.
+    cron filter. Two independently-gated steps, not one combined gate:
 
-    Registered in start_scheduler() to fire every single day now, with no
-    day_of_week restriction at the trigger level — the check below is the
-    FIRST thing this job does once it fires, deciding for itself whether
-    there's anything to do today rather than being excluded by a cron
-    filter before it ever gets the chance to decide. See
-    _is_scheduled_trading_day()'s own docstring for the full reasoning,
-    including the deliberate room this leaves for a future extended-hours
-    session this system doesn't yet support.
+    1. Price pull — gated on whether TODAY is a genuine NYSE trading day
+       (_is_scheduled_trading_day(today_utc)). Correct as originally
+       shipped: there is no new close to pull on a day NYSE was closed.
+    2. Candidate selection / decision-queuing (the RUN_FULL decide phase,
+       inside _run_analysis_pipeline()) — gated on whether an UPCOMING
+       trading day exists (_has_upcoming_trading_day(today_utc)), NOT on
+       whether today itself is one.
+
+    Fixed 2026-08-02, same day as the original calendar-gating change,
+    after realizing the single combined gate silently broke every
+    non-trading-day night's candidate queuing — most urgently, a Sunday
+    night no longer queued anything for Monday at all, since the whole
+    job (price pull AND decide phase together) returned before either
+    ran. The momentum signal is computed from whatever the latest STORED
+    close already is (_ticker_state() reads price_data, not "today"), so
+    it needs no new data from today to produce a valid decision for the
+    next real session — Sunday night correctly uses Friday's close to
+    decide what to queue for Monday, exactly as a Friday night already
+    used Friday's own just-pulled close to decide what to queue for the
+    following Monday. Both directions of this were already correct
+    except for the specific case of a non-trading night preceding the
+    very next trading day, which the old single gate excluded outright.
+
+    Registered in start_scheduler() to fire every single day, no
+    day_of_week restriction at the trigger level — see
+    _is_scheduled_trading_day()'s own docstring for why the trigger
+    itself must be unconditional. If NEITHER gate is satisfied (today is
+    not a trading day AND no trading day falls within the next 10 days —
+    a genuinely pathological, extended closure that essentially never
+    happens for NYSE in practice), the whole job is a clean no-op, same
+    as the original single-gate design was for any non-trading day.
     """
     today_utc: date = datetime.now(timezone.utc).date()
-    if not _is_scheduled_trading_day(today_utc):
-        logger.info("EOD job — %s is not a scheduled NYSE trading day, nothing to do.", today_utc)
+    today_is_trading_day = _is_scheduled_trading_day(today_utc)
+    should_queue_candidates = _has_upcoming_trading_day(today_utc)
+
+    if not today_is_trading_day and not should_queue_candidates:
+        logger.info(
+            "EOD job — %s is not a trading day and no trading day falls in the "
+            "next 10 days — nothing to do.", today_utc,
+        )
         return
 
     logger.info("Scheduled end-of-day refresh starting (21:30 UTC)…")
@@ -470,48 +524,54 @@ def _eod_job() -> None:
     except Exception as _exc:
         logger.warning("Could not stamp last_scheduled_run: %s", _exc)
     config = _load_config()
-    ticker_exchange = _build_ticker_exchange_map(config)
 
-    unique_exchanges = set(ticker_exchange.values())
-    open_exchanges: dict[str, bool] = {
-        exch: _is_exchange_open(exch, today_utc)
-        for exch in unique_exchanges
-    }
+    if today_is_trading_day:
+        ticker_exchange = _build_ticker_exchange_map(config)
+        unique_exchanges = set(ticker_exchange.values())
+        open_exchanges: dict[str, bool] = {
+            exch: _is_exchange_open(exch, today_utc)
+            for exch in unique_exchanges
+        }
 
-    open_tickers:    list[str] = []
-    skipped_tickers: list[str] = []
-    for ticker, exchange in ticker_exchange.items():
-        if ticker in _ALWAYS_PULL or exchange in _ALWAYS_OPEN_EXCHANGES or open_exchanges[exchange]:
-            open_tickers.append(ticker)
+        open_tickers:    list[str] = []
+        skipped_tickers: list[str] = []
+        for ticker, exchange in ticker_exchange.items():
+            if ticker in _ALWAYS_PULL or exchange in _ALWAYS_OPEN_EXCHANGES or open_exchanges[exchange]:
+                open_tickers.append(ticker)
+            else:
+                logger.info("Skipping %s — %s closed today (%s).", ticker, exchange, today_utc)
+                skipped_tickers.append(ticker)
+
+        if open_tickers:
+            logger.info(
+                "EOD refresh — pulling %d assets (%d skipped, market closed).",
+                len(open_tickers), len(skipped_tickers),
+            )
+            results = pull_incremental(tickers=open_tickers)
+            total_rows = sum(results.values())
+            logger.info("Data pull complete — %d new rows across %d assets.", total_rows, len(open_tickers))
+
+            try:
+                set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+            except Exception as exc:
+                logger.warning("Could not stamp last_full_refresh: %s", exc)
+
+            try:
+                set_metadata("last_pull_rows", str(total_rows))
+                set_metadata("last_pull_ticker_count", str(len([v for v in results.values() if v > 0])))
+            except Exception as exc:
+                logger.warning("Could not stamp last_pull_rows: %s", exc)
         else:
-            logger.info("Skipping %s — %s closed today (%s).", ticker, exchange, today_utc)
-            skipped_tickers.append(ticker)
+            logger.info("All markets closed today (%s) — skipping data pull.", today_utc)
+    else:
+        logger.info(
+            "EOD job — %s is not a scheduled NYSE trading day; skipping the price "
+            "pull, still running candidate selection for the upcoming trading day.",
+            today_utc,
+        )
 
-    if not open_tickers:
-        logger.info("All markets closed today (%s) — skipping data pull.", today_utc)
-        _run_analysis_pipeline(config, get_all_tickers(config), RUN_ANALYSIS_ONLY)
-        return
-
-    logger.info(
-        "EOD refresh — pulling %d assets (%d skipped, market closed).",
-        len(open_tickers), len(skipped_tickers),
-    )
-    results = pull_incremental(tickers=open_tickers)
-    total_rows = sum(results.values())
-    logger.info("Data pull complete — %d new rows across %d assets.", total_rows, len(open_tickers))
-
-    try:
-        set_metadata("last_full_refresh", datetime.utcnow().isoformat())
-    except Exception as exc:
-        logger.warning("Could not stamp last_full_refresh: %s", exc)
-
-    try:
-        set_metadata("last_pull_rows", str(total_rows))
-        set_metadata("last_pull_ticker_count", str(len([v for v in results.values() if v > 0])))
-    except Exception as exc:
-        logger.warning("Could not stamp last_pull_rows: %s", exc)
-
-    _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
+    run_type = RUN_FULL if should_queue_candidates else RUN_ANALYSIS_ONLY
+    _run_analysis_pipeline(config, get_all_tickers(config), run_type)
 
     try:
         _fetch_t212_snapshot(config)

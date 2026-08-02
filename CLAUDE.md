@@ -6597,6 +6597,54 @@ Deployed 2026-08-02 (commit range to follow in the deploy log); production
 DB backed up first per this session's standing discipline, even though
 this change touches scheduling logic only, no data.
 
+**Same-day follow-up fix — candidate selection was gated on the wrong
+day.** The single combined `_is_scheduled_trading_day(today_utc)` gate
+above correctly skipped the price pull on a non-trading day, but it also
+skipped candidate selection/decision-queuing (the `RUN_FULL` decide phase)
+on that same day — meaning a Sunday night (or any holiday night) queued
+nothing at all for the next real session. Concretely: the account had
+just been reset and `pending_orders` was empty, so a Sunday-night no-op
+would have left Monday — the first day the live system could actually
+trade — with zero orders submitted; the first real trade wouldn't have
+happened until Tuesday.
+
+**Fix — two independently-gated steps inside `_eod_job()`, not one
+combined gate.** Price pull stays gated on whether *today* is a trading
+day (correct — no new close exists on a non-trading day). Candidate
+selection is now gated on `_has_upcoming_trading_day(today_utc)` — a
+bounded (10-day) forward scan for the next real NYSE session, not a
+literal "is tomorrow a trading day" check. That distinction matters: every
+Friday's literal tomorrow is Saturday, so a naive single-day-ahead check
+would have broken the single most common case (queuing Friday night for
+Monday), not just the holiday-shifted edge case — a real forward scan is
+what correctly and uniformly handles an ordinary weekend, a single-day
+holiday, and a holiday-adjacent long weekend (e.g. Friday before a Monday
+Labor Day, where the real next session is Tuesday) with no special-casing,
+exactly because none of NYSE's real closures ever run longer than a few
+consecutive days. The momentum signal itself needs no new same-day data to
+produce a valid decision — `_ticker_state()` reads whatever the latest
+*stored* close already is, so a Sunday night correctly computes off
+Friday's close, exactly as an ordinary weeknight already computes off that
+same evening's own just-pulled close.
+
+Covered by 8 new/updated tests in `tests/test_scheduler.py`: direct
+`_has_upcoming_trading_day()` checks against three real, independently-
+verified dates (a Sunday finding Monday; a Friday before a Labor-Day-
+shifted long weekend finding the real next session 4 calendar days out —
+the decisive proof against a naive tomorrow-only check; Thanksgiving
+finding the next day); `_eod_job()` proven at the decision layer for a
+Sunday night (price pull NOT called, decide phase called with `RUN_FULL`
+— the specific, urgent bug this closes), an ordinary weeknight (unchanged,
+both price pull and `RUN_FULL` fire), the Friday-before-holiday case
+(today is itself a trading day, so both gates already agree — confirms no
+regression), and the two pre-existing holiday/weekend tests from the
+original calendar-gating change corrected in place (they had asserted a
+*full* no-op, which was itself the bug this fix closes — now assert price
+pull skipped but candidate selection still runs). Full suite: 451 passing.
+
+Deployed 2026-08-02, same evening, before that night's 21:30 UTC run;
+production DB backed up first.
+
 ### Stock submission delayed past NYSE open — and a real sanity-check bug found investigating it (2026-08-02)
 
 **Original goal**: move `stock_order_submission` from 13:30 UTC (right at

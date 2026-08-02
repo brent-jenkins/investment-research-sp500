@@ -916,26 +916,39 @@ def _mock_eod_dependencies(mocker):
     return mock_pull, mock_pipeline, mock_snap
 
 
-def test_eod_job_noop_on_real_market_holiday(monkeypatch, mocker):
+def test_eod_job_holiday_skips_pull_only_not_the_whole_job(monkeypatch, mocker):
+    """Revised 2026-08-02 -- this used to assert a FULL no-op on a
+    holiday. That was itself the bug this same day's later fix closed:
+    the price-pull gate correctly excludes a holiday, but candidate
+    selection must still run for whatever the next real trading day is
+    (here, the day after Thanksgiving). See _has_upcoming_trading_day()'s
+    dedicated test block above for the full reasoning."""
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 11, 26))  # Thanksgiving
     mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
 
     scheduler._eod_job()
 
     mock_pull.assert_not_called()
-    mock_pipeline.assert_not_called()
-    mock_snap.assert_not_called()
+    mock_pipeline.assert_called_once()
+    _, _, run_type = mock_pipeline.call_args[0]
+    assert run_type == scheduler.RUN_FULL
+    mock_snap.assert_called_once()
 
 
-def test_eod_job_noop_on_weekend(monkeypatch, mocker):
+def test_eod_job_weekend_skips_pull_only_not_the_whole_job(monkeypatch, mocker):
+    """Revised 2026-08-02 -- see test_eod_job_holiday_skips_pull_only_
+    not_the_whole_job's docstring immediately above for why. A Saturday's
+    upcoming trading day (Monday) is what candidate selection queues for."""
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1))  # Saturday
     mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
 
     scheduler._eod_job()
 
     mock_pull.assert_not_called()
-    mock_pipeline.assert_not_called()
-    mock_snap.assert_not_called()
+    mock_pipeline.assert_called_once()
+    _, _, run_type = mock_pipeline.call_args[0]
+    assert run_type == scheduler.RUN_FULL
+    mock_snap.assert_called_once()
 
 
 def test_eod_job_runs_normally_on_ordinary_weekday(monkeypatch, mocker):
@@ -946,6 +959,85 @@ def test_eod_job_runs_normally_on_ordinary_weekday(monkeypatch, mocker):
 
     mock_pull.assert_called_once()
     mock_pipeline.assert_called_once()
+    mock_snap.assert_called_once()
+    # 2026-08-02 fix: candidate selection now runs at RUN_FULL whenever an
+    # upcoming trading day exists, independently of the price-pull gate --
+    # on an ordinary weeknight both gates agree, so this must be unchanged.
+    _, _, run_type = mock_pipeline.call_args[0]
+    assert run_type == scheduler.RUN_FULL
+
+
+# ---------------------------------------------------------------------------
+# _has_upcoming_trading_day() / EOD candidate-selection gate fixed
+# separately from the price-pull gate (2026-08-02, same day as the
+# original calendar-gating change) -- the combined single gate above
+# silently broke candidate queuing on every non-trading night, most
+# urgently a Sunday night no longer queuing anything for Monday at all.
+# See CLAUDE.md's dedicated section and _eod_job()'s own docstring.
+#
+# Real, independently-verified dates used throughout (no mocking of
+# pandas_market_calendars itself):
+#   2026-08-02 (today, a Sunday) -> next trading day 2026-08-03 (Monday)
+#   2026-09-04 (Friday) -> precedes a genuine 2-day-weekend-plus-Labor-Day
+#     -holiday gap; the real next trading day is 2026-09-08 (Tuesday), not
+#     the literal "tomorrow" (Saturday) -- the decisive proof this can't
+#     be a naive single-day-ahead check
+#   2026-11-26 (Thanksgiving, a Thursday) -> next trading day 2026-11-27
+#     (the day after, NYSE trades a shortened session) -- a HOLIDAY case,
+#     not just a weekend one
+# ---------------------------------------------------------------------------
+
+def test_has_upcoming_trading_day_finds_monday_from_sunday():
+    from datetime import date
+    assert scheduler._has_upcoming_trading_day(date(2026, 8, 2)) is True
+
+
+def test_has_upcoming_trading_day_finds_tuesday_from_friday_before_holiday_monday():
+    """The decisive proof this is a real lookahead, not a naive
+    tomorrow-only check: 2026-09-04's literal tomorrow (Saturday) is never
+    a trading day, and neither is the day after that (Sunday), nor Monday
+    (Labor Day) -- the real next trading day is Tuesday, 4 calendar days
+    out. A single-day-ahead check would incorrectly return False here."""
+    from datetime import date
+    assert scheduler._has_upcoming_trading_day(date(2026, 9, 4)) is True
+
+
+def test_has_upcoming_trading_day_finds_day_after_thanksgiving():
+    from datetime import date
+    assert scheduler._has_upcoming_trading_day(date(2026, 11, 26)) is True
+
+
+def test_eod_job_sunday_night_queues_candidates_for_monday(monkeypatch, mocker):
+    """The specific, urgent bug this fix closes: a Sunday night EOD run
+    must skip the price pull (nothing new to pull) but STILL run candidate
+    selection at RUN_FULL, so Monday has real orders queued and ready for
+    submission rather than nothing until Tuesday."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 2))  # Sunday
+    mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
+
+    scheduler._eod_job()
+
+    mock_pull.assert_not_called()  # price-pull gate unaffected -- today is not a trading day
+    mock_pipeline.assert_called_once()
+    _, _, run_type = mock_pipeline.call_args[0]
+    assert run_type == scheduler.RUN_FULL  # candidates ARE queued, not analysis-only
+    mock_snap.assert_called_once()
+
+
+def test_eod_job_friday_before_holiday_monday_still_runs_full(monkeypatch, mocker):
+    """Friday 2026-09-04 is itself a genuine trading day (both gates
+    already agree here) -- confirms the fix doesn't regress the ordinary
+    "Friday queues for the next session" case even when that next session
+    is several calendar days out due to a holiday-shifted weekend."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 9, 4))  # Friday
+    mock_pull, mock_pipeline, mock_snap = _mock_eod_dependencies(mocker)
+
+    scheduler._eod_job()
+
+    mock_pull.assert_called_once()  # today IS a trading day -- price pull still runs
+    mock_pipeline.assert_called_once()
+    _, _, run_type = mock_pipeline.call_args[0]
+    assert run_type == scheduler.RUN_FULL
     mock_snap.assert_called_once()
 
 
