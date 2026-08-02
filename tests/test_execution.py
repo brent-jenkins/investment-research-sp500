@@ -126,13 +126,34 @@ def v2_mocks(db_engine, monkeypatch, mocker):
 
 def _mock_price_data(mocker, frames: dict):
     """frames: {ticker: DataFrame}. Anything not listed falls back to a
-    generic bullish frame (so ^GSPC always resolves unless overridden)."""
+    generic bullish frame (so ^GSPC always resolves unless overridden).
+
+    Also mocks _live_current_price() (2026-08-02) to return the same
+    frame's last close -- the submission-time sanity check's "current
+    price" source moved from get_price_df() (mocked here) to a genuine
+    live yfinance quote, and every caller of this shared helper that
+    doesn't specifically care about the sanity check still needs a
+    default "price hasn't moved" current-price value, or _live_current_
+    price() would make a real, unmocked network call during the test.
+    Matches this function's own prior behaviour exactly: before the fix,
+    _latest_close() WAS get_price_df().iloc[-1]["close"] -- this keeps
+    that same effective value, just from the new function name. A test
+    that specifically wants to control the sanity check's live price
+    independently of the stored frame (e.g. to prove the two are no
+    longer the same thing) mocks brokers.trading212._live_current_price
+    itself afterward, which overrides this default.
+    """
     default = _bullish_frame()
 
     def _fake_get_price_df(ticker, days=8000):
         return frames.get(ticker, default).copy()
 
+    def _fake_live_current_price(ticker):
+        frame = frames.get(ticker, default)
+        return float(frame["close"].iloc[-1])
+
     mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+    mocker.patch("brokers.trading212._live_current_price", side_effect=_fake_live_current_price)
 
 
 def _pending_rows(engine, status=None) -> list:
@@ -823,7 +844,15 @@ def test_submission_only_processes_its_own_asset_class(db_engine, v2_mocks, mock
 # ---------------------------------------------------------------------------
 # Submission-time price-sanity check -- fail loud, don't guess (same
 # principle as the 2026-07-31 pricing-bug fix). Compares the price recorded
-# at decide time against the latest available price at submission time.
+# at decide time against a genuinely live price at submission time.
+#
+# 2026-08-02: the live price read moved from get_price_df() (the stored,
+# EOD-only price_data table -- structurally unable to reflect any move
+# within the same trading day, since it's never updated intraday) to
+# _live_current_price() (a real yfinance quote). Tests below mock
+# _live_current_price() directly, the correct boundary now -- mocking
+# get_price_df() as these tests originally did would no longer control
+# what the sanity check actually sees.
 # ---------------------------------------------------------------------------
 
 def test_sanity_check_skips_submission_when_price_moved_beyond_threshold(db_engine, v2_mocks, mocker):
@@ -835,6 +864,7 @@ def test_sanity_check_skips_submission_when_price_moved_beyond_threshold(db_engi
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
                         decided_price=decided_price)
     _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("brokers.trading212._live_current_price", return_value=last_close)
 
     n = submit_pending_stock_orders(_submission_config(threshold=0.03))
 
@@ -855,12 +885,79 @@ def test_sanity_check_allows_submission_when_price_within_threshold(db_engine, v
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
                         decided_price=decided_price)
     _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("brokers.trading212._live_current_price", return_value=last_close)
 
     n = submit_pending_stock_orders(_submission_config(threshold=0.03))
 
     assert n == 1
     v2_mocks.place_market_order.assert_called_once()
     assert len(_pending_rows(db_engine, status="SUBMITTED")) == 1
+
+
+def test_sanity_check_uses_live_price_not_stale_stored_close(db_engine, v2_mocks, mocker):
+    """The decisive regression test for the 2026-08-02 fix: price_data's
+    stored close is set to a value that would NOT trip the sanity check if
+    (incorrectly) still used as "current price", while the genuinely live
+    quote is set to a value that WOULD trip it. The check must follow the
+    live quote, proving it no longer reads the stale stored table at all."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    stale_stored_close = float(frame["close"].iloc[-1])
+    decided_price = stale_stored_close  # decided price matches the stale stored close exactly
+    live_price = stale_stored_close * 1.10  # but the real live quote has moved 10% -- past the 3% threshold
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=decided_price)
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("brokers.trading212._live_current_price", return_value=live_price)
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="SKIPPED_PRICE_MOVED")
+    assert len(rows) == 1
+
+
+def test_live_current_price_returns_none_on_failure_leaves_pending(db_engine, v2_mocks, mocker):
+    """A live-quote failure must fail loud -- leave the row PENDING for
+    retry, never fall back to a stale value that would silently reproduce
+    the exact bug this fix closes."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=float(frame["close"].iloc[-1]))
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("brokers.trading212._live_current_price", return_value=None)
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1
+
+
+def test_live_current_price_uses_yfinance_fast_info_and_handles_failure(mocker):
+    """Direct unit test of _live_current_price() itself -- confirms it
+    reads yfinance's fast_info.last_price (not get_price_df()), returns
+    None on a non-positive/missing price, and never raises on a genuine
+    fetch failure."""
+    from brokers.trading212 import _live_current_price
+
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.fast_info.last_price = 123.45
+    mocker.patch("yfinance.Ticker", return_value=mock_ticker)
+    assert _live_current_price("AAPL") == 123.45
+
+    mock_ticker.fast_info.last_price = None
+    assert _live_current_price("AAPL") is None
+
+    mock_ticker.fast_info.last_price = 0.0
+    assert _live_current_price("AAPL") is None
+
+    mocker.patch("yfinance.Ticker", side_effect=RuntimeError("network down"))
+    assert _live_current_price("AAPL") is None  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1357,18 +1454,22 @@ def test_exit_loop_one_position_exception_does_not_stop_the_rest(db_engine, v2_m
 def test_submission_one_row_exception_does_not_stop_the_rest(db_engine, v2_mocks, mocker):
     """A failure evaluating one pending row (e.g. the price-sanity lookup
     blowing up) must not stop the rest of the pending queue from being
-    submitted."""
+    submitted. The simulated failure targets _live_current_price()
+    (2026-08-02) -- the sanity check's real current-price source now,
+    since get_price_df() is no longer part of that check's own code path
+    at all."""
     from brokers.trading212 import submit_pending_etf_orders
 
     good_frame = _bullish_frame()
     good_close = float(good_frame["close"].iloc[-1])
 
-    def _fake_get_price_df(ticker, days=8000):
+    def _fake_live_current_price(ticker):
         if ticker == "VOO":
             raise RuntimeError("simulated transient failure")
-        return good_frame.copy()
+        return good_close
 
-    mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+    mocker.patch("brokers.trading212.get_price_df", return_value=good_frame.copy())
+    mocker.patch("brokers.trading212._live_current_price", side_effect=_fake_live_current_price)
     _seed_pending_order(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ", is_etf=True, decided_price=good_close)
     _seed_pending_order(db_engine, ticker="XLK", t212_ticker="SXLKl_EQ", is_etf=True, decided_price=good_close)
 

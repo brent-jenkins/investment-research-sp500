@@ -6597,6 +6597,129 @@ Deployed 2026-08-02 (commit range to follow in the deploy log); production
 DB backed up first per this session's standing discipline, even though
 this change touches scheduling logic only, no data.
 
+### Stock submission delayed past NYSE open — and a real sanity-check bug found investigating it (2026-08-02)
+
+**Original goal**: move `stock_order_submission` from 13:30 UTC (right at
+NYSE's regular open) to 30-60 minutes later, on the theory that the
+existing `price_sanity_threshold_pct` check would then see a calmer,
+more settled price instead of the opening-minute scramble. Investigating
+this surfaced a materially bigger, unrelated finding first.
+
+**Part A — intraday data feasibility, checked directly, not assumed.**
+Every backtest in this project runs on daily bars; testing a submission-
+timing effect needs a real intraday price at a specific point in the
+session, which daily data can't provide. Tested live against Yahoo's
+actual API responses (not vendor docs, not memory): `1m` interval data
+is capped at ~8 days of real history; `5m`/`15m`/`30m` are capped at
+~60 days (Yahoo's own error message: *"The requested range must be
+within the last 60 days"*); `60m`/`1h` reaches back ~730 days (2 years —
+Yahoo's own error message again confirms this exact boundary). Daily
+bars and above have full history, as already used throughout this
+project. **Conclusion**: no interval gives full 2007-2026 depth for this
+question — the honest, best-available option is 60-minute bars over the
+real 2-year window, which trades granularity (can only checkpoint at
++60min, not anywhere in the 30-60 min band) for statistical power (2
+years of real, varied market conditions vs. 60 days of whatever the
+market happens to be doing right now).
+
+**The comparison, run for real** (39 tickers — this project's own
+curated-40 candidate pool, minus GOLD — full available 2-year 60m-bar
+history, 19,422 real ticker-days): a surprising, load-bearing result.
+Opening-hour volatility was confirmed as expected — the first 60-minute
+bar's own intraday range averages **2.39x** a later, settled hour's. But
+distance-from-prior-close, which is what `price_sanity_threshold_pct`
+actually measures, went the *opposite* direction from the original
+premise: stdev of %-move-from-prior-close was **higher** at +60min
+(1.83%) than at the literal open (1.42%), and the 3%-threshold trip rate
+roughly **doubled** (3.71% of ticker-days at open vs. 7.29% at +60min).
+Likely mechanism: the NYSE opening auction is a single-shot clearing
+price that already aggregates all overnight order flow efficiently; the
+following hour is often *trending* continuation (an "opening range
+breakout" effect, well-documented market microstructure, and arguably
+expected on a *momentum* system specifically), not mean reversion back
+toward the prior close. **A 60-minute delay does not give the sanity
+check a "calmer" price by the metric that check actually uses** — it
+gives it a price that has, on average, moved further from the anchor.
+
+**The bigger finding, verifying the above against the real code.**
+Investigating this second-order effect required checking exactly what
+the sanity check compares `decided_price` against — `_latest_close()`,
+which called `get_price_df()`, a pure read of the STORED `price_data`
+table. That table is only ever written by `pull_incremental()`, only
+ever called from `_eod_job()`, once daily at 21:30 UTC. Stock submission
+ran at 13:30 UTC the *next* day — hours *before* that day's own EOD
+pull. **The sanity check was structurally comparing a value against
+itself**: `_latest_close()` at 13:30 UTC could only ever return the
+exact same close `decided_price` was already built from the night
+before, for *any* submission time on that day, not just 13:30. Delaying
+submission wouldn't have let the check see a fresher price under any
+delay length — the check had no live price source feeding it at all.
+This is why the empirical study above (using real yfinance intraday
+data) was necessary in the first place: it was testing what a genuinely
+live check *would* see, not what the actual shipped code *was* seeing,
+which turned out to be nothing new regardless of timing.
+
+**Fixed — `_live_current_price()` replaces `_latest_close()`.** Uses
+`yfinance`'s `Ticker(ticker).fast_info.last_price` — a real, current
+quote (subject to Yahoo's standard free-tier delay, typically ~15-20
+minutes, still genuinely intraday rather than up to a full day stale).
+Verified live before adopting: ~0.2-0.4s per ticker, no rate-limit
+errors across repeated calls. T212's own API was considered and
+rejected, same reasoning the original function already had:
+`get_instruments()` carries no price field for any instrument at all
+(confirmed live, see the 2026-07-31 ETF pricing-bug fix), and
+`get_positions()`'s live price only exists for something already held,
+which a not-yet-submitted `PENDING` order by definition isn't. "Fail
+loud, don't guess" preserved exactly — returns `None` on any failure,
+which the caller already treats as "leave pending, retry next window"
+rather than silently falling back to a stale value that would
+reproduce the exact bug this closes.
+
+**Part B — the delay, implemented on the surviving rationale.** The
+"informs a stale check" framing doesn't hold (the check was inert
+regardless of timing, and is now fixed independent of timing too) — but
+the **fill-timing** rationale survives on its own: a real market order
+placed literally at the open executes against a price band with 2.39x
+the range of a later, settled hour, a genuine, empirically-confirmed
+exposure regardless of what the sanity check does or doesn't see.
+`stock_order_submission` moved from 13:30 UTC to **14:30 UTC** — exactly
+60 minutes, not a shorter point in the 30-60 minute range, chosen
+specifically because that's the exact checkpoint the real data measured
+(the first 60-minute bar's own close), not a padded guess partway
+through it. `day_of_week="mon-fri"` on this job's trigger is unchanged —
+out of scope for this task (separate from the market-calendar-awareness
+work done for `scheduled_eod`/`membership_refresh` above).
+
+**What this delay does and doesn't claim, stated plainly.** It reduces
+exposure to the opening hour's wider price *range* (a real, measured
+effect). It does **not** mean the eventual fill lands closer to the EOD
+decision price on average — the same data that validated the range
+effect showed the opposite for distance-from-close. These are two
+different questions, and only the first one is what this change
+addresses.
+
+Covered by: 2 updated scheduler registration tests (14:30 UTC, not
+13:30); 3 new/updated `_live_current_price()` tests in
+`tests/test_execution.py` (returns the real `fast_info.last_price`,
+returns `None` cleanly on a non-positive price or a genuine fetch
+failure without raising) plus a decisive regression test
+(`test_sanity_check_uses_live_price_not_stale_stored_close` — stored
+`price_data` close set to a value that would NOT trip the check if
+still (incorrectly) used, live quote set to a value that WOULD, check
+must follow the live quote); the shared `_mock_price_data()` test helper
+extended to also mock `_live_current_price()` by default (preserving
+prior test semantics for every caller that doesn't specifically care
+about the sanity check, since `_latest_close()` and `get_price_df()`'s
+last close used to be identical) — this alone fixed 9 pre-existing
+tests that started making real, unmocked network calls the moment the
+underlying function changed; 2 more individual tests
+(`test_submission_one_row_exception_does_not_stop_the_rest`,
+`test_comprehensive_multiday_multiticker_replay_matches_backtest_trade_sequence`)
+needed their own explicit `_live_current_price` mocks since they don't
+route through the shared helper. Full suite: 446 passing.
+
+Deployed 2026-08-02; production DB backed up first.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

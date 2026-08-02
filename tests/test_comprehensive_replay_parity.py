@@ -271,6 +271,18 @@ def _replay_frame(mocker, db_engine, harness: _ReplayHarness, config: dict,
             return _day_frames.get(ticker, _day_frames["^GSPC"]).copy()
         mocker.patch.object(t212mod, "get_price_df", side_effect=_fake_get_price_df)
 
+        # 2026-08-02: the submission-time sanity check's current-price
+        # source moved from get_price_df() to a genuine live yfinance
+        # quote (_live_current_price()) -- this synthetic-data harness has
+        # no real yfinance ticker to query, so it must be mocked here too,
+        # matching the exact value get_price_df() itself would have
+        # returned (today's close) to preserve this test's original
+        # "current price == today's synthetic close" intent unchanged.
+        def _fake_live_current_price(ticker, _day_frames=day_frames):
+            frame = _day_frames.get(ticker, _day_frames["^GSPC"])
+            return float(frame.iloc[-1]["close"])
+        mocker.patch.object(t212mod, "_live_current_price", side_effect=_fake_live_current_price)
+
         today_prices = {t212_by_ticker[t]: float(f.iloc[day_idx]["close"]) for t, f in frames.items()}
         harness.set_day_prices(today_prices)
 

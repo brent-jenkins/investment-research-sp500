@@ -440,11 +440,12 @@ def test_scheduler_registers_membership_refresh_job(monkeypatch):
 
 
 def test_scheduler_registers_stock_submission_job_not_etf(monkeypatch):
-    """start_scheduler() must register stock_order_submission at 13:30 UTC
-    (NYSE open), weekdays only. etf_order_submission must NOT be
-    registered at all -- removed entirely 2026-08-02 alongside the rest of
-    the ETF sleeve (see CLAUDE.md's "ETF sleeve removed from live
-    trading" section), not merely left disabled."""
+    """start_scheduler() must register stock_order_submission at 14:30 UTC
+    (60 minutes after NYSE's 13:30 UTC open -- moved 2026-08-02, see
+    CLAUDE.md's dedicated section for the empirical basis), weekdays only.
+    etf_order_submission must NOT be registered at all -- removed entirely
+    2026-08-02 alongside the rest of the ETF sleeve (see CLAUDE.md's "ETF
+    sleeve removed from live trading" section), not merely left disabled."""
     fake_config = {
         "scheduler": {
             "timezone": "UTC",
@@ -471,7 +472,7 @@ def test_scheduler_registers_stock_submission_job_not_etf(monkeypatch):
         assert stock_job is not None
         assert stock_job.func is scheduler._stock_order_submission_job
         assert field("stock_order_submission", "day_of_week") == "mon-fri"
-        assert field("stock_order_submission", "hour") == "13"
+        assert field("stock_order_submission", "hour") == "14"
         assert field("stock_order_submission", "minute") == "30"
     finally:
         scheduler.stop_scheduler()

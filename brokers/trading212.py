@@ -1066,26 +1066,51 @@ def _resolve_pending(row_id: int, status: str, note: Optional[str] = None) -> No
         logger.warning("Failed to resolve pending_orders row %s: %s", row_id, exc)
 
 
-def _latest_close(ticker: str) -> Optional[float]:
-    """Most recently stored close for *ticker* — used by the submission-time
-    price-sanity check. Deliberately reuses the same price_data close series
-    the momentum signal itself is built from (not a T212 quote): T212 has no
-    live quote for an unheld UCITS ETF at all (see get_instrument_price_gbp's
-    docstring), and the UCITS wrapper's own price is a different, unrelated
-    number from the underlying US ticker's price anyway (see the 2026-07-31
-    ETF pricing-bug fix) — so a T212-side comparison would either be
-    unavailable or comparing the wrong thing. The research ticker's own
-    close is what decided_price was built from, so it's the correct
-    apples-to-apples comparison for "has this moved a lot since the decision
-    was made."
+def _live_current_price(ticker: str) -> Optional[float]:
+    """A genuinely live/current price for *ticker* — used by the
+    submission-time price-sanity check.
+
+    Fixed 2026-08-02, replacing the original `_latest_close()`, which read
+    `get_price_df()` — the STORED `price_data` table — under the name
+    "latest_close". That table is only ever written by `pull_incremental()`,
+    which is only ever called from `_eod_job()`, once daily at 21:30 UTC.
+    Stock submission runs at 13:30 UTC the *next* day — hours *before* that
+    day's own EOD pull — so the old function could only ever return the
+    exact same close `decided_price` was already built from the night
+    before. The sanity check was comparing a value against itself: it
+    could not detect a real intraday price move at 13:30 UTC, at any later
+    time the same day, or under any submission-timing change at all,
+    since there was no fresher price source feeding it. Found investigating
+    whether delaying submission 30-60 minutes would let this check see a
+    "calmer, more settled" price — it wouldn't have, regardless of timing,
+    because the check was structurally inert to begin with. See CLAUDE.md's
+    dedicated section for the full investigation.
+
+    Uses yfinance's `fast_info.last_price` — a real, current quote (subject
+    to Yahoo's standard free-tier delay, typically ~15-20 minutes, still a
+    genuine intraday read rather than a value that's already up to a full
+    day stale) — confirmed live before adopting it: ~0.2-0.4s per ticker,
+    no rate-limit errors observed across repeated calls. T212's own API was
+    considered and rejected, same as the original function's reasoning:
+    get_instruments() carries no price field for any instrument (confirmed
+    live — see the 2026-07-31 ETF pricing-bug fix), and get_positions()'s
+    live currentPrice only exists for an instrument already held, which a
+    not-yet-submitted PENDING order by definition isn't.
+
+    "Fail loud, don't guess" is preserved exactly as before — returns None
+    on any failure (network error, no data, non-positive price), which the
+    caller already treats as "leave pending, retry next window" rather than
+    falling back to a stale value that would silently reproduce the exact
+    staleness bug this function exists to fix.
     """
     try:
-        df = get_price_df(ticker, days=5)
-        if df is None or df.empty:
+        import yfinance as yf  # noqa: PLC0415
+        price = yf.Ticker(ticker).fast_info.last_price
+        if price is None or price <= 0:
             return None
-        return float(df["close"].astype(float).iloc[-1])
+        return float(price)
     except Exception as exc:
-        logger.warning("_latest_close failed for %s: %s", ticker, exc)
+        logger.warning("_live_current_price failed for %s: %s", ticker, exc)
         return None
 
 
@@ -2508,13 +2533,16 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 continue
 
             # Price-sanity check — compare the price at decide time against
-            # the latest available price now. Fail loud, don't guess: if the
-            # ticker has moved beyond threshold_pct since the decision was
-            # made, skip and log clearly rather than execute on a stale
-            # decision (same principle as the 2026-07-31 pricing-bug fix —
-            # see CLAUDE.md).
+            # a genuinely live price now (2026-08-02 fix — see
+            # _live_current_price()'s own docstring: the check used to
+            # compare against the same stale value decided_price was
+            # already built from, structurally unable to detect any real
+            # intraday move). Fail loud, don't guess: if the ticker has
+            # moved beyond threshold_pct since the decision was made, skip
+            # and log clearly rather than execute on a stale decision (same
+            # principle as the 2026-07-31 pricing-bug fix — see CLAUDE.md).
             decided_price = row["decided_price"]
-            current_price = _latest_close(ticker)
+            current_price = _live_current_price(ticker)
             if current_price is None or current_price <= 0:
                 logger.warning(
                     "%s: no current price available at submission time — leaving pending, will retry.",

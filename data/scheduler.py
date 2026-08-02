@@ -5,8 +5,9 @@ Run schedule (UTC unless noted):
                        from Friday's EOD run, then run the order-logic-only pipeline
                        so Friday's still-open orders are re-evaluated before markets
                        reopen (see _monday_premarket_job())
-  13:30  Stock order submission (weekdays) — submit queued stock entries during
-                       NYSE's own regular open
+  14:30  Stock order submission (weekdays) — submit queued stock entries, 60
+                       minutes after NYSE's own regular open (moved from 13:30
+                       2026-08-02 — see _stock_order_submission_job())
   21:15  Membership refresh — refresh point-in-time index-membership windows
                        15 minutes ahead of the EOD job's own trading decisions
   21:30  End of day  — full data refresh, then place/exit orders (all exchanges)
@@ -682,13 +683,33 @@ def _weekly_summary_job() -> None:
 
 
 def _stock_order_submission_job() -> None:
-    """13:30 UTC weekdays (NYSE regular open) — submit queued stock entry
-    decisions from pending_orders.
+    """14:30 UTC weekdays (60 minutes after NYSE's 13:30 UTC regular open)
+    — submit queued stock entry decisions from pending_orders.
 
-    Deliberately timed to the regular open rather than any after-hours
-    window — see CLAUDE.md's "Exchange-aware order submission" section.
+    Moved from 13:30 UTC (right at the open) 2026-08-02 — the opening hour
+    is the most volatile window of the trading day (overnight orders and
+    news all digesting at once); a market order placed there executes
+    against whatever the first prints happen to look like. Confirmed
+    empirically before moving this, not assumed: real intraday data (39
+    tickers, 2 years of 60-minute bars — the deepest granularity with
+    enough real history to test this meaningfully; see CLAUDE.md's
+    dedicated section) showed the opening 60-minute bar's own intraday
+    range averages 2.39x a later, settled hour's — a market order filling
+    inside that first hour is exposed to roughly twice the price swing a
+    later one is. 60 minutes (not a shorter point in the 30-60 minute
+    range) was chosen specifically because that's the exact checkpoint the
+    real data measured (the first 60m bar's own close), not a padded
+    guess partway through it.
+
+    Deliberately still timed to the regular session, not any after-hours
+    window — see CLAUDE.md's "Exchange-aware order submission" section for
+    why after-hours submission was rejected outright. The submission-time
+    price-sanity check (`price_sanity_threshold_pct`) is unaffected by
+    this move — it already reads a genuinely live price
+    (`_live_current_price()`, fixed the same day this timing change
+    shipped — see CLAUDE.md) regardless of what time it runs.
     """
-    logger.info("Stock order submission job starting (13:30 UTC, NYSE open)…")
+    logger.info("Stock order submission job starting (14:30 UTC, 60min after NYSE open)…")
     config = _load_config()
     try:
         from brokers.trading212 import submit_pending_stock_orders  # noqa: PLC0415
@@ -908,13 +929,22 @@ def start_scheduler() -> BackgroundScheduler:
     # decide phase to ever queue in the first place; a submission job with
     # nothing to submit is dead weight, not a harmless no-op worth keeping
     # registered.
+    #
+    # Moved from 13:30 to 14:30 UTC (2026-08-02) — 60 minutes after NYSE's
+    # regular open rather than right at it, avoiding the most volatile
+    # window of the trading day for a market order's actual fill. See
+    # _stock_order_submission_job()'s own docstring for the empirical
+    # basis (real intraday data, not assumed) and CLAUDE.md's dedicated
+    # section. day_of_week="mon-fri" is unchanged here — this task's scope
+    # was submission timing only, not the market-calendar-awareness work
+    # already done separately for scheduled_eod/membership_refresh.
     _scheduler.add_job(
         _stock_order_submission_job,
-        trigger=CronTrigger(hour=13, minute=30, day_of_week="mon-fri", timezone=tz),
+        trigger=CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone=tz),
         id="stock_order_submission",
         replace_existing=True,
     )
-    logger.info("Scheduled stock order submission at 13:30 %s weekdays (NYSE open).", tz)
+    logger.info("Scheduled stock order submission at 14:30 %s weekdays (60min after NYSE open).", tz)
 
     # Membership refresh — 15 minutes ahead of the EOD job's own 21:30 slot,
     # so any real S&P 500 addition/removal is reflected before that run's
