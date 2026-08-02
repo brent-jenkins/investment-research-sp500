@@ -2222,3 +2222,147 @@ def test_record_reconciliation_event_upsert_preserves_acknowledged_status(db_eng
     )).fetchone()
     assert row[0] == "ACKNOWLEDGED"
     assert row[1] == "re-detected on a later run"
+
+
+# ---------------------------------------------------------------------------
+# Cross-mechanism check (2026-08-02): does get_unconfirmed_exits() (the
+# Dashboard page's "placed-but-unconfirmed exits" list, output/performance.py)
+# correctly stop showing a SELL once it's genuinely resolved, and does
+# reconcile_positions_with_broker() correctly defer to poll_placed_orders()
+# rather than double-flagging the same order? These are two independent
+# reads over invest_orders that never talk to each other directly -- the
+# only thing that actually clears a PLACED status is poll_placed_orders()
+# itself, so this test drives the real chain end to end rather than
+# asserting on either function in isolation.
+# ---------------------------------------------------------------------------
+
+class _Fake404(Exception):
+    class _Resp:
+        status_code = 404
+    response = _Resp()
+
+
+def test_unconfirmed_exits_clears_once_poll_resolves_it_and_reconciliation_agrees(db_engine, v2_mocks, mocker):
+    """A genuine broker-side closure (e.g. a cash-out acquisition) that
+    happens to coincide with our own outstanding PLACED SELL for the same
+    ticker: poll_placed_orders() (which runs first, every hour, ahead of
+    reconcile_positions_with_broker()) must resolve the order via its
+    direction-aware SELL fallback (no order-history match, no live
+    position -> FILLED) BEFORE reconciliation ever looks at it. Once that
+    happens, both get_unconfirmed_exits() (nothing PLACED left to show)
+    and reconcile_positions_with_broker() (the position no longer counts
+    as "believed open" once its SELL is FILLED, so no BROKER_CLOSED_NO_SELL
+    is raised either) must agree the situation is resolved -- not one
+    clearing while the other still flags it, and not both staying silent
+    forever."""
+    from brokers.trading212 import Trading212Client, poll_placed_orders, reconcile_positions_with_broker
+    from output.performance import get_unconfirmed_exits
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
+    _seed_resolutions_from_mapping(db_engine, {"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD"}})
+
+    buy_dt = datetime.utcnow() - timedelta(days=5)
+    sell_dt = datetime.utcnow() - timedelta(hours=3)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, fill_price, filled_quantity,
+                 status, is_etf, account_type, currency_code, placed_at, filled_at, created_at)
+            VALUES ('VOO', 'I50Dl_EQ', 'BUY', 10, 100.0, 10, 'FILLED', 1, 'DEMO', 'USD', :at, :at, :at)
+        """), {"at": buy_dt.isoformat()})
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, status, order_id, account_type,
+                 currency_code, placed_at, created_at)
+            VALUES ('VOO', 'I50Dl_EQ', 'SELL', 10, 'PLACED', 'order-abc', 'DEMO', 'USD', :at, :at)
+        """), {"at": sell_dt.isoformat()})
+
+    # Sanity: while still PLACED, both mechanisms must reflect that --
+    # unconfirmed, and reconciliation deliberately silent (deferring to
+    # poll, not double-flagging).
+    v2_mocks.get_positions.return_value = []  # T212 no longer shows it held
+    assert [r["ticker"] for r in get_unconfirmed_exits()] == ["VOO"]
+    summary_before = reconcile_positions_with_broker(_reconcile_config())
+    assert summary_before["broker_closed_no_sell"] == []
+
+    # Now the broker-side event resolves: get_order() 404s, order-history
+    # has no match, and no live position remains -- poll_placed_orders()'s
+    # SELL fallback marks it FILLED.
+    v2_mocks.get_order.side_effect = _Fake404()
+    v2_mocks.get_order_history.return_value = []
+    v2_mocks.get_position.return_value = None
+
+    updated = poll_placed_orders({"trading212_invest": {"enabled": True, "live": False}})
+    assert updated == 1
+
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM invest_orders WHERE order_id='order-abc'"
+    )).fetchone()
+    assert row[0] == "FILLED"
+
+    # Both consumers must now agree it's resolved.
+    assert get_unconfirmed_exits() == []
+    mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary_after = reconcile_positions_with_broker(_reconcile_config())
+    assert summary_after["broker_closed_no_sell"] == []
+    count = db_engine.connect().execute(sa_text("SELECT COUNT(*) FROM position_reconciliations")).scalar()
+    assert count == 0
+
+
+def test_unconfirmed_exits_can_linger_if_poll_never_terminal_resolves_the_order(db_engine, v2_mocks, mocker):
+    """The converse of the test above, stated as a genuine, confirmed gap
+    rather than assumed away: if T212's own GET /equity/orders/{id} never
+    404s for a stuck order (any other exception, or a non-terminal status
+    every time), poll_placed_orders()'s `except ... if http_status != 404:
+    continue` never reaches its FILLED/CANCELLED fallback -- the row stays
+    PLACED indefinitely. reconcile_positions_with_broker() deliberately
+    treats an outstanding PLACED order_id as "not a discrepancy, defer to
+    polling" (see _most_recent_sell_order_since()'s own docstring) and has
+    no independent give-up/timeout for this shape the way
+    _SELL_REJECTION_GIVE_UP_THRESHOLD does for repeated FAILED/REJECTED
+    attempts -- so neither mechanism provides a backstop here. This is not
+    a bug this task fixes; it documents the real boundary of what "both
+    mechanisms agree" actually guarantees."""
+    from brokers.trading212 import Trading212Client, poll_placed_orders, reconcile_positions_with_broker
+    from output.performance import get_unconfirmed_exits
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["VOO"])
+    _seed_resolutions_from_mapping(db_engine, {"VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD"}})
+
+    buy_dt = datetime.utcnow() - timedelta(days=5)
+    sell_dt = datetime.utcnow() - timedelta(hours=3)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, fill_price, filled_quantity,
+                 status, is_etf, account_type, currency_code, placed_at, filled_at, created_at)
+            VALUES ('VOO', 'I50Dl_EQ', 'BUY', 10, 100.0, 10, 'FILLED', 1, 'DEMO', 'USD', :at, :at, :at)
+        """), {"at": buy_dt.isoformat()})
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, status, order_id, account_type,
+                 currency_code, placed_at, created_at)
+            VALUES ('VOO', 'I50Dl_EQ', 'SELL', 10, 'PLACED', 'order-stuck', 'DEMO', 'USD', :at, :at)
+        """), {"at": sell_dt.isoformat()})
+
+    v2_mocks.get_positions.return_value = []  # T212 no longer shows it held
+    # get_order() never 404s cleanly -- some other transient error every time.
+    v2_mocks.get_order.side_effect = RuntimeError("connection reset")
+
+    updated = poll_placed_orders({"trading212_invest": {"enabled": True, "live": False}})
+    assert updated == 0  # never resolved
+
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status FROM invest_orders WHERE order_id='order-stuck'"
+    )).fetchone()
+    assert row[0] == "PLACED"  # still stuck
+
+    # Confirmed gap: it lingers on the dashboard...
+    assert [r["ticker"] for r in get_unconfirmed_exits()] == ["VOO"]
+    # ...and reconciliation offers no backstop either -- it defers to
+    # polling by design and never flags this as a discrepancy on its own.
+    mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary = reconcile_positions_with_broker(_reconcile_config())
+    assert summary["broker_closed_no_sell"] == []

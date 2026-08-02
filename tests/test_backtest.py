@@ -164,6 +164,57 @@ def test_compute_metrics_fixed_empty_trades_returns_zeros():
     assert m["cagr_pct"] == 0.0
 
 
+# ---------------------------------------------------------------------------
+# compute_peak_relative_drawdown_pct (2026-08-02) -- the genuine,
+# peak-relative counterpart to compute_metrics_fixed()'s fixed-
+# starting-capital-denominator max_drawdown_pct. See CLAUDE.md's "No market
+# gate at all" section for why the gap between the two can be large on a
+# real equity curve, not a rounding difference.
+# ---------------------------------------------------------------------------
+
+def _dd_trade(entry, exit_, pnl_gbp):
+    return {"ticker": "X", "entry_date": entry, "exit_date": exit_, "pnl_gbp": pnl_gbp}
+
+
+def test_compute_peak_relative_drawdown_pct_empty_trades_returns_none():
+    assert v2b.compute_peak_relative_drawdown_pct([], 10000) is None
+
+
+def test_compute_peak_relative_drawdown_pct_matches_hand_computed_example():
+    """£1000 start -> +£1000 (peak £2000) -> -£500 (£1500). Peak-relative:
+    (1500-2000)/2000 = -25%. Hand-computed, not just asserted against the
+    implementation's own output."""
+    trades = [
+        _dd_trade("2020-01-01", "2020-01-05", 1000.0),
+        _dd_trade("2020-01-06", "2020-01-10", -500.0),
+    ]
+    pr_dd = v2b.compute_peak_relative_drawdown_pct(trades, 1000.0)
+    assert pr_dd == pytest.approx(-25.0, abs=0.01)
+
+
+def test_compute_peak_relative_drawdown_pct_less_severe_than_fixed_denominator_after_a_gain():
+    """The whole point of this metric existing: after the account has
+    genuinely grown, a later decline reads as much milder against its own
+    peak than against the ORIGINAL starting capital -- the fixed-
+    denominator convention compute_metrics_fixed() uses can substantially
+    overstate real risk once genuine growth has occurred first."""
+    trades = [
+        {"ticker": "X", "entry_date": "2020-01-01", "exit_date": "2020-01-05",
+         "pnl_gbp": 1000.0, "pnl_pct": 1.0, "is_win": True, "holding_days": 4},
+        {"ticker": "X", "entry_date": "2020-01-06", "exit_date": "2020-01-10",
+         "pnl_gbp": -500.0, "pnl_pct": -0.25, "is_win": False, "holding_days": 4},
+    ]
+    fixed_dd = v2b.compute_metrics_fixed(trades, 1000.0)["max_drawdown_pct"]
+    peak_dd = v2b.compute_peak_relative_drawdown_pct(trades, 1000.0)
+    assert fixed_dd == pytest.approx(-50.0, abs=0.01)
+    assert abs(peak_dd) < abs(fixed_dd)
+
+
+def test_compute_peak_relative_drawdown_pct_no_decline_ever_is_zero():
+    trades = [_dd_trade("2020-01-01", "2020-01-05", 500.0)]
+    assert v2b.compute_peak_relative_drawdown_pct(trades, 1000.0) == pytest.approx(0.0, abs=0.01)
+
+
 def test_walk_forward_pf_empty_trades():
     wf = v2b.walk_forward_pf([])
     assert wf["n_total"] == 0

@@ -1504,6 +1504,38 @@ def compute_metrics_fixed(trades: list[dict], starting_capital: float) -> dict:
     return base
 
 
+def compute_peak_relative_drawdown_pct(trades: list[dict], starting_capital: float) -> Optional[float]:
+    """The genuine, peak-relative max drawdown — `(equity - running_peak) /
+    running_peak`, never the fixed-`starting_capital` denominator
+    `compute_metrics_fixed()`'s own `max_drawdown_pct` uses. Both are real,
+    correctly-computed numbers off the identical equity_curve_gbp() curve —
+    they answer different questions. The fixed-denominator convention (kept
+    unchanged everywhere else in this codebase, including
+    compute_metrics_fixed() itself, for consistency with every already-
+    published figure) answers "how far below the ORIGINAL starting capital
+    did this account ever fall" — a number that can look small even after a
+    huge intervening gain-then-crash, and can look huge on a run that grew
+    the account substantially before any real decline at all (see CLAUDE.md's
+    "No market-cap gate at all" section for a worked example: a
+    fixed-denominator -27.43% vs. a genuine peak-relative -11.19% on the
+    identical equity curve — roughly a 2.45x overstatement). Peak-relative
+    answers "how far below its OWN HIGH did this account ever fall" — the
+    number that matters for anyone who could have been invested at any
+    point along the way, not only from day one. Returns None (never 0.0,
+    which would misleadingly read as "no drawdown") when there's no usable
+    £-sized equity curve to compute from, matching equity_curve_gbp()'s own
+    empty-vs-flat distinction.
+    """
+    if not trades:
+        return None
+    ec = equity_curve_gbp(pd.DataFrame(trades), starting_capital_gbp=starting_capital)
+    if ec.empty or len(ec) < 2:
+        return None
+    peak = ec["equity_gbp"].cummax()
+    dd_pct = (ec["equity_gbp"] - peak) / peak * 100.0
+    return round(float(dd_pct.min()), 2)
+
+
 def full_metrics_fixed(trades: list[dict], starting_capital: float) -> dict:
     return {"raw": compute_metrics_fixed(trades, starting_capital),
             "ex_best": compute_metrics_fixed(ex_best_trades(trades), starting_capital)}

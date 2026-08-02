@@ -21,7 +21,7 @@ def _sample_trade(entry, exit_, pnl_pct, position_gbp=1000.0):
     }
 
 
-def _sample_result(with_trades=True):
+def _sample_result(with_trades=True, live_universe=False):
     blocks = []
     for i in range(16):
         blocks.append({
@@ -38,12 +38,28 @@ def _sample_result(with_trades=True):
         _sample_trade("2021-01-01", "2021-06-01", -0.02),
         _sample_trade("2022-01-01", "2022-06-01", 0.10),
     ] if with_trades else []
-    return {
-        "start": "2007-01-01", "end": "2026-07-30", "starting_capital_gbp": 50000.0,
-        "universe": {
+    # The dynamic-pool shape (2026-08-02) -- what analysis.validation.
+    # run_full_validation(live_universe=True) actually returns, and what
+    # main.py's Backtest page/DD report generation call always uses going
+    # forward. The old frozen-universe shape (etf_count/stock_candidate_
+    # count/...) is kept selectable via live_universe=False purely to
+    # cover generate_dd_report_pdf()'s own backward-compatible branch --
+    # nothing in production generates that shape any more.
+    universe = (
+        {
+            "as_of": "2026-07-30", "candidate_universe_count": 1204,
+            "live_eligible_count": 503, "excluded_count": 701,
+            "excluded_sample": ["ENRON", "WCOM", "LEH"],
+        } if live_universe else {
             "etf_count": 33, "stock_candidate_count": 40, "stock_member_count": 39,
             "non_members": ["GOLD"], "live_tradeable_count": 72, "total_candidates": 73,
-        },
+        }
+    )
+    return {
+        "start": "2007-01-01", "end": "2026-07-30", "starting_capital_gbp": 50000.0,
+        "universe": universe,
+        "live_universe": live_universe,
+        "backtest_convention": "continuous_walk",
         "n_tickers_with_data": 73, "n_tickers_total": 73,
         "total_trades": len(trades),
         "train": dict(metrics_shape), "test": dict(metrics_shape),
@@ -60,6 +76,7 @@ def _sample_result(with_trades=True):
         # test_generate_dd_report_pdf_position_sizing_text_reflects_engine
         # below.
         "engine_used": "compounding_default",
+        "deployment_basis": "mark_to_market" if live_universe else "cost_basis",
         "per_trade_pct": 0.05,
         "max_deployed_pct": 0.5,
         # Deliberately distinctive numbers, not values a real computation
@@ -153,3 +170,78 @@ def test_generate_dd_report_pdf_shows_gbp_growth_from_result_not_recomputed():
     assert "65,432" in text  # train S&P ending, rounded
     assert "88,765" in text  # test strategy ending, rounded
     assert "54,322" in text  # test S&P ending, rounded
+
+
+# ---------------------------------------------------------------------------
+# live_universe=True shape (2026-08-02) -- the dynamic S&P 500 candidate
+# pool, no ETFs, mark-to-market, continuous-walk. This is what production
+# ALWAYS generates going forward (see CLAUDE.md's "rebuild the
+# backtest/DD-report page to genuinely run against the current, real live
+# engine"); the old frozen-universe shape covered above remains supported
+# purely for backward compatibility, not because anything still produces it.
+# ---------------------------------------------------------------------------
+
+def test_generate_dd_report_pdf_live_universe_well_formed():
+    pdf_bytes = generate_dd_report_pdf(_sample_result(live_universe=True), {})
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert len(pdf_bytes) > 1000
+
+
+def test_generate_dd_report_pdf_live_universe_states_no_etfs():
+    pdf_bytes = generate_dd_report_pdf(_sample_result(live_universe=True), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = " ".join(p.extract_text() for p in reader.pages).replace("\n", " ")
+    assert "No ETFs" in text
+    assert "removed from live trading" in text
+
+
+def test_generate_dd_report_pdf_live_universe_states_continuous_walk():
+    pdf_bytes = generate_dd_report_pdf(_sample_result(live_universe=True), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = " ".join(p.extract_text() for p in reader.pages).replace("\n", " ")
+    assert "continuous-walk" in text.lower()
+    assert "reset-at-boundary" in text.lower()
+
+
+def test_generate_dd_report_pdf_live_universe_shows_real_membership_figures():
+    """The live-universe universe figures (candidate_universe_count/
+    live_eligible_count/excluded_count) must appear, not the old frozen
+    73-ticker/etf_count shape."""
+    pdf_bytes = generate_dd_report_pdf(_sample_result(live_universe=True), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = " ".join(p.extract_text() for p in reader.pages).replace("\n", " ")
+    assert "503" in text   # live_eligible_count
+    assert "1204" in text or "1,204" in text  # candidate_universe_count
+    assert "701" in text   # excluded_count
+
+
+def test_generate_dd_report_pdf_live_universe_states_mark_to_market():
+    pdf_bytes = generate_dd_report_pdf(_sample_result(live_universe=True), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = " ".join(p.extract_text() for p in reader.pages).replace("\n", " ")
+    assert "mark-to-market" in text.lower()
+
+
+def test_generate_dd_report_pdf_frozen_universe_states_cost_basis_not_mtm():
+    """The old, non-live-universe path must keep stating cost-basis, never
+    accidentally claim mark-to-market for figures that were never computed
+    that way."""
+    pdf_bytes = generate_dd_report_pdf(_sample_result(live_universe=False), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = " ".join(p.extract_text() for p in reader.pages).replace("\n", " ")
+    assert "cost-basis" in text.lower()
+
+
+def test_generate_dd_report_pdf_block_pass_criteria_text_matches_the_real_formula():
+    """The block-pass explanation must state the ACTUAL reconciled formula
+    (DD <= 1.5x S&P's own AND profit factor > 1.0) -- not the earlier,
+    retracted reconstruction (a per-block CAGR gate and an invented -20%
+    capital floor), which was wrong and has since been corrected in
+    analysis/validation.py:_block_passes(). See CLAUDE.md's "Block
+    pass/fail formula reconciliation" section."""
+    pdf_bytes = generate_dd_report_pdf(_sample_result(), {})
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = " ".join(p.extract_text() for p in reader.pages).replace("\n", " ")
+    assert "profit factor" in text.lower()
+    assert "greater than 1.0" in text.lower()
+    assert "20% of capital" not in text

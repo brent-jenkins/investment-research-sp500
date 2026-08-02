@@ -47,6 +47,7 @@ from analysis.decision import is_asset_class_enabled
 from analysis.backtest import (
     compute_cost_sensitivity,
     compute_metrics_fixed,
+    compute_peak_relative_drawdown_pct,
     equity_curve_gbp,
     full_metrics_fixed,
     make_blocks,
@@ -190,6 +191,40 @@ def universe_snapshot(as_of: Optional[datetime.date] = None) -> dict:
     }
 
 
+def live_universe_snapshot(as_of: Optional[datetime.date] = None) -> dict:
+    """Live, current DYNAMIC S&P 500 candidate-pool composition — what
+    run_full_validation(live_universe=True) and live order placement
+    (brokers/trading212.py:maybe_place_orders()'s own candidate_tickers)
+    both actually use. Distinct from universe_snapshot() above, which
+    reports the OLD, frozen 73-ticker (33 ETF + 40 curated stock) research
+    universe — still used, unchanged, by the three historical-reproduction
+    engine overrides (uncapped=True / portfolio_mode=True / an explicit
+    compounding-sweep call) specifically so their already-published
+    figures stay exactly reproducible. See CLAUDE.md's "ETF sleeve removed
+    from live trading" and "wire the momentum-only, full-S&P-500 selection
+    into live execution" sections.
+
+    Reports genuine S&P 500 INDEX MEMBERSHIP eligibility only — never T212
+    tradeability, a materially different, live-execution-only concern.
+    ETFs are structurally absent from this universe entirely (not merely
+    flagged off), and stock instrument mappings are resolved dynamically
+    per-ticker (brokers.trading212.resolve_and_cache_instrument()), not
+    gated by any fixed list — so there is no T212-mapping-status concept
+    left here to conflate with membership eligibility in the first place.
+    """
+    as_of = as_of or datetime.date.today()
+    all_known = universe.get_all_known_stock_tickers()
+    eligible_today = set(universe.get_live_stock_candidates(as_of=as_of))
+    excluded = sorted(all_known - eligible_today)
+    return {
+        "as_of": as_of.isoformat(),
+        "candidate_universe_count": len(all_known),
+        "live_eligible_count": len(eligible_today),
+        "excluded_count": len(excluded),
+        "excluded_sample": excluded[:10],
+    }
+
+
 def run_full_validation(
     config: dict,
     start: pd.Timestamp = VALIDATION_START,
@@ -199,6 +234,7 @@ def run_full_validation(
     max_deployed_pct_compounding: Optional[float] = None,
     uncapped: bool = False,
     mark_to_market: bool = False,
+    live_universe: bool = False,
 ) -> dict:
     """Run the complete validated battery over [start, end] and return every
     figure the Backtest page / DD report need. end defaults to today.
@@ -257,6 +293,41 @@ def run_full_validation(
     > portfolio_mode > the new config-sourced compounding default.
     `mark_to_market` layers on top of whichever of these wins, wherever it
     applies.
+
+    A fifth, also-ORTHOGONAL flag — `live_universe` (2026-08-02) — switches
+    the CANDIDATE UNIVERSE itself, independently of which engine or
+    deployment-tracking basis is selected above. `False` (the default)
+    keeps the OLD frozen 73-ticker (33 ETF + 40 curated stock)
+    `analysis.universe.ALL_TICKERS` — required for `uncapped`,
+    `portfolio_mode`, and the explicit compounding-sweep interface to keep
+    reproducing their own already-published historical figures exactly,
+    and left as every other caller's unchanged default. `True` replaces it
+    with `analysis.universe.get_live_stock_candidates(as_of=end.date())` —
+    the exact same dynamically-refreshed, point-in-time S&P 500 stock
+    membership `brokers/trading212.py:maybe_place_orders()` itself reads
+    for real order placement, with ETFs structurally absent (that function
+    already excludes them) rather than merely flag-gated to zero. Still
+    respects `trading212_invest.stock_trading_enabled` (defaults `True`) —
+    disabling it empties the candidate pool, mirroring the per-ticker gate
+    live order placement itself checks before ever considering a ticker.
+    Meant to be paired with `mark_to_market=True` (see CLAUDE.md's "rebuild
+    the backtest/DD-report page to genuinely run against the current, real
+    live engine" — the only two flags this specific pairing needs; the
+    default-sourced `per_trade_pct`/`max_total_deployed` engine selection
+    above already matches live with no further flags required). The
+    returned `"universe"` key reflects whichever universe this run
+    actually used — `live_universe_snapshot()` when `True`,
+    `universe_snapshot()` (unchanged) otherwise — so a caller never has to
+    infer which figures are behind it.
+
+    This is a CONTINUOUS-WALK run regardless of any flag above — one
+    single walk over `[start, end]` with train/test computed by
+    partitioning the resulting trades by `entry_date` after the fact, never
+    a reset-at-boundary comparison between variants. See CLAUDE.md's "Two
+    backtest conventions" section for why this distinction must always be
+    stated explicitly to a reader, not left implicit — every caller of
+    this function should surface that label itself; this function does not
+    format it into any UI string.
     """
     end = end or pd.Timestamp(datetime.date.today())
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 50000))
@@ -300,10 +371,26 @@ def run_full_validation(
     # CLAUDE.md's "Clean, independent ETF/stock trading switches" section.
     etf_trading_enabled = is_asset_class_enabled(is_etf=True, config=config)
     stock_trading_enabled = is_asset_class_enabled(is_etf=False, config=config)
-    candidate_tickers = [
-        t for t in universe.ALL_TICKERS
-        if is_asset_class_enabled(is_etf=t in universe.ETF_TICKERS, config=config)
-    ]
+    if live_universe:
+        # The genuinely dynamic, live-execution candidate pool (2026-08-02)
+        # — ETFs are structurally absent from get_live_stock_candidates()
+        # itself (not merely flag-gated to zero, matching how live order
+        # placement's own candidate_tickers is built — see
+        # brokers/trading212.py:maybe_place_orders()), so etf_trading_
+        # enabled has no candidate-universe effect here; only
+        # stock_trading_enabled (checked once, since every ticker in this
+        # pool is is_etf=False by construction — a per-ticker call to
+        # is_asset_class_enabled() would always resolve identically) can
+        # empty the pool, mirroring the per-ticker gate live's own decide
+        # phase checks before ever considering a ticker.
+        candidate_tickers = (
+            universe.get_live_stock_candidates(as_of=end.date()) if stock_trading_enabled else []
+        )
+    else:
+        candidate_tickers = [
+            t for t in universe.ALL_TICKERS
+            if is_asset_class_enabled(is_etf=t in universe.ETF_TICKERS, config=config)
+        ]
 
     caches = []
     for ticker in candidate_tickers:
@@ -339,6 +426,21 @@ def run_full_validation(
     train_metrics = compute_metrics_fixed(train_trades, starting_capital)
     test_metrics = compute_metrics_fixed(test_trades, starting_capital)
     full_metrics = full_metrics_fixed(all_trades, starting_capital)
+
+    # Genuine peak-relative drawdown, alongside (never replacing) the
+    # fixed-starting-capital-denominator max_drawdown_pct already inside
+    # train_metrics/test_metrics/full_metrics above -- the two answer
+    # different questions and both must stay visible, per this project's
+    # own standing "state the convention explicitly" discipline (see
+    # CLAUDE.md's "No market-cap gate at all" section for why the gap
+    # between them can be large, not a rounding difference). Computed
+    # unconditionally, not only for live_universe runs -- any run with a
+    # real equity curve can show this same distortion.
+    peak_relative_drawdown = {
+        "train": compute_peak_relative_drawdown_pct(train_trades, starting_capital),
+        "test": compute_peak_relative_drawdown_pct(test_trades, starting_capital),
+        "full": compute_peak_relative_drawdown_pct(all_trades, starting_capital),
+    }
 
     train_sp_cagr, train_sp_dd = _cagr_dd_for_series(gspc_close_full, start, VALIDATION_TRAIN_TEST_SPLIT)
     test_sp_cagr, test_sp_dd = _cagr_dd_for_series(gspc_close_full, VALIDATION_TRAIN_TEST_SPLIT, end)
@@ -386,7 +488,13 @@ def run_full_validation(
         ),
         "per_trade_pct": effective_per_trade_pct,
         "max_deployed_pct": effective_max_deployed_pct,
-        "universe": universe_snapshot(),
+        "live_universe": live_universe,
+        "backtest_convention": "continuous_walk",
+        # Reflects whichever universe THIS run actually used -- the
+        # dynamic live pool when live_universe=True, the frozen 73-ticker
+        # research universe otherwise -- so a caller never has to infer
+        # which figures are behind the returned counts.
+        "universe": live_universe_snapshot(as_of=end.date()) if live_universe else universe_snapshot(),
         # n_tickers_total reflects the CANDIDATE pool actually attempted for
         # this run (after the etf_trading_enabled/stock_trading_enabled
         # gate below) -- equal to len(universe.ALL_TICKERS) whenever both
@@ -405,5 +513,6 @@ def run_full_validation(
         "walk_forward": wf,
         "cost_sensitivity": cost_sensitivity,
         "gbp_growth": gbp_growth,
+        "peak_relative_drawdown": peak_relative_drawdown,
         "trades": all_trades,
     }

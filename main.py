@@ -1825,36 +1825,62 @@ def _render_backtest_page(config: dict) -> None:
     blocks each checked against the real S&P 500 over the same window, a
     concentration check (results excluding the single best trade), and
     transaction-cost sensitivity. See analysis/validation.py for the exact
-    methodology and CLAUDE.md's "Live pricing bug, exception isolation, and
-    ETF mapping audit" / "V2 architecture" sections for validation history.
+    methodology and CLAUDE.md's "rebuild the backtest/DD-report page to
+    genuinely run against the current, real live engine" (2026-08-02) and
+    "V2 architecture" sections for validation history.
+
+    Genuinely runs the current, real live engine (2026-08-02) —
+    live_universe=True (the full, dynamically-refreshed S&P 500 stock
+    candidate pool get_live_stock_candidates() itself uses, no ETFs —
+    the sleeve was removed from live trading entirely) and
+    mark_to_market=True (simulate_portfolio_compounding_mtm(), the engine
+    confirmed to genuinely match what live order placement's own
+    account-value reads do). Both flags are passed explicitly, matching
+    the same explicit-not-implicit convention already established for
+    engine_used/deployment_basis elsewhere in this module.
     """
-    from analysis.validation import universe_snapshot
+    from analysis.validation import live_universe_snapshot
 
     _render_page_wordmark("Backtest")
     st.markdown("## Backtest")
     st.caption(
-        "12-month momentum signal, point-in-time-gated universe, and the "
-        "≥7% single-day crisis override — the same engine that drives live "
-        "order placement (analysis/backtest.py), run over its full validated "
-        "2007-present history."
+        "12-month momentum signal, the full dynamically-refreshed S&P 500 stock "
+        "universe (no ETFs — removed from live trading entirely), and the "
+        "≥7% single-day crisis override — the same engine and the same live "
+        "candidate pool that drive real order placement (brokers/trading212.py), "
+        "run over its full validated 2007-present history."
+    )
+    st.caption(
+        "📈 **Continuous walk** — one single, unbroken simulated account runs start to end with no "
+        "balance reset at the train/test boundary. This reports what one real, continuously-running "
+        "account would actually have returned since inception — not a reset-at-boundary comparison "
+        "between variants (see CLAUDE.md's \"Two backtest conventions\" section)."
     )
 
-    snap = universe_snapshot()
+    snap = live_universe_snapshot()
     uc1, uc2, uc3 = st.columns(3)
-    uc1.metric("Candidate Universe", f"{snap['total_candidates']}",
-               f"{snap['etf_count']} ETFs + {snap['stock_candidate_count']} stocks")
-    uc2.metric("Live-Eligible Today", f"{snap['live_tradeable_count']}",
-               f"{snap['stock_member_count']}/{snap['stock_candidate_count']} stocks currently S&P members")
-    uc3.metric("Excluded Today", str(len(snap["non_members"])),
-               ", ".join(snap["non_members"]) or "none")
+    uc1.metric("Candidate Universe", f"{snap['candidate_universe_count']}",
+               "distinct tickers ever discovered as genuine S&P 500 constituents")
+    uc2.metric("Live-Eligible Today", f"{snap['live_eligible_count']}",
+               "genuine S&P 500 members right now — no ETFs, index membership only")
+    uc3.metric("Excluded Today", str(snap["excluded_count"]),
+               ("e.g. " + ", ".join(snap["excluded_sample"])) if snap["excluded_sample"] else "none")
+    st.caption(
+        "These figures are genuine S&P 500 index membership eligibility — the same universe the "
+        "backtest itself simulates — never T212-specific tradeability or mapping status, which is a "
+        "separate, live-execution-only concern."
+    )
 
     st.divider()
 
     if st.button("Run Full Validated Battery (2007–present)", type="primary", key="run_full_validation"):
-        with st.spinner("Running the full battery across all tracked tickers — this can take a minute or two…"):
+        with st.spinner(
+            "Running the full battery across every live S&P 500 candidate (~500 tickers) — this "
+            "typically takes around 12 minutes at this universe size…"
+        ):
             try:
                 from analysis.validation import run_full_validation
-                result = run_full_validation(config)
+                result = run_full_validation(config, live_universe=True, mark_to_market=True)
                 st.session_state["_validation_result"] = result
                 st.session_state["_validation_result_ts"] = datetime.utcnow().isoformat()
             except Exception as exc:
@@ -1873,7 +1899,8 @@ def _render_backtest_page(config: dict) -> None:
     if _ts:
         st.caption(f"Last run: {_fmt_uk(datetime.fromisoformat(_ts))} · "
                    f"{result['start']} → {result['end']} · "
-                   f"{result['n_tickers_with_data']}/{result['n_tickers_total']} tickers had usable data")
+                   f"{result['n_tickers_with_data']}/{result['n_tickers_total']} tickers had usable data · "
+                   f"engine: {result.get('engine_used')} ({result.get('deployment_basis')})")
 
     st.markdown("### Download Due Diligence Report")
     if st.button("Generate Due Diligence Report (PDF)", key="gen_dd_report"):
@@ -1895,10 +1922,11 @@ def _render_backtest_page(config: dict) -> None:
 
     st.divider()
     st.markdown("### Train / Test Split vs S&P 500")
+    prd = result.get("peak_relative_drawdown", {})
     tc1, tc2 = st.columns(2)
-    for col, label, m, sp in (
-        (tc1, "TRAIN (2007–2019)", result["train"], result.get("train_sp", {})),
-        (tc2, "TEST (2020–2026)", result["test"], result.get("test_sp", {})),
+    for col, label, m, sp, prd_key in (
+        (tc1, "TRAIN (2007–2019)", result["train"], result.get("train_sp", {}), "train"),
+        (tc2, "TEST (2020–2026)", result["test"], result.get("test_sp", {}), "test"),
     ):
         with col:
             st.markdown(f"**{label}**")
@@ -1906,9 +1934,21 @@ def _render_backtest_page(config: dict) -> None:
             r1.metric("Trades", m.get("total_trades", 0))
             r2.metric("CAGR", f"{m.get('cagr_pct', 0):+.2f}%",
                       f"vs S&P {sp.get('cagr_pct', 0):+.2f}%" if sp.get("cagr_pct") is not None else None)
-            r3.metric("Max DD", f"{m.get('max_drawdown_pct', 0):.2f}%",
+            r3.metric("Max DD (vs starting capital)", f"{m.get('max_drawdown_pct', 0):.2f}%",
                       f"vs S&P {sp.get('max_drawdown_pct', 0):.2f}%" if sp.get("max_drawdown_pct") is not None else None)
             r4.metric("Win Rate", f"{m.get('win_rate', 0) * 100:.1f}%")
+            _prd_val = prd.get(prd_key)
+            if _prd_val is not None:
+                st.metric("Max DD (genuine peak-relative)", f"{_prd_val:.2f}%")
+    st.caption(
+        "⚠️ \"Max DD (vs starting capital)\" is the fixed-denominator convention used throughout this "
+        "report — how far below the ORIGINAL £50,000 starting balance the account ever fell. On a run "
+        "that grew substantially before any later decline, this can read far worse than the genuine "
+        "risk an investor holding at any point along the way actually experienced — \"Max DD (genuine "
+        "peak-relative)\", shown above whenever it differs, is how far the account ever fell below its "
+        "OWN prior high. Both are real, correctly-computed numbers off the identical equity curve — "
+        "they answer different questions (see CLAUDE.md's \"No market-cap gate at all\" section)."
+    )
 
     gg = result.get("gbp_growth", {})
     if gg:
@@ -1936,9 +1976,11 @@ def _render_backtest_page(config: dict) -> None:
     with fc1:
         st.markdown("**All trades**")
         raw = result["full_raw"]
+        _full_prd = prd.get("full")
+        _prd_suffix = f" (peak-relative: {_full_prd:.2f}%)" if _full_prd is not None else ""
         st.caption(
             f"{raw.get('total_trades', 0)} trades · CAGR {raw.get('cagr_pct', 0):+.2f}% · "
-            f"Max DD {raw.get('max_drawdown_pct', 0):.2f}% · Win rate {raw.get('win_rate', 0) * 100:.1f}% · "
+            f"Max DD {raw.get('max_drawdown_pct', 0):.2f}%{_prd_suffix} · Win rate {raw.get('win_rate', 0) * 100:.1f}% · "
             f"Profit factor {raw.get('profit_factor', 0):.2f}"
         )
     with fc2:
@@ -1957,9 +1999,10 @@ def _render_backtest_page(config: dict) -> None:
     st.divider()
     st.markdown("### 16 Historical Blocks vs S&P 500")
     st.caption(
-        f"**{result['n_blocks_pass']}/{result['n_blocks_total']} blocks pass** — strategy CAGR ≥ S&P 500's own "
-        "over the same window, max drawdown no worse than 1.5× the S&P's own, and no block loses more than "
-        "20% of starting capital."
+        f"**{result['n_blocks_pass']}/{result['n_blocks_total']} blocks pass** — strategy max drawdown no "
+        "worse than 1.5× the S&P's own over the same window, AND strategy profit factor greater than "
+        "1.0 over the same window (the reconciled formula — see CLAUDE.md's \"Block pass/fail formula "
+        "reconciliation\" section; there is no per-block CAGR-vs-S&P gate)."
     )
     blocks_df = pd.DataFrame(result["blocks"])
     blocks_df["passed"] = blocks_df["passed"].map(lambda b: "PASS" if b else "FAIL")

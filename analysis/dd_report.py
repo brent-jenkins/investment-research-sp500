@@ -85,32 +85,10 @@ _KNOWN_LIMITATIONS = [
     ),
     (
         "US concentration is deliberate, not an oversight.",
-        "The validated universe (33 broad ETFs + 40 US large-cap stock candidates) is "
-        "US-and-broad-market concentrated by design — this was the configuration that passed "
-        "validation, and no attempt has yet been made to build or validate a genuinely "
-        "geographically diversified version.",
-    ),
-    (
-        "ETF sleeve execution occurs on a different exchange, different hours, than the signal "
-        "is computed against.",
-        "The 33 ETF instruments in the tradeable universe are UCITS-wrapped funds, listed "
-        "exclusively on the London Stock Exchange (07:00–15:30 UTC) — no genuine US-domiciled ETF "
-        "listing is accessible through the platform, a UK/EU securities-law restriction (Overseas "
-        "Funds Regime equivalence not extended to US-registered funds) applying equally to every "
-        "UK-regulated retail broker, not a limitation specific to this platform. The momentum "
-        "signal and crisis override are both computed from US market closing prices, but the "
-        "resulting order can only execute once LSE's own session next opens — a minimum gap of "
-        "roughly 9.5 hours on an ordinary weekday, extending to roughly 57.5 hours across a "
-        "weekend. The backtest's execution model assumes a same-day, zero-lag fill at the "
-        "computed closing price; live ETF execution cannot match this, since the real fill occurs "
-        "at whatever price LSE's next session opens at. Order submission is timed to each "
-        "instrument's own real trading session with a price-deviation check before executing, as "
-        "the best achievable mitigation — this reduces uncertainty and avoids executing into a "
-        "clearly-stale price, but does not close the underlying timing gap, which is a "
-        "structural, permanent property of UK retail access to US-domiciled ETFs, not an "
-        "engineering problem awaiting a better fix. The individual stock sleeve is not affected "
-        "by this specific constraint — single-name US equities are directly NYSE-listed and not "
-        "subject to the same fund-marketing restriction.",
+        "The validated universe is US-large-cap-stock concentrated by design (the full, "
+        "dynamically-refreshed S&amp;P 500 constituent list — see Methodology's Universe section) "
+        "— this was the configuration that passed validation, and no attempt has yet been made to "
+        "build or validate a genuinely geographically diversified version.",
     ),
 ]
 
@@ -189,19 +167,43 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
     # --- Executive Summary ---
     story.append(Paragraph("Executive Summary", styles["H1"]))
     uni = result["universe"]
+    is_live_universe = bool(result.get("live_universe"))
     story.append(Paragraph(
         "The system trades a single signal — trailing 12-month total return per ticker, long when "
         "positive and flat otherwise — across a point-in-time-gated universe of US large-cap stocks "
-        "(genuine historical S&amp;P 500 membership windows, no discretionary exclusions) and broad market "
-        "ETFs, with a rare-firing crisis override that force-exits all positions and blocks new entries "
-        "on a ≥7% single-day S&amp;P 500 decline. This replaced an earlier six-module regime-weighted "
-        "system after ten rounds of testing found no validated configuration of that architecture "
-        "(see CLAUDE.md's \"V2 architecture — phased rebuild\" section for the full history).",
+        "(genuine historical S&amp;P 500 membership windows, no discretionary exclusions), with a "
+        "rare-firing crisis override that force-exits all positions and blocks new entries on a ≥7% "
+        "single-day S&amp;P 500 decline. This replaced an earlier six-module regime-weighted system "
+        "after ten rounds of testing found no validated configuration of that architecture (see "
+        "CLAUDE.md's \"V2 architecture — phased rebuild\" section for the full history). "
+        "<b>No ETFs are traded</b> — the ETF sleeve was removed from live trading entirely on "
+        "2026-08-02, after a fair-competition study found its prior footprint was driven almost "
+        "entirely by guaranteed scheduling priority rather than momentum merit (see CLAUDE.md's "
+        "\"ETF sleeve removed from live trading\" section); every figure in this report reflects "
+        "that removal, not a legacy configuration.",
+        styles["BodyText"],
+    ))
+    story.append(Spacer(1, 0.15 * cm))
+    story.append(Paragraph(
+        "<b>This is a continuous-walk report, not a reset-at-boundary comparison.</b> One single, "
+        "unbroken simulated account runs from the start date straight through to the end date with "
+        "no balance reset at the train/test boundary — the train and test figures below are the same "
+        "one account's results, partitioned by trade entry date after the fact, reporting what this "
+        "one real, continuously-running strategy would actually have returned since inception. This "
+        "is the correct convention for that question — a reset-at-boundary comparison exists to "
+        "compare competing variants against each other and is deliberately not used here (see "
+        "CLAUDE.md's \"Two backtest conventions\" section).",
         styles["BodyText"],
     ))
     story.append(Spacer(1, 0.3 * cm))
     gg = result.get("gbp_growth", {})
     cap = gg.get("starting_capital_gbp", 0)
+    prd = result.get("peak_relative_drawdown", {})
+    _train_prd, _test_prd = prd.get("train"), prd.get("test")
+    _train_dd_cell = f"{result['train'].get('max_drawdown_pct', 0):.2f}%" + (
+        f" ({_train_prd:.2f}% peak-relative)" if _train_prd is not None else "")
+    _test_dd_cell = f"{result['test'].get('max_drawdown_pct', 0):.2f}%" + (
+        f" ({_test_prd:.2f}% peak-relative)" if _test_prd is not None else "")
     exec_rows = [
         ["Metric", "Train (2007–2019)", "Test (2020–present)"],
         ["Trades", str(result["train"].get("total_trades", 0)), str(result["test"].get("total_trades", 0))],
@@ -209,7 +211,7 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
         ["S&amp;P 500 CAGR (same window)",
          f"{result.get('train_sp', {}).get('cagr_pct', 0) or 0:+.2f}%",
          f"{result.get('test_sp', {}).get('cagr_pct', 0) or 0:+.2f}%"],
-        ["Max Drawdown", f"{result['train'].get('max_drawdown_pct', 0):.2f}%", f"{result['test'].get('max_drawdown_pct', 0):.2f}%"],
+        ["Max Drawdown (vs starting capital; peak-relative)", _train_dd_cell, _test_dd_cell],
         ["Win Rate", f"{result['train'].get('win_rate', 0) * 100:.1f}%", f"{result['test'].get('win_rate', 0) * 100:.1f}%"],
         [f"£{cap:,.0f} invested — Strategy",
          f"£{gg.get('train', {}).get('strategy_ending_gbp', cap):,.0f}",
@@ -228,15 +230,36 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
         "full-period number.",
         styles["Footnote"],
     ))
+    story.append(Paragraph(
+        "Max Drawdown shows two genuinely different, both correctly-computed numbers: against the "
+        "ORIGINAL starting capital (this report's standard convention, used everywhere else in this "
+        "document) and, in parentheses, the peak-relative figure — how far the account ever fell below "
+        "its OWN prior high, which is what matters for anyone who could have been invested at any point "
+        "along the way, not only from day one. On a run that grew substantially before any later "
+        "decline, the two can diverge widely — never read the first figure alone as the genuine risk an "
+        "investor holding at any point actually experienced.",
+        styles["Footnote"],
+    ))
     story.append(Spacer(1, 0.3 * cm))
+    if is_live_universe:
+        _uni_sentence = (
+            f"Live-eligible universe today: {uni['live_eligible_count']} genuine S&amp;P 500 stock "
+            f"constituents (out of {uni['candidate_universe_count']} ever discovered by the ongoing "
+            f"membership-tracking mechanism; {uni['excluded_count']} discovered historically but not "
+            "currently members — e.g. delisted, removed, or acquired constituents)."
+        )
+    else:
+        _uni_sentence = (
+            f"Live-eligible universe today: {uni['live_tradeable_count']} tickers "
+            f"({uni['etf_count']} ETFs + {uni['stock_member_count']} of {uni['stock_candidate_count']} "
+            "stock candidates currently genuine S&amp;P 500 members"
+            + (f"; excluded today: {', '.join(uni['non_members'])}" if uni["non_members"] else "")
+            + ")."
+        )
     story.append(Paragraph(
         f"<b>{result['n_blocks_pass']} of {result['n_blocks_total']}</b> historical blocks pass "
-        "(strategy CAGR ≥ S&amp;P 500's own over the same window, max drawdown no worse than 1.5× the "
-        f"S&amp;P's own, no block losing more than 20% of capital). Live-eligible universe today: "
-        f"{uni['live_tradeable_count']} tickers ({uni['etf_count']} ETFs + {uni['stock_member_count']} of "
-        f"{uni['stock_candidate_count']} stock candidates currently genuine S&amp;P 500 members"
-        + (f"; excluded today: {', '.join(uni['non_members'])}" if uni["non_members"] else "")
-        + ").",
+        "(strategy max drawdown no worse than 1.5× the S&amp;P's own over the same window, and strategy "
+        f"profit factor greater than 1.0 over the same window). {_uni_sentence}",
         styles["BodyText"],
     ))
     story.append(PageBreak())
@@ -251,16 +274,31 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
         styles["BodyText"],
     ))
     story.append(Paragraph("Universe", styles["H2"]))
-    story.append(Paragraph(
-        f"{uni['etf_count']} broad market ETFs (always eligible) plus {uni['stock_candidate_count']} US "
-        "large-cap stock candidates, gated by genuine point-in-time S&amp;P 500 membership windows "
-        "reconstructed from a public membership-history dataset — a stock is only tradeable on dates "
-        "it was actually an index member, with no discretionary exclusions (TSLA, META, and GOOGL are "
-        "included from their real membership dates, reversing an earlier subjective exclusion from the "
-        "prior architecture). Re-verified as not a survivorship artifact by re-testing specifically on "
-        "this point-in-time-corrected universe.",
-        styles["BodyText"],
-    ))
+    if is_live_universe:
+        story.append(Paragraph(
+            f"The full, dynamically-refreshed S&amp;P 500 stock membership — {uni['live_eligible_count']} "
+            "genuine constituents as of this report's end date, re-derived daily from an ongoing "
+            "membership-tracking mechanism, not a fixed, hand-curated ticker list. No ETFs — the "
+            "sleeve was removed from live trading entirely (see the Executive Summary above). Every "
+            "stock is gated by genuine point-in-time S&amp;P 500 membership windows reconstructed from "
+            "a public membership-history dataset — a stock is only tradeable on dates it was actually "
+            "an index member, with no discretionary exclusions (TSLA, META, and GOOGL are included "
+            "from their real membership dates, reversing an earlier subjective exclusion from the "
+            "prior architecture). Re-verified as not a survivorship artifact by re-testing specifically "
+            "on this point-in-time-corrected universe.",
+            styles["BodyText"],
+        ))
+    else:
+        story.append(Paragraph(
+            f"{uni['etf_count']} broad market ETFs (always eligible) plus {uni['stock_candidate_count']} US "
+            "large-cap stock candidates, gated by genuine point-in-time S&amp;P 500 membership windows "
+            "reconstructed from a public membership-history dataset — a stock is only tradeable on dates "
+            "it was actually an index member, with no discretionary exclusions (TSLA, META, and GOOGL are "
+            "included from their real membership dates, reversing an earlier subjective exclusion from the "
+            "prior architecture). Re-verified as not a survivorship artifact by re-testing specifically on "
+            "this point-in-time-corrected universe.",
+            styles["BodyText"],
+        ))
     story.append(Paragraph("Crisis Override", styles["H2"]))
     story.append(Paragraph(
         "A rare-firing circuit breaker: any single day the S&amp;P 500 falls ≥7% (the real NYSE Level 1 "
@@ -274,16 +312,24 @@ def generate_dd_report_pdf(result: dict, config: dict) -> bytes:
     ))
     story.append(Paragraph("Position Sizing, Portfolio Constraints & Exits", styles["H2"]))
     engine_used = result.get("engine_used", "compounding_default")
+    deployment_basis = result.get("deployment_basis", "cost_basis")
     if engine_used in ("compounding_default", "compounding_explicit"):
         per_trade_pct = result.get("per_trade_pct") or 0.0
         max_deployed_pct = result.get("max_deployed_pct") or 0.0
+        _basis_phrase = (
+            "genuine mark-to-market — every open position's current, live-priced value, exactly "
+            "matching what real order placement reads from the broker's own account summary"
+            if deployment_basis == "mark_to_market" else
+            "cost-basis — each open position's value at entry, never revalued while held"
+        )
         story.append(Paragraph(
             "Every position is sized via Historical VaR (95% confidence, scaled to the ticker's own "
             f"max holding period via the square-root-of-time rule), ceilinged at {per_trade_pct * 100:.0f}% "
             "of the account's own CURRENT value — the same formula and the same account-value-derived "
             "ceiling real order placement uses — rather than a fixed £ figure, since a single account's "
             "positions genuinely share and compete for capital across every ticker together, not each "
-            f"ticker sized independently against an unconstrained notional balance. New entries stop "
+            f"ticker sized independently against an unconstrained notional balance. \"Current value\" "
+            f"here is tracked on a {_basis_phrase} basis. New entries stop "
             f"once {max_deployed_pct * 100:.0f}% of the account's current value is deployed; position "
             "count is an emergent consequence of these two limits together, not a separately-enforced "
             "third rule. Exit priority: crisis override → index removal (stocks only) → ATR-based "

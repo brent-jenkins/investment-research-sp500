@@ -45,10 +45,19 @@ def _fast_validation_result():
     ]
     return {
         "start": "2007-01-01", "end": "2026-07-30", "starting_capital_gbp": 50000.0,
+        # The live-universe (2026-08-02) shape -- what run_full_validation
+        # actually returns now that the Backtest page always calls it with
+        # live_universe=True, mark_to_market=True. See tests/test_dd_report.py's
+        # own matching _sample_result(live_universe=True) shape.
         "universe": {
-            "etf_count": 33, "stock_candidate_count": 40, "stock_member_count": 39,
-            "non_members": ["GOLD"], "live_tradeable_count": 72, "total_candidates": 73,
+            "as_of": "2026-07-30", "candidate_universe_count": 1204,
+            "live_eligible_count": 503, "excluded_count": 701,
+            "excluded_sample": ["ENRON", "WCOM", "LEH"],
         },
+        "live_universe": True,
+        "backtest_convention": "continuous_walk",
+        "engine_used": "compounding_default",
+        "deployment_basis": "mark_to_market",
         "n_tickers_with_data": 73, "n_tickers_total": 73,
         "total_trades": len(trades),
         "train": dict(metrics_shape), "test": dict(metrics_shape),
@@ -69,6 +78,11 @@ def _fast_validation_result():
             "train": {"strategy_ending_gbp": 71234.56, "sp500_ending_gbp": 65432.10},
             "test": {"strategy_ending_gbp": 88765.43, "sp500_ending_gbp": 54321.98},
         },
+        # Deliberately distinctive, materially milder than max_drawdown_pct
+        # above (-25.0%) -- proves the page shows the genuine peak-relative
+        # figure from `result`, not a recomputation, and that it's visibly
+        # different from the fixed-denominator figure.
+        "peak_relative_drawdown": {"train": -9.87, "test": -11.23, "full": -12.34},
         "trades": trades,
     }
 
@@ -168,3 +182,80 @@ def test_gbp_growth_shown_on_backtest_page_from_result_not_recomputed(app):
     assert any("65,432" in v for v in metric_values)  # train S&P ending
     assert any("88,765" in v for v in metric_values)  # test strategy ending
     assert any("54,322" in v for v in metric_values)  # test S&P ending
+
+
+def test_backtest_page_calls_run_full_validation_with_live_universe_and_mtm(db_engine, monkeypatch, mocker):
+    """The 'Run Full Validated Battery' button must call run_full_validation()
+    with live_universe=True and mark_to_market=True explicitly -- not the
+    old bare/default call -- proving the page genuinely runs the current,
+    real live engine (2026-08-02) rather than the frozen 73-ticker
+    cost-basis configuration it used before. See CLAUDE.md's "rebuild the
+    backtest/DD-report page to genuinely run against the current, real
+    live engine" section."""
+    mocker.patch("data.scheduler.start_scheduler")
+    mock_run = mocker.patch(
+        "analysis.validation.run_full_validation",
+        return_value=_fast_validation_result(),
+    )
+    monkeypatch.setattr("main.get_engine", lambda: db_engine)
+
+    at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["page"] = "backtest"
+    at = at.run()
+    at.button(key="run_full_validation").click().run()
+
+    assert not at.exception
+    mock_run.assert_called_once()
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("live_universe") is True
+    assert kwargs.get("mark_to_market") is True
+
+
+def test_backtest_page_states_no_etfs_and_continuous_walk(app):
+    """The page's own top-of-page captions must explicitly state both the
+    no-ETFs fact and the continuous-walk convention -- per the standing
+    requirement that this is always labelled, never left implicit (see
+    CLAUDE.md's "Two backtest conventions" section)."""
+    at = app.run()
+
+    all_text = " ".join(m.value for m in at.markdown) + " " + " ".join(c.value for c in at.caption)
+    assert "no ETFs" in all_text.lower() or "no etfs" in all_text.lower()
+    assert "continuous walk" in all_text.lower()
+
+
+def test_backtest_page_universe_boxes_show_membership_not_tradeability(app):
+    """The three universe metric boxes must reflect genuine S&P 500 index
+    membership (candidate_universe_count/live_eligible_count/excluded_count)
+    -- never a T212-tradeability concept, which no longer exists as a
+    static, gate-able list at all. The page's caption is allowed to name
+    "T212" explicitly to state the distinction (the task's own framing
+    does this too) -- what must never appear is a metric DELTA describing
+    tradeability/mapping status instead of membership."""
+    at = app.run()
+
+    metrics = {m.label: m for m in at.metric}
+    assert "Candidate Universe" in metrics
+    assert "Live-Eligible Today" in metrics
+    assert "Excluded Today" in metrics
+    for label in ("Candidate Universe", "Live-Eligible Today", "Excluded Today"):
+        delta_text = (metrics[label].delta or "").lower()
+        assert "tradeable" not in delta_text
+        assert "t212" not in delta_text
+        assert "mapping" not in delta_text
+
+
+def test_backtest_page_shows_both_drawdown_conventions_distinctly(app):
+    """The page must show both the fixed-denominator max_drawdown_pct AND
+    the genuine peak-relative figure from result['peak_relative_drawdown'],
+    read directly (not recomputed), and they must read as visibly
+    different numbers -- per this project's own standing "state the
+    convention explicitly" discipline, since the two can diverge widely."""
+    at = app.run()
+    at.button(key="run_full_validation").click().run()
+
+    assert not at.exception
+    metric_values = [m.value for m in at.metric]
+    assert any("-9.87" in v for v in metric_values)   # train peak-relative
+    assert any("-11.23" in v for v in metric_values)  # test peak-relative
+    all_text = " ".join(m.value for m in at.markdown) + " ".join(c.value for c in at.caption)
+    assert "peak-relative" in all_text.lower()

@@ -595,3 +595,169 @@ def test_run_full_validation_no_trades_all_blocks_fail_gracefully(db_engine, moc
     assert result["n_tickers_with_data"] == 0
     assert result["train"]["total_trades"] == 0
     assert result["test"]["total_trades"] == 0
+
+
+# ---------------------------------------------------------------------------
+# live_universe_snapshot() -- the dynamic-pool counterpart to
+# universe_snapshot() above. Reports genuine S&P 500 index membership
+# eligibility only, never T212 tradeability (2026-08-02).
+# ---------------------------------------------------------------------------
+
+def test_live_universe_snapshot_shape(db_engine):
+    v2u.seed_baseline_membership()
+    snap = v2v.live_universe_snapshot(as_of=date(2026, 7, 30))
+    assert snap["as_of"] == "2026-07-30"
+    known = v2u.get_all_known_stock_tickers()
+    eligible = v2u.get_live_stock_candidates(as_of=date(2026, 7, 30))
+    assert snap["candidate_universe_count"] == len(known)
+    assert snap["live_eligible_count"] == len(eligible)
+    assert snap["excluded_count"] == len(known) - len(eligible)
+    assert "GOLD" in snap["excluded_sample"] or snap["excluded_count"] > len(snap["excluded_sample"])
+    # No T212-tradeability concept anywhere in this dict -- membership only.
+    assert "etf_count" not in snap
+    assert not any("t212" in k.lower() or "tradeable" in k.lower() for k in snap)
+
+
+def test_live_universe_snapshot_defaults_as_of_to_today(db_engine):
+    v2u.seed_baseline_membership()
+    snap = v2v.live_universe_snapshot()
+    assert snap["as_of"] == date.today().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# run_full_validation(live_universe=True) -- the genuinely dynamic,
+# live-execution-matching candidate pool, replacing the frozen 73-ticker
+# universe.ALL_TICKERS. See CLAUDE.md's "rebuild the backtest/DD-report
+# page to genuinely run against the current, real live engine" (2026-08-02).
+# ---------------------------------------------------------------------------
+
+def _live_universe_setup(mocker, live_candidates):
+    v2u.seed_baseline_membership()
+    gspc_dates = pd.date_range("2015-01-01", "2026-07-30", freq="D")
+    gspc_df = pd.DataFrame({
+        "date": gspc_dates, "close": [100.0 * (1.0002 ** i) for i in range(len(gspc_dates))],
+    })
+    mocker.patch("analysis.validation.get_price_df", return_value=gspc_df)
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=live_candidates)
+    requested: list = []
+
+    def _fake_precompute(ticker, config):
+        requested.append(ticker)
+        return None
+
+    mocker.patch("analysis.validation.precompute_ticker", side_effect=_fake_precompute)
+    mocker.patch("analysis.validation.run_candidate", return_value=[])
+    mocker.patch("analysis.validation.simulate_portfolio_compounding", return_value=[])
+    return requested
+
+
+def test_live_universe_true_uses_the_dynamic_candidate_pool_not_all_tickers(db_engine, mocker):
+    """The frozen 73-ticker universe.ALL_TICKERS must never be touched when
+    live_universe=True -- candidate_tickers must come from
+    get_live_stock_candidates() alone, including tickers that were never
+    in the old curated-40/ETF-33 set at all."""
+    requested = _live_universe_setup(mocker, ["MU", "LRCX", "AAPL"])
+
+    result = v2v.run_full_validation(
+        {"backtest": {}}, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        live_universe=True,
+    )
+
+    assert set(requested) == {"MU", "LRCX", "AAPL"}
+    assert not (set(requested) & set(v2u.ETF_TICKERS))  # never any ETF
+    assert result["n_tickers_total"] == 3
+    assert result["live_universe"] is True
+
+
+def test_live_universe_false_default_unchanged_frozen_universe(db_engine, mocker):
+    requested = _live_universe_setup(mocker, ["MU", "LRCX", "AAPL"])  # must be ignored entirely
+
+    result = v2v.run_full_validation(
+        {"backtest": {}}, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+    )
+
+    assert set(requested) == set(v2u.ALL_TICKERS)
+    assert result["live_universe"] is False
+
+
+def test_live_universe_respects_stock_trading_enabled_switch(db_engine, mocker):
+    requested = _live_universe_setup(mocker, ["MU", "LRCX"])
+
+    config = {"backtest": {}, "trading212_invest": {"stock_trading_enabled": False}}
+    result = v2v.run_full_validation(
+        config, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"), live_universe=True,
+    )
+
+    assert requested == []
+    assert result["n_tickers_total"] == 0
+
+
+def test_live_universe_result_universe_key_uses_live_snapshot(db_engine, mocker):
+    """result["universe"] must reflect whichever universe THIS run
+    actually used -- live_universe_snapshot() when live_universe=True,
+    never the frozen universe_snapshot()."""
+    _live_universe_setup(mocker, ["MU", "LRCX"])
+
+    result = v2v.run_full_validation(
+        {"backtest": {}}, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+        live_universe=True,
+    )
+
+    assert "candidate_universe_count" in result["universe"]
+    assert "etf_count" not in result["universe"]
+
+
+def test_live_universe_false_result_universe_key_uses_frozen_snapshot(db_engine, mocker):
+    requested = _live_universe_setup(mocker, ["MU", "LRCX"])
+    del requested  # unused; asserting on result only
+
+    result = v2v.run_full_validation(
+        {"backtest": {}}, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+    )
+
+    assert "etf_count" in result["universe"]  # the frozen-universe snapshot's own field
+
+
+def test_result_always_states_the_continuous_walk_convention(db_engine, mocker):
+    """Every run, regardless of any flag, is a continuous walk -- per the
+    standing labeling requirement, this must be explicit in the result,
+    not left for a caller to infer."""
+    _live_universe_setup(mocker, ["MU"])
+
+    for kwargs in ({}, {"live_universe": True}, {"uncapped": True}, {"portfolio_mode": True}):
+        result = v2v.run_full_validation(
+            {"backtest": {}}, start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"), **kwargs,
+        )
+        assert result["backtest_convention"] == "continuous_walk"
+
+
+def test_result_includes_peak_relative_drawdown_always(db_engine, mocker):
+    """peak_relative_drawdown must be present regardless of live_universe/
+    engine flags -- any run with a real equity curve can show the
+    fixed-denominator/peak-relative gap, not only live_universe runs."""
+    _live_universe_setup(mocker, ["MU"])
+
+    result = v2v.run_full_validation(
+        {"backtest": {"starting_capital_gbp": 10000}},
+        start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+    )
+
+    assert set(result["peak_relative_drawdown"].keys()) == {"train", "test", "full"}
+
+
+def test_result_peak_relative_drawdown_none_when_no_trades(db_engine, mocker):
+    v2u.seed_baseline_membership()
+    gspc_dates = pd.date_range("2015-01-01", "2026-07-30", freq="D")
+    gspc_df = pd.DataFrame({
+        "date": gspc_dates, "close": [100.0 + i * 0.01 for i in range(len(gspc_dates))],
+    })
+    mocker.patch("analysis.validation.get_price_df", return_value=gspc_df)
+    mocker.patch("analysis.validation.precompute_ticker", return_value=None)
+    mocker.patch("analysis.validation.slice_ticker", return_value=None)
+    mocker.patch("analysis.validation.run_candidate", return_value=[])
+
+    result = v2v.run_full_validation(
+        {"backtest": {"starting_capital_gbp": 10000}},
+        start=pd.Timestamp("2015-01-01"), end=pd.Timestamp("2026-07-30"),
+    )
+    assert result["peak_relative_drawdown"] == {"train": None, "test": None, "full": None}

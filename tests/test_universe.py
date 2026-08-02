@@ -20,6 +20,36 @@ def _clear_membership_cache():
     v2u.clear_membership_cache()
 
 
+# ---------------------------------------------------------------------------
+# get_all_known_stock_tickers() / get_live_stock_candidates() (2026-08-02
+# refactor -- the raw "every discovered ticker" set was extracted out of
+# get_live_stock_candidates() into its own function so
+# analysis.validation.live_universe_snapshot() can report from the exact
+# same underlying set, not a second, independently re-derived copy).
+# ---------------------------------------------------------------------------
+
+def test_get_all_known_stock_tickers_excludes_etfs(db_engine):
+    v2u.seed_baseline_membership()
+    known = v2u.get_all_known_stock_tickers()
+    assert not (known & set(v2u.ETF_TICKERS))
+    assert "GOLD" in known  # still a known candidate despite its empty window
+    assert set(v2u.STOCK_MEMBERSHIP.keys()) <= known
+
+
+def test_get_live_stock_candidates_is_all_known_filtered_by_membership(db_engine):
+    """get_live_stock_candidates() must be exactly get_all_known_stock_
+    tickers() filtered through is_member() for the given date -- the
+    refactor's whole point was to make this an explicit filter over a
+    shared set, not two independent computations that could drift."""
+    v2u.seed_baseline_membership()
+    as_of = date(2026, 7, 30)
+    known = v2u.get_all_known_stock_tickers()
+    expected = sorted(t for t in known if v2u.is_member(t, as_of))
+    assert v2u.get_live_stock_candidates(as_of=as_of) == expected
+    assert "GOLD" not in v2u.get_live_stock_candidates(as_of=as_of)  # empty window -> never eligible
+    assert not (set(v2u.get_live_stock_candidates(as_of=as_of)) & set(v2u.ETF_TICKERS))
+
+
 def test_etf_tickers_always_eligible():
     for t in v2u.ETF_TICKERS:
         assert v2u.is_member(t, date(2007, 1, 1))

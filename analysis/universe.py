@@ -255,6 +255,30 @@ def is_member(ticker: str, check_date: date) -> bool:
     return any(start <= check_date <= end for start, end in windows)
 
 
+def get_all_known_stock_tickers() -> set[str]:
+    """Every distinct stock ticker this system has ever discovered as a
+    genuine (former or current) S&P 500 constituent — the union of every
+    ticker refresh_membership_from_source() has ever written to
+    universe_membership plus STOCK_MEMBERSHIP's own keys (so this still
+    returns something sensible on a fresh install before the first refresh
+    has run). ETFs excluded — no membership concept, and structurally
+    absent from live trading entirely since 2026-08-02 (see CLAUDE.md's
+    "ETF sleeve removed from live trading").
+
+    Shared by get_live_stock_candidates() below (today's eligible subset
+    of this set) and analysis.validation.live_universe_snapshot() (which
+    reports this full set alongside today's eligible subset, so the two
+    can never silently drift apart by each re-deriving their own copy of
+    "every known ticker").
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT DISTINCT ticker FROM universe_membership")).fetchall()
+    all_known = {r[0] for r in rows} | set(STOCK_MEMBERSHIP.keys())
+    all_known -= set(ETF_TICKERS)
+    return all_known
+
+
 def get_live_stock_candidates(as_of: Optional[date] = None) -> list[str]:
     """Return every ticker that is a genuine, currently-eligible LIVE
     trading candidate — the full, dynamically-refreshed S&P 500 stock
@@ -264,14 +288,8 @@ def get_live_stock_candidates(as_of: Optional[date] = None) -> list[str]:
     live and research universes are deliberately two separate systems, a
     split that predates this function and is unaffected by it).
 
-    Sourced entirely from the DB — every ticker refresh_membership_from_
-    source() has ever discovered (universe_membership, via
-    _all_source_tickers()) plus STOCK_MEMBERSHIP's own keys (so this still
-    returns something sensible on a fresh install before the first refresh
-    has run), filtered to genuine current membership via is_member(). ETFs
-    are excluded — the live ETF sleeve was removed entirely 2026-08-02 (see
-    CLAUDE.md), and ETF_TICKERS itself has no membership concept to filter
-    on in the first place.
+    get_all_known_stock_tickers() (above), filtered to genuine current
+    membership via is_member().
 
     There is no separate onboarding job: a brand-new S&P 500 entrant
     appears here automatically the next time the existing daily 21:15 UTC
@@ -279,12 +297,7 @@ def get_live_stock_candidates(as_of: Optional[date] = None) -> list[str]:
     no manual step.
     """
     as_of = as_of or datetime.utcnow().date()
-    engine = get_engine()
-    with engine.connect() as conn:
-        rows = conn.execute(text("SELECT DISTINCT ticker FROM universe_membership")).fetchall()
-    all_known = {r[0] for r in rows} | set(STOCK_MEMBERSHIP.keys())
-    all_known -= set(ETF_TICKERS)
-    return sorted(t for t in all_known if is_member(t, as_of))
+    return sorted(t for t in get_all_known_stock_tickers() if is_member(t, as_of))
 
 
 def get_max_holding_days(ticker: str, config: dict) -> int:
