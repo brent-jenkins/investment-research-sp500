@@ -193,20 +193,14 @@ backtest:
   # structurally, not just asserted in this comment -- see
   # tests/test_live_backtest_parity.py's atr_stop_multiplier parity tests.
   atr_stop_multiplier: 2.0       # stop loss = entry +/- N x ATR
-  # fallback_max_holding_days -- analysis/universe.py:get_max_holding_days()
-  # uses this ONLY for a ticker that is in neither ETF_TICKERS nor
-  # STOCK_MEMBERSHIP (analysis/universe.py) at all -- i.e. not part of the
-  # real, tracked universe, such as an ad-hoc ticker exercised only inside
-  # a one-off backtest research study. Deliberately NOT named
-  # `max_holding_days` -- that name collides with trading212_invest's own
-  # max_holding_days below (the real, live-governing 90-day ETF value) and
-  # this fallback's value (30) coincidentally matching the real stock
-  # figure made that collision easy to misread as intentional. A ticker
-  # that IS part of the real universe (ETF_TICKERS / STOCK_MEMBERSHIP)
-  # always gets its correct 90/30 split via that categorization directly,
-  # regardless of whether it also has a live-execution `instruments:` entry
-  # yet -- see get_max_holding_days()'s own docstring.
-  fallback_max_holding_days: 30
+  # fallback_max_holding_days was removed 2026-08-02 -- consolidated into
+  # trading212_invest.stock_max_holding_days below, which now governs every
+  # non-ETF ticker (curated STOCK_MEMBERSHIP name or otherwise) uniformly.
+  # See analysis/universe.py:get_max_holding_days()'s own docstring for the
+  # full rationale (this key and stock_max_holding_days were two separately-
+  # set values that were only coincidentally equal, not structurally linked
+  # -- the same fragility class as the is_etf-inference fix earlier the
+  # same day).
 
 # Live execution config for the momentum + crisis-override system -- see
 # CLAUDE.md's "V2 architecture -- phased rebuild" section for the full
@@ -295,11 +289,13 @@ trading212_invest:
   max_risk_pct: 0.01
   min_position_gbp: 50
   # Max holding days -- analysis/universe.py:get_max_holding_days() dispatches
-  # on each ticker's own `instruments:` is_etf flag (top-level section,
-  # below `watchlist:`): ETFs get the longer 90d backstop, individual
-  # stocks get the tighter 30d backstop (higher idiosyncratic risk than a
-  # diversified ETF). A ticker with no `instruments:` entry falls back to
-  # backtest.max_holding_days.
+  # on ETF_TICKERS membership (analysis/universe.py), NOT on `instruments:`
+  # registration: ETFs get the longer 90d backstop below; every other
+  # ticker (a curated stock, a market-cap-ranked rolling-universe research
+  # candidate, or any other non-ETF ticker) gets the single
+  # stock_max_holding_days value -- see get_max_holding_days()'s own
+  # docstring for the full rationale, including why this was consolidated
+  # from a three-way split into two values on 2026-08-02.
   max_holding_days: 90
   stock_max_holding_days: 30
   # Clean, independent ETF/stock trading switches (2026-08-01) -- see

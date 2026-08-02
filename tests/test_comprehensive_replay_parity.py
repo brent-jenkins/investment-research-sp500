@@ -138,7 +138,7 @@ def _config() -> dict:
             "price_sanity_threshold_pct": 0.5,  # generous -- not what this test is about
         },
         "backtest": {
-            "atr_stop_multiplier": 2.0, "fallback_max_holding_days": 9999,
+            "atr_stop_multiplier": 2.0,
             "starting_capital_gbp": 10000,
         },
         "signals": {"atr_period": 14},

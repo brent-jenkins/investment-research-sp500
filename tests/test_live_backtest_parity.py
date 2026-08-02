@@ -107,8 +107,7 @@ def _config(ticker: str, t212_ticker: str, is_etf: bool, *, max_holding_days: in
             "max_holding_days": max_holding_days,
             "stock_max_holding_days": stock_max_holding_days,
         },
-        "backtest": {"atr_stop_multiplier": atr_stop_multiplier, "fallback_max_holding_days": 30,
-                     "starting_capital_gbp": 10000},
+        "backtest": {"atr_stop_multiplier": atr_stop_multiplier, "starting_capital_gbp": 10000},
         "signals": {"atr_period": 14},
     }
 
@@ -425,10 +424,13 @@ def test_exit_parity_index_removal(db_engine, mocker, monkeypatch):
         return pd.Timestamp(check_date) < removal_date
 
     mocker.patch("analysis.universe.is_member", side_effect=_is_member_side_effect)
-    # get_max_holding_days() dispatches on real STOCK_MEMBERSHIP membership,
-    # not on live-execution registration -- PXSTOCK needs a STOCK_MEMBERSHIP
-    # entry (any window; is_member() itself is separately mocked above) so
-    # it actually resolves to the stock branch below, not the fallback.
+    # get_max_holding_days() dispatches on ETF_TICKERS membership only
+    # (post-2026-08-02 consolidation, every non-ETF ticker shares one
+    # stock_max_holding_days value regardless of STOCK_MEMBERSHIP status) --
+    # this STOCK_MEMBERSHIP entry isn't load-bearing for the holding-days
+    # dispatch itself any more, only for is_member()'s own separate check
+    # (mocked above), but is kept so PXSTOCK reads as a genuine tracked
+    # stock rather than an untracked research-only ticker.
     mocker.patch("analysis.universe.STOCK_MEMBERSHIP", {"PXSTOCK": []})
     # A generous stock max-holding so MAX_HOLDING can never preempt the
     # index-removal trigger this scenario is actually testing.

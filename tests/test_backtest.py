@@ -12,7 +12,7 @@ from analysis import universe as v2u
 _CONFIG = {
     "signals": {"atr_period": 14},
     "backtest": {
-        "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0, "fallback_max_holding_days": 30,
+        "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0,
     },
     "trading212_invest": {
         "var_confidence": 0.95, "var_lookback_days": 252, "max_risk_pct": 0.01,

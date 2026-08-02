@@ -67,7 +67,7 @@ def _config(mapping=None, enabled=True) -> dict:
             "max_risk_pct": 0.01,
             "min_position_gbp": 50,
         },
-        "backtest": {"atr_stop_multiplier": 2.0, "fallback_max_holding_days": 30},
+        "backtest": {"atr_stop_multiplier": 2.0},
         "signals": {"atr_period": 14},
     }
 

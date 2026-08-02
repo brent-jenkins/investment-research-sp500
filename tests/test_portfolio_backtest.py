@@ -26,7 +26,7 @@ from analysis import universe as v2u
 _CONFIG = {
     "signals": {"atr_period": 14},
     "backtest": {
-        "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0, "fallback_max_holding_days": 30,
+        "starting_capital_gbp": 10000, "atr_stop_multiplier": 2.0,
     },
     "trading212_invest": {
         "var_confidence": 0.95, "var_lookback_days": 252, "max_risk_pct": 0.01,
@@ -926,7 +926,7 @@ def test_simulate_portfolio_frees_capacity_the_moment_one_tickers_data_ends(mock
     frame_b = _delisting_frame(900, start="2020-01-01")
     cached = [{"ticker": "TICKA", "frame": frame_a}, {"ticker": "TICKB", "frame": frame_b}]
     cfg = _config_with_caps(max_open=1, max_deployed=999.0)
-    cfg["backtest"]["fallback_max_holding_days"] = 1000  # longer than either ticker's own data span
+    cfg["trading212_invest"]["stock_max_holding_days"] = 1000  # longer than either ticker's own data span
 
     trades = v2b.simulate_portfolio(cached, cfg, _flat_gspc(900, start="2020-01-01"))
 
@@ -965,7 +965,7 @@ def test_simulate_portfolio_compounding_frees_capacity_the_moment_one_tickers_da
     frame_b = _delisting_frame(900, start="2020-01-01")
     cached = [{"ticker": "TICKA", "frame": frame_a}, {"ticker": "TICKB", "frame": frame_b}]
     cfg = _compounding_config()
-    cfg["backtest"]["fallback_max_holding_days"] = 1000
+    cfg["trading212_invest"]["stock_max_holding_days"] = 1000
     # per_trade_pct=0.3 -> each fallback-sized position is 15% of balance.
     # max_deployed_pct=0.2 sits strictly between one position (15%, fits)
     # and two simultaneous positions (30%, does not) -- so TICKB is
@@ -1027,7 +1027,7 @@ def test_simulate_portfolio_end_of_data_still_correct_when_every_ticker_ends_tog
 
 def test_mtm_appreciation_reduces_capacity_versus_cost_basis(mocker):
     """Ticker A enters day 0 at 100 and doubles to 200 by day 20, staying
-    open throughout (signal never turns off, fallback_max_holding_days set
+    open throughout (signal never turns off, stock_max_holding_days set
     very high so it can't exit via MAX_HOLDING either) -- a genuine
     unrealized +100% gain, still on the books. Ticker B becomes a candidate
     on day 20 with a deployment cap tight enough that A's cost basis alone
@@ -1062,7 +1062,7 @@ def test_mtm_appreciation_reduces_capacity_versus_cost_basis(mocker):
 
     cached = [{"ticker": "A_APPRECIATES", "frame": frame_a}, {"ticker": "B_CANDIDATE", "frame": frame_b}]
     cfg = _compounding_config()
-    cfg["backtest"]["fallback_max_holding_days"] = 9999  # A must never exit via MAX_HOLDING in this window
+    cfg["trading212_invest"]["stock_max_holding_days"] = 9999  # A must never exit via MAX_HOLDING in this window
     per_trade_pct = 0.05
     max_deployed_pct = 0.06  # cost-basis's constant 5% fits under this; mark-to-market's ~7.3% (day 20) doesn't
 
@@ -1081,7 +1081,7 @@ def test_mtm_depreciation_frees_capacity_versus_cost_basis(mocker):
     calculation) to ~60 by day 20, staying open throughout (ATR wide
     enough that its stop is never hit, isolating unrealized-loss
     accounting from the stop-loss exit path entirely, and
-    fallback_max_holding_days set very high so MAX_HOLDING can't fire
+    stock_max_holding_days set very high so MAX_HOLDING can't fire
     either). A's shrunk mark-to-market value should free MORE capacity
     than its unchanged cost basis would under the cost-basis engine --
     the reverse of the appreciation case above, confirming this isn't just
@@ -1105,7 +1105,7 @@ def test_mtm_depreciation_frees_capacity_versus_cost_basis(mocker):
 
     cached = [{"ticker": "A_DECLINES", "frame": frame_a}, {"ticker": "B_CANDIDATE", "frame": frame_b}]
     cfg = _compounding_config()
-    cfg["backtest"]["fallback_max_holding_days"] = 9999
+    cfg["trading212_invest"]["stock_max_holding_days"] = 9999
     per_trade_pct = 0.05
     max_deployed_pct = 0.045  # cost-basis's constant 5% rejects B; mark-to-market's shrunk value admits it
 
