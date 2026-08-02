@@ -5439,6 +5439,147 @@ throwaway research script — no source files were modified). Nothing
 pushed; the investigation itself was pure analysis, not a code or config
 change, so there is nothing to commit here beyond this write-up.
 
+### No market-cap gate at all — the "broadening dilutes" finding reverses under the corrected engine (2026-08-02)
+
+Direct follow-up to the two investigations immediately above, and a
+deliberate re-test of "V2 stock universe broadening" (earlier in this
+file), which found genuine dilution when the candidate pool widened
+from curated-40 to a full ~500-stock, market-cap-ranked universe. That
+original study predates several real infrastructure defects this
+project has since found and fixed: no cross-ticker portfolio cap at all
+(see "Portfolio-capped backtest engine"), alphabetical/config-order
+admission priority instead of momentum strength (see "Trade
+prioritization and capacity-allocation engine"), a cost-basis rather
+than genuine mark-to-market deployment tracker (see "Live/backtest
+deployment-cap parity" and "Mark-to-market unbounded compounding
+defect"), an `is_etf` inference bug, and the `stock_max_holding_days` /
+`fallback_max_holding_days` split fragility consolidated earlier this
+same day. Per this file's own reproducibility standard, that original
+finding was exactly as provisional as curated-40's and rolling-40's own
+figures were before their re-verification — this section re-tests it
+under the corrected engine rather than assuming it still holds.
+
+**Methodology — no market-cap pre-filter, full 503-candidate pool,
+momentum ranks and capacity constraints are the only gates.** Built from
+the same point-in-time-correct 503-candidate S&amp;P 500 pool this
+project's market-cap research has used throughout (reconstructed via
+`analysis/universe.py:_reconstruct_windows()` against the same
+`fja05680/sp500` source, reproducing exactly 503 candidates, 500 usable
+after excluding 3 for insufficient history — `FDXF`, `HONA`, `Q`,
+matching the original study's own exclusions precisely). No quarterly
+market-cap ranking or reconstitution is applied — every candidate that
+clears the real, existing momentum signal and point-in-time-membership
+gate competes on equal footing, exactly as the live universe's own
+signal computation and entry gating already work, just applied to 503
+tickers instead of 40.
+
+**Balance-reset methodology, applied to all three variants for a
+genuinely symmetric comparison.** The position-sizing investigation
+immediately above found that a single continuous 2007–2026 walk
+contaminates any test-period comparison — whichever variant compounds to
+a bigger balance during training mechanically sizes every test-period
+trade bigger, independent of that trade's own merit. Rather than
+reweight after the fact again, this study built
+`simulate_portfolio_compounding_mtm_reset_at_boundary()` — the real
+production function, extracted via source introspection (not retyped,
+eliminating transcription risk) with one additive change: the tracked
+account balance is renormalized to exactly £50,000 the first day on or
+after 2020-01-01, before that day's entries are evaluated (training-
+period signal history and membership eligibility are unaffected; only
+the £ balance tracker resets). Verified byte-identical to the real
+function when the reset is unused (a curated-40 run with no reset
+matched the real function's own 2,624 trades exactly) before being
+trusted for anything. Curated-40 and rolling-40 were **also** re-run
+with the identical reset treatment (cheap once the engine was validated,
+~3 minutes) specifically so all three sit on the same clean footing —
+not comparing a reset variant against two unreset ones.
+
+**Full comparison, £50,000-reset basis, all three variants, test period
+(2020-01-01→2026-07-31):**
+
+| | Curated-40 | Rolling-40 (quarterly) | Full-500 (no gate) |
+|---|---|---|---|
+| Trades | 1,073 | 1,091 | **1,182** |
+| Win rate | 47.53% | 45.83% | **48.82%** |
+| Profit factor | 1.77 | 1.56 | **1.77** |
+| CAGR | 14.31% | 11.08% | **19.83%** |
+| Max drawdown | −15.83% | −11.89% | **−27.43%** |
+| Test £50,000 → | £119,600.48 | £99,239.48 | **£162,802.54** |
+
+**The edge survives sizing normalization and is even clearer per-trade.**
+Average test position sizes across the three reset variants are already
+close (£3,548.92 / £3,151.99 / £3,504.42, ≤1.13x spread — the reset
+largely equalized sizing on its own), but a lighter-touch reweighting to
+a common £3,401.78 reference size confirms the full-500 variant's edge
+is not a sizing artifact: mean return per trade 2.606% vs. curated-40's
+1.912% and rolling-40's 1.455% — the largest gap of the three, not a
+shrinking one.
+
+**Removing the gate helps — materially on return, at a real, quantified
+cost on risk.** Full-500 beats both gated variants on CAGR and matches
+curated-40's best-in-class profit factor, but its max drawdown
+(−27.43%) is meaningfully worse than either gated variant's — a wider,
+unconstrained candidate pool trades more often and absorbs more
+idiosyncratic single-name risk along the way. A genuine trade-off, not a
+one-sided improvement; anyone adopting this needs to accept materially
+worse drawdown for materially better return, not assume both improve
+together.
+
+**Composition check — the extra edge is not a mega-cap rediscovery.**
+Broken down by real, point-in-time SEC-sourced market cap at entry
+(resolved for 1,107 of 1,182 test trades — 75 trades on tickers with
+unresolvable SEC data, e.g. META/XOM/WFC, excluded from this specific
+breakdown only, consistent with the "44 genuinely unresolvable" list
+under "Market-cap data infrastructure" above): the mega-cap tier (≥£200B
+— the only tier either gated variant can ever reach) has the *lowest*
+mean return (1.65%) and win rate (44.5%) of the four profitable tiers.
+The extra edge is overwhelmingly concentrated in the **£10–50B
+"mid-large" tier** (518 trades, £53,167.24 pnl, 3.16% mean return,
+51.5% win rate) — two orders of magnitude below rolling-40's own top-40
+floor (£271.3B as of 2026-06-30) and therefore structurally unreachable
+by any size-ranked gate at all. Small-caps (&lt;£2B) genuinely lose money
+in this universe (−5.73% mean return, 13.6% win rate) — this is not
+"smaller is always better," it is specifically the mid-large tier being
+underexploited by every gated variant. Ticker-level confirmation
+matches: of 190 distinct tickers traded in the test period, **171 (90%)
+are outside curated-40's fixed 40**, contributing 968 of 1,182 trades
+(81.9%) and £95,480.24 of £112,802.54 total profit (84.6%) — real,
+identifiable momentum stories in growing-but-not-yet-mega companies
+(`WDC`, `STX`, `SNDK`, `PLTR`, `GEV`, `GLW`, `MU`, `LRCX`, `INTC`, `COP`,
+among others), not statistical noise.
+
+**Original full-500 study confirmed genuinely unreconstructable, not
+guessed at.** Checked directly: no leftover files anywhere on the
+server, and the schema no longer has a `backtest_runs` table at all
+(removed post-V1-removal) — the original study's trade-level data does
+not survive anywhere; only its prose summary in this file does,
+predating the trade-level-preservation standing requirement added
+earlier the same day.
+
+**Updated statement — the original "broadening dilutes" finding does
+NOT hold under the current, corrected engine, and the reversal has an
+identifiable, not merely coincidental, cause.** Re-testing the identical
+underlying question (broad vs. narrow universe) under the corrected
+engine flips the conclusion: broadening now improves both CAGR and
+profit factor, at a real, quantified drawdown cost, and the improvement
+traces to a specific, economically sensible source (mid-large-cap
+momentum names structurally invisible to any market-cap-ranked gate)
+rather than to noise or a methodology artifact. This is precisely the
+kind of infrastructure-dependent reversal this file's own
+reproducibility standard exists to catch: the original finding was
+correct for the engine it ran on, and that engine no longer exists.
+
+Full local suite: 434 passing, confirmed before and after. Trade-level
+output for all three reset variants (ticker/direction/entry_date/
+exit_date/entry_price/exit_price/exit_reason/pnl_pct/position_gbp/
+pnl_gbp/stop_distance_pct/holding_days/is_win — the same shape
+`backtest_trades` already uses) was exported and preserved before the
+research clone was deleted, per the trade-level-preservation standing
+requirement this session added specifically because of the unrecoverable
+original full-500 study. Nothing pushed as a result of the investigation
+itself (pure analysis, no code/config change); this write-up is the
+durable record.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
