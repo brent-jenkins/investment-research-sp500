@@ -321,15 +321,20 @@ def test_backfill_updates_value_on_conflict(db_engine, mocker):
 # ---------------------------------------------------------------------------
 
 def test_shares_outstanding_as_of_forward_fills(db_engine):
+    """Deliberately NOT a split-like jump (ratio ~1.29, nowhere near a
+    plausible split ratio -- see _split_adjust()'s own dedicated tests
+    below for real split-adjustment coverage) -- this test is purely
+    about forward-fill/no-look-ahead semantics and must not incidentally
+    trigger split-adjustment, which would change these asserted values."""
     _seed_shares(db_engine, "AAPL", date(2020, 1, 1), 1000.0)
     _seed_shares(db_engine, "AAPL", date(2020, 4, 1), 1010.0)
-    _seed_shares(db_engine, "AAPL", date(2020, 7, 1), 4000.0)  # simulated split
+    _seed_shares(db_engine, "AAPL", date(2020, 7, 1), 1300.0)
 
     assert mc.shares_outstanding_as_of("AAPL", date(2020, 2, 15)) == 1000.0  # between Q1 and Q2 filings
     assert mc.shares_outstanding_as_of("AAPL", date(2020, 4, 1)) == 1010.0   # exact filing date
-    assert mc.shares_outstanding_as_of("AAPL", date(2020, 6, 30)) == 1010.0  # day before the split filing
-    assert mc.shares_outstanding_as_of("AAPL", date(2020, 7, 1)) == 4000.0   # split filing date itself
-    assert mc.shares_outstanding_as_of("AAPL", date(2021, 1, 1)) == 4000.0   # well after last filing
+    assert mc.shares_outstanding_as_of("AAPL", date(2020, 6, 30)) == 1010.0  # day before the Q3 filing
+    assert mc.shares_outstanding_as_of("AAPL", date(2020, 7, 1)) == 1300.0   # Q3 filing date itself
+    assert mc.shares_outstanding_as_of("AAPL", date(2021, 1, 1)) == 1300.0   # well after last filing
 
 
 def test_shares_outstanding_as_of_no_look_ahead_before_first_filing(db_engine):
@@ -341,6 +346,152 @@ def test_shares_outstanding_as_of_no_look_ahead_before_first_filing(db_engine):
 
 def test_shares_outstanding_as_of_returns_none_for_unknown_ticker(db_engine):
     assert mc.shares_outstanding_as_of("NOPE", date(2020, 1, 1)) is None
+
+
+# ---------------------------------------------------------------------------
+# Placeholder/near-zero shares filtering and split-adjustment -- added
+# 2026-08-02 tracing why real S&P-500-eligible tickers (CMG, SMCI, SPG,
+# FOX, FOXA, HOOD, CVNA) were showing up as implausible "small-caps" in a
+# market-cap-ranked momentum study. Two distinct root causes, two distinct
+# fixes -- see _MIN_PLAUSIBLE_SHARES and _split_adjust()'s own docstrings.
+# ---------------------------------------------------------------------------
+
+def test_implausibly_small_shares_row_is_excluded_not_forward_filled(db_engine):
+    """FOX/FOXA's real, already-stored bug: a single row of literal 1.0
+    (a placeholder from an incomplete spinoff-day filing) must never be
+    forward-filled as a genuine reading -- shares_outstanding_as_of()
+    must return None for any date, not 1.0."""
+    _seed_shares(db_engine, "FOX", date(2019, 3, 18), 1.0)
+    assert mc.shares_outstanding_as_of("FOX", date(2020, 1, 1)) is None
+
+
+def test_literal_zero_row_already_excluded_by_the_original_guard_stays_excluded(db_engine):
+    """SPG/HOOD/CVNA's real, already-stored bug: one or more literal 0.0
+    rows sitting in an otherwise real series (predating the write-side
+    guard, or a since-patched gap) must be filtered at read time too, not
+    just relied on at write time -- shares_outstanding_as_of() must skip
+    straight past a stored 0.0 to the next genuine value, or to None if
+    none exists."""
+    _seed_shares(db_engine, "HOOD", date(2020, 12, 31), 229_031_546.0)
+    _seed_shares(db_engine, "HOOD", date(2021, 9, 30), 0.0)
+    assert mc.shares_outstanding_as_of("HOOD", date(2022, 1, 1)) == 229_031_546.0
+
+
+def test_stray_relative_magnitude_outlier_is_excluded_at_read_time(db_engine):
+    """CMG's real, already-stored third anomaly: a single row of 27,962.0
+    sitting amid neighbours in the tens-of-millions range -- well above
+    _MIN_PLAUSIBLE_SHARES (so the absolute floor alone would NOT catch
+    it), but a ~1,000x-from-median outlier caught by the SAME relative
+    rule _drop_magnitude_outliers() already applies at write time,
+    reused here as a read-side re-check for a row that evidently slipped
+    past it. Needs >= _OUTLIER_MIN_ROWS (5) real rows for the median
+    check to engage at all -- mirrors CMG's real, much longer series."""
+    _seed_shares(db_engine, "CMG", date(2021, 10, 22), 28_135_406.0)
+    _seed_shares(db_engine, "CMG", date(2022, 2, 4), 28_031_948.0)
+    _seed_shares(db_engine, "CMG", date(2022, 4, 25), 27_962.0)  # the anomaly
+    _seed_shares(db_engine, "CMG", date(2022, 7, 25), 27_764_647.0)
+    _seed_shares(db_engine, "CMG", date(2022, 10, 24), 27_721_112.0)
+    assert mc.shares_outstanding_as_of("CMG", date(2022, 5, 1)) == 28_031_948.0
+
+
+def test_is_relative_magnitude_outlier_matches_drop_magnitude_outliers_own_rule():
+    """Direct unit coverage of the extracted predicate -- must agree
+    exactly with _OUTLIER_MEDIAN_MULTIPLE's own 100x threshold, since
+    _drop_magnitude_outliers() (write time) and _get_shares_series()
+    (read time) both depend on this being the SAME rule, not two
+    independently-tuned copies."""
+    median = 28_000_000.0
+    assert mc._is_relative_magnitude_outlier(27_962.0, median) is True   # CMG's real anomaly, ~1002x off
+    assert mc._is_relative_magnitude_outlier(27_764_647.0, median) is False  # a genuine neighbour
+    assert mc._is_relative_magnitude_outlier(median * 100.0001, median) is True   # just past the boundary
+    assert mc._is_relative_magnitude_outlier(median * 99.9999, median) is False   # just inside it
+    assert mc._is_relative_magnitude_outlier(100.0, 0.0) is False  # non-positive median never flags anything
+
+
+def test_closest_plausible_split_ratio_matches_real_verified_splits():
+    """Direct hits against real, already-verified corporate actions from
+    this module's own docstring and this investigation -- not synthetic
+    round numbers chosen for convenience."""
+    assert mc._closest_plausible_split_ratio(4.01) == 4.0    # NVDA 2021
+    assert mc._closest_plausible_split_ratio(9.97) == 10.0   # NVDA 2024
+    assert mc._closest_plausible_split_ratio(19.75) == 20.0  # GOOGL 2022
+    assert mc._closest_plausible_split_ratio(49.86) == 50.0  # CMG 2024 (this investigation)
+    assert mc._closest_plausible_split_ratio(10.13) == 10.0  # SMCI 2024 (this investigation)
+
+
+def test_closest_plausible_split_ratio_rejects_organic_growth():
+    """A ratio that doesn't land near any real split multiple -- ordinary
+    share-count growth from equity grants/secondary offerings -- must
+    never be misread as a split."""
+    assert mc._closest_plausible_split_ratio(1.15) is None
+    assert mc._closest_plausible_split_ratio(1.29) is None
+    assert mc._closest_plausible_split_ratio(0.88) is None  # a real buyback, not a reverse split
+
+
+def test_closest_plausible_split_ratio_matches_reverse_splits():
+    assert mc._closest_plausible_split_ratio(0.10) == 0.1   # a real 1:10 reverse split
+    assert mc._closest_plausible_split_ratio(0.51) == 0.5   # a real 1:2 reverse split
+
+
+def test_split_adjust_scales_pre_split_values_up():
+    series = [(date(2020, 1, 1), 1_000.0), (date(2021, 1, 1), 1_010.0), (date(2022, 1, 1), 4_040.0)]
+    adjusted = mc._split_adjust(series)
+    assert adjusted == [(date(2020, 1, 1), 4_000.0), (date(2021, 1, 1), 4_040.0), (date(2022, 1, 1), 4_040.0)]
+
+
+def test_split_adjust_leaves_non_split_growth_unchanged():
+    series = [(date(2020, 1, 1), 1_000.0), (date(2021, 1, 1), 1_010.0), (date(2022, 1, 1), 1_300.0)]
+    assert mc._split_adjust(series) == series
+
+
+def test_split_adjust_compounds_multiple_splits_correctly():
+    """Real NVDA history, synthetically reproduced: a 4:1 split (2021)
+    then a 10:1 split (2024) -- the earliest value must reflect BOTH
+    splits compounded (x40), not just the most recent one."""
+    series = [
+        (date(2015, 1, 1), 623_000_000.0),
+        (date(2021, 7, 1), 2_500_000_000.0),
+        (date(2023, 1, 1), 2_460_000_000.0),
+        (date(2024, 7, 1), 24_530_000_000.0),
+    ]
+    adjusted = mc._split_adjust(series)
+    assert adjusted[0] == (date(2015, 1, 1), 623_000_000.0 * 40)
+    assert adjusted[1] == (date(2021, 7, 1), 2_500_000_000.0 * 10)
+    assert adjusted[2] == (date(2023, 1, 1), 24_600_000_000.0)
+    assert adjusted[3] == (date(2024, 7, 1), 24_530_000_000.0)  # unchanged, already current basis
+
+
+def test_split_adjust_handles_reverse_split():
+    series = [(date(2020, 1, 1), 100_000_000.0), (date(2021, 1, 1), 10_000_000.0)]  # 1:10 reverse split
+    adjusted = mc._split_adjust(series)
+    assert adjusted[0] == (date(2020, 1, 1), 10_000_000.0)
+    assert adjusted[1] == (date(2021, 1, 1), 10_000_000.0)
+
+
+def test_split_adjust_too_short_series_returns_unchanged():
+    assert mc._split_adjust([]) == []
+    assert mc._split_adjust([(date(2020, 1, 1), 1_000.0)]) == [(date(2020, 1, 1), 1_000.0)]
+
+
+def test_market_cap_correctly_reflects_a_real_pre_split_date_end_to_end(db_engine):
+    """Full pipeline, CMG's real shape (simplified): shares_outstanding_as_of()
+    for a PRE-split date must return the SPLIT-ADJUSTED figure, matching
+    what market_cap() needs to stay consistent with price_data's own
+    already-split-adjusted prices -- not the raw, as-filed pre-split
+    count, which would understate market cap by roughly the split ratio."""
+    _seed_shares(db_engine, "CMG", date(2024, 4, 22), 27_467_000.0)   # pre-split, as genuinely filed
+    _seed_shares(db_engine, "CMG", date(2024, 7, 22), 1_369_476_000.0)  # post-50:1-split
+    _seed_price(db_engine, "CMG", date(2024, 5, 1), 55.0)  # a plausible post-split-adjusted price
+
+    # Query date sits AFTER the first stored filing (2024-04-22, so it's
+    # not before the ticker's earliest known data) but BEFORE the split
+    # filing (2024-07-22) -- must read the split-ADJUSTED figure
+    # (27,467,000 * 50), not the raw as-filed 27,467,000, which paired
+    # with an already-split-adjusted price would understate market cap ~50x.
+    shares = mc.shares_outstanding_as_of("CMG", date(2024, 5, 1))
+    assert shares == pytest.approx(27_467_000.0 * 50)
+    mcap = mc.market_cap("CMG", date(2024, 5, 1))
+    assert mcap == pytest.approx(27_467_000.0 * 50 * 55.0)
 
 
 def test_shares_outstanding_as_of_is_cached_across_calls(db_engine, mocker):

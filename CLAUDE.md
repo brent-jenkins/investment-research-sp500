@@ -5525,6 +5525,25 @@ one-sided improvement; anyone adopting this needs to accept materially
 worse drawdown for materially better return, not assume both improve
 together.
 
+**The −27.43% figure is the fixed-denominator convention (against
+starting capital); the genuine peak-relative decline is smaller — real
+but a smaller number, checked directly, not assumed.** Computed from the
+actual full-500 test-period equity curve: the fixed-denominator worst
+point (2026-07-29, equity £161,421.09 against the test period's overall
+peak of £175,135.81 on 2026-07-10) reads as −27.43% of the £50,000
+starting capital. The genuine worst PEAK-RELATIVE decline occurred
+earlier and at a different point entirely — 2025-04-25, equity
+£96,695.62 against its own then-current running peak of £108,874.01 — a
+**−11.19%** decline against the peak it actually fell from. The gap
+between the two conventions is **16.24 percentage points** (a ~2.45x
+overstatement by the fixed-denominator figure) — smaller than the ~97-
+point gap the same convention produced for an earlier, uncapped
+continuous-walk comparison this session found (the reset-at-boundary
+methodology genuinely bounds the distortion, it just doesn't eliminate
+it). **−11.19% is the number that reflects genuine downside risk from any
+point an investor could actually have been holding at peak; −27.43%
+should not be read as that.**
+
 **Composition check — the extra edge is not a mega-cap rediscovery.**
 Broken down by real, point-in-time SEC-sourced market cap at entry
 (resolved for 1,107 of 1,182 test trades — 75 trades on tickers with
@@ -5537,10 +5556,26 @@ The extra edge is overwhelmingly concentrated in the **£10–50B
 "mid-large" tier** (518 trades, £53,167.24 pnl, 3.16% mean return,
 51.5% win rate) — two orders of magnitude below rolling-40's own top-40
 floor (£271.3B as of 2026-06-30) and therefore structurally unreachable
-by any size-ranked gate at all. Small-caps (&lt;£2B) genuinely lose money
-in this universe (−5.73% mean return, 13.6% win rate) — this is not
-"smaller is always better," it is specifically the mid-large tier being
-underexploited by every gated variant. Ticker-level confirmation
+by any size-ranked gate at all. **Correction (2026-08-02) — the small-cap
+(&lt;£2B) tier's reported −5.73% mean return / 13.6% win rate is a data-
+quality artifact, not a genuine small-cap risk signal.** A direct follow-up
+check against real point-in-time membership windows found none of the 7
+affected tickers (`CMG`, `SPG`, `SMCI`, `FOX`, `FOXA`, `HOOD`, `CVNA`) is
+a small or declining company at all — `CMG`, `SPG`, `FOXA`, `FOX` are all
+long-standing, still-active index constituents, and `SMCI`/`HOOD`/`CVNA`
+are recent *additions*; all seven are genuinely large, multi-billion-
+dollar companies. Traced to two distinct `analysis/market_cap.py` bugs,
+fixed the same day (see "Two real market-cap data bugs found and fixed"
+below): a handful of stored placeholder/near-zero shares-outstanding
+values being forward-filled as real readings, and a split-adjustment
+basis mismatch between SEC's un-adjusted shares data and yfinance's
+retroactively-adjusted prices. With both fixed, these 7 tickers correctly
+resolve to their real, multi-billion-pound market caps (or, for the two
+with insufficient remaining SEC data, `None` rather than a fabricated
+tiny value) — they were never small-caps in the first place, so no
+"smaller is always better/worse" conclusion should be drawn from this
+tier at all pending a fresh re-run with the fix applied. Ticker-level
+confirmation
 matches: of 190 distinct tickers traded in the test period, **171 (90%)
 are outside curated-40's fixed 40**, contributing 968 of 1,182 trades
 (81.9%) and £95,480.24 of £112,802.54 total profit (84.6%) — real,
@@ -5614,6 +5649,138 @@ drift from one SEC filing tie-break affecting 2 of 67 quarters) — the
 full-500 finding should now be treated as at least as settled as
 rolling-40's, and did not require a second independent build to correct
 anything about its own headline conclusion.
+
+### Two real market-cap data bugs found and fixed (2026-08-02)
+
+Direct follow-up to three specific checks on the full-500 no-gate
+finding — investigating what the 22 small-cap (&lt;£2B) trades in that
+study's composition breakdown actually were, before drawing any
+conclusion about small-cap risk. Checked against real point-in-time
+membership windows (`analysis.universe._reconstruct_windows()`): none of
+the 7 affected tickers (`CMG`, `SPG`, `SMCI`, `FOX`, `FOXA`, `HOOD`,
+`CVNA`) is a small or declining company at all — `CMG`, `SPG`, `FOXA`,
+and `FOX` are all long-standing, still-active index constituents (member
+since 2011, 2002, 2004, and 2015 respectively), and `SMCI`/`HOOD`/`CVNA`
+are recent *additions* to the index (2024/2025/2025) — the opposite of
+"declining toward removal." All seven are genuinely large, multi-billion-
+dollar companies. Traced to real stored data, not assumed, this resolved
+into two distinct `analysis/market_cap.py` bugs, both fixed the same day.
+
+**Bug 1 — placeholder/near-zero shares-outstanding values being
+forward-filled as real readings.** `shares_outstanding_as_of()` forward-
+fills whatever the most recent stored value is — but for 5 of the 7
+tickers, that stored value was a literal data-quality placeholder, not a
+genuine reading. Checked directly against the raw stored rows: `FOX` and
+`FOXA` each have exactly **one** stored row, a literal `1.0` (their
+2019-03-18 spinoff-day filing — already known and named in
+`_drop_magnitude_outliers()`'s own docstring as a case its
+`_OUTLIER_MIN_ROWS` guard deliberately skips, since a single-row series
+is too short for a median-based check to mean anything — but nothing
+downstream ever caught it defensively). `SPG`, `HOOD`, and `CVNA` each
+carry one or more stored rows of literal `0.0` that
+`_dedupe_earliest_filed()`'s own `val<=0` guard should already exclude at
+write time, but evidently didn't for these specific rows (predating that
+guard, or a since-patched gap). **Fix**: a new, deliberately narrow
+`_MIN_PLAUSIBLE_SHARES = 50.0` floor, applied defensively at READ time in
+`_get_shares_series()` — protects every consumer regardless of how a bad
+value entered the table, not just future writes. Kept intentionally low
+(catches only genuine near-zero placeholders like 0/1, not a general
+small-cap detector) after an initial attempt at a much higher,
+"no real company has this few shares" floor (100,000) broke ~20
+pre-existing tests that use small round numbers as illustrative fixtures
+with no intent to represent realistic magnitudes — reverted in favour of
+this narrower, better-targeted value plus the separate mechanism below
+for genuinely large stray anomalies.
+
+**Bug 2 — a split-adjustment basis mismatch between SEC shares data and
+yfinance prices.** SEC's shares-outstanding figures are NOT retroactively
+adjusted for later stock splits (a filing genuinely reports the real
+share count as of that filing date), but `price_data`'s close prices
+(yfinance-sourced) ARE retroactively split-adjusted — standard practice
+for financial data providers, and already documented elsewhere in this
+project for its price-history implications, but never previously
+connected to `market_cap.py`'s own `shares × price` formula. For any
+query date before a ticker's real split, this understates market cap by
+roughly the split ratio: checked directly, `CMG`'s real 50:1 split (June
+2024) and `SMCI`'s real 10:1 split (October 2024) each produced this
+exact defect — CMG's real ~$70–80B market cap was computing as ~£1B for
+pre-split 2024 query dates. **Fix**: `_split_adjust()`, a new function
+in `_get_shares_series()`'s cache-population path — walks the sorted
+shares series backward from the most recent row, and wherever a
+consecutive-row ratio lands within 5% of a real, known stock-split
+multiple (`_PLAUSIBLE_SPLIT_RATIOS`: 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25,
+30, 40, 50, 100, or the matching reverse-split reciprocal), retroactively
+scales every earlier value up to the same basis — mirroring exactly how
+yfinance already retroactively adjusts prices, so `market_cap()`'s
+`shares × price` stays internally consistent at every historical date,
+not just post-split ones. Deliberately restricted to close matches on
+real, round split ratios (not "any large jump") specifically because
+genuine organic share-count change — buybacks, secondary offerings,
+equity grants — essentially never lands within a tight tolerance of one
+of these exact values by coincidence; verified this holds for the
+already-known real splits documented elsewhere in this module (NVDA
+4.01x/9.97x, GOOGL 19.75x, AAPL, TSLA) as well as the two new ones found
+here. Multiple splits in one ticker's history compound correctly (walks
+backward, so each earlier split multiplies on top of any later
+adjustment already applied) — verified against NVDA's real two-split
+history (4:1 in 2021, then 10:1 in 2024) directly.
+
+**A third, distinct anomaly found the same day, closed by a related but
+separate mechanism.** `CMG` also carries a single stray stored row of
+`27,962.0` (2022-04-25) sitting amid neighbours in the tens-of-millions
+range — a ~1,000x magnitude defect that should have been caught by
+`_drop_magnitude_outliers()` at write time but evidently wasn't for this
+specific row. Too large in absolute terms to be caught by the narrow
+`_MIN_PLAUSIBLE_SHARES` floor above (50 vs. 27,962), so a second,
+genuinely relative check was added: `_is_relative_magnitude_outlier()`,
+the exact predicate `_drop_magnitude_outliers()` already uses at write
+time (extracted so both call sites share one implementation, not two
+that could drift), re-applied defensively at read time in
+`_get_shares_series()` against whatever is actually stored, regardless
+of when or how it got there — skipped below `_OUTLIER_MIN_ROWS` (5), the
+same robustness guard the write-time version already uses.
+
+**Verified directly against real production data before being trusted —
+not just synthetic tests.** Ran the fixed code against a read-only copy
+of the real production database (never touching the live one), compared
+to the same real data under the original, unfixed code: at a genuine
+pre-split query date (2024-05-01), `CMG`'s computed market cap corrected
+from **£1.72B to £86.2B** (exactly the 50x its real split ratio implies:
+27,467,000 raw shares → 1,373,350,000 split-adjusted), and `SMCI`'s
+corrected from **£4.13B to £41.3B** (exactly the 10x its real split
+implies). For `SPG`/`HOOD` (partial, stale-but-genuine data remaining
+after the placeholder rows are filtered), market cap now resolves to a
+plausible, stale-but-not-catastrophically-wrong figure instead of
+literal £0; for `FOX`/`FOXA`/`CVNA` (essentially no usable data
+remaining), market cap now correctly returns `None` (honestly
+"unavailable") instead of a fabricated near-zero value computed from a
+placeholder share count.
+
+**What this fix does NOT do, stated plainly.** It does not perform a
+live SEC re-fetch for `SPG`, `FOX`, `FOXA`, `HOOD`, or `CVNA` — these five
+tickers' remaining stored history is either genuinely stale (SPG/HOOD, no
+filing captured since ~2010/2021) or effectively empty (FOX/FOXA/CVNA).
+The code fix stops the WORST failure mode (a fabricated, wildly-wrong
+market cap) for all five, but does not by itself restore full, current
+data completeness — a live `backfill_shares_outstanding()` re-fetch for
+these five specific tickers (already-existing, rate-limited, safe
+infrastructure) would be a natural, low-risk follow-up, not attempted
+here since it wasn't part of what was asked and involves a live write to
+the production database.
+
+Full local test suite: 447 passing (434 + 13 new tests covering both
+fixes — `tests/test_market_cap.py`), confirmed before and after. One
+pre-existing test (`test_shares_outstanding_as_of_forward_fills`) had its
+"simulated split" fixture value changed from a genuinely split-like ratio
+(~3.96x, coincidentally close to 4) to a non-split-like one (~1.29x),
+since it now genuinely triggers the new split-adjustment logic and its
+original assertions were written before that logic existed — its own
+intent (forward-fill/no-look-ahead semantics) is unaffected; dedicated
+split-adjustment coverage lives in the new tests instead. Committed
+locally only, per this session's standing practice — the small-cap tier
+composition figures in the section above are corrected in place rather
+than requiring a full study re-run, since the fix's effect on those
+specific 7 tickers is independently verified above.
 
 ### Broker integration — Trading212 Invest
 

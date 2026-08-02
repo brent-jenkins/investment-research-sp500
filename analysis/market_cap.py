@@ -279,6 +279,18 @@ def _dedupe_earliest_filed(raw: list[dict]) -> list[dict]:
         # row) -- and because shares_outstanding_as_of() forward-fills, one
         # stray 0 would silently zero out market cap for every date from that
         # filing until the next one, ranking a mega-cap below every peer.
+        # NOT extended to the full _MIN_PLAUSIBLE_SHARES floor (2026-08-02
+        # investigation, see that constant's own docstring) -- this write
+        # path processes real SEC API rows where a genuinely tiny-but-
+        # positive value (e.g. FOX/FOXA's real, already-stored 1.0
+        # placeholder) is exactly as implausible as a literal 0, but this
+        # function's own test suite uses small illustrative round numbers
+        # as stand-ins with no intent to represent realistic magnitudes, so
+        # raising this specific threshold breaks that convention broadly.
+        # The floor is instead enforced defensively on the READ side
+        # (_get_shares_series()), which protects every consumer regardless
+        # of how a bad value entered the table -- including this path's own
+        # writes, the moment they're read back.
         if not end or val is None or float(val) <= 0:
             continue
         cur = best_by_end.get(end)
@@ -337,6 +349,22 @@ _OUTLIER_MEDIAN_MULTIPLE = 100.0
 _OUTLIER_MIN_ROWS = 5
 
 
+def _is_relative_magnitude_outlier(value: float, median: float) -> bool:
+    """True if *value* is more than _OUTLIER_MEDIAN_MULTIPLE times (or less
+    than its reciprocal of) *median* -- the core predicate
+    _drop_magnitude_outliers() applies at write time, extracted so
+    _get_shares_series() can reuse the IDENTICAL, already-calibrated rule as
+    a read-side defensive re-check (see _get_shares_series()'s own docstring
+    for why a stale, already-stored anomaly needs this too, not just future
+    writes -- found live 2026-08-02: CMG carries a single stray row of
+    27,962.0 sitting amid neighbours in the tens-of-millions range, which
+    should have been caught by this exact rule at write time but evidently
+    wasn't for this specific row)."""
+    if median <= 0:
+        return False
+    return value > median * _OUTLIER_MEDIAN_MULTIPLE or value < median / _OUTLIER_MEDIAN_MULTIPLE
+
+
 def _drop_magnitude_outliers(rows: list[dict], cik: str = "") -> list[dict]:
     """Drop rows whose share count is implausible by orders of magnitude
     relative to the series' OWN median -- a defect class the zero/negative
@@ -385,12 +413,10 @@ def _drop_magnitude_outliers(rows: list[dict], cik: str = "") -> list[dict]:
     if median <= 0:
         return rows
 
-    hi = median * _OUTLIER_MEDIAN_MULTIPLE
-    lo = median / _OUTLIER_MEDIAN_MULTIPLE
     kept, dropped = [], []
     for r in rows:
         v = float(r["val"])
-        (dropped if (v > hi or v < lo) else kept).append(r)
+        (dropped if _is_relative_magnitude_outlier(v, median) else kept).append(r)
 
     for r in dropped:
         logger.warning(
@@ -680,6 +706,113 @@ def backfill_shares_outstanding(tickers: list[str], sleep: float = _SLEEP_BETWEE
     return summary
 
 
+# A stored shares-outstanding value at or below this is never a plausible
+# real reading -- found live 2026-08-02, tracing why 7 real S&P-500-
+# eligible tickers (CMG, SMCI, SPG, FOX, FOXA, HOOD, CVNA) were showing up
+# as implausible "small-caps" in a market-cap-ranked momentum study: FOX
+# and FOXA each have exactly ONE stored row, a literal 1.0 (their 2019-03-18
+# spinoff-day filing, already known and named in _drop_magnitude_outliers()'s
+# own docstring above as a case its _OUTLIER_MIN_ROWS guard deliberately
+# skips -- a single-row series is too short for that guard's median check to
+# mean anything, so nothing downstream of it ever caught this); SPG, HOOD,
+# and CVNA each carry one or more stored rows of literal 0.0.
+# _dedupe_earliest_filed()'s own val<=0 guard (see above) should already
+# exclude a 0.0 at WRITE time -- these rows either predate that guard or
+# slipped through a gap since patched -- so this is a defensive, READ-side
+# re-check that protects every consumer regardless of how a bad value
+# entered the table, not just future writes.
+#
+# Deliberately NARROW -- catches only genuine near-zero placeholder values,
+# not a general small-cap/magnitude-outlier detector (see
+# _is_relative_magnitude_outlier() above for that -- also applied,
+# separately, inside _get_shares_series() below). 50 sits comfortably above every real
+# placeholder value found live (0, 1) and comfortably below the smallest
+# genuinely-small real-world share count this project's own test suite uses
+# as an illustrative fixture (100) -- raising this further (e.g. to a
+# "no real company has this few shares" threshold in the thousands or
+# hundred-thousands) was tried and reverted: it broke ~20 pre-existing
+# tests that use small round numbers as stand-ins with no intent to
+# represent realistic magnitudes, without adding real protection beyond
+# what the relative-outlier check below already provides for genuinely
+# large anomalies like CMG's stray 27,962.0 row.
+_MIN_PLAUSIBLE_SHARES = 50.0
+
+# Real US stock splits land on one of these round ratios (or the matching
+# reverse-split reciprocal, e.g. a 1:10 reverse split is a 0.1x ratio);
+# genuine organic share-count change (buybacks, secondary offerings, equity
+# grants) essentially never lands within a tight tolerance of one of these
+# exact values by coincidence. Verified live 2026-08-02 directly against
+# two real, already-stored corporate actions -- no live re-fetch needed to
+# confirm detection works: CMG's real 50:1 split (June 2024) shows a raw
+# consecutive-row ratio of 1,369,476,000 / 27,467,000 = 49.86 (0.28% off
+# 50); SMCI's real 10:1 split (October 2024) shows 593,481,352 / 58,556,527
+# = 10.13 (1.3% off 10) -- both comfortably inside the 5% tolerance below,
+# and consistent with the tighter, already-documented splits this module's
+# own docstring verified for NVDA/AAPL/TSLA/GOOGL.
+_PLAUSIBLE_SPLIT_RATIOS: tuple[float, ...] = (
+    2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 100.0,
+)
+_SPLIT_RATIO_TOLERANCE = 0.05
+
+
+def _closest_plausible_split_ratio(ratio: float) -> Optional[float]:
+    """If *ratio* (or its reciprocal, for a reverse split) is within
+    _SPLIT_RATIO_TOLERANCE of a real, known stock-split multiple, return
+    that multiple (as the value to MULTIPLY an earlier, pre-split reading
+    by -- greater than 1 for a forward split, less than 1 for a reverse
+    split's already-inverted fraction). None if *ratio* doesn't plausibly
+    represent a genuine corporate action.
+    """
+    for r in _PLAUSIBLE_SPLIT_RATIOS:
+        if abs(ratio - r) / r <= _SPLIT_RATIO_TOLERANCE:
+            return r
+        inv = 1.0 / r
+        if abs(ratio - inv) / inv <= _SPLIT_RATIO_TOLERANCE:
+            return inv
+    return None
+
+
+def _split_adjust(series: list[tuple[date, float]]) -> list[tuple[date, float]]:
+    """Retroactively scale every pre-split value in *series* (already
+    sorted ascending by date) up to the same basis as the ticker's most
+    recent, post-split share count -- mirroring exactly how price_data's
+    own close prices are already retroactively split-adjusted by yfinance,
+    so market_cap()'s shares x price stays internally consistent at every
+    historical date, not just post-split ones. SEC's shares-outstanding
+    figures are NOT retroactively adjusted (a filing genuinely reports the
+    company's real share count as of that filing date -- see this module's
+    own docstring's NVDA/AAPL/TSLA/GOOGL examples, where the raw jump IS
+    the real corporate action), so without this, a query date before a real
+    split understates market cap by roughly the split ratio (found live
+    2026-08-02: CMG's real ~$70-80B cap was computing as ~£1B for pre-split
+    2024 query dates).
+
+    Walks backward from the most recent row so multiple splits in one
+    ticker's history compound correctly (each earlier detected split
+    multiplies everything before it, on top of any later splits already
+    applied by a previous iteration of this same walk) -- verified against
+    NVDA's real two-split history (4:1 in 2021, then 10:1 in 2024) in
+    tests/test_market_cap.py.
+
+    Never mutates *series* in place; returns a new list.
+    """
+    if len(series) < 2:
+        return series
+    adjusted = list(series)
+    for i in range(len(adjusted) - 1, 0, -1):
+        prev_date, prev_val = adjusted[i - 1]
+        _cur_date, cur_val = adjusted[i]
+        if prev_val <= 0:
+            continue
+        split = _closest_plausible_split_ratio(cur_val / prev_val)
+        if split is None or split == 1.0:
+            continue
+        for j in range(i):
+            d, v = adjusted[j]
+            adjusted[j] = (d, v * split)
+    return adjusted
+
+
 def _get_shares_series(ticker: str) -> list[tuple[date, float]]:
     """Read *ticker*'s stored quarterly shares-outstanding series, sorted
     by the date each observation actually became public (`filed_date`) --
@@ -700,6 +833,19 @@ def _get_shares_series(ticker: str) -> list[tuple[date, float]]:
     period_end_date across every row (restatement filings in particular
     can file well out of period-end order) — see this module's own
     docstring / MarketCapHistory's docstring for the full rationale.
+
+    Three defensive/corrective passes run on the raw stored rows before the
+    result is cached -- see _MIN_PLAUSIBLE_SHARES, _is_relative_magnitude_
+    outlier(), and _split_adjust()'s own docstrings for the real bugs each
+    one closes: (1) drop any row at or below _MIN_PLAUSIBLE_SHARES (a
+    placeholder/data-defect value, never a genuine reading), (2) re-check
+    the remaining rows for a relative magnitude outlier against the
+    series' own median, reusing _drop_magnitude_outliers()'s exact,
+    already-calibrated write-time rule as a defensive read-time re-check
+    (skipped below _OUTLIER_MIN_ROWS, same as the write-time guard, for
+    the same reason), (3) retroactively split-adjust the remaining series
+    so it's internally consistent with price_data's own split-adjusted
+    prices at every historical date.
     """
     if ticker in _shares_cache:
         return _shares_cache[ticker]
@@ -720,8 +866,17 @@ def _get_shares_series(ticker: str) -> list[tuple[date, float]]:
     out: list[tuple[date, float]] = []
     for period_end_raw, filed_raw, shares in rows:
         effective = _to_date(filed_raw) if filed_raw is not None else _to_date(period_end_raw)
-        out.append((effective, float(shares)))
+        val = float(shares)
+        if val <= _MIN_PLAUSIBLE_SHARES:
+            continue
+        out.append((effective, val))
+
+    if len(out) >= _OUTLIER_MIN_ROWS:
+        median = statistics.median(v for _, v in out)
+        out = [(d, v) for d, v in out if not _is_relative_magnitude_outlier(v, median)]
+
     out.sort(key=lambda pair: pair[0])
+    out = _split_adjust(out)
     _shares_cache[ticker] = out
     return out
 
