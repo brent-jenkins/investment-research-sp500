@@ -5307,6 +5307,122 @@ post-Monday-EOD reproduction check remains genuinely outstanding — not
 attempted as part of this work, and not attemptable before 21:30 UTC
 Monday at the earliest.
 
+### Position sizing, volatility, and tie-breaking — curated-40's return advantage largely re-explained (2026-08-02)
+
+Direct follow-up to the investigation above, prompted by curated-40's
+max position size (£31,682.80) sitting nearly 3x rolling-40's
+(£11,426.10) — visible in every prior comparison but never directly
+investigated as a possible driver of the return gap, separate from
+which stocks were actually picked.
+
+**Headline finding, stated first, per this file's own convention: ~73%
+of the raw £ return gap between curated-40 and rolling-40 is a
+position-sizing/compounding-carryover artifact, not stock selection —
+but not for the reason initially hypothesized.** The working hypothesis
+going in was "curated-40's fixed mega-cap roster is structurally calmer
+than rolling-40's rotating mix of newer entrants, so VaR sizes it
+bigger" — **checked directly and refuted** (see below). The real
+mechanism is simpler and purely structural: `per_trade_pct` sizes every
+new position as a percentage of the account's *current, compounding*
+balance, and because train/test is a post-hoc split of one continuous
+2007–2026 run (not two independent simulations), curated-40 had already
+compounded to a materially larger balance than rolling-40 by the moment
+the test period even begins — independent of anything about the test
+period's own trades.
+
+**Part A — position sizing, quantified precisely.** Average test-period
+`position_gbp`: curated-40 £12,116.01 vs. rolling-40 £7,106.54 (1.70x).
+Ceiling-hit rate (fraction of sizing events where `per_trade_pct`'s
+ceiling, not VaR's own volatility-scaled risk budget, was the binding
+constraint) went the *opposite* direction from the volatility
+hypothesis: rolling-40 hits its ceiling **more** often (89.58% vs.
+curated-40's 85.16%) — ruling out "curated hits the ceiling more because
+it's calmer" as the mechanism before Part B's volatility check even ran.
+The real driver, found by checking account balance at the exact
+2020-01-01 train/test boundary: curated-40 entered the test period with
+**£170,314.16**, rolling-40 with **£114,388.90** — a 1.49x gap purely
+from 2009–2019 performance, before the period being compared at all.
+That one number then mechanically inflates every subsequent test-period
+position via the `per_trade_pct` ceiling, regardless of that trade's own
+merit. A rough reweighting (holding each trade's own `pnl_pct` fixed,
+rescaling `pnl_gbp` to a common reference position size — not a full
+re-simulation, sized to be honest about the effect, not to prove a
+predetermined answer) showed the raw £125,755.74 test-period gap
+(curated £238,323.01 vs. rolling £112,567.27, a 2.12x ratio) shrinks to
+**£33,629.78 once both variants are reweighted to a common average
+position size — 73.3% of the raw gap disappears**. What survives —
+1.910% vs. 1.482% mean return per trade, a **1.274x** ratio — matches
+the plain, £-unweighted sum-of-`pnl_pct` comparison almost exactly
+(20.57 vs. 16.15, same 1.274x), confirming this is the genuine,
+sizing-independent selection edge, not an artifact of the reweighting
+method itself.
+
+**Part B — the "curated-40 is calmer" premise is refuted, not
+confirmed, by real numbers.** Per-ticker annualized realized volatility
+(daily log-return stdev × √252, test period): curated-40 mean 34.97% /
+median 33.30% (n=40) vs. rolling-40 mean 36.80% / median 33.39% (n=115)
+— medians essentially identical; rolling-40's slightly higher mean is
+driven entirely by its much wider tail (SNDK at 105.90% vs. curated-40's
+own max, TSLA at 64.96%), not a broad structural calmness difference.
+More decisively, the trade-weighted `|holding_var|` — the actual
+volatility measure `_var_position_size_core()` sizes against, pulled
+from real sizing-event instrumentation rather than a proxy — shows
+curated-40 **slightly more** volatile, not less: mean 14.608% vs.
+rolling-40's 14.061% (median 13.574% vs. 13.111%). This is fully
+consistent with, and mechanistically explains, Part A's ceiling-hit-rate
+finding running the "wrong" way: marginally *higher* volatility means a
+marginally *smaller* raw VaR-desired size relative to the ceiling, so
+curated-40 hits its ceiling *less* often — the reverse of what the
+original volatility hypothesis predicted. **Any future comparison
+between a curated and a rolling/broadened universe should not assume a
+narrower, longer-established roster is automatically calmer** — checked
+directly here, twice, and found not to hold.
+
+**Part C — tie-breaking: present in the code exactly where suspected,
+confirmed empirically inert.** `analysis/backtest.py`'s admission logic
+(`_admit_group()`, both `simulate_portfolio_compounding_mtm()` at line
+~1261 and the cost-basis engine's identical logic at line ~911) sorts
+candidates via `key=lambda c: (-c[1], per_ticker[c[0]]["idx"])` —
+momentum descending as the primary key, but a secondary tie-break on
+`idx`, the ticker's position in whatever order the caller's
+`tickers_cache` list was built in. Since `analysis.universe.ALL_TICKERS`
+is `tuple(sorted(...))` and every research script built for this
+project's rolling-universe work also sources its ticker list via
+`sorted(...)`, this tie-break is, in practice, still alphabetical ticker
+order — the earlier priority-engine fix (see "Trade prioritization and
+capacity-allocation engine" above) demoted the old ordering rule to a
+tie-break rather than eliminating it outright. Checked empirically
+whether it ever actually fires, not assumed either way: scanned every
+day across the full 2009–2026 window (4,170 days with ≥2 eligible
+candidates, both universes) for exact-float momentum ties among
+signal-eligible tickers — **zero ties found, in either universe, across
+the entire window**. Real, continuous trailing-12-month-return momentum
+values computed from real daily closes essentially never collide
+exactly between two different tickers. Confirmed present, confirmed to
+have never fired, contributes nothing to the curated-40 vs. rolling-40
+gap as measured.
+
+**Updated, direct conclusion.** Of the ~£125,756 raw test-period £ gap,
+roughly 73% (≈£92,126) is the position-sizing/compounding-carryover
+artifact described above — not volatility-driven (Part B refutes that
+specific mechanism directly) and not an ordering/tie-break artifact
+(Part C confirms the residual tie-break exists but never fires). The
+remaining ~27% (a **1.274x** ratio, 1.910% vs. 1.482% average return per
+trade) is curated-40's genuine selection/timing edge — real, but
+meaningfully smaller than the raw headline figures suggested. **Any
+future citation of the curated-40 vs. rolling-40 comparison should use
+the sizing-normalized ~1.27x figure as the trustworthy measure of
+selection quality, not the raw ~2.1x £ figure**, which is substantially
+inflated by an accounting mechanism (compounding-balance carryover from
+before the comparison window) unrelated to which stocks were actually
+picked.
+
+Full local suite: 434 passing, confirmed both before and after (this
+investigation only monkeypatched functions at runtime inside a
+throwaway research script — no source files were modified). Nothing
+pushed; the investigation itself was pure analysis, not a code or config
+change, so there is nothing to commit here beyond this write-up.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
