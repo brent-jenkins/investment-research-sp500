@@ -18,6 +18,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import html
+import json
 import logging
 import subprocess
 import time
@@ -30,6 +31,7 @@ import streamlit as st
 import yaml
 
 from analysis.backtest import compute_metrics, equity_curve_gbp
+from analysis.universe import MEMBERSHIP_STALE_HOURS, is_membership_refresh_stale
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
 from data.ingestion import get_all_tickers, get_all_watchlist_entries, get_price_df, pull_incremental
 from data.scheduler import start_scheduler
@@ -984,6 +986,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     last_refresh = get_metadata("last_full_refresh")
     last_sched   = get_metadata("last_scheduled_run")
     last_sched_name = get_metadata_str("last_scheduled_run_name") or ""
+    last_membership_refresh = get_metadata("last_membership_refresh_success")
 
     sc1, sc2, sc3 = st.columns(3)
     _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info")
@@ -1505,6 +1508,36 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     st.divider()
     st.markdown("### Scheduler Health")
 
+    _mr_val, _mr_sub = _age_display(last_membership_refresh)
+    _mr_stale = is_membership_refresh_stale(last_membership_refresh)
+    _mr_colour = "#dc2626" if _mr_stale else "#8899AA"
+    _mr_caption = f"Membership refresh (fja05680/sp500): last successful {_mr_val} ({_mr_sub})"
+    if _mr_stale:
+        _mr_caption += f" — OVERDUE, past the {MEMBERSHIP_STALE_HOURS:.0f}h (~2 cycle) threshold"
+
+    _wiki_json = get_metadata_str("membership_wikipedia_lag_check")
+    _wiki_caption = "Wikipedia lag check: not yet run"
+    _wiki_colour = "#8899AA"
+    if _wiki_json:
+        try:
+            _wiki_result = json.loads(_wiki_json)
+            _wiki_n = len(_wiki_result.get("disagreements", []))
+            if _wiki_result.get("error"):
+                _wiki_caption = f"Wikipedia lag check: last attempt failed — {_wiki_result['error']}"
+                _wiki_colour = "#dc2626"
+            elif _wiki_n:
+                _wiki_caption = f"Wikipedia lag check: {_wiki_n} disagreement(s) flagged (lag detector only — not independent verification)"
+                _wiki_colour = "#f59e0b"
+            else:
+                _wiki_caption = f"Wikipedia lag check: no disagreement ({_wiki_result.get('checked', 0)} ticker(s) checked — lag detector only, not independent verification)"
+        except Exception:
+            pass
+    st.markdown(
+        f'<div style="font-size:0.78rem;color:{_mr_colour};margin-bottom:2px">{html.escape(_mr_caption)}</div>'
+        f'<div style="font-size:0.78rem;color:{_wiki_colour};margin-bottom:8px">{html.escape(_wiki_caption)}</div>',
+        unsafe_allow_html=True,
+    )
+
     try:
         import data.scheduler as _sched_mod
         _aps        = getattr(_sched_mod, "_scheduler", None)
@@ -1603,6 +1636,8 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                 _dot, _badge = "#16a34a", "OK"
             if _job.id == "scheduled_eod" and _eod_overdue():
                 _dot, _badge = "#dc2626", "OVERDUE"
+            if _job.id == "membership_refresh" and is_membership_refresh_stale(last_membership_refresh):
+                _dot, _badge = "#dc2626", "OVERDUE"
             _sh_rows.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge))
         st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
     elif _daemon_active:
@@ -1653,6 +1688,8 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                 )
             _dot, _badge = "#16a34a", "OK"
             if _sid == "scheduled_eod" and _eod_overdue():
+                _dot, _badge = "#dc2626", "OVERDUE"
+            if _sid == "membership_refresh" and is_membership_refresh_stale(last_membership_refresh):
                 _dot, _badge = "#dc2626", "OVERDUE"
             _sh_rows_d.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge))
         st.markdown(_sh_head + "".join(_sh_rows_d) + "</div>", unsafe_allow_html=True)

@@ -9,7 +9,14 @@ from datetime import datetime, timedelta
 import pytest
 
 from data.database import set_metadata
-from output.briefing import _gather_weekly_data, _smtp_send, _weekly_summary_html, _weekly_summary_text, send_weekly_summary_email
+from output.briefing import (
+    _gather_weekly_data,
+    _smtp_send,
+    _weekly_summary_html,
+    _weekly_summary_text,
+    send_membership_staleness_alert,
+    send_weekly_summary_email,
+)
 
 
 def _config(enabled=True, to_addresses=None):
@@ -332,3 +339,119 @@ def test_send_weekly_summary_records_its_own_timestamp_only_on_success(db_engine
     sent, _ = send_weekly_summary_email(_config(enabled=False))
     assert sent is False
     assert get_metadata_str("last_weekly_summary_sent") is None
+
+
+# ---------------------------------------------------------------------------
+# send_membership_staleness_alert() (2026-08-02) -- mirrors brokers/
+# trading212.py:_send_t212_error_email()'s enabled-gate + own-dedicated-
+# cooldown pattern exactly, but for the membership-refresh staleness alert
+# (see analysis/universe.py's MEMBERSHIP_STALE_HOURS docstring for what
+# triggers this). Must use its OWN cooldown key, never the T212 error
+# alert's or the weekly summary's -- same reasoning as the weekly summary's
+# own separate-trigger-path tests above.
+# ---------------------------------------------------------------------------
+
+_MEMBERSHIP_STALENESS_KEY = "membership_staleness_email_last_sent"
+
+
+def test_membership_staleness_alert_disabled_skips_cleanly(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, detail = send_membership_staleness_alert(96.0, 48.0, _config(enabled=False))
+
+    assert sent is False
+    smtp_cls.assert_not_called()
+
+
+def test_membership_staleness_alert_sends_on_first_occurrence(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_membership_staleness_alert(96.0, 48.0, _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_membership_staleness_alert_handles_infinite_age_never_recorded(db_engine, mocker):
+    """last_success=None upstream -> age_hours=inf -- must render sensible
+    copy, not crash on formatting an infinite float."""
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_membership_staleness_alert(float("inf"), 48.0, _config())
+
+    assert sent is True
+    raw = mock_server.sendmail.call_args[0][2]
+    # The message's plain/html parts may be base64/quoted-printable encoded
+    # (MIMEText auto-selects an encoding once it sees the non-ASCII em-dash
+    # this alert's copy uses) -- decode via the real email parser rather
+    # than substring-matching the raw wire format.
+    msg = _email_pkg.message_from_string(raw)
+    decoded_parts = [
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    ]
+    combined = " ".join(decoded_parts).lower()
+    assert "never recorded" in combined or "unknown period" in combined
+
+
+def test_membership_staleness_alert_second_occurrence_within_cooldown_is_skipped(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_membership_staleness_alert(96.0, 48.0, cfg)
+    mock_server.sendmail.reset_mock()
+
+    send_membership_staleness_alert(97.0, 48.0, cfg)
+
+    mock_server.sendmail.assert_not_called()
+
+
+def test_membership_staleness_alert_sends_again_once_cooldown_has_elapsed(db_engine, mocker):
+    from data.database import set_metadata as _set_metadata
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    stale_last_sent = (datetime.utcnow() - timedelta(hours=9)).isoformat()
+    _set_metadata(_MEMBERSHIP_STALENESS_KEY, stale_last_sent)
+
+    cfg = _config()
+    cfg["notifications"]["email"]["alert_cooldown_hours"] = 8
+    send_membership_staleness_alert(200.0, 48.0, cfg)
+
+    mock_server.sendmail.assert_called_once()
+
+
+def test_membership_staleness_alert_disabled_does_not_consume_cooldown(db_engine, mocker):
+    from data.database import get_metadata_str
+    mocker.patch("output.briefing.smtplib.SMTP")
+
+    send_membership_staleness_alert(96.0, 48.0, _config(enabled=False))
+
+    assert get_metadata_str(_MEMBERSHIP_STALENESS_KEY) is None
+
+
+def test_membership_staleness_alert_uses_its_own_cooldown_key_not_shared_with_others(db_engine, mocker):
+    """A T212-error-alert cooldown or weekly-summary timestamp already in
+    effect must never suppress this alert -- deliberately separate state,
+    same principle as the weekly summary's own separate-trigger-path
+    tests above."""
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
+    set_metadata("last_weekly_summary_sent", datetime.utcnow().isoformat())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_membership_staleness_alert(96.0, 48.0, _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()

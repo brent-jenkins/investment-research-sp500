@@ -2,7 +2,7 @@
 the ongoing refresh mechanism that keeps it from becoming a static,
 decaying snapshot.
 """
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -284,3 +284,172 @@ def test_get_max_holding_days_stock_default_is_30_when_config_key_absent(mocker)
     mocker.patch.object(v2u, "ETF_TICKERS", ())
     mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {})
     assert v2u.get_max_holding_days("UNKNOWN_TICKER", {}) == 30
+
+
+# ---------------------------------------------------------------------------
+# Membership refresh staleness tracking (2026-08-02) -- fja05680/sp500 is
+# now the sole live eligibility gate and previously had no staleness
+# timestamp at all: a fetch failure just logged a WARNING and returned
+# silently. Mirrors main.py:_eod_overdue()'s exact weekday/Monday-exemption
+# shape -- see is_membership_refresh_stale()'s own docstring for why.
+# 2026-08-03 (Monday), 2026-08-04 (Tuesday), 2026-08-01 (Saturday) below are
+# real, verified weekdays for the dates used, not assumed.
+# ---------------------------------------------------------------------------
+
+def test_refresh_from_source_stamps_success_timestamp(db_engine, mocker):
+    assert v2u.get_last_membership_refresh_success() is None  # nothing recorded yet
+
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {})
+    mocker.patch.object(v2u, "_fetch_source_csv", return_value="date,tickers\n2020-01-01,\"ZZZ\"\n")
+
+    before = datetime.utcnow()
+    v2u.refresh_membership_from_source()
+    after = datetime.utcnow()
+
+    stamped = v2u.get_last_membership_refresh_success()
+    assert stamped is not None
+    assert before - timedelta(seconds=2) <= stamped <= after + timedelta(seconds=2)
+
+
+def test_refresh_from_source_does_not_stamp_on_fetch_failure(db_engine, mocker):
+    mocker.patch.object(v2u, "_fetch_source_csv", side_effect=RuntimeError("network down"))
+    v2u.refresh_membership_from_source()
+    assert v2u.get_last_membership_refresh_success() is None
+
+
+def test_refresh_from_source_stamps_even_with_per_ticker_reconstruction_errors(db_engine, mocker):
+    """A malformed row causing one ticker's reconstruction to fail is a
+    different, already-visible problem (summary['errors']) from the source
+    itself being unreachable -- it must not suppress the success stamp,
+    since the mechanism genuinely did talk to the source successfully."""
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": []})
+    mocker.patch.object(v2u, "_fetch_source_csv", return_value="date,tickers\n2020-01-01,\"AAPL\"\n")
+    mocker.patch.object(v2u, "_reconstruct_windows", side_effect=RuntimeError("malformed row"))
+
+    summary = v2u.refresh_membership_from_source()
+
+    assert summary["errors"]
+    assert v2u.get_last_membership_refresh_success() is not None
+
+
+def test_is_membership_refresh_stale_false_when_fresh():
+    now = datetime(2026, 8, 4, 12, 0)  # Tuesday
+    last_success = now - timedelta(hours=1)
+    assert not v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+def test_is_membership_refresh_stale_true_past_threshold_on_weekday():
+    now = datetime(2026, 8, 4, 12, 0)  # Tuesday
+    last_success = now - timedelta(hours=49)
+    assert v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+def test_is_membership_refresh_stale_false_just_under_threshold():
+    now = datetime(2026, 8, 4, 12, 0)  # Tuesday
+    last_success = now - timedelta(hours=47)
+    assert not v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+def test_is_membership_refresh_stale_none_last_success_is_infinitely_stale():
+    now = datetime(2026, 8, 4, 12, 0)  # Tuesday
+    assert v2u.is_membership_refresh_stale(None, now=now)
+
+
+def test_is_membership_refresh_stale_monday_before_job_time_is_exempted():
+    """Friday 21:15 -> Monday 07:00 is ~57.75h old (> 48h) purely from the
+    weekend gap, with nothing actually wrong -- must not be flagged before
+    Monday's own 21:15 UTC run has had a chance to succeed."""
+    last_success = datetime(2026, 7, 31, 21, 15)  # Friday
+    now = datetime(2026, 8, 3, 7, 0)  # Monday, before 21:15
+    assert not v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+def test_is_membership_refresh_stale_monday_after_job_time_is_not_exempted():
+    """Once Monday's own 21:15 UTC run time has passed without a fresh
+    success, the exemption no longer applies -- a genuinely missed Monday
+    cycle must surface, not be silently forgiven all day."""
+    last_success = datetime(2026, 7, 31, 21, 15)  # Friday
+    now = datetime(2026, 8, 3, 22, 0)  # Monday, after 21:15
+    assert v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+def test_is_membership_refresh_stale_weekend_never_flagged():
+    last_success = datetime(2026, 7, 27, 12, 0)  # the prior Monday -- way over 48h old
+    now = datetime(2026, 8, 1, 12, 0)  # Saturday
+    assert not v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+def test_is_membership_refresh_stale_handles_tz_aware_last_success():
+    now = datetime(2026, 8, 4, 12, 0)  # Tuesday
+    last_success = (now - timedelta(hours=1)).replace(tzinfo=timezone.utc)
+    assert not v2u.is_membership_refresh_stale(last_success, now=now)
+
+
+# ---------------------------------------------------------------------------
+# Wikipedia lag check (2026-08-02) -- a lag detector against the data's own
+# upstream source, NOT independent verification (fja05680/sp500's own
+# maintainer updates by diffing against this exact Wikipedia page). Must
+# flag disagreement, never raise, never gate eligibility.
+# ---------------------------------------------------------------------------
+
+def test_check_wikipedia_lag_flags_genuine_disagreement(db_engine, mocker):
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": [], "MISSING": []})
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
+    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: True)  # our data: both are members
+
+    result = v2u.check_wikipedia_lag()
+
+    assert result["checked"] == 2
+    assert result["error"] is None
+    assert [d["ticker"] for d in result["disagreements"]] == ["MISSING"]
+    assert result["disagreements"][0] == {"ticker": "MISSING", "our_member": True, "wikipedia_member": False}
+
+
+def test_check_wikipedia_lag_no_disagreement_when_they_match(db_engine, mocker):
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": [], "GONE": []})
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
+    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: t == "AAPL")
+
+    result = v2u.check_wikipedia_lag()
+
+    assert result["disagreements"] == []
+
+
+def test_check_wikipedia_lag_never_raises_on_fetch_failure(db_engine, mocker):
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", side_effect=RuntimeError("wikipedia unreachable"))
+
+    result = v2u.check_wikipedia_lag()  # must not raise
+
+    assert result["error"] is not None
+    assert result["disagreements"] == []
+
+
+def test_check_wikipedia_lag_note_labels_it_as_a_lag_detector_not_verification(db_engine, mocker):
+    """Critical framing requirement -- must never read as independent
+    verification, since agreement here proves nothing about whether
+    Wikipedia's own current-members list is itself correct."""
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": []})
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
+    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: True)
+
+    result = v2u.check_wikipedia_lag()
+
+    note = result["note"].lower()
+    assert "lag detector" in note
+    assert "not independent verification" in note
+
+
+def test_check_wikipedia_lag_persists_result_to_metadata(db_engine, mocker):
+    from data.database import get_metadata_str
+    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": []})
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
+    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: True)
+
+    v2u.check_wikipedia_lag()
+
+    stored = get_metadata_str(v2u._WIKI_LAG_METADATA_KEY)
+    assert stored is not None
+    import json
+    parsed = json.loads(stored)
+    assert parsed["checked"] == 1
+    assert parsed["disagreements"] == []

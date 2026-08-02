@@ -5,6 +5,7 @@ building, VIX-spike and central-bank alerts were all signal/regime-driven
 content tied to the six-module confluence system and had no equivalent to
 carry forward).
 """
+import html
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _UK_TZ = ZoneInfo("Europe/London")
 _LAST_WEEKLY_SUMMARY_KEY = "last_weekly_summary_sent"
+_MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY = "membership_staleness_email_last_sent"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -374,4 +376,83 @@ def send_weekly_summary_email(config: dict) -> tuple[bool, str]:
             set_metadata(_LAST_WEEKLY_SUMMARY_KEY, data["generated_at"].isoformat())
         except Exception as exc:
             logger.warning("Could not record last_weekly_summary_sent: %s", exc)
+    return sent, detail
+
+
+def send_membership_staleness_alert(age_hours: float, threshold_hours: float, config: dict) -> tuple[bool, str]:
+    """Alert that the point-in-time S&P 500 membership refresh
+    (analysis/universe.py:refresh_membership_from_source(), the SOLE live
+    eligibility gate for stock entries) has gone unsuccessful for longer
+    than threshold_hours (~2 reconciliation cycles).
+
+    Gated the same two ways as brokers/trading212.py's
+    _send_t212_error_email() (2026-08-02 precedent): notifications.email.
+    enabled (checked inside _smtp_send() itself) and its OWN dedicated
+    cooldown key, _MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY -- deliberately
+    separate from every other email's cooldown (t212_error_email_last_sent,
+    the weekly summary's own timestamp), for the identical reason the
+    weekly summary already keeps its own trigger path (see this module's
+    docstring and send_weekly_summary_email() above): a persistent
+    membership-refresh failure is a different problem from a T212 order
+    error or a scheduled weekly send, and sharing one cooldown would let
+    any one of them silently "use up" another's alert window. The
+    timestamp is only updated on a genuinely successful send, so a
+    disabled config or a transient SMTP failure never suppresses the next
+    real alert once email is re-enabled or the SMTP issue clears.
+    """
+    from data.database import get_metadata_str, set_metadata
+
+    cooldown_hours = float(config.get("notifications", {}).get("email", {}).get("alert_cooldown_hours", 8))
+    last_sent_str = get_metadata_str(_MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY)
+    if last_sent_str:
+        try:
+            hours_since = (datetime.utcnow() - datetime.fromisoformat(last_sent_str)).total_seconds() / 3600
+            if hours_since < cooldown_hours:
+                logger.info(
+                    "Membership staleness email skipped — within %.1fh cooldown (last sent %.1fh ago)",
+                    cooldown_hours, hours_since,
+                )
+                return False, "within cooldown"
+        except ValueError:
+            pass  # corrupt/unexpected stored value -- treat as no prior send
+
+    age_str = f"{age_hours:.1f}h" if age_hours != float("inf") else "an unknown period (never recorded)"
+    subject = "SP500INVEST: S&P 500 membership refresh is stale"
+    text_body = (
+        "The point-in-time S&P 500 membership refresh "
+        "(analysis/universe.py:refresh_membership_from_source(), the SOLE "
+        "live eligibility gate for stock entries) has not completed "
+        f"successfully in {age_str} — past the {threshold_hours:.0f}h "
+        "(~2 reconciliation cycle) threshold.\n\n"
+        "This does NOT necessarily mean a real index change has been "
+        "missed — the underlying source (github.com/fja05680/sp500) only "
+        "updates every 1-5 months in practice. It means the DAILY refresh "
+        "job that keeps this system's local copy in sync has itself "
+        "stopped succeeding — most likely because the source is "
+        "unreachable, renamed, rate-limiting, or its raw CSV URL has "
+        "changed. Until this is fixed, live stock eligibility is being "
+        "decided against a frozen, aging snapshot with no further checks.\n\n"
+        "Check the Status page's Scheduler Health table (Membership "
+        "Refresh row) and server logs for "
+        "'refresh_membership_from_source' / 'Membership refresh'."
+    )
+    html_body = (
+        '<p style="color:#dc2626;font-weight:bold">S&amp;P 500 membership refresh is stale</p>'
+        f'<p>Last successful reconciliation: {html.escape(age_str)} ago '
+        f'(threshold: {threshold_hours:.0f}h, ~2 reconciliation cycles).</p>'
+        '<p>This does <b>not</b> necessarily mean a real index change was missed — '
+        'the underlying source updates every 1-5 months in practice — it means '
+        'the <b>daily refresh job itself has stopped succeeding</b>, most likely '
+        'because github.com/fja05680/sp500 is unreachable, renamed, or its raw '
+        'CSV URL changed. Live stock eligibility is being decided against a '
+        'frozen snapshot until this is fixed.</p>'
+        "<p>Check the Status page's Scheduler Health table (Membership Refresh "
+        "row) and server logs.</p>"
+    )
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
+        except Exception as exc:
+            logger.warning("Could not record membership_staleness_email_last_sent: %s", exc)
     return sent, detail

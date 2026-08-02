@@ -465,8 +465,30 @@ def _membership_refresh_job() -> None:
     try/except here is an extra layer specifically because this job sits
     directly ahead of the EOD job in the schedule, and a refresh failure
     must never block that job from running.
+
+    Two additional checks (2026-08-02), each in its own try/except so a
+    failure in either never blocks the refresh above or the EOD job that
+    follows this one 15 minutes later:
+
+    1. Staleness — re-checks is_membership_refresh_stale() using whatever
+       last_membership_refresh_success is now (freshly updated if this
+       run's fetch just succeeded, unchanged/still old if it just failed
+       or has been failing for a while) and sends an email alert (subject
+       to its own cooldown) if the refresh has gone unsuccessful for more
+       than ~2 reconciliation cycles. See analysis/universe.py's own
+       MEMBERSHIP_STALE_HOURS docstring for why 48h was chosen.
+    2. Wikipedia lag check — see analysis/universe.py:check_wikipedia_lag()
+       for what this does and does not prove (a lag detector against the
+       data's own upstream source, not independent verification). Flags
+       only; never blocks anything.
     """
-    from analysis.universe import refresh_membership_from_source  # noqa: PLC0415
+    from analysis.universe import (  # noqa: PLC0415
+        MEMBERSHIP_STALE_HOURS,
+        check_wikipedia_lag,
+        get_last_membership_refresh_success,
+        is_membership_refresh_stale,
+        refresh_membership_from_source,
+    )
 
     try:
         summary = refresh_membership_from_source()
@@ -482,6 +504,29 @@ def _membership_refresh_job() -> None:
             )
     except Exception as exc:
         logger.warning("Membership refresh job failed: %s", exc)
+
+    try:
+        last_success = get_last_membership_refresh_success()
+        if is_membership_refresh_stale(last_success):
+            age_hours = (
+                (datetime.utcnow() - last_success.replace(tzinfo=None)).total_seconds() / 3600
+                if last_success else float("inf")
+            )
+            logger.warning(
+                "Membership refresh stale — last success %s (%s), threshold %.0fh.",
+                last_success.isoformat() if last_success else "never",
+                f"{age_hours:.1f}h ago" if age_hours != float("inf") else "unknown age",
+                MEMBERSHIP_STALE_HOURS,
+            )
+            from output.briefing import send_membership_staleness_alert  # noqa: PLC0415
+            send_membership_staleness_alert(age_hours, MEMBERSHIP_STALE_HOURS, _load_config())
+    except Exception as exc:
+        logger.warning("Membership staleness check/alert failed: %s", exc)
+
+    try:
+        check_wikipedia_lag()
+    except Exception as exc:
+        logger.warning("Wikipedia membership lag check failed: %s", exc)
 
 
 def _weekly_summary_job() -> None:

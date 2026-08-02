@@ -18,6 +18,8 @@ to test.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import data.scheduler as scheduler
 
 # Fixed "now" date used across tests — a Wednesday, so the weekday guard
@@ -508,6 +510,12 @@ def test_membership_refresh_job_calls_refresh_and_logs_changes(mocker, caplog):
         "analysis.universe.refresh_membership_from_source",
         return_value={"checked": 40, "changed": [{"ticker": "XYZ", "old": [], "new": [("2026-01-01", "2026-12-31")]}], "errors": []},
     )
+    # Staleness/lag checks are exercised in their own dedicated tests below --
+    # kept a deterministic "not stale" here so this test stays focused on the
+    # refresh-and-log behaviour and never risks a real SMTP/network attempt.
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=datetime.utcnow())
+    mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=False)
+    mocker.patch("analysis.universe.check_wikipedia_lag", return_value={"checked": 39, "disagreements": []})
     with caplog.at_level("INFO"):
         scheduler._membership_refresh_job()
     mock_refresh.assert_called_once()
@@ -519,7 +527,77 @@ def test_membership_refresh_job_never_raises_on_failure(mocker):
         "analysis.universe.refresh_membership_from_source",
         side_effect=RuntimeError("network down"),
     )
+    # Both new checks (2026-08-02) also made to fail -- the job must still
+    # never raise, each is in its own try/except.
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", side_effect=RuntimeError("db down"))
+    mocker.patch("analysis.universe.check_wikipedia_lag", side_effect=RuntimeError("wiki down"))
     scheduler._membership_refresh_job()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Membership refresh staleness alert + Wikipedia lag check (2026-08-02) --
+# fja05680/sp500 is now the sole live eligibility gate and previously had no
+# staleness timestamp, no alert, and no lag detector at all. See
+# analysis/universe.py's MEMBERSHIP_STALE_HOURS/is_membership_refresh_stale()/
+# check_wikipedia_lag() docstrings for the full rationale.
+# ---------------------------------------------------------------------------
+
+def test_membership_refresh_job_sends_alert_when_stale(mocker):
+    """When is_membership_refresh_stale() says stale, the job must call
+    send_membership_staleness_alert() with the real age and threshold --
+    is_membership_refresh_stale() itself is mocked here so this test is
+    immune to which real weekday/time it happens to run on (its own
+    formula is covered directly, and deterministically, in
+    tests/test_universe.py)."""
+    mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
+    stale_last_success = datetime.utcnow() - timedelta(hours=96)
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=stale_last_success)
+    mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=True)
+    mocker.patch("analysis.universe.check_wikipedia_lag", return_value={"checked": 39, "disagreements": []})
+    mocker.patch("data.scheduler._load_config", return_value={"notifications": {"email": {"enabled": True}}})
+    mock_alert = mocker.patch("output.briefing.send_membership_staleness_alert")
+
+    scheduler._membership_refresh_job()
+
+    mock_alert.assert_called_once()
+    age_hours, threshold_hours, cfg = mock_alert.call_args[0]
+    assert age_hours == pytest.approx(96.0, abs=0.1)
+    assert threshold_hours == pytest.approx(48.0)
+    assert cfg == {"notifications": {"email": {"enabled": True}}}
+
+
+def test_membership_refresh_job_does_not_alert_when_not_stale(mocker):
+    mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=datetime.utcnow())
+    mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=False)
+    mocker.patch("analysis.universe.check_wikipedia_lag", return_value={"checked": 39, "disagreements": []})
+    mock_alert = mocker.patch("output.briefing.send_membership_staleness_alert")
+
+    scheduler._membership_refresh_job()
+
+    mock_alert.assert_not_called()
+
+
+def test_membership_refresh_job_alert_never_raises_when_alert_itself_fails(mocker):
+    mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=None)
+    mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=True)
+    mocker.patch("analysis.universe.check_wikipedia_lag", return_value={"checked": 39, "disagreements": []})
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("output.briefing.send_membership_staleness_alert", side_effect=RuntimeError("smtp down"))
+
+    scheduler._membership_refresh_job()  # must not raise
+
+
+def test_membership_refresh_job_calls_wikipedia_lag_check(mocker):
+    mocker.patch("analysis.universe.refresh_membership_from_source", return_value={"checked": 0, "changed": [], "errors": []})
+    mocker.patch("analysis.universe.get_last_membership_refresh_success", return_value=datetime.utcnow())
+    mocker.patch("analysis.universe.is_membership_refresh_stale", return_value=False)
+    mock_wiki = mocker.patch("analysis.universe.check_wikipedia_lag", return_value={"checked": 39, "disagreements": []})
+
+    scheduler._membership_refresh_job()
+
+    mock_wiki.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,9 @@ membership span (see _KNOWN_TICKER_RENAMES below): FB, added 2013-12-23,
 renamed 2022-06-09; the underlying company's index membership never
 lapsed, only its ticker symbol changed.
 """
+import json
 import logging
+import re
 from datetime import date, datetime
 from typing import Optional
 
@@ -58,6 +60,57 @@ _SOURCE_URL = (
     "S%26P%20500%20Historical%20Components%20%26%20Changes%20(Updated).csv"
 )
 _SENTINEL_END = date(2099, 12, 31)  # "still a member as of the latest known data"
+
+# Staleness tracking (2026-08-02) -- fja05680/sp500 is now the SOLE live
+# eligibility gate (see this module's own docstring). Before this, a fetch
+# failure just logged a WARNING and returned silently -- no timestamp, no
+# alert, no way to tell "refreshed today" from "silently failing since a
+# deploy three weeks ago" short of grepping server logs. Mirrors the
+# existing FRED _calendar_staleness / EOD OVERDUE badge pattern rather than
+# inventing something new -- see main.py:_eod_overdue() for the sibling
+# implementation this one is modelled on.
+_LAST_REFRESH_SUCCESS_KEY = "last_membership_refresh_success"
+
+# The job (data/scheduler.py:_membership_refresh_job()) fires Mon-Fri only,
+# once per weekday, at 21:15 UTC -- identical cadence to the EOD job
+# _eod_overdue() already watches. "~2 reconciliation cycles" (looser than
+# EOD's own ~1-cycle/26h bar) is a deliberate choice, not the same number
+# reused: a missed EOD cycle risks trading on stale PRICE data the same
+# day, which is urgent; the underlying membership source itself only
+# changes every 1-5 months in practice (see this module's docstring), so
+# one missed refresh is low-stakes and tolerating it before alerting cuts
+# noise without meaningfully delaying detection of a genuine operational
+# break (the source going unreachable, a renamed/moved repo, etc.).
+# 48h is exactly 2 weekday cycles under normal Mon-Fri sequencing; across
+# a weekend a single missed Friday->Monday refresh can also cross this
+# line by Tuesday (a real, accepted approximation -- see is_membership_
+# refresh_stale()'s own docstring -- the same class of imprecision the
+# EOD badge's 26h/Monday-exemption design already accepts).
+MEMBERSHIP_STALE_HOURS = 48.0
+_MEMBERSHIP_JOB_HOUR, _MEMBERSHIP_JOB_MINUTE = 21, 15
+
+# Wikipedia lag check (2026-08-02) -- NOT independent verification. See
+# check_wikipedia_lag()'s own docstring for why: fja05680/sp500's own
+# maintainer updates his data by diffing against this exact page (see this
+# module's docstring), so Wikipedia is this data's own upstream source,
+# not a second opinion. A genuine Wikipedia error would show up as
+# agreement on both sides and go undetected here. What this actually
+# detects: whether our local copy has fallen behind Wikipedia's *current*
+# state, given the maintainer's own irregular 1-5 month update cadence.
+_WIKI_LAG_METADATA_KEY = "membership_wikipedia_lag_check"
+_WIKIPEDIA_URL = (
+    "https://en.wikipedia.org/w/index.php"
+    "?title=List_of_S%26P_500_companies&action=raw"
+)
+# Wikipedia's "List of S&P 500 companies" wikitable renders each row's
+# ticker cell via an exchange-specific template -- {{NyseSymbol|MMM}},
+# {{NasdaqSymbol|AAPL}}, etc. (confirmed directly against the live raw
+# wikitext 2026-08-02: 502 tickers, all via {{NyseSymbol|...}}/
+# {{NasdaqSymbol|...}}). Matched generically on "*Symbol" rather than
+# hardcoding the two exchange names seen today, in case Wikipedia ever
+# adds a third (e.g. a future Cboe-listed constituent) without changing
+# the template naming convention.
+_WIKI_TICKER_RE = re.compile(r"\{\{[A-Za-z]+Symbol\|([A-Z][A-Z.\-]*)\}\}")
 
 ETF_TICKERS: tuple[str, ...] = (
     "AMLP", "EEM", "EMB", "EWG", "EWJ", "EWZ", "FXI", "GLD", "HYG", "IBB",
@@ -335,6 +388,19 @@ def refresh_membership_from_source(config: Optional[dict] = None) -> dict:
         summary["errors"].append(f"fetch failed: {exc}")
         return summary
 
+    # Stamped here, not at the end -- this is "did we genuinely talk to the
+    # source successfully", the actual thing last_membership_refresh_success
+    # exists to answer. A per-ticker reconstruction failure below is a
+    # different, already-visible problem (summary["errors"]/a WARNING log)
+    # and must not gate this timestamp -- doing so would conflate "the
+    # source itself is unreachable" with "one row's CSV was malformed",
+    # two failure modes with different remediation.
+    try:
+        from data.database import set_metadata
+        set_metadata(_LAST_REFRESH_SUCCESS_KEY, datetime.utcnow().isoformat())
+    except Exception as exc:
+        logger.warning("refresh_membership_from_source: could not record success timestamp — %s", exc)
+
     engine = get_engine()
     fetched_at = datetime.utcnow()
 
@@ -371,3 +437,130 @@ def refresh_membership_from_source(config: Optional[dict] = None) -> dict:
 
     clear_membership_cache()  # always -- simplest way to guarantee no stale entries survive a refresh
     return summary
+
+
+def get_last_membership_refresh_success() -> Optional[datetime]:
+    """Read last_membership_refresh_success from system_metadata, or None
+    if the refresh mechanism has never once completed a fetch successfully
+    (fresh install, or every attempt so far has failed)."""
+    from data.database import get_metadata
+    return get_metadata(_LAST_REFRESH_SUCCESS_KEY)
+
+
+def is_membership_refresh_stale(last_success: Optional[datetime], now: Optional[datetime] = None) -> bool:
+    """True if the point-in-time membership refresh has gone unsuccessful
+    for more than MEMBERSHIP_STALE_HOURS (~2 reconciliation cycles).
+
+    Pure -- takes last_success/now explicitly rather than reading
+    system_metadata itself, so the Status page and the scheduler job's own
+    alert check share this one implementation without either needing a DB
+    round-trip inside the function (mirrors main.py:_eod_overdue()'s exact
+    shape, including its weekday-only + Monday-before-this-job's-own-time
+    exemption -- this job shares the identical Mon-Fri-only, no-weekend-run
+    cadence as the EOD job, so the identical false-positive class the
+    Monday exemption was built to close applies here too: with no
+    exemption, last_success would always be >48h old every Monday until
+    that day's own 21:15 UTC run completes, purely from the weekend gap,
+    not a genuine problem).
+
+    A None last_success (never once succeeded) is treated as infinitely
+    stale, same convention _eod_overdue() uses for a None last_refresh.
+    """
+    now = now or datetime.utcnow()
+    if last_success is not None and getattr(last_success, "tzinfo", None):
+        last_success = last_success.replace(tzinfo=None)
+    age_hours = (
+        (now - last_success).total_seconds() / 3600
+        if last_success else float("inf")
+    )
+    monday_before_job = (
+        now.weekday() == 0
+        and (now.hour, now.minute) < (_MEMBERSHIP_JOB_HOUR, _MEMBERSHIP_JOB_MINUTE)
+    )
+    return age_hours > MEMBERSHIP_STALE_HOURS and now.weekday() < 5 and not monday_before_job
+
+
+def _fetch_wikipedia_current_members(timeout: int = 15) -> set:
+    resp = requests.get(
+        _WIKIPEDIA_URL, timeout=timeout,
+        headers={"User-Agent": "sp500invest-research/1.0 (hello@example.com)"},
+    )
+    resp.raise_for_status()
+    return set(_WIKI_TICKER_RE.findall(resp.text))
+
+
+def check_wikipedia_lag(check_date: Optional[date] = None) -> dict:
+    """Compare today's reconstructed STOCK_MEMBERSHIP eligibility against
+    Wikipedia's live current-constituents table and flag any disagreement.
+
+    THIS IS A LAG DETECTOR, NOT INDEPENDENT VERIFICATION. fja05680/sp500's
+    own maintainer updates his data by diffing against this exact Wikipedia
+    page (see this module's own docstring for the full provenance) -- so
+    Wikipedia is this data's own upstream source, not a second opinion. If
+    Wikipedia's own current-members table is ever wrong, both sides would
+    agree on the same wrong answer and this check would find nothing.
+    What it actually detects is narrower and still useful: whether our
+    local copy has fallen behind Wikipedia's *current* state, given the
+    maintainer's own irregular 1-5 month update cadence (documented in
+    this module's docstring) -- i.e. "our stored data may be stale
+    relative to its own upstream source", never "verified independently".
+
+    Flags, never blocks -- this is not a new eligibility gate, only an
+    operational signal. Never raises; a fetch/parse failure is recorded in
+    the returned dict and logged, not propagated. Persists its result to
+    system_metadata (_WIKI_LAG_METADATA_KEY) for Status page display.
+    """
+    from data.database import set_metadata
+
+    check_date = check_date or date.today()
+    result: dict = {
+        "checked_at": datetime.utcnow().isoformat(),
+        "checked": 0,
+        "disagreements": [],
+        "error": None,
+        "note": (
+            "Lag detector only, NOT independent verification -- Wikipedia "
+            "is fja05680/sp500's own upstream source (its maintainer "
+            "updates by diffing against this exact page). See "
+            "analysis/universe.py:check_wikipedia_lag()."
+        ),
+    }
+    try:
+        wiki_members = _fetch_wikipedia_current_members()
+    except Exception as exc:
+        logger.warning("check_wikipedia_lag: could not fetch Wikipedia — %s", exc)
+        result["error"] = str(exc)
+        try:
+            set_metadata(_WIKI_LAG_METADATA_KEY, json.dumps(result))
+        except Exception as meta_exc:
+            logger.warning("check_wikipedia_lag: could not persist result — %s", meta_exc)
+        return result
+
+    for ticker in STOCK_MEMBERSHIP:
+        result["checked"] += 1
+        ours = is_member(ticker, check_date)
+        theirs = ticker in wiki_members
+        if ours != theirs:
+            result["disagreements"].append(
+                {"ticker": ticker, "our_member": ours, "wikipedia_member": theirs}
+            )
+
+    if result["disagreements"]:
+        logger.warning(
+            "Wikipedia lag check (lag detector only, NOT independent verification): "
+            "%d ticker(s) disagree with our stored membership — %s",
+            len(result["disagreements"]), result["disagreements"],
+        )
+    else:
+        logger.info(
+            "Wikipedia lag check: %d ticker(s) checked, no disagreement "
+            "(lag detector only, not independent verification).",
+            result["checked"],
+        )
+
+    try:
+        set_metadata(_WIKI_LAG_METADATA_KEY, json.dumps(result))
+    except Exception as exc:
+        logger.warning("check_wikipedia_lag: could not persist result — %s", exc)
+
+    return result
