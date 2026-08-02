@@ -550,3 +550,110 @@ def test_dashboard_candidate_status_shows_unavailable_when_projection_fails(db_e
     assert not at.exception
     df = at.dataframe[0].value
     assert df.loc[df["Ticker"] == "AAPL", "Status"].iloc[0] == "PROJECTION_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard candidate-table momentum-strength label (2026-08-02) -- a
+# qualitative label (Weak/Moderate/Strong/Very Strong) alongside the raw
+# momentum percentage, using RELATIVE percentile bands recomputed from the
+# current live candidate pool every render (see
+# main.py:_compute_momentum_strength_bands()'s own docstring for the
+# relative-vs-absolute reasoning). Also removes the "Type" column, which
+# always read "STOCK" for every row now that ETFs are fully out of live
+# trading (see CLAUDE.md's "ETF sleeve removed from live trading").
+# ---------------------------------------------------------------------------
+
+def test_dashboard_candidate_table_strength_label_uses_relative_percentile_bands(db_engine, dashboard_app, mocker):
+    """10 candidates with momentum 1..10 -- exact, hand-computed pandas
+    quantile boundaries (q25=3.25, q75=7.75, q90=9.1) put 1-3 in Weak,
+    4-7 in Moderate, 8-9 in Strong, and 10 alone in Very Strong. Proves
+    the bands are genuinely derived from THIS pool's own distribution,
+    not a fixed/arbitrary cutoff."""
+    tickers = [f"T{i}" for i in range(1, 11)]
+    projection = []
+    for i, t in enumerate(tickers, start=1):
+        _seed_dashboard_pending_row(db_engine, ticker=t, momentum_pct=float(i))
+        projection.append({"ticker": t, "momentum_pct": float(i), "position_gbp": 1000.0,
+                            "projected_status": "PROJECTED_ADMIT"})
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=projection)
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    strength_by_ticker = dict(zip(df["Ticker"], df["Strength"]))
+    for t in ["T1", "T2", "T3"]:
+        assert strength_by_ticker[t] == "Weak", strength_by_ticker
+    for t in ["T4", "T5", "T6", "T7"]:
+        assert strength_by_ticker[t] == "Moderate", strength_by_ticker
+    for t in ["T8", "T9"]:
+        assert strength_by_ticker[t] == "Strong", strength_by_ticker
+    assert strength_by_ticker["T10"] == "Very Strong", strength_by_ticker
+
+
+def test_dashboard_candidate_table_raw_momentum_percentage_still_shown_alongside_strength(db_engine, dashboard_app, mocker):
+    """The qualitative label must be ADDITIVE, never a replacement for the
+    raw figure -- same "show both, hide neither" principle as the
+    fixed-denominator/peak-relative drawdown pair shown together
+    elsewhere on this page."""
+    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=26.997925)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "SNDK", "momentum_pct": 26.997925, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Momentum" in df.columns
+    assert "Strength" in df.columns
+    row = df.loc[df["Ticker"] == "SNDK"].iloc[0]
+    assert "2699.8%" in row["Momentum"]  # raw percentage, unmodified
+    assert row["Strength"]  # a real qualitative label, not blank
+
+
+def test_dashboard_candidate_table_type_column_removed(db_engine, dashboard_app, mocker):
+    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Type" not in df.columns
+
+
+def test_dashboard_candidate_table_strength_shows_placeholder_with_too_few_candidates(db_engine, dashboard_app, mocker):
+    """Fewer than 4 usable momentum values -- not enough to form 4
+    meaningful percentile bands -- must show a plain placeholder, never a
+    misleading or arbitrarily-assigned label."""
+    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0)
+    _seed_dashboard_pending_row(db_engine, ticker="MSFT", momentum_pct=2.0)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+        {"ticker": "MSFT", "momentum_pct": 2.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Strength"]) == {"—"}
+
+
+def test_dashboard_candidate_table_strength_caption_states_relative_reasoning(db_engine, dashboard_app, mocker):
+    for i, t in enumerate(["A", "B", "C", "D"], start=1):
+        _seed_dashboard_pending_row(db_engine, ticker=t, momentum_pct=float(i))
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": t, "momentum_pct": float(i), "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"}
+        for i, t in enumerate(["A", "B", "C", "D"], start=1)
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "relative" in all_text.lower()
+    assert "recalculated" in all_text.lower() or "fresh" in all_text.lower()

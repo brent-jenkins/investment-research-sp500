@@ -7024,6 +7024,22 @@ Covered by 10 tests in `tests/test_briefing.py`: the four pre-existing regressio
 
 Full local suite: 548 passing (2 net new).
 
+### Dashboard candidate-table momentum-strength label (2026-08-02)
+
+A raw momentum percentage (e.g. `+2699.8%`) forces a reader to mentally judge whether it's alarming or genuinely fine every time. Added a qualitative label alongside it, and removed the Dashboard's Candidate Queue table's "Type" column at the same time — it always read `STOCK` for every row once ETFs were removed from live trading entirely (see "ETF sleeve removed from live trading" above), so a column with zero variation across every row was pure dead space.
+
+**Labeling convention — Weak / Moderate / Strong / Very Strong**, the standard investment-terminology tiering for momentum strength. Every candidate in `pending_orders` already has a positive signal by construction (this system is long/flat-only — a negative-momentum candidate never appears here), so the labels describe the *strength* of positive momentum, not a bullish/bearish spectrum — there is no "negative" tier.
+
+**Bands are percentile-based, derived from the current live candidate pool's own momentum distribution, not fixed percentages** — `main.py:_compute_momentum_strength_bands()`: bottom 25% "Weak", middle 50% (25th–75th percentile) "Moderate", next 15% (75th–90th) "Strong", top 10% (90th+) "Very Strong" — the standard percentile/decile convention, top decile as "Very Strong". Recomputed fresh from the full current queue on every render, before any status filtering is applied (so filtering the table by status never changes what the bands themselves mean). Falls back to a plain `"—"` placeholder for every candidate when fewer than 4 usable momentum values exist — not enough data to form 4 meaningful bands, and a placeholder is honest where an arbitrarily-assigned label would not be.
+
+**Relative bands were chosen deliberately over absolute fixed thresholds, and the reasoning is stated explicitly rather than assumed** — the identical trap this file has already documented for `max_holding_days` and the old flat position caps (see "Position sizing caps... binding-frequency investigation" above), just applied to a display value instead of a trading parameter. The whole candidate pool's momentum distribution moves with the market regime: a raging bull run lifts nearly every candidate's momentum together, while a flat or choppy market compresses the whole distribution toward zero. A fixed absolute cutoff would either mislabel most candidates most of the time (calibrated for one regime, applied in a different one) or need periodic manual re-tuning to stay meaningful — exactly the maintenance burden this project has repeatedly found itself paying down elsewhere. Relative percentile bands adapt automatically and always reflect real, current conditions. **The honest trade-off, stated rather than hidden**: labels are not numerically stable day to day — "Strong" today and "Strong" a month ago do not necessarily correspond to the same underlying momentum percentage. This is an accepted cost given the label's actual job — communicating today's relative standing among today's real candidates at a glance — not serving as a fixed, comparable-over-time benchmark.
+
+**The raw percentage remains visible, always shown alongside the qualitative label, never replaced by it** — the same "show both, hide neither" principle already established for fixed-denominator vs. peak-relative drawdown (see "Backtest/DD-report page rebuilt..." above). The Candidate Queue table's Momentum column is unchanged; Strength is a new, additional column next to it.
+
+Covered by 5 new tests in `tests/test_main_ui.py`: the exact band boundaries proven against a hand-computed pandas-quantile fixture (10 candidates, momentum 1–10, giving exact q25/q75/q90 = 3.25/7.75/9.1 — confirms the bands are genuinely derived from the pool's own distribution, not hardcoded); the raw percentage and the Strength label both present side by side for the same row; the Type column confirmed absent from the rendered table; the too-few-candidates placeholder case; and the relative-bands reasoning present in the page's own caption text.
+
+Full local suite: 553 passing (5 new).
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:

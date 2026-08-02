@@ -739,6 +739,68 @@ def _get_unconfirmed_exits_cached() -> list[dict]:
     return get_unconfirmed_exits()
 
 
+def _compute_momentum_strength_bands(momentum_values: pd.Series) -> dict:
+    """Relative, percentile-based momentum-strength band boundaries,
+    computed fresh from the CURRENT live candidate pool's own momentum
+    distribution every render — not fixed thresholds (2026-08-02).
+
+    Deliberate design choice, stated explicitly rather than assumed:
+    RELATIVE bands, recalculated against today's own pool each time, not
+    absolute fixed percentages. Reasoning — the same "don't hardcode a
+    threshold that goes stale as conditions shift" trap this codebase has
+    already been burned by for max-holding-days and the old flat position
+    caps (see CLAUDE.md), just applied to a display label instead of a
+    trading parameter: the whole candidate pool's momentum distribution
+    moves with the market regime (a raging bull run lifts every
+    candidate's momentum; a flat/choppy market compresses it), so a fixed
+    absolute cutoff would either mislabel most candidates most of the
+    time or need periodic manual re-tuning to stay meaningful. A relative
+    percentile split adapts automatically and always reflects real,
+    current conditions. The trade-off, stated honestly: labels are not
+    numerically stable day to day — "Strong" today and "Strong" a month
+    ago do not necessarily mean the same underlying momentum percentage —
+    which is an accepted cost given the label's job is to communicate
+    today's relative standing at a glance, not to be a fixed benchmark.
+
+    Bands: bottom 25% "Weak", middle 50% (25th-75th percentile)
+    "Moderate", next 15% (75th-90th) "Strong", top 10% (90th+) "Very
+    Strong" — the standard percentile-decile convention, top decile as
+    "Very Strong". Every candidate on this list already has a positive
+    signal by construction (long/flat only — pending_orders never queues
+    a negative-momentum candidate), so these bands describe the STRENGTH
+    of positive momentum, not a bullish/bearish spectrum.
+
+    Returns {} (every candidate then labels "—") when fewer than 4 usable
+    values exist — not enough data to form 4 meaningful bands.
+    """
+    vals = momentum_values.dropna()
+    if len(vals) < 4:
+        return {}
+    return {
+        "q25": vals.quantile(0.25),
+        "q75": vals.quantile(0.75),
+        "q90": vals.quantile(0.90),
+    }
+
+
+def _momentum_strength_label(momentum_pct, bands: dict) -> str:
+    """Maps one candidate's raw momentum_pct to a qualitative strength
+    label via the relative bands from _compute_momentum_strength_bands()
+    — see that function's docstring for the full reasoning. Displayed
+    ALONGSIDE the raw percentage, never in place of it, same principle as
+    the fixed-denominator/peak-relative drawdown pair shown together
+    elsewhere on this page."""
+    if not bands or pd.isna(momentum_pct):
+        return "—"
+    if momentum_pct >= bands["q90"]:
+        return "Very Strong"
+    if momentum_pct >= bands["q75"]:
+        return "Strong"
+    if momentum_pct >= bands["q25"]:
+        return "Moderate"
+    return "Weak"
+
+
 def _value_history_chart(rows: list[dict]) -> go.Figure:
     """£ account-value line chart — a filled area under the line so the
     real starting-balance anchor (see get_account_value_history()'s own
@@ -909,9 +971,11 @@ def _render_dashboard_page(config: dict) -> None:
         projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
 
         cdf = pd.DataFrame(candidates).copy()
-        cdf["Type"] = cdf["is_etf"].map(lambda b: "ETF" if b else "STOCK")
         cdf["Status"] = cdf["ticker"].map(lambda t: projected_by_ticker.get(t, "PROJECTION_UNAVAILABLE"))
         cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
+
+        momentum_bands = _compute_momentum_strength_bands(cdf["momentum_pct"])
+        cdf["Strength"] = cdf["momentum_pct"].map(lambda v: _momentum_strength_label(v, momentum_bands))
         cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
         cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
 
@@ -922,6 +986,12 @@ def _render_dashboard_page(config: dict) -> None:
             "submission time, against whatever the account's state is *at that moment*, which "
             "can genuinely change in between (a position closing, an emergency exit)."
         )
+        st.caption(
+            "**Strength** is relative to today's own candidate pool (bottom 25% Weak · middle "
+            "50% Moderate · next 15% Strong · top 10% Very Strong), recalculated fresh on every "
+            "render — not a fixed threshold — so it reflects current conditions rather than "
+            "going stale as the market moves. The raw percentage is always shown alongside it."
+        )
         status_options = sorted(cdf["Status"].unique().tolist())
         status_filter = st.multiselect(
             "Filter by status", options=status_options, default=status_options,
@@ -929,8 +999,8 @@ def _render_dashboard_page(config: dict) -> None:
         )
         cdf = cdf[cdf["Status"].isin(status_filter)]
 
-        cdf = cdf[["ticker", "Type", "Status", "momentum_pct", "position_gbp", "decided_at"]]
-        cdf.columns = ["Ticker", "Type", "Status", "Momentum", "Sized Position", "Decided At"]
+        cdf = cdf[["ticker", "Status", "momentum_pct", "Strength", "position_gbp", "decided_at"]]
+        cdf.columns = ["Ticker", "Status", "Momentum", "Strength", "Sized Position", "Decided At"]
         st.caption(f"{len(cdf)} of {len(candidates)} candidates shown")
         st.dataframe(cdf, width="stretch", hide_index=True)
 
