@@ -363,6 +363,53 @@ def test_monday_premarket_runs_pipeline_even_with_no_stale_orders(db_engine, mon
     assert len(pipeline_calls) == 1
 
 
+def test_monday_premarket_stale_order_cancellation_never_touches_pending_orders(db_engine, monkeypatch, mocker):
+    """2026-08-03 urgent check — the real, direct answer to "does Monday
+    pre-market's cancellation step ever cancel a locally-queued, not-yet-
+    submitted candidate": _cancel_stale_weekend_orders()'s own SQL (both
+    the SELECT and the UPDATE) operates exclusively on invest_orders --
+    genuinely broker-placed orders -- and never references pending_orders
+    at all. This is exactly the scenario the tomorrow-gating fix made
+    possible: a Friday-queued candidate whose real 14:30 UTC submission
+    window is legitimately pushed past Monday (e.g. a Monday holiday
+    moving it to Tuesday/Wednesday) sits validly PENDING the whole time --
+    confirms that candidate's row is completely untouched by this job's
+    cancellation step, whether or not a real stale broker order also
+    exists to cancel alongside it."""
+    mock_client, _ = _monday_mocks(monkeypatch, mocker)
+    _seed_order(db_engine, hours_old=33.5, order_id="genuinely-stale-broker-order")
+
+    with Session(db_engine) as session:
+        session.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+            VALUES ('STILLVALID', 'STILLVALID_US_EQ', 0, 'USD', :now, 100.0,
+                    500.0, 0.30, 90.0, 0.02, 'PENDING', :now)
+        """), {"now": (datetime.utcnow() - timedelta(hours=33.5)).isoformat()})
+        session.commit()
+
+    with Session(db_engine) as session:
+        before = [dict(r._mapping) for r in session.execute(sa_text("SELECT * FROM pending_orders"))]
+    assert len(before) == 1 and before[0]["status"] == "PENDING"
+
+    scheduler._monday_premarket_job()
+
+    # The genuinely stale broker order was correctly cancelled ...
+    mock_client.cancel_order.assert_called_once_with("genuinely-stale-broker-order")
+    with Session(db_engine) as session:
+        broker_order = session.query(InvestOrder).filter_by(order_id="genuinely-stale-broker-order").one()
+    assert broker_order.status == "CANCELLED"
+
+    # ... but the still-valid, not-yet-due locally-queued candidate is
+    # completely untouched -- same age, same PLACED-adjacent status, no
+    # resolution recorded -- proving the cancellation step never reaches
+    # pending_orders at all, regardless of the row's own age.
+    with Session(db_engine) as session:
+        after = [dict(r._mapping) for r in session.execute(sa_text("SELECT * FROM pending_orders"))]
+    assert after == before
+
+
 def test_scheduler_registers_monday_job_mon_only_fixed_at_0700(monkeypatch):
     """start_scheduler() must register monday_premarket with day_of_week='mon',
     fixed at 07:00 UTC directly (no longer derived from a scheduler.runs.pre_market

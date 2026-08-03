@@ -213,6 +213,33 @@ def test_analysis_only_run_type_skips_buy_phase(db_engine, v2_mocks, mocker):
     v2_mocks.place_market_order.assert_not_called()
 
 
+def test_analysis_only_run_type_never_touches_pending_orders(db_engine, v2_mocks, mocker):
+    """2026-08-03 urgent check — confirms directly (not just via
+    place_market_order not being called) that a genuinely still-PENDING
+    candidate queued at EOD, not yet due for its real exchange-timed
+    submission window (e.g. a Friday decision whose Monday would-be
+    submission window is pushed to Tuesday/Wednesday by a holiday — see
+    _has_upcoming_trading_day()), survives an analysis_only run
+    completely untouched. run_type != "full" returns immediately after
+    maybe_exit_positions() (brokers/trading212.py:maybe_place_orders()),
+    never reaching the BUY/decide-and-queue phase that is the only code
+    in this function that ever writes to pending_orders at all — this is
+    exactly what _monday_premarket_job() passes when it re-runs the order
+    pipeline after cancelling stale weekend broker orders."""
+    from brokers.trading212 import maybe_place_orders
+
+    _seed_pending_order(db_engine, ticker="STILLPENDING", t212_ticker="STILLPENDING_US_EQ",
+                        is_etf=False, status="PENDING")
+    before = _pending_rows(db_engine)
+    assert len(before) == 1
+
+    _mock_price_data(mocker, {})
+    maybe_place_orders(_config(), run_type="analysis_only")
+
+    after = _pending_rows(db_engine)
+    assert after == before, "a still-PENDING candidate must survive an analysis_only run byte-for-byte unchanged"
+
+
 def test_pause_new_entries_blocks_buy_but_still_exits(db_engine, v2_mocks, mocker):
     """trading212_invest.pause_new_entries is a temporary safety switch (see
     brokers/trading212.py) -- it must block the BUY phase entirely, even on
