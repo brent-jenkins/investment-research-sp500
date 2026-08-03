@@ -7872,3 +7872,35 @@ Full local suite: 646 passing (up from the 645 baseline this task's own concurre
 **Confirmed Monday-to-Friday-only behaviour is achieved entirely through the real calendar check, never a day-of-week filter of any kind.** No `day_of_week` value appears anywhere in this job's registration or body after this fix — the only reason it never fires on a genuine Saturday, Sunday, or market holiday is that `_is_nyse_open_now()` genuinely says so for those dates, proven by `test_stock_order_submission_job_skips_on_real_weekend`/`_skips_on_real_market_holiday` against the real, unmocked `pandas_market_calendars` library.
 
 Full local suite: 651 passing (646 + 5 net new tests — 5 added, 0 removed; the one pre-existing stale assertion was corrected in place, not counted as a removal since the test itself still exists and still runs).
+
+## Scheduler Health terminology standardized (2026-08-03)
+
+Direct follow-up to the stock-order-submission NYSE-gating fix immediately above — held until that fix landed, per this task's own explicit sequencing, since its own label needed to be part of the same standardization rather than fixed twice.
+
+**The inconsistency, confirmed directly against the live label strings, not assumed from memory.** `main.py`'s `_JOB_LABELS` dict and the daemon-mode `_extra_static` reconstruction (both described under "'Trade Alerts' renamed to 'Open Trade Monitor'; 'Pipeline' merged into 'Scheduler Health'" above) mixed **two genuinely separate axes**:
+1. **"Fires how often" wording** — `scheduled_eod`/`membership_refresh`/`stock_order_submission` all said `"... daily · ..."`, while `market_hours_check`/`account_state_refresh` both said `"Hourly, every day · ..."` — the identical underlying fact (no `day_of_week` cron filter, gates internally instead), worded two different ways purely by accident of which job was edited when.
+2. **The gating-mechanism suffix** — `"NYSE-gated"` (day-level, `_is_scheduled_trading_day()`) vs. `"NYSE-hours-gated"` (session-level, `_is_nyse_open_now()`) — a genuine, real distinction between two different mechanisms, not wording drift, and explicitly **not** part of this task's inconsistency to fix.
+
+**Wording standardized to `"every day"`, applied everywhere the "fires how often" fact is stated.** Chosen over `"daily"` because it reads correctly in both contexts this codebase actually needs — a single fixed-time job (`"21:30 every day"`) and an hourly job (`"Hourly, every day"`) — without the connotation-of-frequency ambiguity `"daily"` carries when paired with `"Hourly"` right next to it (`"Hourly, daily"` would read as self-contradictory). Three labels changed, in both places each is defined:
+- `_JOB_LABELS["scheduled_eod"]`: `f"{_uk_sched_time(21, 30)} daily · NYSE-gated"` → `f"{_uk_sched_time(21, 30)} every day · NYSE-gated"`.
+- `_JOB_LABELS["membership_refresh"]` / `_extra_static`'s matching entry: `"... daily · NYSE-gated"` → `"... every day · NYSE-gated"`.
+- `_JOB_LABELS["stock_order_submission"]` / `_extra_static`'s matching entry: `"... daily · NYSE-hours-gated"` → `"... every day · NYSE-hours-gated"` (this label had *just* been introduced by the fix immediately above, still using the old "daily" wording — exactly why this task explicitly waited for that fix to land first, so the label was corrected once, not twice).
+
+`market_hours_check`/`account_state_refresh` already said `"Hourly, every day"` — no change needed; these two were the reference point the other three were brought into line with. Two nearby explanatory code comments referencing the old wording (`"fire daily now"` above `_JOB_LABELS`; `"(14:30 UTC daily, NYSE-hours-gated..."` above `_extra_static`) were updated to match, since they sit immediately next to the labels they describe.
+
+**Every job's gating suffix cross-checked against its real, current code — confirmed all already correct, nothing to fix on this axis.** Read each job function directly rather than trusting its existing label:
+
+| Job | Real gating call (`data/scheduler.py`) | Suffix shown | Correct? |
+|---|---|---|---|
+| `scheduled_eod` (`_eod_job()`) | `_is_scheduled_trading_day(today_utc)` — day-level | `NYSE-gated` | ✅ |
+| `membership_refresh` (`_membership_refresh_job()`) | `_is_scheduled_trading_day(today_utc)` — day-level | `NYSE-gated` | ✅ |
+| `market_hours_check` (`_market_hours_check_job()`) | `_is_nyse_open_now(now_utc)` — session-level | `NYSE-hours-gated` | ✅ |
+| `stock_order_submission` (`_stock_order_submission_job()`) | `_is_nyse_open_now(now_utc)` — session-level (just migrated by the fix immediately above) | `NYSE-hours-gated` | ✅ |
+| `account_state_refresh` (`_account_state_job()`) | no gate at all — deliberately unconditional | `unconditional` | ✅ (left untouched, per task instruction) |
+| `weekly_summary` (`_weekly_summary_job()`) | inherently weekly (`day_of_week="sun"`), not part of this daily/every-day axis at all | `09:00 UK time · Sunday` | ✅ (left untouched, per task instruction) |
+
+No suffix needed correcting — the one job whose suffix would have been wrong (`stock_order_submission`, which was still session-untested `"Mon–Fri"` before today) was already fixed correctly by the immediately-preceding task. This table exists as the direct evidence for "confirmed, not assumed," not because any mismatch was found.
+
+**Tests.** No test in the suite asserted on the literal `"daily"`/`"every day"`/`"NYSE-gated"`/`"NYSE-hours-gated"` label text (confirmed via a full grep across `tests/` before editing, not assumed) — this is a pure display-copy change with zero test collision. Full local suite re-run after the edit: 651 passing, unchanged from the prior task's own count, confirming no regression.
+
+No underlying job behaviour, registration, or gating logic changed anywhere in this task — every trigger, every internal `_is_scheduled_trading_day()`/`_is_nyse_open_now()` call, and every job function body are byte-identical to the fix immediately above; this was wording-only, confirmed by the full test suite passing with zero changes to any scheduler/broker file.

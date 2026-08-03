@@ -1375,17 +1375,25 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         pass
 
     # Labels must match the *real* jobs data/scheduler.py:start_scheduler()
-    # registers, not a stale snapshot — scheduled_eod/membership_refresh
-    # fire daily now (no day_of_week filter, NYSE-calendar-gated
-    # internally, see _is_scheduled_trading_day()), and
-    # stock_order_submission/weekly_summary are genuine, order-affecting
-    # jobs that must appear here, not silently fall back to a raw job id.
+    # registers, not a stale snapshot — scheduled_eod/membership_refresh/
+    # stock_order_submission all fire every day now (no day_of_week
+    # filter), gated internally per-job either at the day level
+    # (_is_scheduled_trading_day() — "NYSE-gated") or the stricter
+    # session level (_is_nyse_open_now() — "NYSE-hours-gated"; see
+    # market_hours_check/stock_order_submission). "every day" is the one
+    # standardised term for "no day-of-week cron filter" across every
+    # label below (2026-08-03 — previously mixed "daily"/"every day" for
+    # the identical fact); "NYSE-gated" vs "NYSE-hours-gated" is a
+    # genuine, deliberately preserved distinction between the two real
+    # gating mechanisms, not wording drift. stock_order_submission/
+    # weekly_summary are genuine, order-affecting jobs that must appear
+    # here, not silently fall back to a raw job id.
     _JOB_LABELS: dict[str, tuple[str, str]] = {
-        "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} daily · NYSE-gated"),
+        "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} every day · NYSE-gated"),
         "market_hours_check":     ("Open Trade Monitor", "Hourly, every day · NYSE-hours-gated"),
         "account_state_refresh":  ("Account State Refresh", "Hourly, every day · unconditional"),
-        "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
-        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} daily · NYSE-hours-gated"),
+        "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} every day · NYSE-gated"),
+        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} every day · NYSE-hours-gated"),
         "weekly_summary":         ("Weekly Summary",    "09:00 UK time · Sunday"),
         "job_dispatcher":         ("job_dispatcher",    "—"),
     }
@@ -1501,7 +1509,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         # membership_refresh is fixed at 21:15 rather than derived from
         # scheduler.runs, and — like scheduled_eod above — has no
         # day_of_week filter on its real trigger. stock_order_submission
-        # (14:30 UTC daily, NYSE-hours-gated internally via
+        # (14:30 UTC every day, NYSE-hours-gated internally via
         # _is_nyse_open_now() — fixed 2026-08-03, previously a bare
         # day_of_week="mon-fri" cron filter with no internal calendar
         # check at all) and weekly_summary (09:00 Europe/London,
@@ -1531,9 +1539,9 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
              _CronTrigger(minute=0, timezone=_tz_s)),
             ("account_state_refresh", "Account State Refresh", "Hourly, every day · unconditional",
              _CronTrigger(minute=0, timezone=_tz_s)),
-            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
+            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} every day · NYSE-gated",
              _CronTrigger(hour=21, minute=15, timezone=_tz_s)),
-            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} daily · NYSE-hours-gated",
+            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} every day · NYSE-hours-gated",
              _CronTrigger(hour=14, minute=30, timezone=_tz_s)),
             ("weekly_summary", "Weekly Summary", "09:00 UK time · Sunday",
              _CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")),
