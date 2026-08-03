@@ -7178,6 +7178,47 @@ Local execution ran 8 processes across two batches of 4 (matching the local mach
 
 Research-only — nothing in `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, or `brokers/trading212.py` changed as a result of this sweep. Both the local and server-side clones were deleted after these figures were captured; production confirmed untouched throughout (commit hash and both services' `ActiveEnterTimestamp` unchanged by this work).
 
+### Does the entry gate need an absolute minimum momentum floor? (2026-08-03)
+
+**Question.** The entry gate requires only `momentum > 0` — no distinction between a genuinely trending candidate and one that is barely, statistically-indistinguishably positive. In normal conditions this is harmless (capacity-based admission naturally reaches only the strong end of the pool before running out). The real concern is a slow, grinding decline — broadly compressed momentum, no single violent day (so the crisis override never fires) — where every real candidate is only marginally positive and idle capacity has nothing better to admit than "the best of a bad bunch." Investigated in two parts, entirely locally (per "Experimental/research work runs locally, not on the server" above), read-only against a fresh production DB snapshot and the current code (including the same day's `reentry_cooldown_days` fix) — nothing in `config.yaml`, `analysis/`, or `brokers/` changed as a result.
+
+**Part A — how often does this actually happen?** Instrumented `simulate_portfolio_compounding_mtm()` via the same source-introspection technique used throughout this file's research history (verified faithful — inert-default and reset-disabled runs both reproduce the real function's trades exactly, before trusting anything downstream) to record, for every day/group candidate-pool evaluation across the full 2007–2026 continuous walk (501 usable stock tickers — the live candidate pool, no ETFs, matching today's real universe): the full momentum distribution of every entry-gate-passing candidate, and whether real account capacity was available that day (`current_deployed / current_balance < max_total_deployed`).
+
+| Marginal threshold | Days: ALL candidates below it (of 3,903 capacity-available days with ≥1 candidate) | Days: majority below it | Real admitted trades below it (of 3,246 total) |
+|---|---|---|---|
+| 1% | 15 (0.38%) | 19 (0.49%) | 57 (1.76%) |
+| 2% | 35 (0.90%) | 51 (1.31%) | 105 (3.23%) |
+| 5% | 63 (1.61%) | 124 (3.18%) | 178 (5.48%) |
+
+**Genuinely rare, but not zero — both things are true and neither cancels the other out.** At a 2% "marginal" definition, fewer than 1% of capacity-available days ever saw every real candidate that weak, and only ~3% of every trade this system has ever entered (across the full 19-year validated window) had entry momentum that low. This matches the task's own framing — today's real candidate list is overwhelmingly strong, capacity is the binding constraint, not weakness — and confirms it isn't a theoretical worry either: 35 real days (2% threshold) to 63 real days (5% threshold) is a small but genuine number of instances, not zero.
+
+**Part B — sweep of absolute floors, reset-at-boundary methodology (matching every prior sweep's own "comparing variants" convention — see "Two backtest conventions" above), test period 2020–2026:**
+
+| Floor | Test trades | Win rate | Profit factor | CAGR | Max DD (fixed-denom) | Max DD (peak-relative) | £50,000 → |
+|---|---|---|---|---|---|---|---|
+| 0% (today's gate) | 1,181 | 48.94% | 1.77 | 19.86% | −27.48% | −11.19% | £162,914.46 |
+| 2% | 1,179 | 49.11% | 1.77 | **19.88%** | −27.52% | −11.19% | **£163,127.21** |
+| 5% | 1,166 | 47.77% | 1.70 | 18.50% | −22.93% | −10.82% | £151,236.74 |
+| 10% | 1,178 | 47.88% | 1.69 | 18.39% | −28.89% | −10.75% | £150,329.27 |
+| 15% | 1,179 | 48.52% | 1.69 | 18.71% | −29.98% | **−11.43%** | £153,015.58 |
+
+Non-monotonic again, for the identical structural reason documented in the re-entry cooldown sweep immediately above — entries here are the same capacity-constrained, momentum-ranked, skip-and-continue admission, so excluding one candidate hands its slot to a different one, cascading into a materially different downstream trade sequence over a 19-year walk. Drawdown does **not** cleanly improve with a higher floor either — 15% is actually the single worst peak-relative drawdown in the whole table, worse than the 0% baseline.
+
+**Early-stage-winner exclusion check — the decisive evidence, computed directly from the 0%-floor baseline's own trades (uncontaminated by the capacity-cascade re-run effect above), not inferred from the aggregate table:**
+
+| Floor | Trades directly excluded | Band win rate | Band mean P&L | Genuine ≥20% winners excluded |
+|---|---|---|---|---|
+| 2% | 1 | 0% | −9.08% | 0 |
+| 5% | 5 | 40.0% | −3.88% | 0 |
+| 10% | 9 | 55.6% | +0.58% | 0 |
+| 15% | 17 | 58.8% | **+3.68%** (above the 2.61% overall average) | **2** — `TSLA` (entered at 12.02% momentum, went on to +26.38%) and `CEG` (entered at 12.23%, went on to +25.95%) |
+
+**A 2% floor is close to free; a 15% floor has a demonstrated, concrete cost.** At 2%, exactly one trade in the entire six-year test period would have been excluded, and it was a loser (−9.08%) — no genuine winner sacrificed, and the aggregate CAGR/return is unchanged or marginally better. By 15%, the excluded band's own win rate and mean return are *better* than the overall average — meaning the floor at that level is filtering out a disproportionately good set of trades, including two real, named, verifiable early-stage winners. This is exactly the hidden cost the task's own framing warned against, and it shows up precisely where a naive "higher floor = more confidence = safer" intuition would have predicted the opposite.
+
+**Recommendation: a small floor (2%) is worth adding; do not go higher without more evidence.** Part A shows the scenario is rare but real (dozens of genuine historical days, not zero); Part B shows a 2% floor costs essentially nothing — flat-to-marginally-better CAGR, no genuine winner excluded — while formalizing the existing capacity-driven de facto floor into an explicit, principled rule, directly serving the stated goal ("invest in trades with real confidence behind them, not just to stay in the market at all costs"). Nothing past 2% is supported by this data: 5%/10%/15% show no clean, monotonic benefit (the CAGR/drawdown figures bounce for the same path-dependency reason the re-entry cooldown sweep already documented), and 15% has a concrete, named cost. **Caveat, stated plainly**: every excluded-band sample here is small (1 to 17 trades across a six-year test period) — this is directional, evidence-based guidance, not a statistically powerful result, and the same single-continuous-walk limitation the re-entry cooldown sweep flagged applies here too. Not implemented — this was explicitly a "check before it matters" investigation, not an urgent live change; adding a 2% floor to `passes_entry_gate()` (or a new, adjacent check) is a follow-up decision, not made here.
+
+Research-only — nothing in `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, or `brokers/trading212.py` changed as a result of this investigation. The local scratch clone was deleted after these figures were captured; production was never touched (this task was explicitly local and read-only relative to the live system throughout).
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
