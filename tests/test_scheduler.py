@@ -304,7 +304,14 @@ def test_scheduler_registers_membership_refresh_job(monkeypatch):
 def test_scheduler_registers_stock_submission_job_not_etf(monkeypatch):
     """start_scheduler() must register stock_order_submission at 14:30 UTC
     (60 minutes after NYSE's 13:30 UTC open -- moved 2026-08-02, see
-    CLAUDE.md's dedicated section for the empirical basis), weekdays only.
+    CLAUDE.md's dedicated section for the empirical basis). Fires every
+    single day now (no day_of_week cron filter), gated internally on
+    _is_nyse_open_now() instead -- 2026-08-03 fix, correcting this test's
+    own previously-stale "mon-fri" assertion, which encoded the exact
+    weekday-only-cron gap this fix closed (see the dedicated
+    "NYSE-session gating fix" test section below for full coverage of the
+    new gating behaviour: real-holiday skip, real-weekend skip, genuine
+    market-open run, and the trigger's own no-filter registration).
     etf_order_submission must NOT be registered at all -- removed entirely
     2026-08-02 alongside the rest of the ETF sleeve (see CLAUDE.md's "ETF
     sleeve removed from live trading" section), not merely left disabled."""
@@ -333,7 +340,7 @@ def test_scheduler_registers_stock_submission_job_not_etf(monkeypatch):
         stock_job = sched.get_job("stock_order_submission")
         assert stock_job is not None
         assert stock_job.func is scheduler._stock_order_submission_job
-        assert field("stock_order_submission", "day_of_week") == "mon-fri"
+        assert field("stock_order_submission", "day_of_week") == "*"
         assert field("stock_order_submission", "hour") == "14"
         assert field("stock_order_submission", "minute") == "30"
     finally:
@@ -437,7 +444,13 @@ def test_weekly_summary_job_stamps_last_scheduled_run(mocker):
     assert any(c.args[0] == "last_scheduled_run" for c in mock_meta.call_args_list)
 
 
-def test_stock_order_submission_job_calls_submit_pending_stock_orders(mocker):
+def test_stock_order_submission_job_calls_submit_pending_stock_orders(monkeypatch, mocker):
+    # 2026-08-03 fix: this job now gates internally on the real NYSE
+    # session (_is_nyse_open_now()) before doing anything at all -- frozen
+    # to a real, independently-verified open moment (same date/hour
+    # test_market_hours_check_job_runs_when_nyse_genuinely_open already
+    # uses) so this test is no longer wall-clock dependent.
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
     # set_metadata is mocked here for the same reason as the weekly-summary
@@ -449,7 +462,8 @@ def test_stock_order_submission_job_calls_submit_pending_stock_orders(mocker):
     mock_submit.assert_called_once_with({"k": "v"})
 
 
-def test_stock_order_submission_job_never_raises_on_failure(mocker):
+def test_stock_order_submission_job_never_raises_on_failure(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mocker.patch("brokers.trading212.submit_pending_stock_orders", side_effect=RuntimeError("boom"))
     mocker.patch("data.scheduler.set_metadata")
@@ -457,13 +471,14 @@ def test_stock_order_submission_job_never_raises_on_failure(mocker):
     scheduler._stock_order_submission_job()  # must not raise
 
 
-def test_stock_order_submission_job_stamps_last_scheduled_run(mocker):
+def test_stock_order_submission_job_stamps_last_scheduled_run(monkeypatch, mocker):
     """2026-08-03 fix — same issue, same reason as the weekly-summary job
     above. This is the job that actually places real orders (see the
     2026-08-03 incident: 16 real positions opened at 14:30 UTC / 15:30 BST,
     yet the Status page's job-recency widgets still showed the 07:00 UTC /
     08:00 BST Monday Pre-Market run as the most recent event, since this
     job never stamped last_scheduled_run at all)."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
     mock_meta = mocker.patch("data.scheduler.set_metadata")
@@ -472,6 +487,144 @@ def test_stock_order_submission_job_stamps_last_scheduled_run(mocker):
 
     mock_meta.assert_any_call("last_scheduled_run_name", "Stock Order Submission")
     assert any(c.args[0] == "last_scheduled_run" for c in mock_meta.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# NYSE-session gating fix (2026-08-03) — confirmed a real, live gap: this
+# job was still registered with a bare day_of_week="mon-fri" cron filter
+# and had NO internal calendar/session check of its own at all, unlike
+# every other job touched the same day. A plain weekday filter has no
+# concept of a US market holiday — on a Monday that also happens to be a
+# genuine NYSE closure, this job would still have fired at 14:30 UTC
+# believing it was a normal trading day and attempted to submit real
+# orders with the market closed. Fixed by reusing the exact,
+# already-proven _is_nyse_open_now() mechanism market_hours_check_job()
+# already uses (the stricter, live-session check, not the day-level
+# _is_scheduled_trading_day() scheduled_eod/membership_refresh use — see
+# the job's own docstring for why the stricter check is the correct one
+# here). Mirrors the market_hours_check_job() test pattern above exactly,
+# reusing the same real, independently-verified dates
+# (test_is_scheduled_trading_day_false_on_real_market_holiday /
+# test_is_scheduled_trading_day_false_on_weekend already confirm 2026-11-26
+# and 2026-08-01 compute as closed via the real pandas_market_calendars
+# library, not a stubbed one).
+# ---------------------------------------------------------------------------
+
+def test_stock_order_submission_job_skips_on_real_market_holiday(monkeypatch, mocker):
+    """A real, independently-verified NYSE holiday that falls on a weekday
+    (2026-11-26, Thanksgiving) — submission must not be attempted at all,
+    and last_scheduled_run must not be overwritten by a run that did
+    nothing (stamping happens AFTER the gate)."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 11, 26, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders")
+    mock_meta = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._stock_order_submission_job()
+
+    mock_submit.assert_not_called()
+    mock_meta.assert_not_called()
+
+
+def test_stock_order_submission_job_skips_on_real_weekend(monkeypatch, mocker):
+    """Explicit proof — not an assumption — that a genuine Saturday is
+    correctly skipped through the SAME mechanism as the holiday case above
+    (_is_nyse_open_now()), with no separate day-of-week logic anywhere in
+    this job at all: NYSE is never in session on a Saturday, so the
+    identical live-calendar check naturally returns False here too,
+    exactly as it already does for market_hours_check_job() every
+    weekend."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders")
+    mock_meta = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._stock_order_submission_job()
+
+    mock_submit.assert_not_called()
+    mock_meta.assert_not_called()
+
+
+def test_stock_order_submission_job_runs_when_nyse_genuinely_open(monkeypatch, mocker):
+    """A real, independently-verified NYSE-open moment (mid-session on an
+    ordinary Tuesday, the same date/hour market_hours_check_job()'s own
+    "genuinely open" test uses) — submission must actually run."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
+    mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._stock_order_submission_job()
+
+    mock_submit.assert_called_once_with({"k": "v"})
+
+
+def test_stock_order_submission_registered_daily_no_day_of_week_filter(monkeypatch):
+    """Confirms the registration itself, not just the job's own internal
+    behaviour — the load-bearing part of the "fires unconditionally,
+    decides internally" pattern: if the trigger still carried a
+    day_of_week filter, the job would never even wake up to run its own
+    _is_nyse_open_now() gate on the days the filter excluded. Mirrors
+    test_market_hours_check_and_account_state_registered_hourly_no_cron_filter
+    above exactly."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        job = sched.get_job("stock_order_submission")
+        assert job is not None
+        assert job.func is scheduler._stock_order_submission_job
+
+        def field(name: str) -> str:
+            return next(str(f) for f in job.trigger.fields if f.name == name)
+
+        assert field("day_of_week") == "*"
+        assert field("hour") == "14"
+        assert field("minute") == "30"
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_stock_order_submission_trigger_actually_fires_on_a_real_weekend_date(monkeypatch):
+    """Confirms the registration's own computed next-fire-time, not just
+    the raw field values — mirrors
+    test_market_hours_check_trigger_actually_fires_on_a_real_weekend_date
+    above: the trigger must genuinely land on a real Saturday, proving the
+    job gets the chance to wake up and decide for itself (via
+    _is_nyse_open_now()) rather than being excluded by a cron filter
+    before it ever runs."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        job = sched.get_job("stock_order_submission")
+        assert job is not None
+        just_after_friday_midnight = datetime(2026, 7, 31, 23, 1, tzinfo=timezone.utc)
+        next_fire = job.trigger.get_next_fire_time(None, just_after_friday_midnight)
+        assert next_fire is not None
+        assert next_fire.date() == datetime(2026, 8, 1).date()  # Saturday
+    finally:
+        scheduler.stop_scheduler()
 
 
 def test_membership_refresh_job_calls_refresh_and_logs_changes(monkeypatch, mocker, caplog):

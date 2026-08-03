@@ -1,9 +1,14 @@
 """APScheduler-based scheduled jobs: daily runs with per-exchange holiday awareness.
 
 Run schedule (UTC unless noted):
-  14:30  Stock order submission (weekdays) — submit queued stock entries, 60
-                       minutes after NYSE's own regular open (moved from 13:30
-                       2026-08-02 — see _stock_order_submission_job())
+  14:30  Stock order submission — every day, gated internally by
+                       _is_nyse_open_now() (2026-08-03 fix — found still
+                       using a bare day_of_week="mon-fri" cron filter with
+                       no calendar/session check of its own at all, a real
+                       gap on a US market holiday) — submit queued stock
+                       entries, 60 minutes after NYSE's own regular open
+                       (moved from 13:30 2026-08-02 — see
+                       _stock_order_submission_job())
   21:15  Membership refresh — refresh point-in-time index-membership windows
                        15 minutes ahead of the EOD job's own trading decisions
   21:30  End of day  — full data refresh, then place/exit orders (all exchanges)
@@ -899,8 +904,44 @@ def _weekly_summary_job() -> None:
 
 
 def _stock_order_submission_job() -> None:
-    """14:30 UTC weekdays (60 minutes after NYSE's 13:30 UTC regular open)
-    — submit queued stock entry decisions from pending_orders.
+    """14:30 UTC, every single day (no cron-level day-of-week filter — see
+    start_scheduler()'s own registration comment) — submit queued stock
+    entry decisions from pending_orders, gated internally on
+    _is_nyse_open_now() rather than a fixed weekday cron filter
+    (2026-08-03).
+
+    FOUND AND FIXED as a real, live gap, not a hypothetical: this job —
+    the one that places real orders — was still registered with
+    day_of_week="mon-fri" and had NO internal calendar/session check of
+    its own at all, unlike every other job touched the same day
+    (scheduled_eod/membership_refresh: _is_scheduled_trading_day();
+    market_hours_check: _is_nyse_open_now()). A plain weekday filter has
+    no concept of a US market holiday — on a Monday that also happens to
+    be a genuine NYSE closure (a federal holiday), this job would still
+    have fired at 14:30 UTC believing it was a normal trading day, and
+    attempted to submit real orders with the market closed. Confirmed
+    directly by reading the actual registration before assuming either
+    way — the registration's own prior comment explicitly stated this gap
+    was deliberately left out of scope when submission timing was last
+    changed (2026-08-02), and was never revisited until now.
+
+    Uses _is_nyse_open_now() specifically — the STRICTER, live-session
+    check ("is the market genuinely in session right now"), not
+    _is_scheduled_trading_day()'s day-level check ("is today a trading
+    day at all") — reusing the exact, already-proven mechanism built for
+    market_hours_check_job() rather than a separate, weaker check for
+    this exact purpose. This is also the correct check for what
+    submission timing actually cares about: 14:30 UTC is chosen
+    specifically to land 60 minutes into NYSE's live regular session (see
+    below), so the question genuinely is "is the market open right now",
+    not merely "is today a trading day" — the same distinction that makes
+    _is_nyse_open_now() correct for the hourly market_hours_check job
+    applies identically here. A holiday (schedule.empty for today) and an
+    ordinary Saturday/Sunday are both covered by this SAME check, with no
+    separate weekday logic needed at all — NYSE's own real calendar is
+    never in session on a Saturday or Sunday, so _is_nyse_open_now()
+    naturally returns False then regardless of day-of-week, exactly the
+    same way it already does for market_hours_check_job() every weekend.
 
     Moved from 13:30 UTC (right at the open) 2026-08-02 — the opening hour
     is the most volatile window of the trading day (overnight orders and
@@ -921,12 +962,15 @@ def _stock_order_submission_job() -> None:
     window — see CLAUDE.md's "Exchange-aware order submission" section for
     why after-hours submission was rejected outright. The submission-time
     price-sanity check (`price_sanity_threshold_pct`) is unaffected by
-    this move — it already reads a genuinely live price
-    (`_live_current_price()`, fixed the same day this timing change
-    shipped — see CLAUDE.md) regardless of what time it runs.
+    this fix — it already reads a genuinely live price
+    (`_live_current_price()`, fixed the same day the timing change
+    shipped — see CLAUDE.md) regardless of what time it runs; nor is the
+    crisis re-check (`is_crisis_mode_active_now()`) or the capacity check
+    inside `submit_pending_stock_orders()` — this fix only changes WHEN
+    the job is willing to run, never what it does once it decides to.
 
     Stamps last_scheduled_run/last_scheduled_run_name (2026-08-03) — this
-    is the job that actually places real orders, but until this fix it
+    is the job that actually places real orders, but until that fix it
     never touched either key, so the Status page's "Last Scheduled Run"
     card, the Pipeline "Order Logic" row, and the sidebar's "Last
     scheduled run" caption (all three read the same key) kept showing
@@ -935,8 +979,17 @@ def _stock_order_submission_job() -> None:
     _eod_job() already uses; stamped unconditionally once the job
     genuinely fires, not only when an order was actually placed — "the
     job ran" is the signal this key represents, not "the job did
-    something."
+    something." Stamped AFTER the NYSE-session gate below (2026-08-03,
+    this same fix) — a genuine no-op day (market closed) should not
+    overwrite "Last Scheduled Run" with a run that did nothing, the same
+    "the job ran" semantics this key already carries for every other
+    job's own gate.
     """
+    now_utc = datetime.now(timezone.utc)
+    if not _is_nyse_open_now(now_utc):
+        logger.debug("Stock order submission skipped — NYSE not in session.")
+        return
+
     logger.info("Stock order submission job starting (14:30 UTC, 60min after NYSE open)…")
     try:
         set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
@@ -1197,16 +1250,32 @@ def start_scheduler() -> BackgroundScheduler:
     # window of the trading day for a market order's actual fill. See
     # _stock_order_submission_job()'s own docstring for the empirical
     # basis (real intraday data, not assumed) and CLAUDE.md's dedicated
-    # section. day_of_week="mon-fri" is unchanged here — this task's scope
-    # was submission timing only, not the market-calendar-awareness work
-    # already done separately for scheduled_eod/membership_refresh.
+    # section.
+    #
+    # No day_of_week filter (2026-08-03 fix — found still using the old
+    # day_of_week="mon-fri" cron pattern, with no internal calendar check
+    # at all, a real gap: a plain weekday filter has no concept of a US
+    # market holiday, so this job — the one that places real orders —
+    # would have fired and attempted submission on a Monday that was also
+    # a genuine NYSE closure). Fires every single day now, gated
+    # internally by _is_nyse_open_now() inside the job itself, matching
+    # the same "fire unconditionally, check the real calendar internally"
+    # pattern scheduled_eod/membership_refresh already established —
+    # except this one uses the stricter, live-session check
+    # (_is_nyse_open_now(), the same mechanism market_hours_check_job()
+    # uses), not the day-level _is_scheduled_trading_day() those two use,
+    # since 14:30 UTC is deliberately timed to land inside NYSE's live
+    # session, not merely on a trading day.
     _scheduler.add_job(
         _stock_order_submission_job,
-        trigger=CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone=tz),
+        trigger=CronTrigger(hour=14, minute=30, timezone=tz),
         id="stock_order_submission",
         replace_existing=True,
     )
-    logger.info("Scheduled stock order submission at 14:30 %s weekdays (60min after NYSE open).", tz)
+    logger.info(
+        "Scheduled stock order submission at 14:30 %s daily "
+        "(NYSE-hours-gated internally via _is_nyse_open_now()).", tz,
+    )
 
     # Membership refresh — 15 minutes ahead of the EOD job's own 21:30 slot,
     # so any real S&P 500 addition/removal is reflected before that run's

@@ -1385,7 +1385,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         "market_hours_check":     ("Open Trade Monitor", "Hourly, every day · NYSE-hours-gated"),
         "account_state_refresh":  ("Account State Refresh", "Hourly, every day · unconditional"),
         "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
-        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri"),
+        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} daily · NYSE-hours-gated"),
         "weekly_summary":         ("Weekly Summary",    "09:00 UK time · Sunday"),
         "job_dispatcher":         ("job_dispatcher",    "—"),
     }
@@ -1501,7 +1501,10 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         # membership_refresh is fixed at 21:15 rather than derived from
         # scheduler.runs, and — like scheduled_eod above — has no
         # day_of_week filter on its real trigger. stock_order_submission
-        # (14:30 UTC weekdays) and weekly_summary (09:00 Europe/London,
+        # (14:30 UTC daily, NYSE-hours-gated internally via
+        # _is_nyse_open_now() — fixed 2026-08-03, previously a bare
+        # day_of_week="mon-fri" cron filter with no internal calendar
+        # check at all) and weekly_summary (09:00 Europe/London,
         # Sunday — its own explicit timezone, not this scheduler's UTC
         # default) are real, currently registered jobs that were
         # previously missing from this reconstruction entirely, making the
@@ -1530,8 +1533,8 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
              _CronTrigger(minute=0, timezone=_tz_s)),
             ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
              _CronTrigger(hour=21, minute=15, timezone=_tz_s)),
-            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri",
-             _CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
+            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} daily · NYSE-hours-gated",
+             _CronTrigger(hour=14, minute=30, timezone=_tz_s)),
             ("weekly_summary", "Weekly Summary", "09:00 UK time · Sunday",
              _CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")),
         ]
