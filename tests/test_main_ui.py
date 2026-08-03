@@ -530,19 +530,23 @@ def test_dashboard_crisis_banner_text_describes_new_entries_only(db_engine, dash
 # verification, not a separate/approximate computation.
 # ---------------------------------------------------------------------------
 
-def _seed_dashboard_pending_row(db_engine, *, ticker, momentum_pct, position_gbp=1000.0, is_etf=False):
+def _seed_dashboard_pending_row(db_engine, *, ticker, momentum_pct, position_gbp=1000.0,
+                                 is_etf=False, status="PENDING", resolution_note=None,
+                                 decided_at=None):
     from sqlalchemy import text as sa_text
     from datetime import datetime
+    now = decided_at or datetime.utcnow().isoformat()
     with db_engine.begin() as conn:
         conn.execute(sa_text("""
             INSERT INTO pending_orders
                 (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+                 position_gbp, momentum_pct, stop_price, var_pct, status, resolution_note, created_at)
             VALUES (:ticker, :t212_ticker, :is_etf, 'USD', :now, 100.0,
-                    :position_gbp, :momentum_pct, 90.0, 0.02, 'PENDING', :now)
+                    :position_gbp, :momentum_pct, 90.0, 0.02, :status, :resolution_note, :now)
         """), {
             "ticker": ticker, "t212_ticker": f"{ticker}_US_EQ", "is_etf": is_etf,
-            "now": datetime.utcnow().isoformat(), "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+            "now": now, "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+            "status": status, "resolution_note": resolution_note,
         })
 
 
@@ -609,6 +613,107 @@ def test_dashboard_candidate_status_shows_unavailable_when_projection_fails(db_e
     assert not at.exception
     df = at.dataframe[0].value
     assert df.loc[df["Ticker"] == "AAPL", "Status"].iloc[0] == "PROJECTION_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# Resolved candidates must not silently disappear from the dashboard
+# (2026-08-03) -- real incident: SNDK was the top-ranked overnight candidate,
+# 16 real orders were placed via the 14:30 UTC submission job, and SNDK was
+# nowhere to be found on the Candidate Queue once it resolved to
+# SKIPPED_PRICE_MOVED -- get_pending_candidates() filtered to
+# WHERE status = 'PENDING' only, even though the row was still sitting in
+# pending_orders, fully within its 30-day retention window. See CLAUDE.md's
+# write-up of the real SNDK resolution for the exact evidence.
+# ---------------------------------------------------------------------------
+
+def test_dashboard_candidate_table_shows_a_resolved_candidate_not_just_pending_ones(db_engine, dashboard_app, mocker):
+    """The real SNDK scenario: a resolved (SKIPPED_PRICE_MOVED) row must
+    still appear in the table -- not disappear -- showing its real,
+    final status (not a PROJECTED_* guess) and its resolution_note."""
+    _seed_dashboard_pending_row(
+        db_engine, ticker="SNDK", momentum_pct=26.997925, position_gbp=806.81,
+        status="SKIPPED_PRICE_MOVED",
+        resolution_note="price moved +3.11% since decision (decided 1214.83 -> now 1252.56), exceeds 3% sanity threshold",
+    )
+    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0, status="PENDING")
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "SNDK" in set(df["Ticker"])
+    sndk_row = df.loc[df["Ticker"] == "SNDK"].iloc[0]
+    assert sndk_row["Status"] == "SKIPPED_PRICE_MOVED"
+    assert "price moved +3.11%" in sndk_row["Note"]
+
+
+def test_dashboard_candidate_status_filter_offers_resolved_statuses_not_just_projected(db_engine, dashboard_app, mocker):
+    """The filter dropdown's options come from whatever's genuinely in the
+    data (main.py already derives it dynamically via cdf["Status"].unique())
+    -- this failed silently before the fix only because the underlying
+    query itself excluded every non-PENDING row, so the dropdown never had
+    a resolved status to offer in the first place."""
+    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=26.9, status="SKIPPED_PRICE_MOVED",
+                                resolution_note="price moved too much")
+    _seed_dashboard_pending_row(db_engine, ticker="WBD", momentum_pct=6.6, status="REJECTED_CAPACITY",
+                                resolution_note="capacity already full")
+    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0, status="PENDING")
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    options = set(at.multiselect(key="candidate_status_filter").options)
+    assert {"SKIPPED_PRICE_MOVED", "REJECTED_CAPACITY", "PROJECTED_ADMIT"} <= options
+
+    at.multiselect(key="candidate_status_filter").set_value(["SKIPPED_PRICE_MOVED"]).run()
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"SNDK"}
+
+
+def test_dashboard_candidate_table_a_ticker_with_two_historical_rows_shows_each_rows_own_status(db_engine, dashboard_app, mocker):
+    """A ticker can have several historical pending_orders rows (e.g. an
+    earlier SUPERSEDED decision and the later, final one that replaced
+    it) -- confirms Status is looked up per ROW, not by ticker, which
+    would otherwise silently show one row's status on the other."""
+    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=26.0, status="SUPERSEDED",
+                                resolution_note="cleared for fresh re-run", decided_at="2026-08-02T21:31:10")
+    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0, status="SKIPPED_PRICE_MOVED",
+                                resolution_note="price moved too much", decided_at="2026-08-02T21:50:29")
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    sndk_rows = df.loc[df["Ticker"] == "SNDK"]
+    assert len(sndk_rows) == 2
+    assert set(sndk_rows["Status"]) == {"SUPERSEDED", "SKIPPED_PRICE_MOVED"}
+
+
+def test_dashboard_candidate_table_no_change_to_retention_only_to_visibility(db_engine, dashboard_app, mocker):
+    """Explicit confirmation this is a query/filter fix, not a retention
+    change: a resolved row from several days ago (well within the
+    existing 30-day pending_orders retention window -- unaffected by this
+    task) is shown exactly like a same-day one; nothing here alters how
+    long rows are kept, only whether the UI can reach them."""
+    _seed_dashboard_pending_row(
+        db_engine, ticker="OLDROW", momentum_pct=5.0, status="SUBMITTED",
+        decided_at="2026-07-20T21:30:00",
+    )
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "OLDROW" in set(df["Ticker"])
+    assert df.loc[df["Ticker"] == "OLDROW", "Status"].iloc[0] == "SUBMITTED"
 
 
 # ---------------------------------------------------------------------------

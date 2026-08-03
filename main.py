@@ -1045,36 +1045,69 @@ def _render_dashboard_page(config: dict) -> None:
 
     # --- Candidate queue -----------------------------------------------
     st.markdown("### Candidate Queue")
-    st.caption("Decisions queued at EOD, awaiting their exchange-timed submission window "
-               "(14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware order submission\" section).")
+    st.caption(
+        "Every decision queued at EOD, still retained by the 30-day pending_orders "
+        "retention policy — whatever became of it: still awaiting its exchange-timed "
+        "submission window (14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware order "
+        "submission\" section), or already resolved (submitted, skipped, rejected on "
+        "capacity, or superseded by a fresh re-run). A resolved row is a real, final, "
+        "historical outcome — not something that disappears once decided."
+    )
     candidates = _get_pending_candidates_cached()
     if not candidates:
-        st.info("No candidates currently queued.")
+        st.info("No candidates currently queued or retained.")
     else:
         projected = _get_projected_admission_cached(config)
         projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
 
         cdf = pd.DataFrame(candidates).copy()
-        cdf["Status"] = cdf["ticker"].map(lambda t: projected_by_ticker.get(t, "PROJECTION_UNAVAILABLE"))
+        # Real status wins for an already-resolved row — only a genuinely
+        # still-PENDING row gets the live re-projected status. Looked up per
+        # ROW, not by ticker: a ticker can have several historical rows
+        # (e.g. an earlier SUPERSEDED decision and the later, final one that
+        # replaced it), and a ticker-keyed map would silently show one row's
+        # status on the other (2026-08-03 fix).
+        cdf["Status"] = cdf.apply(
+            lambda r: r["status"] if r["status"] != "PENDING"
+            else projected_by_ticker.get(r["ticker"], "PROJECTION_UNAVAILABLE"),
+            axis=1,
+        )
+        cdf["Note"] = cdf["resolution_note"].fillna("—")
+        cdf["decided_date"] = pd.to_datetime(cdf["decided_at"]).dt.date
         cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
 
-        momentum_bands = _compute_momentum_strength_bands(cdf["momentum_pct"])
-        cdf["Strength"] = cdf["momentum_pct"].map(lambda v: _momentum_strength_label(v, momentum_bands))
+        # Momentum-strength bands are computed per decision-date cohort, not
+        # across the whole table (2026-08-03) -- now that resolved rows from
+        # earlier days are shown alongside today's, computing one set of
+        # bands across every day at once would silently mix different days'
+        # momentum distributions together, breaking _compute_momentum_
+        # strength_bands()'s own documented "relative to that day's pool"
+        # design. Grouping by decided_date keeps each day's candidates
+        # judged only against their own day's real pool, exactly as before
+        # this fix for whichever day is the most recent.
+        def _label_group(s: pd.Series) -> pd.Series:
+            bands = _compute_momentum_strength_bands(s)
+            return s.map(lambda v: _momentum_strength_label(v, bands))
+        cdf["Strength"] = cdf.groupby("decided_date")["momentum_pct"].transform(_label_group)
+
         cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
         cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
 
         st.caption(
-            "⚠️ **Status is a projection, not a guarantee.** Computed by replaying the same "
-            "momentum-ranked, skip-and-continue capacity check real submission uses, against "
-            "the account's real state *right now* — the actual decision only happens at real "
-            "submission time, against whatever the account's state is *at that moment*, which "
-            "can genuinely change in between (a position closing, an emergency exit)."
+            "⚠️ **A `PROJECTED_*` status is a projection, not a guarantee** — shown only for "
+            "a row still genuinely `PENDING`. Computed by replaying the same momentum-ranked, "
+            "skip-and-continue capacity check real submission uses, against the account's "
+            "real state *right now* — the actual decision only happens at real submission "
+            "time, against whatever the account's state is *at that moment*, which can "
+            "genuinely change in between (a position closing, an emergency exit). Any other "
+            "status shown is the row's real, final, historical outcome — not a projection."
         )
         st.caption(
-            "**Strength** is relative to today's own candidate pool (bottom 25% Weak · middle "
-            "50% Moderate · next 15% Strong · top 10% Very Strong), recalculated fresh on every "
-            "render — not a fixed threshold — so it reflects current conditions rather than "
-            "going stale as the market moves. The raw percentage is always shown alongside it."
+            "**Strength** is relative to that candidate's own decision-date cohort (bottom "
+            "25% Weak · middle 50% Moderate · next 15% Strong · top 10% Very Strong), "
+            "recalculated fresh per day — not a fixed threshold — so it reflects that day's "
+            "real conditions rather than going stale as the market moves. The raw percentage "
+            "is always shown alongside it."
         )
         status_options = sorted(cdf["Status"].unique().tolist())
         status_filter = st.multiselect(
@@ -1083,8 +1116,8 @@ def _render_dashboard_page(config: dict) -> None:
         )
         cdf = cdf[cdf["Status"].isin(status_filter)]
 
-        cdf = cdf[["ticker", "Status", "momentum_pct", "Strength", "position_gbp", "decided_at"]]
-        cdf.columns = ["Ticker", "Status", "Momentum", "Strength", "Sized Position", "Decided At"]
+        cdf = cdf[["ticker", "Status", "momentum_pct", "Strength", "position_gbp", "decided_at", "Note"]]
+        cdf.columns = ["Ticker", "Status", "Momentum", "Strength", "Sized Position", "Decided At", "Note"]
         st.caption(f"{len(cdf)} of {len(candidates)} candidates shown")
         st.dataframe(cdf, width="stretch", hide_index=True)
 

@@ -312,14 +312,47 @@ def _seed_pending_row(engine, *, ticker: str, status: str, momentum_pct: float):
         """), {"t": ticker, "mom": momentum_pct, "status": status, "now": datetime.utcnow().isoformat()})
 
 
-def test_get_pending_candidates_returns_only_pending_ordered_by_momentum(db_engine):
+def test_get_pending_candidates_returns_every_status_ordered_by_momentum(db_engine):
+    """2026-08-03 fix — this used to filter to WHERE status = 'PENDING'
+    only, so a resolved candidate (submitted, skipped, rejected, superseded)
+    silently disappeared from every consumer even though its row was still
+    sitting in pending_orders, fully within the 30-day retention window.
+    Every status must now come back, still ordered by momentum descending."""
     _seed_pending_row(db_engine, ticker="LOWMOM", status="PENDING", momentum_pct=0.05)
     _seed_pending_row(db_engine, ticker="HIGHMOM", status="PENDING", momentum_pct=0.30)
-    _seed_pending_row(db_engine, ticker="SUBMITTED", status="SUBMITTED", momentum_pct=0.50)
+    _seed_pending_row(db_engine, ticker="SUBMITTEDTICK", status="SUBMITTED", momentum_pct=0.50)
+    _seed_pending_row(db_engine, ticker="SKIPPEDTICK", status="SKIPPED_PRICE_MOVED", momentum_pct=0.40)
+    _seed_pending_row(db_engine, ticker="REJECTEDTICK", status="REJECTED_CAPACITY", momentum_pct=0.20)
+    _seed_pending_row(db_engine, ticker="SUPERSEDEDTICK", status="SUPERSEDED", momentum_pct=0.10)
 
     rows = get_pending_candidates()
 
-    assert [r["ticker"] for r in rows] == ["HIGHMOM", "LOWMOM"]
+    assert [r["ticker"] for r in rows] == [
+        "SUBMITTEDTICK", "SKIPPEDTICK", "HIGHMOM", "REJECTEDTICK", "SUPERSEDEDTICK", "LOWMOM",
+    ]
+
+
+def test_get_pending_candidates_includes_status_and_resolution_note(db_engine):
+    """The dashboard needs the row's own real status and its resolution_note
+    (why it resolved that way) to show a resolved candidate meaningfully,
+    not just that it's no longer PENDING."""
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, resolution_note,
+                 resolved_at, created_at)
+            VALUES ('SNDK', 'SNDK1_US_EQ', 0, 'USD', :now, 1214.83, 806.81, 26.9979, 817.94,
+                    -0.6197, 'SKIPPED_PRICE_MOVED',
+                    'price moved +3.11% since decision (decided 1214.83 -> now 1252.56), exceeds 3% sanity threshold',
+                    :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+
+    rows = get_pending_candidates()
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "SKIPPED_PRICE_MOVED"
+    assert "price moved +3.11%" in rows[0]["resolution_note"]
 
 
 def test_get_unconfirmed_exits_empty(db_engine):

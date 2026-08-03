@@ -536,17 +536,39 @@ def get_top_trades(limit: int = 5) -> tuple[list[dict], list[dict]]:
 
 
 def get_pending_candidates() -> list[dict]:
-    """Every PENDING pending_orders row — decisions queued at EOD,
-    awaiting their exchange-timed submission window (see CLAUDE.md's
-    "Exchange-aware order submission" section). Ordered by momentum
-    descending, matching the real admission-priority order live
-    submission itself uses (brokers/trading212.py:_load_pending_orders())."""
+    """Every pending_orders row currently retained by the 30-day retention
+    policy (`brokers/trading212.py:purge_old_pending_orders()`) — every
+    decision queued at EOD, whatever became of it since: still `PENDING`,
+    or resolved to `SUBMITTED`/`FAILED`/`SKIPPED_PRICE_MOVED`/
+    `SKIPPED_ALREADY_HELD`/`REJECTED_CAPACITY`/`SKIPPED_CRISIS_BLOCKED`/
+    `SUPERSEDED` (see `data/database.py:PendingOrder.status`'s own
+    documented value set). Includes `status`/`resolution_note` so a
+    resolved row's own final outcome (and why) is directly visible.
+
+    Fixed 2026-08-03 — this previously filtered to `WHERE status =
+    'PENDING'` only, so the moment a candidate resolved (submitted,
+    skipped on the price-sanity check, rejected on capacity, superseded by
+    a fresh re-run, ...) its row silently disappeared from every consumer
+    of this function even though the row itself was still sitting in the
+    table, fully within its 30-day retention window. This is a query-scope
+    fix only — `purge_old_pending_orders()`'s own 30-day window is
+    completely unchanged; this function simply stops re-filtering out rows
+    that policy has already decided to keep.
+
+    Ordered by momentum descending, matching the real admission-priority
+    order live submission itself uses
+    (`brokers/trading212.py:_load_pending_orders()`) — this also means a
+    ticker's several historical rows (e.g. an earlier SUPERSEDED decision
+    and the later, final one that replaced it) both surface at the same
+    momentum-ranked position, rather than one silently masking the other.
+    """
     from sqlalchemy import text as sa_text
     try:
         with get_engine().connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT ticker, is_etf, decided_at, decided_price, position_gbp, momentum_pct
-                FROM pending_orders WHERE status = 'PENDING'
+                SELECT ticker, is_etf, decided_at, decided_price, position_gbp,
+                       momentum_pct, status, resolution_note
+                FROM pending_orders
                 ORDER BY momentum_pct DESC
             """)).mappings().all()
         return [dict(r) for r in rows]
