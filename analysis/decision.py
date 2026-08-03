@@ -164,7 +164,11 @@ def is_asset_class_enabled(*, is_etf: bool, config: dict) -> bool:
 
 
 REENTRY_COOLDOWN_DAYS = 30
-"""Calendar days after a ticker's last order (PLACED/FILLED, either
+"""The FALLBACK default re-entry cooldown, used only when
+trading212_invest.reentry_cooldown_days is absent from config entirely
+(backwards compatible with a config predating this parameter) -- see
+resolve_reentry_cooldown_days() immediately below for the real, live
+value. Calendar days after a ticker's last order (PLACED/FILLED, either
 direction) during which a new entry into that same ticker is blocked.
 
 Found missing from the backtest engine entirely on 2026-08-03: live
@@ -174,7 +178,9 @@ had an equivalent -- meaning every backtest run could freely re-enter
 a ticker the instant it exited, a genuine extra degree of freedom live
 has never had. See CLAUDE.md's "30-day re-entry cooldown -- live/
 backtest parity gap closed" section for the investigation, the fix,
-and the direct headline-figure sensitivity check that followed.
+and the direct headline-figure sensitivity check that followed --
+and "Re-entry cooldown set to 0 (config-driven)" for why production
+now runs at 0, not this 30-day fallback.
 
 Expressed as accepted, reviewed duplication (the same shape as
 candidate-priority-ranking above): live's own check
@@ -185,9 +191,10 @@ overhead an efficient batch query already avoids; the backtest
 engine's own check runs per-ticker, inline, inside its own day-by-day
 walk, since it has no equivalent bulk-query mechanism to reuse. These
 cannot literally share one function call for that reason -- but both
-sides read this ONE constant rather than each hardcoding their own
-"30", and both are independently tested to enforce the identical
-30-calendar-day boundary against the same synthetic scenario.
+sides resolve the SAME cooldown value via resolve_reentry_cooldown_days()
+below rather than each hardcoding their own number, and both are
+independently tested to enforce the identical boundary against the
+same synthetic scenario.
 
 Only simulate_portfolio_compounding_mtm() (analysis/backtest.py) --
 the engine analysis/validation.py:run_full_validation() actually
@@ -216,6 +223,26 @@ def is_reentry_blocked(
     if days_since_last_order is None:
         return False
     return days_since_last_order < cooldown_days
+
+
+def resolve_reentry_cooldown_days(config: dict) -> int:
+    """The real, currently-configured re-entry cooldown -- reads
+    trading212_invest.reentry_cooldown_days, falling back to
+    REENTRY_COOLDOWN_DAYS (30) only when the key is absent entirely.
+
+    Both live order placement (brokers/trading212.py's two
+    _load_open_order_tickers() call sites) and the backtest engine
+    (simulate_portfolio_compounding_mtm()) call this ONE function to
+    resolve the value they then pass to is_reentry_blocked() -- so
+    neither can silently resolve a different cooldown for the same
+    config, closing the exact class of gap this parameter's own
+    docstring above was written to document. Production runs at 0
+    (2026-08-03) -- see CLAUDE.md's "Re-entry cooldown set to 0
+    (config-driven)" section for why, and for the sweep across
+    intermediate values it was set ahead of.
+    """
+    t212_cfg = config.get("trading212_invest", {}) or {}
+    return int(t212_cfg.get("reentry_cooldown_days", REENTRY_COOLDOWN_DAYS))
 
 
 def resolve_dynamic_max_position_gbp(

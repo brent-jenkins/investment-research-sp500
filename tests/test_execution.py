@@ -829,6 +829,38 @@ def test_load_open_order_tickers_boundary_matches_backtests_own_boundary(db_engi
     assert "OLD" not in blocked  # 31 days -- cooldown cleared
 
 
+def test_load_open_order_tickers_config_driven_zero_permits_recent_reentry(db_engine):
+    """2026-08-03: production sets trading212_invest.reentry_cooldown_days
+    to 0 -- a ticker with an order placed moments ago must no longer be
+    treated as cooling down once that config value is resolved and
+    passed through as days=0, even though the same row would still be
+    blocked under the 30-day fallback default proven above."""
+    from brokers.trading212 import _load_open_order_tickers
+    from analysis.decision import resolve_reentry_cooldown_days
+
+    # Space-separated (matching SQLAlchemy's real placed_at storage format,
+    # "YYYY-MM-DD HH:MM:SS.ffffff") -- an isoformat() T-separated string
+    # would sort *after* SQLite's own datetime('now') at the same second
+    # (see CLAUDE.md's "T212 P&L reconstruction" section on this exact
+    # same-timestamp string-comparison pitfall), which would make even a
+    # days=0 window spuriously still "contain" a just-inserted row.
+    just_now = (datetime.utcnow() - timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('JUSTNOW', 'JUSTNOW_EQ', 'SELL', 'FILLED', :ts, :ts)
+        """), {"ts": just_now})
+
+    cooldown_days = resolve_reentry_cooldown_days({"trading212_invest": {"reentry_cooldown_days": 0}})
+    assert cooldown_days == 0
+
+    blocked_default = _load_open_order_tickers()
+    assert "JUSTNOW" in blocked_default  # unchanged 30-day fallback still blocks it
+
+    blocked_zero = _load_open_order_tickers(days=cooldown_days)
+    assert "JUSTNOW" not in blocked_zero  # config-resolved 0-day cooldown does not
+
+
 # ---------------------------------------------------------------------------
 # Exchange-aware order submission (2026-07-31, see CLAUDE.md) --
 # _submit_pending_orders() / submit_pending_etf_orders() /

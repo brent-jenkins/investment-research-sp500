@@ -1294,6 +1294,37 @@ def test_mtm_reentry_blocked_within_30_days_of_exit_allowed_after(mocker):
     assert days_gap >= 30, f"re-entered only {days_gap} days after exit -- cooldown not enforced"
 
 
+def test_mtm_reentry_cooldown_is_config_driven_zero_permits_immediate_reentry(mocker):
+    """2026-08-03: trading212_invest.reentry_cooldown_days now overrides
+    the 30-day fallback -- production sets it to 0. The exact same
+    exit-then-immediate-signal-back-on scenario as the test above, but
+    with the config value set to 0, must now re-enter on the very next
+    day rather than waiting 30 days."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+
+    n = 60
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    signal = [True] * 10 + [False] + [True] * (n - 11)
+    close = pd.Series([100.0] * n, index=dates)
+    atr = pd.Series([1.0] * n, index=dates)
+    frame = pd.DataFrame({"close": close, "atr": atr, "signal": pd.Series(signal, index=dates)})
+
+    cfg = _compounding_config()
+    cfg["trading212_invest"]["stock_max_holding_days"] = 200
+    cfg["trading212_invest"]["reentry_cooldown_days"] = 0
+
+    cached = [{"ticker": "REENTRY0", "frame": frame}]
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    assert len(trades) == 2, f"expected exactly 2 trades (initial + immediate re-entry), got {len(trades)}: {trades}"
+    first, second = trades[0], trades[1]
+    assert first["exit_date"] == dates[10].date()
+    assert second["entry_date"] == dates[11].date(), (
+        f"reentry_cooldown_days=0 must permit re-entry the very next day, "
+        f"got entry_date={second['entry_date']}"
+    )
+
+
 def test_mtm_reentry_never_blocked_for_a_tickers_very_first_entry(mocker):
     """A ticker with no prior trade at all (last_exit_date=None) must never
     be treated as cooling down -- confirms is_reentry_blocked(None) is

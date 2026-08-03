@@ -27,6 +27,7 @@ from analysis.decision import (
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
+    resolve_reentry_cooldown_days,
 )
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
@@ -1194,12 +1195,16 @@ def simulate_portfolio_compounding_mtm(
     simulate_portfolio_compounding(); only the numbers feeding the capacity
     check and the sizing formula differ.
 
-    **30-day re-entry cooldown (2026-08-03)** — this is the one engine
-    that enforces analysis/decision.py:is_reentry_blocked(), since this
-    is the engine analysis/validation.py:run_full_validation() actually
-    defaults to and the one confirmed to match live order placement.
-    Every other engine in this file is deliberately exempt — see
-    is_reentry_blocked()'s own docstring for the full reasoning.
+    **Re-entry cooldown (2026-08-03, config-driven)** — this is the one
+    engine that enforces analysis/decision.py:is_reentry_blocked(), since
+    this is the engine analysis/validation.py:run_full_validation()
+    actually defaults to and the one confirmed to match live order
+    placement. The cooldown length itself is resolved once per call via
+    resolve_reentry_cooldown_days(config) — trading212_invest.
+    reentry_cooldown_days, falling back to the 30-day REENTRY_COOLDOWN_DAYS
+    constant only when that key is absent. Every other engine in this
+    file is deliberately exempt — see is_reentry_blocked()'s own
+    docstring for the full reasoning.
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -1208,6 +1213,7 @@ def simulate_portfolio_compounding_mtm(
     max_risk_pct = float(var_cfg.get("max_risk_pct", 0.01))
     min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
     absolute_max_position_gbp = float(var_cfg.get("absolute_max_position_gbp", 1_000_000))
+    reentry_cooldown_days = resolve_reentry_cooldown_days(config)
 
     per_ticker: dict[str, dict] = {}
     events: list[tuple] = []
@@ -1303,7 +1309,7 @@ def simulate_portfolio_compounding_mtm(
             # one shared function with live's bulk SQL check.
             last_exit = st.get("last_exit_date")
             days_since_exit = (dt - last_exit).days if last_exit is not None else None
-            if is_reentry_blocked(days_since_exit):
+            if is_reentry_blocked(days_since_exit, cooldown_days=reentry_cooldown_days):
                 continue
             momentum_val = row.get("momentum")
             momentum_val = float(momentum_val) if pd.notna(momentum_val) else float("-inf")

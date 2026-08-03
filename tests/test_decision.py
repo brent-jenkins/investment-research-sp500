@@ -14,6 +14,7 @@ from analysis.decision import (
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
+    resolve_reentry_cooldown_days,
 )
 
 
@@ -255,3 +256,31 @@ def test_is_reentry_blocked_none_never_blocks():
 def test_is_reentry_blocked_respects_a_custom_cooldown_period():
     assert is_reentry_blocked(10, cooldown_days=14) is True
     assert is_reentry_blocked(14, cooldown_days=14) is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_reentry_cooldown_days() (2026-08-03) -- the shared config-lookup
+# both live order placement and simulate_portfolio_compounding_mtm() call
+# to resolve the real cooldown value, so neither can silently resolve a
+# different one for the same config. Production sets
+# trading212_invest.reentry_cooldown_days: 0 -- see CLAUDE.md's "Re-entry
+# cooldown set to 0 (config-driven)" section.
+# ---------------------------------------------------------------------------
+
+def test_resolve_reentry_cooldown_days_reads_the_configured_value():
+    assert resolve_reentry_cooldown_days({"trading212_invest": {"reentry_cooldown_days": 0}}) == 0
+    assert resolve_reentry_cooldown_days({"trading212_invest": {"reentry_cooldown_days": 7}}) == 7
+
+
+def test_resolve_reentry_cooldown_days_falls_back_to_30_when_key_absent():
+    """A config predating this parameter (no reentry_cooldown_days key at
+    all) must behave exactly as before this change shipped -- the
+    original 30-day REENTRY_COOLDOWN_DAYS default."""
+    assert resolve_reentry_cooldown_days({"trading212_invest": {}}) == 30
+    assert resolve_reentry_cooldown_days({}) == REENTRY_COOLDOWN_DAYS
+
+
+def test_resolve_reentry_cooldown_days_zero_means_no_cooldown_at_all():
+    assert is_reentry_blocked(0, cooldown_days=resolve_reentry_cooldown_days(
+        {"trading212_invest": {"reentry_cooldown_days": 0}}
+    )) is False

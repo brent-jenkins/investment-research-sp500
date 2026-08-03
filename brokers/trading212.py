@@ -82,6 +82,7 @@ from analysis.decision import (
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
+    resolve_reentry_cooldown_days,
 )
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
@@ -771,11 +772,14 @@ def _load_open_order_tickers(days: int = REENTRY_COOLDOWN_DAYS) -> set:
     """Every ticker with a PLACED/FILLED order (either direction) within
     the last *days* calendar days -- a new entry into any of these is
     skipped by the decide phase. `days` defaults to the single shared
-    REENTRY_COOLDOWN_DAYS constant (analysis/decision.py) rather than its
-    own hardcoded literal -- see that constant's own docstring for why
-    this bulk SQL query and the backtest engine's per-ticker Python check
+    REENTRY_COOLDOWN_DAYS fallback constant (analysis/decision.py) for
+    direct/test callers, but both real call sites in this module pass it
+    explicitly, resolved from config via resolve_reentry_cooldown_days()
+    -- see that function's own docstring for why this bulk SQL query and
+    the backtest engine's per-ticker Python check
     (analysis/backtest.py:simulate_portfolio_compounding_mtm()) can't
-    literally share one function call, but both read the same threshold.
+    literally share one function call, but both resolve the same
+    config-driven threshold.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -2373,7 +2377,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
 
     try:
         gspc_close = _load_gspc_close()
-        open_order_tickers = _load_open_order_tickers()
+        open_order_tickers = _load_open_order_tickers(days=resolve_reentry_cooldown_days(config))
     except Exception as exc:
         logger.error("Read error — %s", exc, exc_info=True)
         _set_t212_error(f"read failed: {exc}")
@@ -2796,7 +2800,7 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
         return 0
 
     try:
-        open_order_tickers = _load_open_order_tickers()
+        open_order_tickers = _load_open_order_tickers(days=resolve_reentry_cooldown_days(config))
     except Exception as exc:
         logger.error("Read error during %s submission — %s", label, exc, exc_info=True)
         return 0
