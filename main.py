@@ -1114,7 +1114,7 @@ def _render_dashboard_page(config: dict) -> None:
     st.caption(
         "SELL orders T212 has accepted but not yet resolved to FILLED/CANCELLED/REJECTED. "
         "Status here only updates when poll_placed_orders() next runs — hourly via the "
-        "trade-alert job, or sooner via a manual account refresh — so a row a few minutes "
+        "Open Trade Monitor job, or sooner via a manual account refresh — so a row a few minutes "
         "old is routine, not stuck. A 2026-07 finding once cited a 60+ hour resolution gap "
         "on this account as a documented characteristic; tracing its origin (2026-08-03) "
         "found that figure was based on this system's own polling timing, not T212's real "
@@ -1141,41 +1141,6 @@ def _render_dashboard_page(config: dict) -> None:
 # ---------------------------------------------------------------------------
 # Status page
 # ---------------------------------------------------------------------------
-
-def _pipeline_row(label: str, ts: "datetime | None", level: str,
-                   desc: str, never_badge: str = "PENDING") -> str:
-    """Build one row of the Status page's Pipeline table as an HTML string.
-
-    *level* ("ok"/"warn"/"error") must be precomputed by the caller, via
-    whichever staleness rule actually fits that row — e.g.
-    _trading_day_age_level() for a daily (or better) job, where a genuine
-    NYSE-calendar-aware count is needed so an ordinary weekend gap doesn't
-    misread as stale (see that function's own docstring). This function
-    used to hardcode _age_level()'s naive elapsed-hours rule for every row
-    it renders — fixed 2026-08-03, since that's exactly what made the
-    "Price Data Refresh" row show STALE for data only one real trading day
-    old.
-    """
-    if ts is None:
-        badge, colour = never_badge, ("#8899AA" if never_badge != "PENDING" else "#f59e0b")
-        age_str = "—"
-    else:
-        colour = _LEVEL_COLOUR.get(level, "#8899AA")
-        badge = {"ok": "OK", "warn": "STALE", "error": "OVERDUE"}.get(level, "OK")
-        _, age_str = _age_display(ts)
-    ts_str = _fmt_uk(ts, "%Y-%m-%d %H:%M") if ts else "Never"
-    return (
-        '<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #1E2D45;'
-        'font-size:0.85rem">'
-        f'<div style="width:32px;flex-shrink:0;color:{colour}">●</div>'
-        f'<div style="flex:0 0 18%;padding-right:8px;font-weight:600">{html.escape(label)}</div>'
-        f'<div style="flex:0 0 17%;padding-right:8px;color:#8899AA">{html.escape(ts_str)}</div>'
-        f'<div style="flex:0 0 7%;padding-right:8px;color:#8899AA">{html.escape(age_str)}</div>'
-        f'<div style="flex:0 0 8%;padding-right:8px;color:{colour};font-weight:700">{badge}</div>'
-        f'<div style="flex:1;color:#8899AA">{html.escape(desc)}</div>'
-        '</div>'
-    )
-
 
 def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     """System status panel — rendered as the Status page."""
@@ -1262,41 +1227,257 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         f"Last run: {run_label}" if run_label else "Not yet run"
     )
 
+    # ── Scheduler Health ──────────────────────────────────────────────────
+    # Lives here — near the top of the page, in the old "Pipeline"
+    # section's former position — rather than further down, per the
+    # 2026-08-03 consolidation: Pipeline and Scheduler Health used to be
+    # two separate sections both answering "what's happening with the
+    # scheduled jobs," with Pipeline showing only a simplified two-step
+    # subset of what this section already covers more completely across
+    # every registered job. Pipeline's own two data points (price-refresh
+    # coverage detail, last-run-type label) are folded into this section's
+    # "End of Day" row's Description column below — that job is the one
+    # that actually performs both the price pull and the order-decide
+    # logic Pipeline used to track separately, so nothing genuinely unique
+    # from Pipeline was lost, only its standalone section.
     st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
-    st.markdown("### Pipeline")
+    st.markdown("### Scheduler Health")
 
-    _THEAD = (
-        '<div style="font-size:0.88rem">'
-        '<div style="display:flex;align-items:center;padding:4px 0 6px;border-bottom:2px solid #1E2D45;'
-        'color:#8899AA;font-size:0.70rem;text-transform:uppercase;letter-spacing:0.07em">'
-        '<div style="width:32px;flex-shrink:0"></div>'
-        '<div style="flex:0 0 18%;padding-right:8px">Step</div>'
-        '<div style="flex:0 0 17%;padding-right:8px">Last Run</div>'
-        '<div style="flex:0 0 7%;padding-right:8px">Age</div>'
-        '<div style="flex:0 0 8%;padding-right:8px">Status</div>'
-        '<div style="flex:1">Description</div>'
+    _mr_val, _mr_sub = _age_display(last_membership_refresh)
+    _mr_stale = is_membership_refresh_stale(last_membership_refresh)
+    _mr_colour = "#dc2626" if _mr_stale else "#8899AA"
+    _mr_caption = f"Membership refresh (fja05680/sp500): last successful {_mr_val} ({_mr_sub})"
+    if _mr_stale:
+        _mr_caption += f" — OVERDUE, past the {MEMBERSHIP_STALE_HOURS:.0f}h (~2 cycle) threshold"
+
+    _wiki_json = get_metadata_str("membership_wikipedia_lag_check")
+    _wiki_caption = "Wikipedia lag check: not yet run"
+    _wiki_colour = "#8899AA"
+    if _wiki_json:
+        try:
+            _wiki_result = json.loads(_wiki_json)
+            _wiki_n = len(_wiki_result.get("disagreements", []))
+            if _wiki_result.get("error"):
+                _wiki_caption = f"Wikipedia lag check: last attempt failed — {_wiki_result['error']}"
+                _wiki_colour = "#dc2626"
+            elif _wiki_n:
+                _wiki_caption = f"Wikipedia lag check: {_wiki_n} disagreement(s) flagged (lag detector only — not independent verification)"
+                _wiki_colour = "#f59e0b"
+            else:
+                _wiki_caption = f"Wikipedia lag check: no disagreement ({_wiki_result.get('checked', 0)} ticker(s) checked — lag detector only, not independent verification)"
+        except Exception:
+            pass
+    st.markdown(
+        f'<div style="font-size:0.78rem;color:{_mr_colour};margin-bottom:2px">{html.escape(_mr_caption)}</div>'
+        f'<div style="font-size:0.78rem;color:{_wiki_colour};margin-bottom:8px">{html.escape(_wiki_caption)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    try:
+        import data.scheduler as _sched_mod
+        _aps        = getattr(_sched_mod, "_scheduler", None)
+        _aps_running = _aps is not None and getattr(_aps, "running", False)
+    except Exception:
+        _aps        = None
+        _aps_running = False
+
+    _daemon_active = False
+    _daemon_age_s: float = float("inf")
+    try:
+        _hb_str = get_metadata_str("scheduler_heartbeat")
+        if _hb_str:
+            _hb_dt = datetime.fromisoformat(_hb_str)
+            _daemon_age_s = (datetime.utcnow() - _hb_dt).total_seconds()
+            _daemon_active = _daemon_age_s < 90
+    except Exception:
+        pass
+
+    # Labels must match the *real* jobs data/scheduler.py:start_scheduler()
+    # registers, not a stale snapshot — scheduled_eod/membership_refresh
+    # fire daily now (no day_of_week filter, NYSE-calendar-gated
+    # internally, see _is_scheduled_trading_day()), and
+    # stock_order_submission/weekly_summary are genuine, order-affecting
+    # jobs that must appear here, not silently fall back to a raw job id.
+    _JOB_LABELS: dict[str, tuple[str, str]] = {
+        "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} daily · NYSE-gated"),
+        "trade_alert_check":      ("Open Trade Monitor", "Hourly 00–21, 23 · Mon–Fri"),
+        "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
+        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri"),
+        "weekly_summary":         ("Weekly Summary",    "09:00 UK time · Sunday"),
+        "job_dispatcher":         ("job_dispatcher",    "—"),
+    }
+
+    if _daemon_active:
+        _aps_label, _mode_note, _aps_colour = "RUNNING", f"(daemon · heartbeat {int(_daemon_age_s)}s ago)", "#16a34a"
+    elif _aps_running:
+        _aps_label, _mode_note, _aps_colour = "RUNNING", "(in-process)", "#16a34a"
+    else:
+        _aps_label, _mode_note, _aps_colour = "STOPPED", "", "#dc2626"
+
+    st.markdown(
+        f'<div style="margin-bottom:10px">'
+        f'<span style="font-size:0.82rem;color:#8899AA">Scheduler: </span>'
+        f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
+        + (f'<span style="font-size:0.75rem;color:#8899AA;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # scheduled_eod's Description column folds in exactly what the old,
+    # separate "Pipeline" section used to show for its two steps (price
+    # refresh coverage, last-run-type) — both are genuinely produced by
+    # this one job, so nothing is lost by not having a standalone section.
+    _eod_detail = f"{price_desc} · {order_desc}"
+
+    def _sched_row_html(jlabel: str, jsched: str, nrt_str: str, until_str: str, dot: str, badge: str,
+                         detail: str = "") -> str:
+        return (
+            f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
+            f'align-items:center;font-size:0.78rem">'
+            f'<div style="flex:0 0 16%;font-weight:600">{html.escape(jlabel)}</div>'
+            f'<div style="flex:0 0 20%;color:#8899AA;font-size:0.72rem">{html.escape(jsched)}</div>'
+            f'<div style="flex:0 0 18%">{html.escape(nrt_str)}</div>'
+            f'<div style="flex:0 0 9%;color:#8899AA">{html.escape(until_str)}</div>'
+            f'<div style="flex:0 0 10%;color:{dot};font-weight:700">{html.escape(badge)}</div>'
+            f'<div style="flex:1;color:#8899AA;font-size:0.72rem;padding-left:8px">{html.escape(detail)}</div>'
+            f'</div>'
+        )
+
+    _sh_head = (
+        '<div style="font-size:0.82rem">'
+        '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
+        'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
+        '<div style="flex:0 0 16%">Job</div>'
+        '<div style="flex:0 0 20%">Schedule</div>'
+        '<div style="flex:0 0 18%">Next Run</div>'
+        '<div style="flex:0 0 9%">In</div>'
+        '<div style="flex:0 0 10%">Status</div>'
+        '<div style="flex:1;padding-left:8px">Description</div>'
         '</div>'
     )
-    _TFOOT = "</div>"
 
-    rows = "".join([
-        _pipeline_row(
-            "1 · Price Data Refresh", last_refresh,
-            level=_trading_day_age_level(last_refresh), desc=price_desc, never_badge="PENDING",
-        ),
-        _pipeline_row(
-            "2 · Order Logic", last_sched,
-            level=_trading_day_age_level(last_sched), desc=order_desc, never_badge="PENDING",
-        ),
-    ])
-    st.markdown(_THEAD + rows + _TFOOT, unsafe_allow_html=True)
+    def _eod_overdue() -> bool:
+        _ref_age = (
+            (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
+            if last_refresh else float("inf")
+        )
+        _now_u = datetime.utcnow()
+        _monday_before_eod = _now_u.weekday() == 0 and (_now_u.hour, _now_u.minute) < (21, 30)
+        return _ref_age > 26 and _now_u.weekday() < 5 and not _monday_before_eod
+
+    if _aps_running and _aps is not None:
+        _aps_jobs   = _aps.get_jobs()
+        _now_utc_tz = datetime.now(timezone.utc)
+        _sh_rows: list[str] = []
+        for _job in _aps_jobs:
+            _jlabel, _jsched = _JOB_LABELS.get(_job.id, (_job.id, "—"))
+            if _jlabel == "job_dispatcher":
+                continue
+            _nrt = _job.next_run_time
+            if _nrt is None:
+                _nrt_str, _until_str, _dot, _badge = "Paused", "—", "#94a3b8", "PAUSED"
+            else:
+                _d = (_nrt - _now_utc_tz).total_seconds()
+                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
+                _until_str = (
+                    f"{int(_d / 60)}m"  if _d < 3600
+                    else f"{_d / 3600:.1f}h" if _d < 86400
+                    else f"{_d / 86400:.1f}d"
+                )
+                _dot, _badge = "#16a34a", "OK"
+            if _job.id == "scheduled_eod" and _eod_overdue():
+                _dot, _badge = "#dc2626", "OVERDUE"
+            if _job.id == "membership_refresh" and is_membership_refresh_stale(last_membership_refresh):
+                _dot, _badge = "#dc2626", "OVERDUE"
+            _detail = _eod_detail if _job.id == "scheduled_eod" else ""
+            _sh_rows.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge, _detail))
+        st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
+    elif _daemon_active:
+        from apscheduler.triggers.cron import CronTrigger as _CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger as _ItvTrigger
+        _cfg_s  = _load_config()["scheduler"]
+        _tz_s   = _cfg_s["timezone"]
+        _now_tz = datetime.now(timezone.utc)
+
+        _static_jobs: list[tuple[str, str, str, object]] = []
+        for _rn, _rc in _cfg_s.get("runs", {}).items():
+            _sid = f"scheduled_{_rn}"
+            _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
+            # No day_of_week filter — matches the real trigger in
+            # data/scheduler.py:start_scheduler() exactly. These jobs fire
+            # every calendar day and gate themselves internally via
+            # _is_scheduled_trading_day() (NYSE calendar); a reconstructed
+            # Mon-Fri-only trigger here would silently show the wrong next
+            # fire time on a weekend/holiday.
+            _trigger = _CronTrigger(
+                hour=_rc["hour"], minute=_rc["minute"],
+                timezone=_tz_s,
+            )
+            _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
+
+        # membership_refresh is fixed at 21:15 rather than derived from
+        # scheduler.runs, and — like scheduled_eod above — has no
+        # day_of_week filter on its real trigger. stock_order_submission
+        # (14:30 UTC weekdays) and weekly_summary (09:00 Europe/London,
+        # Sunday — its own explicit timezone, not this scheduler's UTC
+        # default) are real, currently registered jobs that were
+        # previously missing from this reconstruction entirely, making the
+        # actual order-submission job invisible on the Status page
+        # whenever the standalone daemon (rather than the in-process
+        # fallback) is what's running — exactly the case in normal
+        # production operation. monday_premarket was removed entirely
+        # 2026-08-03 — confirmed genuinely redundant with the hourly
+        # trade_alert_check job, which fires at the identical 07:00 UTC
+        # minute every Monday — see CLAUDE.md's "Monday Pre-Market removed"
+        # section.
+        _extra_static = [
+            ("trade_alert_check", "Open Trade Monitor", "Hourly 00–21, 23 · Mon–Fri",
+             _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
+            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
+             _CronTrigger(hour=21, minute=15, timezone=_tz_s)),
+            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri",
+             _CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
+            ("weekly_summary", "Weekly Summary", "09:00 UK time · Sunday",
+             _CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")),
+        ]
+        _static_jobs.extend(_extra_static)
+
+        _sh_rows_d: list[str] = []
+        for _sid, _jlabel, _jsched, _trigger in _static_jobs:
+            try:
+                _nrt = _trigger.get_next_fire_time(None, _now_tz)
+            except Exception:
+                _nrt = None
+            if _nrt is None:
+                _nrt_str, _until_str = "—", "—"
+            else:
+                _d = (_nrt - _now_tz).total_seconds()
+                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
+                _until_str = (
+                    f"{int(_d / 60)}m"  if _d < 3600
+                    else f"{_d / 3600:.1f}h" if _d < 86400
+                    else f"{_d / 86400:.1f}d"
+                )
+            _dot, _badge = "#16a34a", "OK"
+            if _sid == "scheduled_eod" and _eod_overdue():
+                _dot, _badge = "#dc2626", "OVERDUE"
+            if _sid == "membership_refresh" and is_membership_refresh_stale(last_membership_refresh):
+                _dot, _badge = "#dc2626", "OVERDUE"
+            _detail = _eod_detail if _sid == "scheduled_eod" else ""
+            _sh_rows_d.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge, _detail))
+        st.markdown(_sh_head + "".join(_sh_rows_d) + "</div>", unsafe_allow_html=True)
+    else:
+        st.warning(
+            "Scheduler is not running — scheduled jobs will not fire until the service restarts. "
+            "On the server, ensure investment-research-scheduler.service is enabled and running."
+        )
 
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
     st.markdown("### Scheduled Runs")
     st.caption(
         "The 07:00 (Tue–Fri) pre-market and 13:30 US-open analysis-only runs "
         "that used to sit here were removed 2026-07-31 — confirmed redundant "
-        "with the hourly trade-alert job below, not just assumed. See "
+        "with the hourly Open Trade Monitor job above, not just assumed. See "
         "CLAUDE.md's \"Pre-market/US-open scheduled runs removed\" section."
     )
     sched_runs = config.get("scheduler", {}).get("runs", {})
@@ -1621,228 +1802,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                     )
             else:
                 st.caption("No instrument resolutions recorded yet — none needed until the first live candidate is evaluated.")
-
-    # ── Scheduler Health ──────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Scheduler Health")
-
-    _mr_val, _mr_sub = _age_display(last_membership_refresh)
-    _mr_stale = is_membership_refresh_stale(last_membership_refresh)
-    _mr_colour = "#dc2626" if _mr_stale else "#8899AA"
-    _mr_caption = f"Membership refresh (fja05680/sp500): last successful {_mr_val} ({_mr_sub})"
-    if _mr_stale:
-        _mr_caption += f" — OVERDUE, past the {MEMBERSHIP_STALE_HOURS:.0f}h (~2 cycle) threshold"
-
-    _wiki_json = get_metadata_str("membership_wikipedia_lag_check")
-    _wiki_caption = "Wikipedia lag check: not yet run"
-    _wiki_colour = "#8899AA"
-    if _wiki_json:
-        try:
-            _wiki_result = json.loads(_wiki_json)
-            _wiki_n = len(_wiki_result.get("disagreements", []))
-            if _wiki_result.get("error"):
-                _wiki_caption = f"Wikipedia lag check: last attempt failed — {_wiki_result['error']}"
-                _wiki_colour = "#dc2626"
-            elif _wiki_n:
-                _wiki_caption = f"Wikipedia lag check: {_wiki_n} disagreement(s) flagged (lag detector only — not independent verification)"
-                _wiki_colour = "#f59e0b"
-            else:
-                _wiki_caption = f"Wikipedia lag check: no disagreement ({_wiki_result.get('checked', 0)} ticker(s) checked — lag detector only, not independent verification)"
-        except Exception:
-            pass
-    st.markdown(
-        f'<div style="font-size:0.78rem;color:{_mr_colour};margin-bottom:2px">{html.escape(_mr_caption)}</div>'
-        f'<div style="font-size:0.78rem;color:{_wiki_colour};margin-bottom:8px">{html.escape(_wiki_caption)}</div>',
-        unsafe_allow_html=True,
-    )
-
-    try:
-        import data.scheduler as _sched_mod
-        _aps        = getattr(_sched_mod, "_scheduler", None)
-        _aps_running = _aps is not None and getattr(_aps, "running", False)
-    except Exception:
-        _aps        = None
-        _aps_running = False
-
-    _daemon_active = False
-    _daemon_age_s: float = float("inf")
-    try:
-        _hb_str = get_metadata_str("scheduler_heartbeat")
-        if _hb_str:
-            _hb_dt = datetime.fromisoformat(_hb_str)
-            _daemon_age_s = (datetime.utcnow() - _hb_dt).total_seconds()
-            _daemon_active = _daemon_age_s < 90
-    except Exception:
-        pass
-
-    # Labels must match the *real* jobs data/scheduler.py:start_scheduler()
-    # registers, not a stale snapshot — scheduled_eod/membership_refresh
-    # fire daily now (no day_of_week filter, NYSE-calendar-gated
-    # internally, see _is_scheduled_trading_day()), and
-    # stock_order_submission/weekly_summary are genuine, order-affecting
-    # jobs that must appear here, not silently fall back to a raw job id.
-    _JOB_LABELS: dict[str, tuple[str, str]] = {
-        "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} daily · NYSE-gated"),
-        "trade_alert_check":      ("Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri"),
-        "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
-        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri"),
-        "weekly_summary":         ("Weekly Summary",    "09:00 UK time · Sunday"),
-        "job_dispatcher":         ("job_dispatcher",    "—"),
-    }
-
-    if _daemon_active:
-        _aps_label, _mode_note, _aps_colour = "RUNNING", f"(daemon · heartbeat {int(_daemon_age_s)}s ago)", "#16a34a"
-    elif _aps_running:
-        _aps_label, _mode_note, _aps_colour = "RUNNING", "(in-process)", "#16a34a"
-    else:
-        _aps_label, _mode_note, _aps_colour = "STOPPED", "", "#dc2626"
-
-    st.markdown(
-        f'<div style="margin-bottom:10px">'
-        f'<span style="font-size:0.82rem;color:#8899AA">Scheduler: </span>'
-        f'<span style="font-size:0.82rem;font-weight:700;color:{_aps_colour}">{_aps_label}</span>'
-        + (f'<span style="font-size:0.75rem;color:#8899AA;margin-left:6px">{html.escape(_mode_note)}</span>' if _mode_note else "")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-    def _sched_row_html(jlabel: str, jsched: str, nrt_str: str, until_str: str, dot: str, badge: str) -> str:
-        return (
-            f'<div style="display:flex;padding:5px 0;border-bottom:1px solid #1E2D45;'
-            f'align-items:center;font-size:0.78rem">'
-            f'<div style="flex:0 0 22%;font-weight:600">{html.escape(jlabel)}</div>'
-            f'<div style="flex:0 0 28%;color:#8899AA;font-size:0.73rem">{html.escape(jsched)}</div>'
-            f'<div style="flex:0 0 25%">{html.escape(nrt_str)}</div>'
-            f'<div style="flex:0 0 12%;color:#8899AA">{html.escape(until_str)}</div>'
-            f'<div style="flex:0 0 13%;color:{dot};font-weight:700">{html.escape(badge)}</div>'
-            f'</div>'
-        )
-
-    _sh_head = (
-        '<div style="font-size:0.82rem">'
-        '<div style="display:flex;padding:3px 0 5px;border-bottom:2px solid #1E2D45;'
-        'color:#8899AA;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em">'
-        '<div style="flex:0 0 22%">Job</div>'
-        '<div style="flex:0 0 28%">Schedule</div>'
-        '<div style="flex:0 0 25%">Next Run</div>'
-        '<div style="flex:0 0 12%">In</div>'
-        '<div style="flex:0 0 13%">Status</div>'
-        '</div>'
-    )
-
-    def _eod_overdue() -> bool:
-        _ref_age = (
-            (datetime.utcnow() - last_refresh.replace(tzinfo=None)).total_seconds() / 3600
-            if last_refresh else float("inf")
-        )
-        _now_u = datetime.utcnow()
-        _monday_before_eod = _now_u.weekday() == 0 and (_now_u.hour, _now_u.minute) < (21, 30)
-        return _ref_age > 26 and _now_u.weekday() < 5 and not _monday_before_eod
-
-    if _aps_running and _aps is not None:
-        _aps_jobs   = _aps.get_jobs()
-        _now_utc_tz = datetime.now(timezone.utc)
-        _sh_rows: list[str] = []
-        for _job in _aps_jobs:
-            _jlabel, _jsched = _JOB_LABELS.get(_job.id, (_job.id, "—"))
-            if _jlabel == "job_dispatcher":
-                continue
-            _nrt = _job.next_run_time
-            if _nrt is None:
-                _nrt_str, _until_str, _dot, _badge = "Paused", "—", "#94a3b8", "PAUSED"
-            else:
-                _d = (_nrt - _now_utc_tz).total_seconds()
-                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
-                _until_str = (
-                    f"{int(_d / 60)}m"  if _d < 3600
-                    else f"{_d / 3600:.1f}h" if _d < 86400
-                    else f"{_d / 86400:.1f}d"
-                )
-                _dot, _badge = "#16a34a", "OK"
-            if _job.id == "scheduled_eod" and _eod_overdue():
-                _dot, _badge = "#dc2626", "OVERDUE"
-            if _job.id == "membership_refresh" and is_membership_refresh_stale(last_membership_refresh):
-                _dot, _badge = "#dc2626", "OVERDUE"
-            _sh_rows.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge))
-        st.markdown(_sh_head + "".join(_sh_rows) + "</div>", unsafe_allow_html=True)
-    elif _daemon_active:
-        from apscheduler.triggers.cron import CronTrigger as _CronTrigger
-        from apscheduler.triggers.interval import IntervalTrigger as _ItvTrigger
-        _cfg_s  = _load_config()["scheduler"]
-        _tz_s   = _cfg_s["timezone"]
-        _now_tz = datetime.now(timezone.utc)
-
-        _static_jobs: list[tuple[str, str, str, object]] = []
-        for _rn, _rc in _cfg_s.get("runs", {}).items():
-            _sid = f"scheduled_{_rn}"
-            _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
-            # No day_of_week filter — matches the real trigger in
-            # data/scheduler.py:start_scheduler() exactly. These jobs fire
-            # every calendar day and gate themselves internally via
-            # _is_scheduled_trading_day() (NYSE calendar); a reconstructed
-            # Mon-Fri-only trigger here would silently show the wrong next
-            # fire time on a weekend/holiday.
-            _trigger = _CronTrigger(
-                hour=_rc["hour"], minute=_rc["minute"],
-                timezone=_tz_s,
-            )
-            _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
-
-        # membership_refresh is fixed at 21:15 rather than derived from
-        # scheduler.runs, and — like scheduled_eod above — has no
-        # day_of_week filter on its real trigger. stock_order_submission
-        # (14:30 UTC weekdays) and weekly_summary (09:00 Europe/London,
-        # Sunday — its own explicit timezone, not this scheduler's UTC
-        # default) are real, currently registered jobs that were
-        # previously missing from this reconstruction entirely, making the
-        # actual order-submission job invisible on the Status page
-        # whenever the standalone daemon (rather than the in-process
-        # fallback) is what's running — exactly the case in normal
-        # production operation. monday_premarket was removed entirely
-        # 2026-08-03 — confirmed genuinely redundant with the hourly
-        # trade_alert_check job, which fires at the identical 07:00 UTC
-        # minute every Monday — see CLAUDE.md's "Monday Pre-Market removed"
-        # section.
-        _extra_static = [
-            ("trade_alert_check", "Trade Alerts", "Hourly 00–21, 23 · Mon–Fri",
-             _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
-            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
-             _CronTrigger(hour=21, minute=15, timezone=_tz_s)),
-            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri",
-             _CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
-            ("weekly_summary", "Weekly Summary", "09:00 UK time · Sunday",
-             _CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")),
-        ]
-        _static_jobs.extend(_extra_static)
-
-        _sh_rows_d: list[str] = []
-        for _sid, _jlabel, _jsched, _trigger in _static_jobs:
-            try:
-                _nrt = _trigger.get_next_fire_time(None, _now_tz)
-            except Exception:
-                _nrt = None
-            if _nrt is None:
-                _nrt_str, _until_str = "—", "—"
-            else:
-                _d = (_nrt - _now_tz).total_seconds()
-                _nrt_str = _fmt_uk(_nrt, "%a %d %b %H:%M")
-                _until_str = (
-                    f"{int(_d / 60)}m"  if _d < 3600
-                    else f"{_d / 3600:.1f}h" if _d < 86400
-                    else f"{_d / 86400:.1f}d"
-                )
-            _dot, _badge = "#16a34a", "OK"
-            if _sid == "scheduled_eod" and _eod_overdue():
-                _dot, _badge = "#dc2626", "OVERDUE"
-            if _sid == "membership_refresh" and is_membership_refresh_stale(last_membership_refresh):
-                _dot, _badge = "#dc2626", "OVERDUE"
-            _sh_rows_d.append(_sched_row_html(_jlabel, _jsched, _nrt_str, _until_str, _dot, _badge))
-        st.markdown(_sh_head + "".join(_sh_rows_d) + "</div>", unsafe_allow_html=True)
-    else:
-        st.warning(
-            "Scheduler is not running — scheduled jobs will not fire until the service restarts. "
-            "On the server, ensure investment-research-scheduler.service is enabled and running."
-        )
 
     # ── Log Viewer ─────────────────────────────────────────────────────────
     st.divider()

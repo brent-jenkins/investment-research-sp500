@@ -881,20 +881,31 @@ def _seed_metadata(db_engine, key: str, value: str) -> None:
         ), {"k": key, "v": value, "t": "2026-01-01T00:00:00"})
 
 
-def _pipeline_row_badge(markdown_html: str, row_label: str, next_row_label: str) -> str:
-    """Extract the OK/STALE/OVERDUE badge text for one Pipeline row out of
-    the single concatenated markdown string _render_status_page() renders
-    both rows into — bounded between this row's own label and the next
-    row's label so a badge search never accidentally matches the other
-    row's badge (or the word "stale" appearing in a row's own description
-    text, e.g. "N stale tickers")."""
-    start = markdown_html.index(row_label)
-    end = markdown_html.index(next_row_label, start) if next_row_label else len(markdown_html)
-    segment = markdown_html[start:end]
-    for badge in ("OVERDUE", "STALE", "OK"):
-        if f'">{badge}</div>' in segment:
-            return badge
-    raise AssertionError(f"No badge found in segment for {row_label!r}: {segment!r}")
+def _status_card_level(at, label: str) -> str:
+    """Extract the colour-coded level ("ok"/"warn"/"error"/"info") of a
+    top-level _status_card() by its label — each card renders as its own
+    separate markdown element (col.markdown(...)) carrying a
+    'border-left:3px solid {colour}' style, so this finds the element
+    containing the given label and maps its colour back through
+    main._LEVEL_COLOUR.
+
+    Superseded 2026-08-03's own _pipeline_row_badge() helper: the standalone
+    "Pipeline" section (whose two rows that helper parsed) was removed and
+    folded into Scheduler Health's "End of Day" row as part of that same
+    day's Pipeline/Scheduler-Health consolidation (see CLAUDE.md). The
+    underlying staleness mechanism these tests actually validate —
+    _trading_day_age_level()/_nyse_trading_days_since() — is unchanged and
+    still drives the "Last Data Refresh"/"Last Scheduled Run" top-level
+    cards this helper now reads instead."""
+    import re
+    import main as _main_mod
+    colour_to_level = {v: k for k, v in _main_mod._LEVEL_COLOUR.items()}
+    for m in at.markdown:
+        if f">{label}</div>" in m.value:
+            match = re.search(r"border-left:3px solid (#[0-9a-fA-F]{6})", m.value)
+            if match:
+                return colour_to_level.get(match.group(1), "unknown")
+    raise AssertionError(f"No status card found for label {label!r}")
 
 
 @pytest.fixture
@@ -918,9 +929,10 @@ def status_app(db_engine, monkeypatch, mocker):
 
 def test_status_page_price_refresh_not_stale_after_one_trading_day_gap(db_engine, status_app):
     """A refresh genuinely only 1 NYSE trading day old (e.g. Friday's EOD
-    run, as of the following Monday) must show OK — not the STALE/OVERDUE
-    a plain elapsed-hours count would incorrectly show for a 63+ hour gap
-    that is still only one real trading day."""
+    run, as of the following Monday) must show the "ok" level on the "Last
+    Data Refresh" card — not the "warn"/"error" a plain elapsed-hours count
+    would incorrectly show for a 63+ hour gap that is still only one real
+    trading day."""
     sessions = _real_nyse_sessions_last_30_days()
     one_trading_day_ago = sessions[-2]  # exactly 1 session strictly after this date
     _seed_metadata(db_engine, "last_full_refresh", f"{one_trading_day_ago.isoformat()}T21:30:00")
@@ -928,14 +940,13 @@ def test_status_page_price_refresh_not_stale_after_one_trading_day_gap(db_engine
     at = status_app.run()
 
     assert not at.exception
-    all_markdown = "\n".join(m.value for m in at.markdown)
-    badge = _pipeline_row_badge(all_markdown, "1 · Price Data Refresh", "2 · Order Logic")
-    assert badge == "OK", f"expected OK for a 1-trading-day-old refresh, got {badge}"
+    level = _status_card_level(at, "Last Data Refresh")
+    assert level == "ok", f"expected ok for a 1-trading-day-old refresh, got {level}"
 
 
 def test_status_page_price_refresh_shows_overdue_for_a_genuine_multi_day_gap(db_engine, status_app):
-    """Confirms the fix isn't just 'always OK' — a refresh genuinely many
-    NYSE trading days old must still show OVERDUE."""
+    """Confirms the fix isn't just 'always ok' — a refresh genuinely many
+    NYSE trading days old must still show the "error" level."""
     sessions = _real_nyse_sessions_last_30_days()
     many_trading_days_ago = sessions[0]  # the oldest date in the whole lookback window
     _seed_metadata(db_engine, "last_full_refresh", f"{many_trading_days_ago.isoformat()}T21:30:00")
@@ -943,19 +954,18 @@ def test_status_page_price_refresh_shows_overdue_for_a_genuine_multi_day_gap(db_
     at = status_app.run()
 
     assert not at.exception
-    all_markdown = "\n".join(m.value for m in at.markdown)
-    badge = _pipeline_row_badge(all_markdown, "1 · Price Data Refresh", "2 · Order Logic")
-    assert badge == "OVERDUE", f"expected OVERDUE for a many-trading-day-old refresh, got {badge}"
+    level = _status_card_level(at, "Last Data Refresh")
+    assert level == "error", f"expected error for a many-trading-day-old refresh, got {level}"
 
 
 def test_status_page_order_logic_row_shows_most_recent_job_not_an_older_one(db_engine, status_app):
-    """The Pipeline "Order Logic" row and the "Last Scheduled Run" card
-    both read last_scheduled_run/last_scheduled_run_name — this confirms
-    the page genuinely surfaces whatever job most recently stamped that
-    key (here: a real, current Stock Order Submission run), not a stale
-    value left over from an older job. The scheduler-side fix that makes
-    _stock_order_submission_job() actually stamp this key is covered in
-    tests/test_scheduler.py — this test covers the display side."""
+    """The "Last Scheduled Run" card reads last_scheduled_run/
+    last_scheduled_run_name — this confirms the page genuinely surfaces
+    whatever job most recently stamped that key (here: a real, current
+    Stock Order Submission run), not a stale value left over from an older
+    job. The scheduler-side fix that makes _stock_order_submission_job()
+    actually stamp this key is covered in tests/test_scheduler.py — this
+    test covers the display side."""
     sessions = _real_nyse_sessions_last_30_days()
     today_or_last_session = sessions[-1]
     _seed_metadata(db_engine, "last_scheduled_run", f"{today_or_last_session.isoformat()}T14:30:00")
@@ -964,7 +974,95 @@ def test_status_page_order_logic_row_shows_most_recent_job_not_an_older_one(db_e
     at = status_app.run()
 
     assert not at.exception
-    all_markdown = "\n".join(m.value for m in at.markdown)
-    badge = _pipeline_row_badge(all_markdown, "2 · Order Logic", "")
-    assert badge == "OK"
+    level = _status_card_level(at, "Last Scheduled Run")
+    assert level == "ok"
     assert any("Stock Order Submission" in m.value for m in at.markdown)
+
+
+# ---------------------------------------------------------------------------
+# Status page — "Trade Alerts" renamed to "Open Trade Monitor", and the
+# separate "Pipeline" section merged into "Scheduler Health" (2026-08-03)
+#
+# "Trade Alerts" read as a passive notification system; the underlying
+# hourly job (maybe_exit_positions()) actively evaluates stop-loss/
+# signal-off/max-holding/crisis conditions and places real SELL orders —
+# arguably the most safety-critical recurring job in the system. Renamed
+# to make that plain. Purely a label change — job id/function/schedule
+# untouched (see tests/test_scheduler.py for those).
+#
+# "Pipeline" and "Scheduler Health" were two separate sections both
+# answering "what's happening with the scheduled jobs" — Pipeline's two
+# rows (price refresh coverage, last-run-type) are both genuinely produced
+# by the single "End of Day" job Scheduler Health already lists, so they
+# were folded into that row's new Description column rather than kept as
+# a standalone section. The merged section moved into Pipeline's former
+# (near-the-top) position rather than staying further down the page.
+# ---------------------------------------------------------------------------
+
+def test_status_page_pipeline_section_is_gone(status_app):
+    at = status_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "### Pipeline" not in all_text
+    assert "1 · Price Data Refresh" not in all_text
+    assert "2 · Order Logic" not in all_text
+
+
+def test_status_page_shows_open_trade_monitor_not_trade_alerts(db_engine, status_app):
+    """Job rows (including the renamed "Open Trade Monitor" label) only
+    render once the scheduler is detected as active — via either a real
+    in-process APScheduler or a recent daemon heartbeat — otherwise the
+    page shows the "Scheduler is not running" warning instead. Seed a
+    fresh heartbeat so the daemon-mode rendering branch (the one that
+    actually runs in production) executes.
+
+    Scoped to markdown rendered from the "### Scheduler Health" heading
+    onward, not the whole page: the "Last Deployment" card above it renders
+    the latest real git commit's own subject line verbatim, and a commit
+    describing this exact rename legitimately contains the literal phrase
+    "Trade Alerts" as prose — a whole-page substring check would (and, when
+    first written, did) false-positive on that unrelated, expected text."""
+    from datetime import datetime as _dt
+    _seed_metadata(db_engine, "scheduler_heartbeat", _dt.utcnow().isoformat())
+
+    at = status_app.run()
+    assert not at.exception
+    sh_idx = next(i for i, m in enumerate(at.markdown) if "Scheduler Health" in m.value)
+    scoped_text = " ".join(m.value for m in at.markdown[sh_idx:])
+    assert "Open Trade Monitor" in scoped_text
+    assert "Trade Alerts" not in scoped_text
+
+
+def test_status_page_end_of_day_row_shows_folded_in_pipeline_detail(db_engine, status_app):
+    """The "End of Day" Scheduler Health row's new Description column must
+    show both of the old Pipeline section's two data points — price
+    coverage and last-run-type — since that job is what genuinely produces
+    both."""
+    from datetime import datetime as _dt
+    _seed_metadata(db_engine, "last_run_type", "full")
+    _seed_metadata(db_engine, "scheduler_heartbeat", _dt.utcnow().isoformat())
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "End of Day" in all_text
+    # price_desc: either genuine coverage text or the no-data placeholder —
+    # either way it must appear somewhere the old Pipeline row would have
+    # shown it.
+    assert ("tickers up to date" in all_text
+            or "No price data yet" in all_text
+            or "missing" in all_text)
+    assert "Full Refresh" in all_text
+
+
+def test_status_page_scheduler_health_appears_before_scheduled_runs(status_app):
+    """The merged section must sit in Pipeline's former (near-the-top)
+    position — before "Scheduled Runs" — not further down the page where
+    Scheduler Health used to live."""
+    at = status_app.run()
+    assert not at.exception
+
+    sh_idx = next(i for i, m in enumerate(at.markdown) if "Scheduler Health" in m.value)
+    sr_idx = next(i for i, m in enumerate(at.markdown) if "### Scheduled Runs" in m.value)
+    assert sh_idx < sr_idx, "Scheduler Health must render before Scheduled Runs"
