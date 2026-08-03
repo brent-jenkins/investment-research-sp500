@@ -1382,7 +1382,8 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     # jobs that must appear here, not silently fall back to a raw job id.
     _JOB_LABELS: dict[str, tuple[str, str]] = {
         "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} daily · NYSE-gated"),
-        "trade_alert_check":      ("Open Trade Monitor", "Hourly 00–21, 23 · Mon–Fri"),
+        "market_hours_check":     ("Open Trade Monitor", "Hourly, every day · NYSE-hours-gated"),
+        "account_state_refresh":  ("Account State Refresh", "Hourly, every day · unconditional"),
         "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
         "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri"),
         "weekly_summary":         ("Weekly Summary",    "09:00 UK time · Sunday"),
@@ -1509,12 +1510,24 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         # fallback) is what's running — exactly the case in normal
         # production operation. monday_premarket was removed entirely
         # 2026-08-03 — confirmed genuinely redundant with the hourly
-        # trade_alert_check job, which fires at the identical 07:00 UTC
-        # minute every Monday — see CLAUDE.md's "Monday Pre-Market removed"
-        # section.
+        # trade alert job, which fired at the identical 07:00 UTC minute
+        # every Monday (at the time, the single unconditional
+        # _trade_alert_job() this file registered — split 2026-08-03 into
+        # market_hours_check/account_state_refresh, both still hourly
+        # every day, so this redundancy finding is unaffected) — see
+        # CLAUDE.md's "Monday Pre-Market removed" section.
+        #
+        # market_hours_check/account_state_refresh (2026-08-03 split, see
+        # data/scheduler.py's own docstrings and CLAUDE.md's "Splitting
+        # the hourly trade-alert job" section) both register with no
+        # hour= or day_of_week= filter at all — genuinely hourly, every
+        # day — so both reconstruct here as a plain hourly trigger with no
+        # cron restriction, unlike every other job in this list.
         _extra_static = [
-            ("trade_alert_check", "Open Trade Monitor", "Hourly 00–21, 23 · Mon–Fri",
-             _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
+            ("market_hours_check", "Open Trade Monitor", "Hourly, every day · NYSE-hours-gated",
+             _CronTrigger(minute=0, timezone=_tz_s)),
+            ("account_state_refresh", "Account State Refresh", "Hourly, every day · unconditional",
+             _CronTrigger(minute=0, timezone=_tz_s)),
             ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
              _CronTrigger(hour=21, minute=15, timezone=_tz_s)),
             ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri",
@@ -1739,7 +1752,8 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
             "Errors Only": frozenset(),
             "Scheduler":   frozenset({"scheduler", "pre-market", "us-open", "eod",
                                       "order pipeline", "pipeline complete",
-                                      "trade alert", "membership", "scheduled_", "catch-up",
+                                      "trade alert", "market-hours check", "account state",
+                                      "membership", "scheduled_", "catch-up",
                                       "missed eod"}),
             "Data":        frozenset({"pull_incremental", "yfinance", "new rows",
                                       "price data", "data pull", "incremental",

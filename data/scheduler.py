@@ -7,7 +7,15 @@ Run schedule (UTC unless noted):
   21:15  Membership refresh — refresh point-in-time index-membership windows
                        15 minutes ahead of the EOD job's own trading decisions
   21:30  End of day  — full data refresh, then place/exit orders (all exchanges)
-  00-21,23  Hourly   — T212 order-status poll, exit check, account snapshot refresh
+  Hourly (every day, all 24 hours) — two independently-scheduled jobs, each
+                       self-gating internally rather than via a fixed cron
+                       window (2026-08-03 — see _market_hours_check_job()/
+                       _account_state_job() and CLAUDE.md's "Splitting the
+                       hourly trade-alert job" section):
+                         - market_hours_check — order-status poll + exit
+                           check, real work only when _is_nyse_open_now()
+                         - account_state_refresh — position reconciliation +
+                           account snapshot, unconditional every firing
   09:00  Weekly summary (Sunday, *Europe/London* — not UTC) — send the weekly
                        summary email (see output/briefing.py:send_weekly_summary_email())
 
@@ -19,12 +27,22 @@ it, and in the Tue-Fri pre-market job's case, its own data pull for
 "exchanges that just closed" had already become a permanent no-op: the
 current V2 universe is exclusively NYSE/FX-listed instruments, and NYSE
 never satisfies "closed before 07:00 UTC" — confirmed directly by calling
-_exchanges_closed_before() against the live config). The hourly
-trade_alert_check job (below) already calls maybe_exit_positions() at the
-exact same 07:00 minute and again at 13:00/14:00 either side of 13:30 — so
-neither run added anything the hourly cadence didn't already cover. See
-CLAUDE.md's "Pre-market/US-open scheduled runs removed" section for the
-full investigation.
+_exchanges_closed_before() against the live config). At the time this was
+removed, the hourly trade alert job (the single, unconditional
+_trade_alert_job() this file used to register — split 2026-08-03 into
+market_hours_check/account_state_refresh, see those functions' own
+docstrings) already called maybe_exit_positions() at the exact same 07:00
+minute and again at 13:00/14:00 either side of 13:30 — so neither run
+added anything the hourly cadence didn't already cover. See CLAUDE.md's
+"Pre-market/US-open scheduled runs removed" section for the full
+investigation. (Correction, 2026-08-03: the successor market_hours_check
+job now SKIPS real exit-check work at 07:00/13:00 UTC specifically,
+since NYSE isn't open at either time — but this doesn't undermine the
+original redundancy finding, since a 07:00/13:00 UTC exit check was
+already evaluating against unchanged, stale price data either way; the
+practical outcome — no meaningful exit decision happens at those hours —
+is identical, only the mechanism changed from "an inert call" to "a
+skipped call".)
 
 The Monday-only 07:00 UTC "Monday Pre-Market" job (stale weekend BUY order
 cancellation + an order-logic re-run) was removed entirely 2026-08-03 for
@@ -202,6 +220,52 @@ def _is_scheduled_trading_day(check_date: date) -> bool:
     cron trigger would have.
     """
     return _is_exchange_open("NYSE", check_date)
+
+
+def _is_nyse_open_now(now_utc: datetime) -> bool:
+    """True if NYSE is genuinely inside its live regular trading session
+    RIGHT NOW — a materially stricter question than
+    _is_scheduled_trading_day() above, which only ever answers "is today
+    a trading day at all" (day-level), not "is the market actually open
+    at this exact time of day" (2026-08-03).
+
+    Reads NYSE's own real market_open/market_close timestamps for today
+    from pandas_market_calendars directly, rather than approximating
+    with a fixed UTC hour range — this is what lets a job that calls
+    this fire unconditionally every hour, every day, and still correctly
+    track NYSE's own session boundary as it genuinely moves in UTC terms
+    across the year (US and UK DST transitions land on different
+    calendar dates most years, so a hand-maintained UTC window is
+    guaranteed to be wrong for the few weeks each spring/autumn the two
+    don't align — the same class of staleness risk that let the old
+    "0-21,23" hourly trade-alert range go unrevisited for over a year
+    after the multi-region system it was built for no longer existed;
+    see CLAUDE.md's "Splitting the hourly trade-alert job" section for
+    the full investigation).
+
+    Fails OPEN (returns True) on any calendar-lookup error — matches
+    _is_exchange_open()'s own established convention, deliberately in
+    the safer direction for what this gates: a transient calendar
+    lookup failure must never silently suppress a safety-critical exit-
+    check/order-poll job for up to an hour. Running that job against a
+    possibly-closed market is harmless (nothing to act on, completes
+    quickly); skipping it while the market is genuinely open would not
+    be.
+    """
+    try:
+        cal = mcal.get_calendar("NYSE")
+        schedule = cal.schedule(
+            start_date=now_utc.date().isoformat(),
+            end_date=now_utc.date().isoformat(),
+        )
+        if schedule.empty:
+            return False
+        market_open = schedule.iloc[0]["market_open"]
+        market_close = schedule.iloc[0]["market_close"]
+        return bool(market_open <= now_utc <= market_close)
+    except Exception as exc:
+        logger.warning("NYSE live-session check failed: %s — assuming open.", exc)
+        return True
 
 
 def _has_upcoming_trading_day(from_date: date, lookahead_days: int = 10) -> bool:
@@ -603,30 +667,53 @@ def _eod_job() -> None:
     _record_eod_completion("COMPLETED", today_utc, **details)
 
 
-def _trade_alert_job() -> None:
-    """Hourly (00:00–21:00 + 23:00 UTC, weekdays) — T212 order-status poll,
-    exit check, position reconciliation, and account snapshot refresh.
+def _market_hours_check_job() -> None:
+    """Hourly, every single day (no cron-level day-of-week or hour-of-day
+    filter at all — see start_scheduler()'s own registration comment)
+    — T212 order-status poll and exit check, gated internally on
+    _is_nyse_open_now() rather than a fixed UTC hour range.
 
-    Runs unconditionally on every firing:
-      - T212 order-status polling (`poll_placed_orders()`) and account/positions
-        snapshot refresh (`_fetch_t212_snapshot()`), so the Status page snapshot
-        stays current.
-      - The exit check — `brokers.trading212.maybe_exit_positions()` — so a
-        crisis exit, index removal, stop loss, signal-off, or max-holding exit
-        closes within about an hour rather than waiting for the next full
-        (07:00/13:30/21:30) run.
-      - Live position reconciliation — `brokers.trading212.reconcile_
-        positions_with_broker()` (2026-08-02) — compares what this system's
-        own order history implies is open against T212's real, live
-        positions, flagging a broker-side closure (e.g. a cash-out
-        acquisition) or an unrecognized held instrument (e.g. a stock-swap
-        acquisition) that maybe_exit_positions() has no way to notice on
-        its own. Same hourly cadence as the exit check for the same reason:
-        this is safety-critical account-state visibility, not something
-        that should wait for the next full run. See CLAUDE.md's "Live
-        position reconciliation" section.
+    Replaces the old, single _trade_alert_job() (2026-08-03 — see
+    CLAUDE.md's "Splitting the hourly trade-alert job" section for the
+    full investigation this split is based on). Split into this
+    NYSE-hours-gated job (order polling + exit checks) and the
+    unconditional _account_state_job() below (reconciliation + account
+    snapshot) because those four responsibilities do not share one
+    correct time window — the two gated here both have a direct,
+    evidenced dependency on NYSE actually being open:
+
+      - The exit check (`brokers.trading212.maybe_exit_positions()`) —
+        stop-loss/signal-off/crisis-exit/max-holding decisions all
+        depend on live, moving price data. Price data is completely
+        static outside NYSE hours (no new EOD pull happens until 21:30
+        UTC, and nothing moves in the stored data between one day's
+        close and the next day's pull) — checking against unchanged
+        data produces the identical answer every time, pure no-op
+        overhead.
+      - T212 order-status polling (`poll_placed_orders()`) — confirmed
+        directly (2026-08-03, see CLAUDE.md's "Tracing the '60+ hour
+        fill-lag' claim's real origin" section) that T212 does not fill
+        market orders outside NYSE trading hours at all, and every real
+        fill on this account has resolved within single-digit seconds
+        during its own session — polling outside NYSE hours has no
+        real informational value under normal conditions. (A genuinely
+        rare, anomalous resolution outside normal fill mechanics can't
+        be fully ruled out from the evidence gathered — that residual,
+        low-severity risk is accepted explicitly, not overlooked; see
+        the same CLAUDE.md section.)
+
+    Fires every hour regardless of NYSE state — the gate is evaluated
+    fresh on every real firing via _is_nyse_open_now(), not approximated
+    with a hardcoded UTC window, so it stays correct across the US/UK
+    DST-transition mismatch automatically with no schedule to
+    hand-maintain.
     """
-    logger.info("Trade alert check starting…")
+    now_utc = datetime.now(timezone.utc)
+    if not _is_nyse_open_now(now_utc):
+        logger.debug("Market-hours check skipped — NYSE not in session.")
+        return
+
+    logger.info("Market-hours check starting (NYSE in session)…")
     config = _load_config()
 
     try:
@@ -641,18 +728,43 @@ def _trade_alert_job() -> None:
         from brokers.trading212 import maybe_exit_positions  # noqa: PLC0415
         maybe_exit_positions(config)
     except Exception as exc:
-        logger.error("Hourly exit check failed: %s", exc, exc_info=True)
+        logger.error("Exit check failed: %s", exc, exc_info=True)
+
+
+def _account_state_job() -> None:
+    """Hourly, every single day, unconditionally — no NYSE-hours gate at
+    all, deliberately unlike _market_hours_check_job() above (2026-08-03
+    — see that function's own docstring and CLAUDE.md's "Splitting the
+    hourly trade-alert job" section for the full investigation).
+
+      - Live position reconciliation — `brokers.trading212.reconcile_
+        positions_with_broker()` — deliberately NOT NYSE-hours-gated:
+        its relationship to corporate-action processing timing was
+        explicitly left unverified by the investigation this split is
+        based on (a cash-out acquisition or stock-swap could in
+        principle be reflected by the broker at a time not obviously
+        tied to NYSE's own regular session) — erring toward running it
+        more often rather than risking a real gap on an unconfirmed
+        assumption.
+      - Account/positions snapshot refresh (`_fetch_t212_snapshot()`) —
+        deliberately NOT gated either: this has real value independent
+        of trading hours (Status/Dashboard page freshness for anyone
+        checking outside market hours), so gating it to NYSE hours
+        would work directly against its own purpose.
+    """
+    logger.info("Account state refresh starting…")
+    config = _load_config()
 
     try:
         from brokers.trading212 import reconcile_positions_with_broker  # noqa: PLC0415
         reconcile_positions_with_broker(config)
     except Exception as exc:
-        logger.error("Hourly position reconciliation failed: %s", exc, exc_info=True)
+        logger.error("Position reconciliation failed: %s", exc, exc_info=True)
 
     try:
         _fetch_t212_snapshot(config)
     except Exception as exc:
-        logger.error("Hourly T212 snapshot refresh failed: %s", exc)
+        logger.error("Account snapshot refresh failed: %s", exc)
 
 
 def _membership_refresh_job() -> None:
@@ -996,9 +1108,12 @@ def start_scheduler() -> BackgroundScheduler:
     # happens at 14:30 UTC mid-session, hours before NYSE close), so the
     # scenario the cancellation step guarded against cannot occur; its
     # order-logic half was separately confirmed redundant with the hourly
-    # trade_alert_check job below, which fires at this exact same 07:00
-    # UTC minute every Monday. See CLAUDE.md's "Monday Pre-Market removed"
-    # section for the full investigation.
+    # trade alert job below (at the time, the single unconditional
+    # _trade_alert_job() this file used to register — split 2026-08-03
+    # into market_hours_check/account_state_refresh, see those functions'
+    # own docstrings), which fired at this exact same 07:00 UTC minute
+    # every Monday. See CLAUDE.md's "Monday Pre-Market removed" section
+    # for the full investigation.
 
     # 60-second dispatcher: executes pending UI-requested jobs (e.g. T212 refresh).
     _scheduler.add_job(
@@ -1009,22 +1124,37 @@ def start_scheduler() -> BackgroundScheduler:
     )
     logger.info("Scheduled 60-second job dispatcher.")
 
-    # Hourly trade alert check across all major market sessions (weekdays only).
-    # Hour range covers: Asian (00-08 UTC), European (08-17 UTC), US (14-21 UTC),
-    # plus 23:00 UTC for Sydney/Auckland pre-market.
+    # Split 2026-08-03 from the old single, unconditional hourly
+    # _trade_alert_job() (hardcoded "0-21,23 mon-fri" cron window) into two
+    # genuinely hourly, every-day jobs that each decide internally whether
+    # there's real work to do — see _market_hours_check_job() and
+    # _account_state_job()'s own docstrings, and CLAUDE.md's "Splitting the
+    # hourly trade-alert job" section, for the full investigation and
+    # rationale. Neither job carries an hour= or day_of_week= cron filter —
+    # both fire every hour, every day, and gate (or don't) on live,
+    # real-time state rather than an approximated UTC window, the same
+    # "fire unconditionally, decide internally" pattern already proven for
+    # the EOD job's own dual-gate fix.
     _scheduler.add_job(
-        _trade_alert_job,
-        trigger=CronTrigger(
-            hour="0-21,23",
-            minute=0,
-            day_of_week="mon-fri",
-            timezone=tz,
-        ),
-        id="trade_alert_check",
+        _market_hours_check_job,
+        trigger=CronTrigger(minute=0, timezone=tz),
+        id="market_hours_check",
         replace_existing=True,
     )
     logger.info(
-        "Scheduled trade alert check hourly 00:00–21:00 + 23:00 %s on weekdays.", tz,
+        "Scheduled market-hours check hourly, every day (%s) — internally "
+        "gated on genuine, live NYSE session hours.", tz,
+    )
+
+    _scheduler.add_job(
+        _account_state_job,
+        trigger=CronTrigger(minute=0, timezone=tz),
+        id="account_state_refresh",
+        replace_existing=True,
+    )
+    logger.info(
+        "Scheduled account-state refresh hourly, every day (%s) — "
+        "unconditional, no NYSE-hours gate.", tz,
     )
 
     # Exchange-aware order submission (2026-07-31) — see CLAUDE.md's

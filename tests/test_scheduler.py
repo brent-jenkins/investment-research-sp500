@@ -1,20 +1,29 @@
 """Tests for data/scheduler.py.
 
 Covers the missed-EOD catch-up check, job registration (EOD, membership
-refresh), and the simplified _run_analysis_pipeline() / _trade_alert_job()
-bodies -- both of which now just delegate straight to brokers/trading212.py's
-maybe_place_orders()/poll_placed_orders()/maybe_exit_positions(), since there
-is no separate "analysis pipeline" step in the momentum + crisis-override
-system (see data/scheduler.py's module docstring).
+refresh), and the simplified _run_analysis_pipeline() body, which just
+delegates straight to brokers/trading212.py's maybe_place_orders(), since
+there is no separate "analysis pipeline" step in the momentum +
+crisis-override system (see data/scheduler.py's module docstring).
 
 The Tue-Fri 07:00 pre-market and 13:30 US-open "analysis only" jobs were
-removed 2026-07-31 (confirmed genuinely redundant with the hourly
-trade_alert_check job — see CLAUDE.md's "Pre-market/US-open scheduled runs
-removed" section) — there is no `_pre_market_job()`/`_us_open_job()` left
-to test. The Monday-only 07:00 UTC "Monday Pre-Market" job (stale weekend
-BUY order cancellation + an order-logic re-run) was removed entirely
-2026-08-03 for the identical reason — see CLAUDE.md's "Monday Pre-Market
-removed" section — there is no `_monday_premarket_job()` left to test either.
+removed 2026-07-31 (confirmed genuinely redundant with the hourly trade
+alert job — see CLAUDE.md's "Pre-market/US-open scheduled runs removed"
+section) — there is no `_pre_market_job()`/`_us_open_job()` left to test.
+The Monday-only 07:00 UTC "Monday Pre-Market" job (stale weekend BUY order
+cancellation + an order-logic re-run) was removed entirely 2026-08-03 for
+the identical reason — see CLAUDE.md's "Monday Pre-Market removed"
+section — there is no `_monday_premarket_job()` left to test either.
+
+The single, unconditional hourly `_trade_alert_job()` (poll + exit check +
+reconciliation + snapshot refresh, on a hardcoded "0-21,23 mon-fri" cron
+window) was itself split 2026-08-03 into `_market_hours_check_job()`
+(order poll + exit check, internally gated on a genuine, live
+`_is_nyse_open_now()` check rather than an approximated UTC window) and
+`_account_state_job()` (reconciliation + snapshot refresh, unconditional)
+— see both functions' own docstrings and CLAUDE.md's "Splitting the
+hourly trade-alert job" section for the full investigation and rationale.
+There is no `_trade_alert_job()` left to test either.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -658,52 +667,201 @@ def test_run_analysis_pipeline_checks_for_failures_even_on_analysis_only_run(moc
 
 
 # ---------------------------------------------------------------------------
-# _trade_alert_job() — hourly poll + exit check + snapshot refresh only (no
-# VIX-spike branch, no CFD alerting -- both removed along with V1).
+# _is_nyse_open_now() -- real, unmocked pandas_market_calendars NYSE data,
+# same discipline as the calendar-gating tests below: verified directly
+# before writing these, not assumed. 2026-08-04 (an ordinary Tuesday) has a
+# real NYSE session of 13:30-20:00 UTC; 2026-08-01 is a genuine Saturday
+# (fully closed all day).
 # ---------------------------------------------------------------------------
 
-def test_trade_alert_job_calls_poll_and_exit_check(mocker):
+def test_is_nyse_open_now_true_during_real_session():
+    now = datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)  # mid-session
+    assert scheduler._is_nyse_open_now(now) is True
+
+
+def test_is_nyse_open_now_false_before_session_open():
+    now = datetime(2026, 8, 4, 7, 0, tzinfo=timezone.utc)  # hours before 13:30 open
+    assert scheduler._is_nyse_open_now(now) is False
+
+
+def test_is_nyse_open_now_false_after_session_close():
+    now = datetime(2026, 8, 4, 21, 0, tzinfo=timezone.utc)  # hour after 20:00 close
+    assert scheduler._is_nyse_open_now(now) is False
+
+
+def test_is_nyse_open_now_false_on_real_weekend():
+    now = datetime(2026, 8, 1, 15, 0, tzinfo=timezone.utc)  # Saturday, same clock time as the open-session case
+    assert scheduler._is_nyse_open_now(now) is False
+
+
+# ---------------------------------------------------------------------------
+# _market_hours_check_job() -- order poll + exit check, internally gated on
+# a genuine, live _is_nyse_open_now() check (2026-08-03 split, replacing the
+# old single _trade_alert_job()). Reuses _frozen_date_at() (already used
+# throughout this file for the calendar-gating tests below) to drive the
+# job's internal datetime.now(timezone.utc) call to a specific, real
+# NYSE-open or NYSE-closed moment -- not a mocked/assumed calendar
+# response, the genuine pandas_market_calendars check runs end-to-end.
+# ---------------------------------------------------------------------------
+
+def test_market_hours_check_job_skips_when_nyse_genuinely_closed(monkeypatch, mocker):
+    """A real, independently-verified NYSE-closed moment (Saturday) --
+    poll/exit must not be attempted at all."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
-    mock_reconcile = mocker.patch("brokers.trading212.reconcile_positions_with_broker")
-    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
 
-    scheduler._trade_alert_job()
+    scheduler._market_hours_check_job()
+
+    mock_poll.assert_not_called()
+    mock_exit.assert_not_called()
+
+
+def test_market_hours_check_job_runs_when_nyse_genuinely_open(monkeypatch, mocker):
+    """A real, independently-verified NYSE-open moment (mid-session on an
+    ordinary Tuesday) -- poll and exit check must both run."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+
+    scheduler._market_hours_check_job()
 
     mock_poll.assert_called_once()
     mock_exit.assert_called_once()
+
+
+def test_market_hours_check_job_failure_does_not_raise(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders", side_effect=RuntimeError("boom"))
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions", side_effect=RuntimeError("boom"))
+
+    scheduler._market_hours_check_job()  # must not raise
+
+    mock_exit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _account_state_job() -- reconciliation + snapshot refresh, deliberately
+# UNconditional (no NYSE-hours gate at all -- 2026-08-03 split). Both the
+# genuinely-open and genuinely-closed cases must behave identically, proving
+# there is no hidden gate anywhere in this job's own body.
+# ---------------------------------------------------------------------------
+
+def test_account_state_job_runs_when_nyse_open(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mock_reconcile = mocker.patch("brokers.trading212.reconcile_positions_with_broker")
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._account_state_job()
+
     mock_reconcile.assert_called_once()
     mock_snap.assert_called_once()
 
 
-def test_trade_alert_job_failure_does_not_block_job(mocker):
+def test_account_state_job_runs_when_nyse_genuinely_closed(monkeypatch, mocker):
+    """The decisive proof this job is unconditional: a real, verified
+    NYSE-closed (weekend) moment must still run reconciliation and the
+    snapshot refresh, unlike _market_hours_check_job() above."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
-    mocker.patch("brokers.trading212.poll_placed_orders", side_effect=RuntimeError("boom"))
-    mocker.patch("brokers.trading212.maybe_exit_positions", side_effect=RuntimeError("boom"))
+    mock_reconcile = mocker.patch("brokers.trading212.reconcile_positions_with_broker")
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._account_state_job()
+
+    mock_reconcile.assert_called_once()
+    mock_snap.assert_called_once()
+
+
+def test_account_state_job_reconciliation_failure_does_not_block_snapshot(monkeypatch, mocker):
+    """A reconciliation-check failure must not prevent the account snapshot
+    refresh from still running that hour -- own try/except, same "one
+    path's failure never blocks another's" convention every other call in
+    this job already follows."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("brokers.trading212.reconcile_positions_with_broker", side_effect=RuntimeError("boom"))
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
 
-    scheduler._trade_alert_job()  # must not raise
+    scheduler._account_state_job()  # must not raise
 
     mock_snap.assert_called_once()
 
 
-def test_trade_alert_job_reconciliation_failure_does_not_block_snapshot(mocker):
-    """A reconciliation-check failure must not prevent the exit check or
-    the account snapshot refresh from still running that hour -- own
-    try/except, same "one path's failure never blocks another's"
-    convention every other call in this job already follows."""
-    mocker.patch("data.scheduler._load_config", return_value={})
-    mocker.patch("brokers.trading212.poll_placed_orders")
-    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
-    mocker.patch("brokers.trading212.reconcile_positions_with_broker", side_effect=RuntimeError("boom"))
-    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+# ---------------------------------------------------------------------------
+# Registration -- both jobs must genuinely carry no hour= or day_of_week=
+# cron filter at all (field == "*" on both), the load-bearing part of the
+# "fires unconditionally, decides internally" design: if either job were
+# still cron-filtered, it would never even wake up to run its own internal
+# gate on the days/hours the filter excluded.
+# ---------------------------------------------------------------------------
 
-    scheduler._trade_alert_job()  # must not raise
+def test_market_hours_check_and_account_state_registered_hourly_no_cron_filter(monkeypatch):
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
 
-    mock_exit.assert_called_once()
-    mock_snap.assert_called_once()
+    sched = scheduler.start_scheduler()
+    try:
+        def field(job_id: str, name: str) -> str:
+            job = sched.get_job(job_id)
+            assert job is not None, f"job '{job_id}' was not registered"
+            return next(str(f) for f in job.trigger.fields if f.name == name)
+
+        mh_job = sched.get_job("market_hours_check")
+        assert mh_job is not None
+        assert mh_job.func is scheduler._market_hours_check_job
+        assert field("market_hours_check", "day_of_week") == "*"
+        assert field("market_hours_check", "hour") == "*"
+        assert field("market_hours_check", "minute") == "0"
+
+        as_job = sched.get_job("account_state_refresh")
+        assert as_job is not None
+        assert as_job.func is scheduler._account_state_job
+        assert field("account_state_refresh", "day_of_week") == "*"
+        assert field("account_state_refresh", "hour") == "*"
+        assert field("account_state_refresh", "minute") == "0"
+
+        assert not hasattr(scheduler, "_trade_alert_job")
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_market_hours_check_trigger_actually_fires_on_a_real_weekend_date(monkeypatch):
+    """Confirms the registration itself, not just the field values -- the
+    trigger's own computed next-fire-time must land on a genuine Saturday
+    hour, proving the job gets the chance to wake up and decide for itself
+    (via _is_nyse_open_now()) rather than being excluded by a cron filter
+    before it ever runs."""
+    fake_config = {"scheduler": {"timezone": "UTC", "runs": {
+        "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+    }}}
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        job = sched.get_job("market_hours_check")
+        assert job is not None
+        just_after_friday_midnight = datetime(2026, 7, 31, 23, 1, tzinfo=timezone.utc)
+        next_fire = job.trigger.get_next_fire_time(None, just_after_friday_midnight)
+        assert next_fire is not None
+        assert next_fire.date() == datetime(2026, 8, 1).date()  # Saturday
+    finally:
+        scheduler.stop_scheduler()
 
 
 # ---------------------------------------------------------------------------
