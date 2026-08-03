@@ -994,6 +994,29 @@ def test_live_current_price_uses_yfinance_fast_info_and_handles_failure(mocker):
 # stop yesterday's now-stale BUY decisions from still going out.
 # ---------------------------------------------------------------------------
 
+def test_is_crisis_mode_active_now_direct_true_false_and_none(db_engine, mocker):
+    """Direct unit test of the shared authoritative function itself --
+    both _submit_pending_orders() and the Dashboard's crisis banner call
+    this exact function, so its own True/False/None behaviour is worth
+    proving in isolation from either caller."""
+    from brokers.trading212 import is_crisis_mode_active_now
+
+    gspc_frame = _bullish_frame()
+    gspc_last_close = float(gspc_frame["close"].iloc[-1])
+    _mock_price_data(mocker, {"^GSPC": gspc_frame})
+
+    # No crisis anywhere -- False.
+    assert is_crisis_mode_active_now() is False
+
+    # A live quote down >=7% from the stored close, not yet a daily bar -- True.
+    mocker.patch("brokers.trading212._live_current_price", return_value=gspc_last_close * 0.90)
+    assert is_crisis_mode_active_now() is True
+
+    # A read failure -- None, never guessed as either True or False.
+    mocker.patch("brokers.trading212._load_gspc_close", side_effect=RuntimeError("DB down"))
+    assert is_crisis_mode_active_now() is None
+
+
 def test_submission_blocked_by_fresh_intraday_crisis_not_yet_in_stored_data(db_engine, v2_mocks, mocker):
     """The decisive test for the actual gap this closes: ^GSPC's STORED
     daily-bar data (price_data) shows no crisis at all -- is_entry_blocked()

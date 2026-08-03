@@ -1237,6 +1237,49 @@ def _load_gspc_close() -> pd.Series:
     return df["close"].astype(float)
 
 
+def is_crisis_mode_active_now() -> Optional[bool]:
+    """The single, authoritative "is the crisis override blocking new
+    entries right now" check (2026-08-03) — combines the daily-bar
+    cooldown-window check (crisis.is_entry_blocked(), which can only ever
+    reflect the most recent STORED close) with the genuinely live
+    intraday check (crisis.is_intraday_crisis(), a real yfinance quote
+    compared against that same stored close) — see analysis/crisis.py:
+    is_intraday_crisis()'s own docstring and CLAUDE.md's "Submission-time
+    crisis re-check" section for why both are needed together and why
+    the daily-bar check alone is not enough.
+
+    Every caller that needs to know "is crisis mode active right now" —
+    order submission (_submit_pending_orders(), below) and the
+    Dashboard's crisis warning banner (output/performance.py:
+    get_crisis_status(), main.py's _render_crisis_banner()) — calls this
+    ONE function, not an independently re-derived copy of the same OR
+    combination; see CLAUDE.md's "Crisis-mode dashboard banner" section
+    for the second call site.
+
+    Returns True (confirmed active), False (confirmed not active), or
+    None (could not be determined — a data-read failure, e.g. the DB or
+    yfinance is unreachable). None is deliberately distinct from False:
+    a caller GATING an action (order submission) must treat None as
+    "don't proceed" — the same "fail loud, don't guess" principle
+    _live_current_price() already follows for a single ticker's price —
+    while a caller only DISPLAYING status (the dashboard banner) can
+    reasonably collapse None to "no banner shown," since the real safety
+    mechanism lives entirely in the gating caller's own handling of
+    None, never in whether a display banner happens to render.
+    """
+    try:
+        gspc_close = _load_gspc_close()
+        live_gspc = _live_current_price("^GSPC")
+        latest_stored_date = gspc_close.index[-1] if not gspc_close.empty else None
+        return bool(
+            (latest_stored_date is not None and crisis.is_entry_blocked(gspc_close, latest_stored_date))
+            or crisis.is_intraday_crisis(gspc_close, live_gspc)
+        )
+    except Exception as exc:
+        logger.error("is_crisis_mode_active_now(): could not determine crisis status — %s", exc, exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # T212 instrument-ID resolution (2026-08-02) — the live candidate pool is
 # now the full, dynamically-refreshed S&P 500 (analysis/universe.py:
@@ -2678,39 +2721,28 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     # this, a genuine, severe decline developing overnight or that
     # morning would never stop yesterday's now-stale BUY decisions from
     # still going out, exactly defeating the crisis override's own
-    # purpose. Re-checking crisis.is_entry_blocked() alone against the
-    # same stored daily-bar gspc_close data decide time already saw would
-    # be a no-op -- it can only ever reflect *yesterday's* close at this
-    # point, identically to decide time -- so this also checks
-    # crisis.is_intraday_crisis() against a genuinely live S&P quote; see
-    # that function's own docstring and CLAUDE.md's "Submission-time
-    # crisis re-check" section for the full investigation. Checked once
-    # per run (market-wide, not per-ticker) -- blocks or defers every
-    # currently-pending entry for this asset class together, not just
-    # whichever candidate happens to be evaluated first.
+    # purpose. is_crisis_mode_active_now() (above) is the single shared
+    # implementation -- see its own docstring for why the daily-bar check
+    # alone would be a no-op at this point and why a genuinely live quote
+    # is what actually closes the gap. Checked once per run (market-wide,
+    # not per-ticker) -- blocks or defers every currently-pending entry
+    # for this asset class together, not just whichever candidate happens
+    # to be evaluated first.
     #
-    # "Fail loud, don't guess" (same principle as _live_current_price()'s
-    # own failure handling below): a genuinely CONFIRMED block resolves
+    # "Fail loud, don't guess": a genuinely CONFIRMED block (True) resolves
     # every pending row to a terminal SKIPPED_CRISIS_BLOCKED (tomorrow's
     # EOD decide cycle will naturally re-queue anything still valid once
     # the block clears -- nothing is permanently lost). A check FAILURE
-    # (a data-read error) is treated as "unknown, don't act" -- rows are
-    # left untouched (still PENDING) for the next submission window to
-    # retry, mirroring how a single ticker's own missing live price
-    # already leaves that row pending rather than assuming it's safe.
-    try:
-        gspc_close = _load_gspc_close()
-        live_gspc = _live_current_price("^GSPC")
-        latest_stored_date = gspc_close.index[-1] if not gspc_close.empty else None
-        crisis_blocked = (
-            (latest_stored_date is not None and crisis.is_entry_blocked(gspc_close, latest_stored_date))
-            or crisis.is_intraday_crisis(gspc_close, live_gspc)
-        )
-    except Exception as exc:
+    # (None) is treated as "unknown, don't act" -- rows are left untouched
+    # (still PENDING) for the next submission window to retry, mirroring
+    # how a single ticker's own missing live price already leaves that
+    # row pending rather than assuming it's safe.
+    crisis_blocked = is_crisis_mode_active_now()
+    if crisis_blocked is None:
         logger.error(
             "Crisis re-check failed during %s submission -- leaving all %d pending "
-            "row(s) untouched for retry rather than guessing it's safe to proceed: %s",
-            label, len(pending), exc, exc_info=True,
+            "row(s) untouched for retry rather than guessing it's safe to proceed.",
+            label, len(pending),
         )
         return 0
 

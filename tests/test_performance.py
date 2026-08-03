@@ -543,6 +543,11 @@ def test_crisis_status_calm_day_reports_no_override(mocker):
     calm = _price_frame(60, 100.0, 0.001)  # steady small gains, no crisis day
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
+    # entry_blocked now sources from brokers.trading212.is_crisis_mode_active_now()
+    # (2026-08-03) -- a separate module-level get_price_df binding the
+    # data.ingestion mock above does not reach, and which would otherwise
+    # make a real DB/yfinance call. Mocked directly at that boundary.
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=False)
 
     status = get_crisis_status()
     assert status["is_crisis_today"] is False
@@ -560,6 +565,7 @@ def test_crisis_status_today_is_crisis_day(mocker):
     })
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=df)
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
 
     status = get_crisis_status()
     assert status["is_crisis_today"] is True
@@ -577,11 +583,43 @@ def test_crisis_status_within_cooldown_after_trigger(mocker):
     })
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=df)
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
 
     status = get_crisis_status()
     assert status["entry_blocked"] is True
     assert status["is_crisis_today"] is False
     assert status["days_since_trigger"] == 4
+
+
+def test_crisis_status_entry_blocked_sources_from_authoritative_check_not_daily_bar_alone(mocker):
+    """The decisive proof this defers to is_crisis_mode_active_now()
+    rather than recomputing its own daily-bar-only verdict (2026-08-03):
+    stored daily-bar data shows a completely calm day (is_crisis_today
+    correctly False, computed independently from the same data), yet
+    entry_blocked still follows the authoritative check when it reports
+    True (the shape of a real intraday-only crisis, invisible to the
+    daily-bar data alone)."""
+    calm = _price_frame(60, 100.0, 0.001)
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
+
+    status = get_crisis_status()
+    assert status["is_crisis_today"] is False  # daily-bar data itself shows nothing wrong
+    assert status["entry_blocked"] is True      # but the authoritative check says blocked
+
+
+def test_crisis_status_entry_blocked_false_when_authoritative_check_cannot_determine(mocker):
+    """is_crisis_mode_active_now() returning None (a check failure) must
+    map to entry_blocked=False here -- a display-only function fails
+    toward showing nothing, never a fabricated or stale verdict."""
+    calm = _price_frame(60, 100.0, 0.001)
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=None)
+
+    status = get_crisis_status()
+    assert status["entry_blocked"] is False
 
 
 # ---------------------------------------------------------------------------

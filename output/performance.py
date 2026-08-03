@@ -347,8 +347,29 @@ POSITIONS_RULES_EXPLANATION = (
 def get_crisis_status() -> dict:
     """Today's crisis-override state plus how close the day's S&P 500 move
     is to the -7% single-day trigger threshold — not just an active/inactive
-    flag. Returns {} if price data isn't available yet."""
+    flag. Returns {} if price data isn't available yet.
+
+    `entry_blocked` is sourced from brokers.trading212.is_crisis_mode_
+    active_now() (2026-08-03) — the same single, authoritative check
+    order submission itself re-confirms fresh before ever placing a new
+    entry (see CLAUDE.md's "Submission-time crisis re-check" and
+    "Crisis-mode dashboard banner" sections) — never a second,
+    independently-derived daily-bar-only computation. This matters:
+    is_crisis_mode_active_now() also checks a genuinely live intraday
+    quote, which this function's own `today_return_pct`/
+    `distance_to_threshold_pp` fields below (still computed from stored
+    daily-bar data, since they're purely informational display context,
+    not a gating decision) cannot see — a crisis visible only intraday
+    would otherwise have shown here as "not blocked" while order
+    submission was already correctly refusing every new entry.
+    is_crisis_mode_active_now() returning None (a data-read failure) maps
+    to entry_blocked=False here — a display-only function fails toward
+    showing nothing rather than a stale or fabricated verdict; the real
+    safety mechanism lives entirely in order submission's own None
+    handling, not in this display value.
+    """
     from analysis import crisis
+    from brokers.trading212 import is_crisis_mode_active_now
     from data.ingestion import get_price_df
 
     df = get_price_df("^GSPC", days=60)
@@ -365,7 +386,7 @@ def get_crisis_status() -> dict:
     latest_dt = close.index[-1]
 
     is_crisis_today = crisis.is_crisis_day(close, latest_dt)
-    entry_blocked = crisis.is_entry_blocked(close, latest_dt)
+    entry_blocked = bool(is_crisis_mode_active_now())
 
     raw = crisis.compute_raw_trigger(close)
     trigger_dates = raw[raw].index

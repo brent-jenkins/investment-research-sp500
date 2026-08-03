@@ -465,6 +465,65 @@ def test_dashboard_shows_stale_warning_when_eod_record_is_old(db_engine, dashboa
 
 
 # ---------------------------------------------------------------------------
+# Dashboard crisis-mode warning banner (2026-08-03) -- sourced from
+# output.performance.get_crisis_status()'s entry_blocked field, which
+# itself defers to brokers.trading212.is_crisis_mode_active_now() -- the
+# same authoritative check order submission re-confirms fresh, never a
+# separate computation.
+# ---------------------------------------------------------------------------
+
+def test_dashboard_shows_crisis_banner_when_entry_blocked(db_engine, dashboard_app, mocker):
+    mocker.patch("output.performance.get_crisis_status", return_value={
+        "entry_blocked": True, "is_crisis_today": True, "today_return_pct": -9.2,
+    })
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    assert any("crisis override active" in e.value.lower() for e in at.error)
+
+
+def test_dashboard_no_crisis_banner_under_normal_conditions(db_engine, dashboard_app, mocker):
+    mocker.patch("output.performance.get_crisis_status", return_value={
+        "entry_blocked": False, "is_crisis_today": False, "today_return_pct": 0.3,
+    })
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    assert not any("crisis override active" in e.value.lower() for e in at.error)
+
+
+def test_dashboard_no_crisis_banner_when_status_is_empty(db_engine, dashboard_app, mocker):
+    """No price data yet / an empty get_crisis_status() result must not
+    be misread as "blocked" -- confirms the absent-key case is handled
+    the same as an explicit False, not a KeyError or a false positive."""
+    mocker.patch("output.performance.get_crisis_status", return_value={})
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    assert not any("crisis override active" in e.value.lower() for e in at.error)
+
+
+def test_dashboard_crisis_banner_text_describes_new_entries_only(db_engine, dashboard_app, mocker):
+    """The banner must state plainly that ONLY new entries are blocked --
+    existing positions continue to be monitored/exited normally -- not a
+    vague "trading is blocked" that could be misread as open positions
+    also being frozen."""
+    mocker.patch("output.performance.get_crisis_status", return_value={"entry_blocked": True})
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    banner_text = " ".join(e.value.lower() for e in at.error if "crisis override active" in e.value.lower())
+    assert banner_text  # the banner was actually found
+    assert "new entries" in banner_text
+    assert "existing positions" in banner_text
+    assert "monitored" in banner_text and ("exited" in banner_text or "normally" in banner_text)
+
+
+# ---------------------------------------------------------------------------
 # Dashboard candidate-queue Status column + filter (2026-08-02) -- sourced
 # from brokers.trading212.project_pending_order_admission(), the same
 # read-only projection built during the urgent capacity/momentum

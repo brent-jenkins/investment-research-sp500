@@ -884,6 +884,40 @@ def _render_eod_status_badge() -> None:
         st.info(f"⚪ **EOD {when}: skipped** — not a trading window (expected, not an error).")
 
 
+def _render_crisis_banner() -> None:
+    """A prominent warning banner shown ONLY when the crisis override is
+    genuinely active right now (2026-08-03) -- sourced from
+    output/performance.py:get_crisis_status()'s `entry_blocked` field,
+    which itself defers entirely to brokers.trading212.is_crisis_mode_
+    active_now() -- the exact same single, authoritative check order
+    submission re-confirms fresh before ever placing a new entry. Never a
+    second, independently-derived computation -- see that function's own
+    docstring and CLAUDE.md's "Crisis-mode dashboard banner" section.
+
+    Nothing is rendered at all when crisis mode isn't active -- including
+    when the underlying check couldn't be determined (get_crisis_status()
+    maps that to entry_blocked=False) -- deliberately, per this feature's
+    own requirement: a muted/inactive version of a warning banner risks
+    being mistaken for a real one, so the only two states are "shown" and
+    "not present on the page at all," never a third, quieter variant.
+    """
+    try:
+        status = _get_crisis_status()
+    except Exception:
+        status = {}
+
+    if not status.get("entry_blocked"):
+        return
+
+    st.error(
+        "🚨 **Crisis override active — new entries are currently blocked.** "
+        "The S&P 500 has triggered the ≥7% single-day decline circuit breaker "
+        "(or remains within its post-trigger cooldown window). **Existing "
+        "positions continue to be monitored and exited normally — only new "
+        "entries are affected.**"
+    )
+
+
 def _render_dashboard_page(config: dict) -> None:
     """Render the Dashboard: account balance, account-value history, top
     winning/losing closed trades, the queued-candidate list, and
@@ -901,6 +935,8 @@ def _render_dashboard_page(config: dict) -> None:
         st.info("Trading is disabled. Set `trading212_invest.enabled: true` in config.yaml to activate.")
         _render_footer()
         return
+
+    _render_crisis_banner()
 
     # --- Account balance ---------------------------------------------------
     summary = _get_account_summary()
