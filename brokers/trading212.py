@@ -79,6 +79,7 @@ from analysis.decision import (
     evaluate_exit_reason,
     is_asset_class_enabled,
     is_position_size_viable,
+    is_submission_price_move_blocked,
     passes_entry_gate,
     passes_momentum_floor,
     resolve_cash_constrained_position_gbp,
@@ -2942,10 +2943,18 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
             # _live_current_price()'s own docstring: the check used to
             # compare against the same stale value decided_price was
             # already built from, structurally unable to detect any real
-            # intraday move). Fail loud, don't guess: if the ticker has
-            # moved beyond threshold_pct since the decision was made, skip
-            # and log clearly rather than execute on a stale decision (same
-            # principle as the 2026-07-31 pricing-bug fix — see CLAUDE.md).
+            # intraday move). ASYMMETRIC (2026-08-03) — blocks only on a
+            # DROP past threshold_pct since the decision, never on a rise
+            # of any size (a rise confirms the momentum thesis rather than
+            # invalidating it — see analysis.decision.
+            # is_submission_price_move_blocked()'s own docstring and
+            # CLAUDE.md's "Price-sanity threshold — momentum-skew
+            # investigation" section for the 176-run block-based evidence
+            # this is based on). Fail loud, don't guess: if the ticker has
+            # genuinely dropped beyond threshold_pct since the decision was
+            # made, skip and log clearly rather than execute on a stale
+            # decision (same principle as the 2026-07-31 pricing-bug fix —
+            # see CLAUDE.md).
             decided_price = row["decided_price"]
             current_price = _live_current_price(ticker)
             if current_price is None or current_price <= 0:
@@ -2955,9 +2964,9 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 )
                 continue
             pct_move = ((current_price - decided_price) / decided_price) if decided_price else 0.0
-            if abs(pct_move) > threshold_pct:
+            if is_submission_price_move_blocked(decided_price, current_price, threshold_pct):
                 note = (
-                    f"price moved {pct_move:+.2%} since decision "
+                    f"price dropped {pct_move:+.2%} since decision "
                     f"(decided {decided_price:.2f} -> now {current_price:.2f}), "
                     f"exceeds {threshold_pct:.0%} sanity threshold"
                 )

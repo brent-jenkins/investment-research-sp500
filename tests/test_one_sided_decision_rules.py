@@ -97,6 +97,26 @@ EXEMPT_LIVE_ONLY: dict[str, str] = {
         "trading switches' section and is_asset_class_enabled()'s own "
         "docstring."
     ),
+    "is_submission_price_move_blocked": (
+        "Genuinely, structurally live-only — verified directly against "
+        "analysis/backtest.py's real architecture, not assumed. Every "
+        "backtest engine enters a position at the SAME moment the decision "
+        "is made (the signal day's own close is both decided_price and "
+        "entry_price in one step, confirmed by reading "
+        "simulate_portfolio_compounding_mtm()'s own admission loop) -- there "
+        "is no decide-then-submit time gap in the current backtest "
+        "architecture at all, so no later 'has price moved since the "
+        "decision' submission-time state exists for this function to check "
+        "against. Identical structural reason "
+        "brokers/trading212.py:is_crisis_mode_active_now() (the submission-"
+        "time crisis re-check) has never needed a backtest counterpart "
+        "either -- see CLAUDE.md's 'Submission-time crisis re-check' "
+        "section for that established precedent, and 'Price-sanity "
+        "threshold -- momentum-skew investigation' for the disposable "
+        "research engine that modeled a genuine decide-to-submit gap "
+        "specifically to test this question, deliberately never merged "
+        "into the frozen, validated production backtest engine."
+    ),
 }
 
 EXEMPT_BACKTEST_ONLY: dict[str, str] = {

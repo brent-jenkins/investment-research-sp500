@@ -173,6 +173,30 @@ def _mock_price_data(mocker, frames: dict):
     mocker.patch("brokers.trading212._live_current_price", side_effect=_fake_live_current_price)
 
 
+def _mock_live_price_for(mocker, ticker: str, price: float) -> None:
+    """Override _live_current_price() for exactly ONE ticker, leaving
+    every other ticker (notably ^GSPC, which the submission-time crisis
+    re-check -- is_crisis_mode_active_now() -- also reads via this same
+    function) at its own unchanged _bullish_frame() close.
+
+    A bare `mocker.patch(..., return_value=X)` -- the pattern the
+    original price-sanity tests used, since it predates the crisis
+    re-check -- feeds X to EVERY ticker's _live_current_price() call,
+    including ^GSPC's. Since _bullish_frame() is fully deterministic
+    (confirmed directly), GSPC's own stored close and X can differ enough
+    to look like a genuine >=7% single-day GSPC decline, spuriously
+    triggering the crisis override and blocking submission for an
+    unrelated reason before the price-sanity check is even reached --
+    exactly what happened when this helper was added (2026-08-03), caught
+    by a real test failure, not assumed."""
+    default_close = float(_bullish_frame()["close"].iloc[-1])
+
+    def _side_effect(t):
+        return price if t == ticker else default_close
+
+    mocker.patch("brokers.trading212._live_current_price", side_effect=_side_effect)
+
+
 def _pending_rows(engine, status=None) -> list:
     """Read pending_orders rows for assertions -- exchange-aware submission
     split (2026-07-31, see CLAUDE.md)."""
@@ -1081,18 +1105,30 @@ def test_submission_only_processes_its_own_asset_class(db_engine, v2_mocks, mock
 # _live_current_price() directly, the correct boundary now -- mocking
 # get_price_df() as these tests originally did would no longer control
 # what the sanity check actually sees.
+#
+# 2026-08-03: ASYMMETRIC -- blocks only on a DROP past the threshold, never
+# on a rise of any size (see CLAUDE.md's "Price-sanity threshold --
+# momentum-skew investigation" section for the 176-run block-based evidence
+# this is based on). The two tests below that used to construct their
+# "moved beyond threshold" scenario with a RISE (decided_price below the
+# current price) were updated to use a genuine DROP instead, to keep
+# actually testing "does an over-threshold move still block" now that only
+# one direction can trigger it -- their own original intent (prove the
+# check fires / prove it reads the live quote, not stale data) is
+# unaffected by which direction is used, so this is a like-for-like
+# substitution, not a behavioural relaxation of either test.
 # ---------------------------------------------------------------------------
 
-def test_sanity_check_skips_submission_when_price_moved_beyond_threshold(db_engine, v2_mocks, mocker):
+def test_sanity_check_skips_submission_when_price_dropped_beyond_threshold(db_engine, v2_mocks, mocker):
     from brokers.trading212 import submit_pending_stock_orders
 
     frame = _bullish_frame()
     last_close = float(frame["close"].iloc[-1])
-    decided_price = last_close / 1.10  # decided price is 10% below "current" -- well past the 3% threshold
+    decided_price = last_close * 1.10  # decided price is 10% above "current" -- a genuine drop, well past 3%
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
                         decided_price=decided_price)
     _mock_price_data(mocker, {"AAPL": frame})
-    mocker.patch("brokers.trading212._live_current_price", return_value=last_close)
+    _mock_live_price_for(mocker, "AAPL", last_close)
 
     n = submit_pending_stock_orders(_submission_config(threshold=0.03))
 
@@ -1109,11 +1145,11 @@ def test_sanity_check_allows_submission_when_price_within_threshold(db_engine, v
 
     frame = _bullish_frame()
     last_close = float(frame["close"].iloc[-1])
-    decided_price = last_close / 1.01  # ~1% move -- comfortably inside the 3% threshold
+    decided_price = last_close / 1.01  # ~1% rise -- comfortably inside the 3% threshold either way
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
                         decided_price=decided_price)
     _mock_price_data(mocker, {"AAPL": frame})
-    mocker.patch("brokers.trading212._live_current_price", return_value=last_close)
+    _mock_live_price_for(mocker, "AAPL", last_close)
 
     n = submit_pending_stock_orders(_submission_config(threshold=0.03))
 
@@ -1127,17 +1163,20 @@ def test_sanity_check_uses_live_price_not_stale_stored_close(db_engine, v2_mocks
     stored close is set to a value that would NOT trip the sanity check if
     (incorrectly) still used as "current price", while the genuinely live
     quote is set to a value that WOULD trip it. The check must follow the
-    live quote, proving it no longer reads the stale stored table at all."""
+    live quote, proving it no longer reads the stale stored table at all.
+    Uses a genuine drop (not the original rise) so this still actually
+    trips the now-asymmetric check -- the point being tested (live vs.
+    stale data source) is orthogonal to direction."""
     from brokers.trading212 import submit_pending_stock_orders
 
     frame = _bullish_frame()
     stale_stored_close = float(frame["close"].iloc[-1])
     decided_price = stale_stored_close  # decided price matches the stale stored close exactly
-    live_price = stale_stored_close * 1.10  # but the real live quote has moved 10% -- past the 3% threshold
+    live_price = stale_stored_close * 0.90  # but the real live quote has DROPPED 10% -- past the 3% threshold
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
                         decided_price=decided_price)
     _mock_price_data(mocker, {"AAPL": frame})
-    mocker.patch("brokers.trading212._live_current_price", return_value=live_price)
+    _mock_live_price_for(mocker, "AAPL", live_price)
 
     n = submit_pending_stock_orders(_submission_config(threshold=0.03))
 
@@ -1145,6 +1184,77 @@ def test_sanity_check_uses_live_price_not_stale_stored_close(db_engine, v2_mocks
     v2_mocks.place_market_order.assert_not_called()
     rows = _pending_rows(db_engine, status="SKIPPED_PRICE_MOVED")
     assert len(rows) == 1
+
+
+def test_sanity_check_asymmetric_a_rise_never_blocks_regardless_of_size(db_engine, v2_mocks, mocker):
+    """The core 2026-08-03 behavioural change: a price RISE since the
+    decision -- even a large one, well past the 3% threshold -- must never
+    block submission. A rise confirms the momentum thesis rather than
+    invalidating it (see CLAUDE.md's momentum-skew investigation)."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    last_close = float(frame["close"].iloc[-1])
+    decided_price = last_close / 1.20  # a 20% RISE since decision -- far past 3%, but a rise, not a drop
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=decided_price)
+    _mock_price_data(mocker, {"AAPL": frame})
+    _mock_live_price_for(mocker, "AAPL", last_close)
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 1, "a price rise, regardless of size, must never block submission"
+    v2_mocks.place_market_order.assert_called_once()
+    assert len(_pending_rows(db_engine, status="SUBMITTED")) == 1
+    assert len(_pending_rows(db_engine, status="SKIPPED_PRICE_MOVED")) == 0
+
+
+def test_sanity_check_drop_just_under_threshold_does_not_block(db_engine, v2_mocks, mocker):
+    """Boundary case: a drop of 2.9% (just under the 3% threshold) must
+    still allow submission -- confirms the boundary is a genuine threshold
+    comparison, not an off-by-something that blocks too eagerly. (The
+    EXACT boundary -- a drop of precisely 3.00% -- is covered robustly at
+    the pure-function level in tests/test_decision.py instead of here:
+    constructing an exact-percentage price via division in this
+    integration test hit real floating-point rounding that made a
+    "precisely -3.00%" move compute as -3.0000000000000016%, an artifact
+    of the test's own arithmetic, not the production code -- confirmed
+    directly before removing that integration-level variant.)"""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    last_close = float(frame["close"].iloc[-1])
+    decided_price = last_close / 0.971  # current price is ~2.9% below decided_price -- just under 3%
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=decided_price)
+    _mock_price_data(mocker, {"AAPL": frame})
+    _mock_live_price_for(mocker, "AAPL", last_close)
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 1
+    v2_mocks.place_market_order.assert_called_once()
+    assert len(_pending_rows(db_engine, status="SKIPPED_PRICE_MOVED")) == 0
+
+
+def test_sanity_check_drop_just_over_threshold_blocks(db_engine, v2_mocks, mocker):
+    """The other side of the same boundary: a drop of 3.1% (just over the
+    3% threshold) must block."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    last_close = float(frame["close"].iloc[-1])
+    decided_price = last_close / 0.969  # current price is ~3.1% below decided_price -- just over 3%
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=decided_price)
+    _mock_price_data(mocker, {"AAPL": frame})
+    _mock_live_price_for(mocker, "AAPL", last_close)
+
+    n = submit_pending_stock_orders(_submission_config(threshold=0.03))
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="SKIPPED_PRICE_MOVED")) == 1
 
 
 def test_live_current_price_returns_none_on_failure_leaves_pending(db_engine, v2_mocks, mocker):

@@ -12,6 +12,7 @@ from analysis.decision import (
     is_asset_class_enabled,
     is_position_size_viable,
     is_reentry_blocked,
+    is_submission_price_move_blocked,
     passes_entry_gate,
     passes_momentum_floor,
     resolve_cash_constrained_position_gbp,
@@ -356,3 +357,53 @@ def test_resolve_min_momentum_floor_two_percent_excludes_marginal_candidate():
     floor = resolve_min_momentum_floor({"trading212_invest": {"min_momentum_pct": 0.02}})
     assert passes_momentum_floor(0.005, floor) is False  # 0.5% momentum -- excluded
     assert passes_momentum_floor(0.03, floor) is True     # 3% momentum -- unaffected
+
+
+# ---------------------------------------------------------------------------
+# is_submission_price_move_blocked() -- asymmetric price-sanity check
+# (2026-08-03). See CLAUDE.md's "Price-sanity threshold -- momentum-skew
+# investigation" section for the 176-run block-based evidence this is
+# based on, and brokers/trading212.py:_submit_pending_orders() for the
+# real call site.
+# ---------------------------------------------------------------------------
+
+def test_price_move_blocked_rise_never_blocks_regardless_of_size():
+    """The core behavioural change: any rise, however large, must never
+    block -- a rise confirms the momentum thesis rather than
+    invalidating it."""
+    assert is_submission_price_move_blocked(100.0, 101.0, 0.03) is False   # +1%
+    assert is_submission_price_move_blocked(100.0, 103.0, 0.03) is False   # +3%, at the threshold
+    assert is_submission_price_move_blocked(100.0, 110.0, 0.03) is False   # +10%, far past
+    assert is_submission_price_move_blocked(100.0, 200.0, 0.03) is False   # +100%, extreme
+
+
+def test_price_move_blocked_drop_past_threshold_blocks():
+    assert is_submission_price_move_blocked(100.0, 90.0, 0.03) is True     # -10%, well past
+    assert is_submission_price_move_blocked(100.0, 96.0, 0.03) is True     # -4%, just past
+
+
+def test_price_move_blocked_drop_under_threshold_does_not_block():
+    assert is_submission_price_move_blocked(100.0, 97.5, 0.03) is False    # -2.5%, under 3%
+    assert is_submission_price_move_blocked(100.0, 99.9, 0.03) is False    # -0.1%, trivial
+
+
+def test_price_move_blocked_drop_exactly_at_threshold_does_not_block():
+    """Strict inequality, matching the original symmetric check's own
+    strict `>` convention exactly -- never inclusive at the boundary."""
+    assert is_submission_price_move_blocked(100.0, 97.0, 0.03) is False    # exactly -3.00%
+
+
+def test_price_move_blocked_drop_just_over_threshold_blocks():
+    assert is_submission_price_move_blocked(100.0, 96.99, 0.03) is True    # -3.01%, just past
+
+
+def test_price_move_blocked_no_price_change_never_blocks():
+    assert is_submission_price_move_blocked(100.0, 100.0, 0.03) is False
+
+
+def test_price_move_blocked_non_positive_decided_price_never_blocks():
+    """No genuine basis for comparison -- fail toward not blocking rather
+    than dividing by zero or guessing. Should not occur in practice (a
+    queued decision always has a real recorded price)."""
+    assert is_submission_price_move_blocked(0.0, 90.0, 0.03) is False
+    assert is_submission_price_move_blocked(-5.0, 90.0, 0.03) is False

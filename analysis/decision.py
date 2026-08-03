@@ -451,3 +451,58 @@ def resolve_cash_constrained_position_gbp(position_gbp: float, available_cash_gb
     from there — see that engine's own reproducibility guarantee.
     """
     return min(position_gbp, available_cash_gbp * cash_fraction)
+
+
+def is_submission_price_move_blocked(
+    decided_price: float, current_price: float, threshold_pct: float,
+) -> bool:
+    """True if a queued BUY decision should be blocked at submission time
+    because the ticker's price has moved too far from decided_price (the
+    EOD close the decision was made against) by the time current_price
+    (a genuinely live quote) is checked.
+
+    ASYMMETRIC (2026-08-03) — blocks only on a DROP past threshold_pct,
+    never on a rise of any size: `(current_price - decided_price) /
+    decided_price < -threshold_pct`. A rise since the decision was made
+    confirms the momentum thesis the decision was already based on rather
+    than invalidating it; blocking on it contradicted this system's own
+    "let winners run" principle and, per a 176-run block-based sweep (see
+    CLAUDE.md's "Price-sanity threshold — momentum-skew investigation"
+    section), was found to disproportionately filter out exactly the
+    highest-momentum candidates this strategy is designed to chase
+    hardest (a genuine, measured 1.91x skew under the old symmetric
+    check). Was previously symmetric — `abs(pct_move) > threshold_pct` —
+    before this fix. The threshold WIDTH is unchanged (still whatever
+    trading212_invest.price_sanity_threshold_pct resolves to, 3% in
+    production) — this is a single-variable direction change, not also a
+    width change, so the two are never conflated in the same commit.
+
+    decided_price<=0 (should not occur in practice — a queued decision
+    always has a real recorded price) is treated as "no basis for
+    comparison" and never blocks, rather than dividing by zero or
+    guessing.
+    """
+    if decided_price <= 0:
+        return False
+    pct_move = (current_price - decided_price) / decided_price
+    return pct_move < -threshold_pct
+
+
+# Layer 4 (tests/test_one_sided_decision_rules.py) EXEMPT_LIVE_ONLY --
+# is_submission_price_move_blocked() is genuinely live-only, verified, not
+# assumed: the backtest engine (analysis/backtest.py) has no
+# decide-then-submit time gap at all in its current architecture -- every
+# engine enters a position at the SAME moment the decision is made (the
+# signal day's own close is both decided_price and entry_price in one
+# step), so there is no later "has price moved since the decision"
+# submission-time state to check against. This is the identical
+# structural reason brokers/trading212.py:is_crisis_mode_active_now()
+# (the submission-time crisis re-check) has never needed a backtest
+# counterpart either -- see CLAUDE.md's "Submission-time crisis re-check"
+# section for that established precedent. Modeling a genuine decide-to-
+# submit gap in the backtest (the technique the momentum-skew sweep above
+# used, on a disposable research engine, to test this exact question) was
+# deliberately out of scope for this change -- see CLAUDE.md's own write-up
+# for why folding it into the frozen, validated production backtest engine
+# would be a materially larger change than the single-variable direction
+# flip this task actually scoped.
