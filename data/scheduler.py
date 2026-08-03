@@ -737,6 +737,11 @@ def _account_state_job() -> None:
     — see that function's own docstring and CLAUDE.md's "Splitting the
     hourly trade-alert job" section for the full investigation).
 
+    Registered at minute=5, not minute=0 like its sibling above — see the
+    registration comment in start_scheduler() for why: running both jobs'
+    T212 API calls concurrently at the identical minute caused a real
+    rate-limit collision on their first joint firing in production.
+
       - Live position reconciliation — `brokers.trading212.reconcile_
         positions_with_broker()` — deliberately NOT NYSE-hours-gated:
         its relationship to corporate-action processing timing was
@@ -1146,14 +1151,33 @@ def start_scheduler() -> BackgroundScheduler:
         "gated on genuine, live NYSE session hours.", tz,
     )
 
+    # Offset 5 minutes past market_hours_check's own minute=0 (2026-08-03
+    # incident fix) — both jobs make several T212 API calls each
+    # (market_hours_check: poll_placed_orders() + maybe_exit_positions()'s
+    # get_positions(); account_state_refresh: reconcile_positions_with_
+    # broker()'s get_positions() + _fetch_t212_snapshot()'s get_account_
+    # summary()/get_positions()), and registering both at the identical
+    # minute=0 let APScheduler run them concurrently — on their very first
+    # joint firing after this split was deployed, the combined burst
+    # exhausted T212's rate limit and maybe_exit_positions()'s own
+    # get_positions() call gave up after 3 retries, skipping the exit
+    # check for that entire cycle (see CLAUDE.md's investigation of the
+    # resulting "T212 request failed after 3 attempts" alert). No open
+    # position was actually at risk that cycle, but the collision is
+    # structural and would recur every hour indefinitely. A 5-minute
+    # offset is ample — the worst-case rate-limit backoff inside a single
+    # _request() call is well under a minute — and preserves both jobs'
+    # "hourly, every day" semantics exactly; only the wall-clock minute
+    # within the hour changed, not the gating logic either job runs.
     _scheduler.add_job(
         _account_state_job,
-        trigger=CronTrigger(minute=0, timezone=tz),
+        trigger=CronTrigger(minute=5, timezone=tz),
         id="account_state_refresh",
         replace_existing=True,
     )
     logger.info(
-        "Scheduled account-state refresh hourly, every day (%s) — "
+        "Scheduled account-state refresh hourly (5min after market-hours "
+        "check, to avoid a T212 rate-limit collision), every day (%s) — "
         "unconditional, no NYSE-hours gate.", tz,
     )
 

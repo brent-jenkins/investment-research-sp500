@@ -576,7 +576,15 @@ def _clear_t212_error() -> None:
 _T212_ERROR_EMAIL_LAST_SENT_KEY = "t212_error_email_last_sent"
 
 
-def _send_t212_error_email(error_msg: str, config: dict) -> None:
+def _send_t212_error_email(
+    error_msg: str,
+    config: dict,
+    *,
+    context: str = "",
+    ticker: Optional[str] = None,
+    direction: Optional[str] = None,
+    next_steps: str = "",
+) -> None:
     """Send a T212 order-placement/API error alert.
 
     Gated two ways (2026-07-31): notifications.email.enabled (checked
@@ -584,19 +592,35 @@ def _send_t212_error_email(error_msg: str, config: dict) -> None:
     caller gets it automatically), and a cooldown
     (notifications.email.alert_cooldown_hours, default 8h) tracked here.
 
-    The cooldown is deliberately GLOBAL across all four call sites in this
-    module (a setup-time API error in the BUY loop, a failed BUY order, a
-    setup-time API error in the EXIT loop, a failed SELL order) rather than
-    per-call-site or per-error-message. A persistent underlying issue (a
-    rate limit exceeding the retry budget, an auth failure) is one real
-    problem, not four independent ones, and is exactly the kind of thing
-    likely to surface through more than one of these call sites in the
-    same run — a per-call-site cooldown would still let each site send its
-    own email every cycle, which does nothing to stop the flood this
-    cooldown exists to prevent. The timestamp is only updated on a
-    genuinely successful send — a disabled config or a transient SMTP
-    failure never "uses up" the cooldown window, so a real alert can still
-    go out once email is re-enabled or the SMTP issue clears.
+    The cooldown is deliberately GLOBAL across all five call sites in this
+    module (a setup-time API error in the EXIT loop, a failed SELL order, a
+    setup-time API error in the decide-phase BUY loop, a setup-time API
+    error in submission, and a failed BUY order) rather than per-call-site
+    or per-error-message. A persistent underlying issue (a rate limit
+    exceeding the retry budget, an auth failure) is one real problem, not
+    five independent ones, and is exactly the kind of thing likely to
+    surface through more than one of these call sites in the same run — a
+    per-call-site cooldown would still let each site send its own email
+    every cycle, which does nothing to stop the flood this cooldown exists
+    to prevent. The timestamp is only updated on a genuinely successful
+    send — a disabled config or a transient SMTP failure never "uses up"
+    the cooldown window, so a real alert can still go out once email is
+    re-enabled or the SMTP issue clears.
+
+    context/ticker/direction/next_steps (all optional, 2026-08-03) make the
+    alert actionable rather than a bare error string — found necessary
+    after a real production alert ("T212 request failed after 3 attempts")
+    gave no ticker, no direction, no indication of what phase failed, and
+    no indication of current state. `context` names the specific step that
+    failed (e.g. "Exit check setup" or "BUY order failed"); `ticker`/
+    `direction` identify the specific instrument/side when the failure is
+    per-candidate rather than a whole-run setup failure; `next_steps`
+    states plainly what happens now — retried automatically next cycle,
+    or flagged for manual review — since that is exactly what a real,
+    time-pressured reader needs to judge urgency without reading source
+    code. All four are optional so every call site can omit what doesn't
+    apply (a setup-time failure has no single ticker/direction) without
+    the email looking broken.
     """
     try:
         from data.database import get_metadata_str, set_metadata
@@ -616,11 +640,48 @@ def _send_t212_error_email(error_msg: str, config: dict) -> None:
                 pass  # corrupt/unexpected stored value -- treat as no prior send
 
         from output.briefing import _smtp_send
-        subject   = "T212 Invest: Order Placement Error"
-        text_body = f"Order placement failed:\n\n{error_msg}"
+
+        subject = "T212 Invest: Order Placement Error"
+        if ticker and direction:
+            subject += f" — {direction} {ticker}"
+        elif context:
+            subject += f" — {context}"
+
+        text_lines = []
+        if context:
+            text_lines.append(f"Where: {context}")
+        if ticker:
+            text_lines.append(f"Ticker: {ticker}")
+        if direction:
+            text_lines.append(f"Direction: {direction}")
+        text_lines += ["", "Underlying T212 error:", error_msg]
+        if next_steps:
+            text_lines += ["", "What happens next:", next_steps]
+        text_body = "\n".join(text_lines)
+
+        def _row(label: str, value: str) -> str:
+            return (
+                f'<tr><td style="padding:2px 8px 2px 0;color:#64748b;font-weight:bold">{label}</td>'
+                f'<td style="padding:2px 0">{value}</td></tr>'
+            )
+
+        html_rows = ""
+        if context:
+            html_rows += _row("Where", context)
+        if ticker:
+            html_rows += _row("Ticker", ticker)
+        if direction:
+            html_rows += _row("Direction", direction)
         html_body = (
             '<p style="color:#dc2626;font-weight:bold">Order placement failed</p>'
-            f'<pre style="background:#f1f5f9;padding:12px;border-radius:4px">{error_msg}</pre>'
+            + (f'<table>{html_rows}</table>' if html_rows else "")
+            + '<p style="margin-top:12px;color:#64748b;font-weight:bold">Underlying T212 error</p>'
+            + f'<pre style="background:#f1f5f9;padding:12px;border-radius:4px">{error_msg}</pre>'
+            + (
+                '<p style="margin-top:12px;color:#64748b;font-weight:bold">What happens next</p>'
+                f'<p>{next_steps}</p>'
+                if next_steps else ""
+            )
         )
         sent, _detail = _smtp_send(subject, text_body, html_body, config)
         if sent:
@@ -1810,7 +1871,18 @@ def maybe_exit_positions(config: dict) -> None:
     except Exception as exc:
         logger.error("API error during exit check — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
-        _send_t212_error_email(str(exc), config)
+        _send_t212_error_email(
+            str(exc), config,
+            context="Exit check setup — could not fetch open positions from T212",
+            next_steps=(
+                "No positions were evaluated for exit this cycle (stop-loss / "
+                "signal-off / crisis-exit / max-holding checks were all skipped "
+                "for every open position). This is not a stuck order — it will "
+                "retry automatically on the next scheduled check (hourly during "
+                "NYSE hours). No manual action needed unless this recurs on "
+                "consecutive checks."
+            ),
+        )
         return
 
     if not positions_by_t212:
@@ -1923,7 +1995,20 @@ def maybe_exit_positions(config: dict) -> None:
                 error_msg = str(exc)
                 logger.error("Sell order failed for %s: %s", ticker, exc)
                 _set_t212_error(f"Sell order failed for {ticker}: {error_msg}")
-                _send_t212_error_email(error_msg, config)
+                _send_t212_error_email(
+                    error_msg, config,
+                    context=f"SELL order failed for {ticker} (exit reason: {exit_reason})",
+                    ticker=ticker, direction="SELL",
+                    next_steps=(
+                        f"The position in {ticker} remains open. It will be "
+                        f"re-evaluated for exit automatically on the next hourly "
+                        f"check — not abandoned. After "
+                        f"{_SELL_REJECTION_GIVE_UP_THRESHOLD} consecutive SELL "
+                        f"failures for this ticker, auto-retry stops and it is "
+                        f"flagged in position_reconciliations for manual review "
+                        f"(write-off, or a fresh attempt once conditions change)."
+                    ),
+                )
 
             _log_order(
                 ticker=ticker, t212_ticker=t212_ticker, direction="SELL",
@@ -2370,7 +2455,16 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
     except Exception as exc:
         logger.error("API error during setup — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
-        _send_t212_error_email(str(exc), config)
+        _send_t212_error_email(
+            str(exc), config,
+            context="Decide phase setup — could not fetch account state from T212 (EOD candidate queuing)",
+            next_steps=(
+                "No new BUY candidates were queued this run. This is the "
+                "decision-queuing step only — no live order was at risk, and no "
+                "existing position was affected. It will retry automatically at "
+                "the next scheduled EOD run."
+            ),
+        )
         return
 
     # Fetched account state BEFORE the delegated exit call, so a ticker sold
@@ -2809,7 +2903,15 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     except Exception as exc:
         logger.error("API error during %s submission setup — %s", label, exc, exc_info=True)
         _set_t212_error(str(exc))
-        _send_t212_error_email(str(exc), config)
+        _send_t212_error_email(
+            str(exc), config,
+            context=f"{label} order submission setup — could not fetch account state from T212",
+            next_steps=(
+                f"None of the {len(pending)} pending {label} candidate(s) queued "
+                f"for today were submitted. They remain PENDING and will be "
+                f"retried at the next scheduled {label} submission window."
+            ),
+        )
         return 0
 
     try:
@@ -2821,7 +2923,7 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     account_label = "LIVE" if live else "DEMO"
     submitted = 0
 
-    for row in pending:
+    for idx, row in enumerate(pending):
         ticker = row["ticker"]
         t212_ticker = row["t212_ticker"]
 
@@ -2946,7 +3048,21 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 error_msg = str(order_exc)
                 logger.error("Buy order failed for %s: %s", ticker, order_exc)
                 _set_t212_error(f"Buy order failed for {ticker}: {error_msg}")
-                _send_t212_error_email(error_msg, config)
+                _remaining = len(pending) - idx - 1
+                _send_t212_error_email(
+                    error_msg, config,
+                    context=f"BUY order failed for {ticker} ({label})",
+                    ticker=ticker, direction="BUY",
+                    next_steps=(
+                        f"{label} submission has been halted for this run — "
+                        f"{_remaining} other pending candidate(s) in today's queue "
+                        f"were not attempted and remain PENDING; they will be "
+                        f"retried at the next scheduled submission window. "
+                        f"{ticker} itself is now marked FAILED and will NOT be "
+                        f"automatically retried as-is — it needs a fresh signal "
+                        f"on a future run to be re-queued."
+                    ),
+                )
 
             _api_ccy = meta.get("currencyCode")
             _log_order(

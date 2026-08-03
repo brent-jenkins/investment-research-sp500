@@ -1934,6 +1934,113 @@ def test_t212_error_email_disabled_does_not_consume_the_cooldown(db_engine, mock
 
 
 # ---------------------------------------------------------------------------
+# Actionable T212 error alerts (2026-08-03) -- a real production alert
+# ("T212 request failed after 3 attempts") gave no ticker, no direction,
+# and no indication of what would happen next -- found investigating a
+# genuine live incident (see CLAUDE.md). _send_t212_error_email() gained
+# optional context/ticker/direction/next_steps kwargs so every call site
+# can say what actually failed and what happens now, without breaking any
+# existing positional-arg caller (all four kwargs default to empty/None).
+# ---------------------------------------------------------------------------
+
+def _sent_message_parts(mock_server) -> tuple[str, str]:
+    """Parses the MIME message sendmail() was called with and returns
+    (decoded subject, decoded plain-text body) -- properly decoded rather
+    than raw substring-matched against msg.as_string(), since utf-8
+    MIMEText bodies (and any non-ASCII subject, e.g. an em-dash) are
+    base64/quoted-printable encoded on the wire and would not contain a
+    literal, searchable substring otherwise."""
+    from email import message_from_string
+    from email.header import decode_header
+
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = message_from_string(raw)
+
+    subject_parts = decode_header(msg["Subject"])
+    subject = "".join(
+        part.decode(enc or "utf-8") if isinstance(part, bytes) else part
+        for part, enc in subject_parts
+    )
+
+    text_body = ""
+    for part in msg.walk():
+        if part.get_content_type() == "text/plain":
+            text_body = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8")
+            break
+
+    return subject, text_body
+
+
+def test_t212_error_email_includes_ticker_direction_context_and_next_steps(db_engine, mocker):
+    """A per-candidate failure (e.g. a failed SELL) must carry the real
+    ticker, direction, what step failed, and what happens next -- not just
+    the bare underlying error string."""
+    from brokers.trading212 import _send_t212_error_email
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    _send_t212_error_email(
+        "T212 request failed after 3 attempts", _email_config(),
+        context="SELL order failed for WBD (exit reason: STOP_LOSS)",
+        ticker="WBD", direction="SELL",
+        next_steps="The position in WBD remains open and will be retried on the next hourly check.",
+    )
+
+    subject, body = _sent_message_parts(mock_server)
+    assert "WBD" in body
+    assert "SELL" in body
+    assert "STOP_LOSS" in body
+    assert "T212 request failed after 3 attempts" in body
+    assert "remains open" in body
+    assert "retried on the next hourly check" in body
+
+    assert "WBD" in subject
+    assert "SELL" in subject
+
+
+def test_t212_error_email_setup_failure_has_no_ticker_but_still_has_context_and_next_steps(db_engine, mocker):
+    """A whole-run setup failure (no single ticker/direction involved) must
+    still explain what step failed and what happens next -- confirms the
+    optional fields degrade gracefully rather than producing a broken or
+    still-generic email when ticker/direction are genuinely not applicable."""
+    from brokers.trading212 import _send_t212_error_email
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    _send_t212_error_email(
+        "T212 request failed after 3 attempts", _email_config(),
+        context="Exit check setup — could not fetch open positions from T212",
+        next_steps="No positions were evaluated for exit this cycle. This will retry automatically.",
+    )
+
+    subject, body = _sent_message_parts(mock_server)
+    assert "Exit check setup" in body
+    assert "could not fetch open positions" in body
+    assert "No positions were evaluated for exit this cycle" in body
+    assert "retry automatically" in body
+
+    assert "Exit check setup" in subject
+
+
+def test_t212_error_email_still_works_with_only_positional_args(db_engine, mocker):
+    """Backward compatibility: every pre-existing call shape (error_msg,
+    config) with no keyword args must still send a well-formed email
+    containing at least the underlying error, not raise a TypeError."""
+    from brokers.trading212 import _send_t212_error_email
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    _send_t212_error_email("bare legacy-shaped error", _email_config())
+
+    mock_server.sendmail.assert_called_once()
+    _subject, body = _sent_message_parts(mock_server)
+    assert "bare legacy-shaped error" in body
+
+
+# ---------------------------------------------------------------------------
 # Trade prioritization and capacity-allocation engine (2026-08-01) -- see
 # CLAUDE.md's "Trade prioritization and capacity-allocation engine" section
 # for the full design writeup and the analysis/backtest.py mirror.
@@ -2193,6 +2300,40 @@ def test_exit_sell_failure_does_not_halt_remaining_positions(db_engine, v2_mocks
     )).fetchone()
     assert voo_row[0] == "FAILED"
     assert aapl_row[0] == "PLACED"
+
+
+def test_exit_sell_failure_alert_carries_real_ticker_direction_and_next_steps(db_engine, v2_mocks, mocker):
+    """Real-call-site regression for the 2026-08-03 alert-content fix: the
+    actual maybe_exit_positions() SELL-failure path must call
+    _send_t212_error_email() with ticker/direction/context/next_steps
+    populated from the real failing position -- not the bare error string
+    a real production alert used to be limited to."""
+    from brokers.trading212 import maybe_exit_positions
+
+    bearish = _bearish_frame()
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 2.0}]
+    v2_mocks.place_market_order.side_effect = RuntimeError("simulated T212 rejection -- no market")
+    _mock_price_data(mocker, {"AAPL": bearish})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+    spy = mocker.patch("brokers.trading212._send_t212_error_email")
+
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=1.0, days_ago=5, is_etf=False)
+
+    cfg = _config(mapping={
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+    }, mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    spy.assert_called_once()
+    _, kwargs = spy.call_args
+    assert kwargs["ticker"] == "AAPL"
+    assert kwargs["direction"] == "SELL"
+    assert "AAPL" in kwargs["context"]
+    assert kwargs["next_steps"]  # non-empty -- real guidance, not left blank
+    assert "remains open" in kwargs["next_steps"]
 
 
 def test_has_recent_sell_order_blocks_on_rejected_within_cooldown(db_engine):

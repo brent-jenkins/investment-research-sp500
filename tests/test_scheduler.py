@@ -798,6 +798,14 @@ def test_account_state_job_reconciliation_failure_does_not_block_snapshot(monkey
 # "fires unconditionally, decides internally" design: if either job were
 # still cron-filtered, it would never even wake up to run its own internal
 # gate on the days/hours the filter excluded.
+#
+# account_state_refresh fires at minute=5, not minute=0 like its sibling
+# (2026-08-03 fix) -- registering both at the identical minute let
+# APScheduler run their T212 API calls concurrently, and on their first
+# joint firing in production this genuinely exhausted T212's rate limit,
+# causing maybe_exit_positions() to give up after 3 retries and skip the
+# exit check for that whole cycle. See CLAUDE.md's investigation of the
+# resulting "T212 request failed after 3 attempts" alert.
 # ---------------------------------------------------------------------------
 
 def test_market_hours_check_and_account_state_registered_hourly_no_cron_filter(monkeypatch):
@@ -832,9 +840,46 @@ def test_market_hours_check_and_account_state_registered_hourly_no_cron_filter(m
         assert as_job.func is scheduler._account_state_job
         assert field("account_state_refresh", "day_of_week") == "*"
         assert field("account_state_refresh", "hour") == "*"
-        assert field("account_state_refresh", "minute") == "0"
+        assert field("account_state_refresh", "minute") == "5"
 
         assert not hasattr(scheduler, "_trade_alert_job")
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_market_hours_check_and_account_state_do_not_share_a_cron_minute(monkeypatch):
+    """Direct regression guard for the 2026-08-03 rate-limit collision: both
+    jobs' T212 API calls firing at the identical wall-clock minute is what
+    caused the real production incident (both registered at minute=0 raced
+    for T212's rate limit, and maybe_exit_positions() lost). Confirms the
+    two jobs' minute fields are genuinely different, not just that
+    account_state_refresh happens to equal "5" (which the test above
+    already checks) -- this is the actual invariant that matters."""
+    fake_config = {
+        "scheduler": {
+            "timezone": "UTC",
+            "runs": {
+                "eod": {"hour": 21, "minute": 30, "label": "End of Day", "type": "full"},
+            },
+        },
+    }
+    monkeypatch.setattr(scheduler, "_load_config", lambda: fake_config)
+    monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: None)
+    monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+
+    sched = scheduler.start_scheduler()
+    try:
+        def field(job_id: str, name: str) -> str:
+            job = sched.get_job(job_id)
+            return next(str(f) for f in job.trigger.fields if f.name == name)
+
+        mh_minute = field("market_hours_check", "minute")
+        as_minute = field("account_state_refresh", "minute")
+        assert mh_minute != as_minute, (
+            "market_hours_check and account_state_refresh must not share a "
+            "cron minute -- concurrent T212 API calls at the same minute "
+            "caused a real production rate-limit failure (2026-08-03)."
+        )
     finally:
         scheduler.stop_scheduler()
 
