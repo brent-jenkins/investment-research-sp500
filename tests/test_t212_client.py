@@ -44,10 +44,18 @@ def _reset_t212_request_pacing():
     a higher level), so without this reset, one test's pacing state
     would bleed into the next test's timing (never a correctness issue
     -- a throttled call still succeeds, just slower -- but genuinely
-    worth avoiding for both test independence and suite speed)."""
+    worth avoiding for both test independence and suite speed).
+
+    Also resets the dedicated, stricter stop-order pacing state
+    (_t212_last_stop_order_at, 2026-08-04, see Trading212Client.
+    place_stop_order()'s own docstring) for the identical reason -- this
+    file is also the only one that exercises place_stop_order()'s real
+    HTTP path."""
     t212_module._t212_last_request_at = 0.0
+    t212_module._t212_last_stop_order_at = 0.0
     yield
     t212_module._t212_last_request_at = 0.0
+    t212_module._t212_last_stop_order_at = 0.0
 
 
 class _FakeResponse:
@@ -285,4 +293,210 @@ def test_request_calls_throttle_before_each_physical_http_attempt(monkeypatch, m
     assert mock_throttle.call_count == 2, (
         "Expected the throttle to be called once per physical HTTP attempt "
         "(including the retried one after a 429), not just once overall"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trading212Client.place_stop_order() (2026-08-04) -- see CLAUDE.md's
+# "Broker-side stop order" section. Deliberately does NOT go through
+# _request()'s 3-retry loop (T212's own docs confirm the endpoint is not
+# idempotent in beta -- a retry on timeout risks a duplicate STANDING
+# order), so these tests exercise its own single-attempt HTTP path
+# directly, mirroring this file's own established pattern of mocking
+# requests.request() so the real client code actually runs.
+# ---------------------------------------------------------------------------
+
+def test_place_stop_order_parses_normal_json(monkeypatch, mocker):
+    client = _client(monkeypatch)
+    mocker.patch(
+        "brokers.trading212.requests.request",
+        return_value=_FakeResponse(json_data={"id": "stop-123"}),
+    )
+    result = client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+    assert result == {"id": "stop-123"}
+
+
+def test_place_stop_order_sends_the_correct_payload_and_path(monkeypatch, mocker):
+    client = _client(monkeypatch)
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return _FakeResponse(json_data={"id": "stop-1"})
+
+    mocker.patch("brokers.trading212.requests.request", side_effect=_fake_request)
+    client.place_stop_order("AAPL_US_EQ", -2.5, 140.25)
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == f"{client.base_url}/equity/orders/stop"
+    assert captured["json"] == {"ticker": "AAPL_US_EQ", "quantity": -2.5, "stopPrice": 140.25}
+
+
+def test_place_stop_order_with_malformed_body_on_success_does_not_raise(monkeypatch, mocker):
+    """Same allow_empty=True convention as place_market_order()/
+    cancel_order() -- the HTTP status already confirms the order was
+    accepted; a malformed/empty body must not be reported as a failure."""
+    client = _client(monkeypatch)
+    mocker.patch(
+        "brokers.trading212.requests.request",
+        return_value=_FakeResponse(status_code=200, raise_on_json=True, text="not json"),
+    )
+    result = client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+    assert result == {}
+
+
+def test_place_stop_order_raises_on_zero_quantity(monkeypatch):
+    client = _client(monkeypatch)
+    with pytest.raises(ValueError):
+        client.place_stop_order("AAPL_US_EQ", 0.0, 150.0)
+
+
+@pytest.mark.parametrize("bad_stop_price", [None, 0.0, -5.0])
+def test_place_stop_order_raises_on_non_positive_stop_price(monkeypatch, bad_stop_price):
+    client = _client(monkeypatch)
+    with pytest.raises(ValueError):
+        client.place_stop_order("AAPL_US_EQ", -1.0, bad_stop_price)
+
+
+def test_place_stop_order_raises_runtime_error_when_live_true(monkeypatch):
+    """Same hard block as place_market_order() -- live trading is gated
+    behind an explicit opt-in the constructor requires, and this must
+    never be silently bypassed for a new order type."""
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    client = Trading212Client(live=True)
+    with pytest.raises(RuntimeError):
+        client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+
+
+def test_place_stop_order_raises_on_http_error_status(monkeypatch, mocker):
+    client = _client(monkeypatch)
+    mocker.patch(
+        "brokers.trading212.requests.request",
+        return_value=_FakeResponse(status_code=400, json_data={"code": "invalid-stop-price"}),
+    )
+    with pytest.raises(Exception) as exc_info:
+        client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+    assert "400" in str(exc_info.value)
+
+
+def test_place_stop_order_never_retries_on_a_request_exception(monkeypatch, mocker):
+    """THE core single-attempt guarantee (2026-08-04) -- T212's own docs
+    confirm this endpoint is not idempotent in beta (a retry on timeout
+    can create a genuine duplicate STANDING order), so place_stop_order()
+    deliberately does NOT route through _request()'s 3-retry loop. A
+    connection error must propagate immediately after exactly ONE
+    physical attempt -- not the 3 attempts market orders/reads get."""
+    import requests as _requests_module
+
+    client = _client(monkeypatch)
+    call_count = {"n": 0}
+
+    def _raise(*_a, **_kw):
+        call_count["n"] += 1
+        raise _requests_module.exceptions.ConnectionError("connection reset")
+
+    mocker.patch("brokers.trading212.requests.request", side_effect=_raise)
+    monkeypatch.setattr(t212_module.time, "sleep", lambda _s: None)  # in case anything tried to wait
+
+    with pytest.raises(_requests_module.exceptions.ConnectionError):
+        client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+
+    assert call_count["n"] == 1, (
+        f"Expected exactly ONE physical HTTP attempt (no retry) -- got {call_count['n']}. "
+        "A retry here would risk placing a genuine duplicate standing order."
+    )
+
+
+def test_place_stop_order_never_retries_on_a_429(monkeypatch, mocker):
+    """The single-attempt guarantee also applies to a 429 -- _request()'s
+    own retry loop treats 429 as retryable with a 4/8/16s backoff wait;
+    place_stop_order() must raise immediately instead, after exactly one
+    attempt, never waiting and retrying."""
+    client = _client(monkeypatch)
+    call_count = {"n": 0}
+
+    def _rate_limited(*_a, **_kw):
+        call_count["n"] += 1
+        return _FakeResponse(status_code=429, text="rate limited")
+
+    mocker.patch("brokers.trading212.requests.request", side_effect=_rate_limited)
+    sleep_calls = []
+    monkeypatch.setattr(t212_module.time, "sleep", lambda s: sleep_calls.append(s))
+
+    with pytest.raises(Exception):
+        client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+
+    assert call_count["n"] == 1, "A 429 must not be retried for this endpoint -- single attempt only"
+    # The two throttle functions may call time.sleep(0) legitimately (an
+    # already-well-spaced call sleeps for nothing extra isn't guaranteed
+    # zero calls, but a 429 RETRY backoff -- 4s/8s/16s -- must never
+    # appear here).
+    assert all(s < 1.0 for s in sleep_calls), (
+        f"Expected no long backoff sleep (this endpoint is never retried on "
+        f"429) -- saw sleep call(s) {sleep_calls}"
+    )
+
+
+def test_place_stop_order_calls_both_the_general_and_the_dedicated_throttle(monkeypatch, mocker):
+    """Confirms place_stop_order() genuinely wires in BOTH pacing floors
+    -- the general, shared one every T212 call gets, AND the dedicated,
+    stricter one specific to this endpoint -- not just one or the
+    other."""
+    client = _client(monkeypatch)
+    mock_general_throttle = mocker.patch("brokers.trading212._throttle_t212_request")
+    mock_stop_throttle = mocker.patch("brokers.trading212._throttle_t212_stop_order")
+    mocker.patch(
+        "brokers.trading212.requests.request",
+        return_value=_FakeResponse(json_data={"id": "stop-1"}),
+    )
+    client.place_stop_order("AAPL_US_EQ", -1.0, 150.0)
+    mock_general_throttle.assert_called_once()
+    mock_stop_throttle.assert_called_once()
+
+
+def test_throttle_stop_order_computes_the_dedicated_interval_not_the_general_one(monkeypatch):
+    """Confirms _throttle_t212_stop_order() computes a wait based on the
+    dedicated _STOP_ORDER_MIN_INTERVAL_SECONDS (2.1s), not the much
+    shorter general _T212_MIN_REQUEST_INTERVAL_SECONDS (0.15s) -- mocks
+    time.sleep so this doesn't block the suite for 2+ seconds; asserts on
+    the computed sleep duration rather than real elapsed wall-clock
+    time."""
+    t212_module._t212_last_stop_order_at = time.monotonic()  # "just happened"
+    sleep_calls = []
+    monkeypatch.setattr(t212_module.time, "sleep", lambda s: sleep_calls.append(s))
+    t212_module._throttle_t212_stop_order()
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] > 1.5, (
+        f"expected a wait close to {t212_module._STOP_ORDER_MIN_INTERVAL_SECONDS}s "
+        f"(the dedicated stop-order interval), got {sleep_calls[0]:.3f}s"
+    )
+
+
+def test_throttle_stop_order_does_not_delay_when_enough_time_has_passed():
+    """Mirrors the general throttle's own equivalent test -- a call made
+    well after the dedicated interval has already elapsed must return
+    immediately."""
+    t212_module._t212_last_stop_order_at = time.monotonic() - 10.0
+    start = time.monotonic()
+    t212_module._throttle_t212_stop_order()
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.05, f"Throttle delayed an already-well-spaced call by {elapsed:.3f}s"
+
+
+def test_throttle_stop_order_delays_a_call_made_immediately_after_another():
+    """Real wall-clock proof, mirroring the general throttle's own
+    test_throttle_delays_a_call_made_immediately_after_another -- two
+    stop-order-paced calls back to back must be spaced at least
+    _STOP_ORDER_MIN_INTERVAL_SECONDS apart in real time, not just in a
+    mocked computation."""
+    t212_module._throttle_t212_stop_order()
+    start = time.monotonic()
+    t212_module._throttle_t212_stop_order()
+    elapsed = time.monotonic() - start
+    assert elapsed >= t212_module._STOP_ORDER_MIN_INTERVAL_SECONDS * 0.9, (
+        f"Second call returned after only {elapsed:.3f}s -- expected at least "
+        f"~{t212_module._STOP_ORDER_MIN_INTERVAL_SECONDS}s of real delay"
     )

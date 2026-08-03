@@ -137,6 +137,22 @@ _WHITELISTED_SOURCE_SNIPPETS: tuple[tuple[str, str, str], ...] = (
         "25%-of-cash sizing clamp, which both sides do share -- CLAUDE.md "
         "'Live and backtest consolidation audit' section",
     ),
+    (
+        "trading212.py",
+        "if stop_price is None or stop_price <= 0:",
+        "Trading212Client.place_stop_order()'s own parameter-validation guard "
+        "-- rejects a nonsensical API call (a non-positive stop price), not a "
+        "trading decision about WHETHER/WHEN to exit a position. That decision "
+        "remains exactly where it already was, unchanged and untouched by this "
+        "method: analysis/decision.py:evaluate_exit_reason()'s STOP_LOSS "
+        "branch (price <= stop_price), which both live order placement and "
+        "every backtest engine still call identically. This is pure execution "
+        "mechanics -- input validation on a real broker-API call -- the same "
+        "category this project's own decision/execution-mechanics boundary "
+        "(see analysis/decision.py's own module docstring) already excludes "
+        "from needing to be shared -- CLAUDE.md 'Broker-side stop order' "
+        "section",
+    ),
 )
 
 

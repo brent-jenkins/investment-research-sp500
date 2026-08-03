@@ -140,6 +140,23 @@ class InvestOrder(Base):
     exit_reason      = Column(String(20))            # CRISIS_EXIT / INDEX_REMOVAL / STOP_LOSS / SIGNAL_OFF / MAX_HOLDING; null for BUY
     var_pct          = Column(Float)                 # holding-period VaR used to size this BUY; null for SELL
     error_message    = Column(Text)
+    # Broker-side stop-loss tracking (2026-08-04, see CLAUDE.md's
+    # "Broker-side stop order" section) -- only ever populated on a BUY
+    # row, once that row's own status genuinely transitions to FILLED
+    # (brokers/trading212.py:poll_placed_orders() places a real T212
+    # POST /equity/orders/stop at stop_price, sized to this row's own
+    # filled quantity). stop_order_status: PLACED (a real T212 order_id
+    # was obtained) / FAILED (placement attempt failed) / CANCELLED (the
+    # standing stop was cancelled before a non-STOP_LOSS exit -- see
+    # maybe_exit_positions()'s cancel-fix) / ALREADY_RESOLVED (a cancel
+    # attempt 404'd -- the stop had likely already fired) / CANCEL_FAILED
+    # (a cancel attempt failed for a reason other than "already
+    # resolved"). Null on every SELL row and on any BUY row placed
+    # before this feature existed (see the backfill task in CLAUDE.md
+    # for pre-existing open positions).
+    stop_order_id     = Column(String(64))
+    stop_order_status = Column(String(20))
+    stop_order_note   = Column(Text)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     filled_at        = Column(DateTime)
     cancelled_at     = Column(DateTime)
@@ -443,12 +460,15 @@ def _apply_migrations(engine) -> None:
     """Add columns that were introduced after initial schema creation.
 
     SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS, so we attempt
-    each ALTER and silently skip columns that already exist. Empty for now —
-    every column ever added here targeted a table removed in the 2026-07-31
-    V1 removal; kept as a no-op rather than deleted so a future schema change
-    has an established place to add to.
+    each ALTER and silently skip columns that already exist.
     """
-    new_columns: list[tuple[str, str, str]] = []
+    new_columns: list[tuple[str, str, str]] = [
+        # Broker-side stop-loss tracking (2026-08-04) -- see InvestOrder's
+        # own column comments above for what each column means.
+        ("invest_orders", "stop_order_id", "TEXT"),
+        ("invest_orders", "stop_order_status", "TEXT"),
+        ("invest_orders", "stop_order_note", "TEXT"),
+    ]
 
     for table, column, col_type in new_columns:
         try:

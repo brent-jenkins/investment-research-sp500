@@ -930,6 +930,513 @@ def test_exit_skips_duplicate_when_placed_sell_order_exists(db_engine, v2_mocks,
     v2_mocks.place_market_order.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Broker-side stop order (2026-08-04) -- see CLAUDE.md's "Broker-side stop
+# order" section. Two mechanisms tested here:
+#   1. poll_placed_orders() places a real T212 stop order the instant a BUY
+#      row genuinely transitions to FILLED (when the config flag is on).
+#   2. maybe_exit_positions()'s orphaned-stop cancel-fix -- a standing
+#      broker-side stop is cancelled before a non-STOP_LOSS exit SELL is
+#      placed, so it can never later fire against an unrelated FUTURE
+#      position in the same ticker.
+# ---------------------------------------------------------------------------
+
+class _FakeHTTPStatus(Exception):
+    """Minimal stand-in for a requests.exceptions.HTTPError carrying a
+    specific status code on its .response -- mirrors the shape real T212
+    client-method exceptions carry (see Trading212Client._request())."""
+
+    class _Resp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    def __init__(self, status_code, msg="http error"):
+        super().__init__(msg)
+        self.response = self._Resp(status_code)
+
+
+def _seed_open_position_with_broker_stop(
+    engine, *, ticker, t212_ticker, stop_price, days_ago, is_etf,
+    stop_order_id=None, stop_order_status=None, momentum_pct=0.05,
+):
+    """Same shape as _seed_open_position(), plus the broker-side
+    stop-order tracking columns the cancel-fix reads from
+    _load_open_position_context()."""
+    entry_dt = datetime.utcnow() - timedelta(days=days_ago)
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, fill_price, filled_quantity,
+                 status, is_etf, momentum_pct, stop_price, account_type, currency_code,
+                 stop_order_id, stop_order_status, placed_at, filled_at, created_at)
+            VALUES (:t, :tt, 'BUY', 10, 100.0, 10, 'FILLED', :etf, :mom, :stop, 'DEMO', 'USD',
+                    :soid, :sostatus, :at, :at, :at)
+        """), {"t": ticker, "tt": t212_ticker, "etf": is_etf, "mom": momentum_pct,
+               "stop": stop_price, "soid": stop_order_id, "sostatus": stop_order_status,
+               "at": entry_dt.isoformat()})
+
+
+def test_exit_cancels_standing_stop_before_a_non_stop_loss_exit(db_engine, v2_mocks, mocker):
+    """The core cancel-fix proof: a MAX_HOLDING exit (not STOP_LOSS) with a
+    standing PLACED broker-side stop must cancel that stop BEFORE placing
+    the exit SELL -- otherwise it could later fire against an unrelated
+    future position in the same ticker."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()  # signal stays on -- only MAX_HOLDING should fire
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+    v2_mocks.cancel_order.return_value = {}
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 0.01,  # far below price -- STOP_LOSS does NOT fire
+        days_ago=999,                  # MAX_HOLDING fires instead
+        is_etf=False, stop_order_id="stop-order-1", stop_order_status="PLACED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.cancel_order.assert_called_once_with("stop-order-1")
+    # The exit SELL must still be placed -- MAX_HOLDING is a real,
+    # safety-critical exit condition, unaffected by the cancel-fix.
+    v2_mocks.place_market_order.assert_called_once()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "MAX_HOLDING"
+    stop_row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status, stop_order_note FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert stop_row[0] == "CANCELLED"
+    assert "MAX_HOLDING" in stop_row[1]
+
+
+def test_exit_stop_loss_does_not_cancel_the_standing_stop(db_engine, v2_mocks, mocker):
+    """The other half of the cancel-fix's own logic: when the exit reason
+    IS STOP_LOSS, the standing stop and this exit are the SAME protection
+    firing -- there is nothing to cancel and no orphan risk, so
+    cancel_order() must NOT be called at all."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bearish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=999999)
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 10,  # guarantees price <= stop_price -- STOP_LOSS fires
+        days_ago=1, is_etf=False,
+        stop_order_id="stop-order-2", stop_order_status="PLACED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.cancel_order.assert_not_called()
+    v2_mocks.place_market_order.assert_called_once()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "STOP_LOSS"
+    # The BUY row's own stop-order tracking must be left completely
+    # untouched -- no cancel attempt means no status change.
+    stop_row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert stop_row[0] == "PLACED"
+
+
+def test_exit_cancel_fix_is_a_no_op_when_no_standing_stop_exists(db_engine, v2_mocks, mocker):
+    """Regression guard: a position with no broker-side stop at all (the
+    normal case for every pre-existing test in this file, and for every
+    position opened before this mechanism shipped) must behave EXACTLY as
+    before -- no cancel_order() call, no change to exit behaviour."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=last_price * 0.01, days_ago=999, is_etf=False)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.cancel_order.assert_not_called()
+    v2_mocks.place_market_order.assert_called_once()
+
+
+def test_exit_cancel_404_and_position_already_closed_skips_redundant_sell(db_engine, v2_mocks, mocker):
+    """The confirmed T212 race: cancel_order() 404s (the standing stop
+    already resolved -- most likely it fired first), and a fresh
+    get_position() call shows the position genuinely already closed. The
+    correct handling is to skip placing a redundant exit SELL entirely,
+    not to guess."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()  # signal on -- only MAX_HOLDING fires
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+    v2_mocks.cancel_order.side_effect = _FakeHTTPStatus(404, "order not found")
+    v2_mocks.get_position.return_value = {"ticker": "AAPL_US_EQ", "quantity": 0.0}  # already closed
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 0.01, days_ago=999, is_etf=False,
+        stop_order_id="stop-order-3", stop_order_status="PLACED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.cancel_order.assert_called_once_with("stop-order-3")
+    v2_mocks.get_position.assert_called_once_with("AAPL_US_EQ")
+    # No redundant SELL against an already-closed position.
+    v2_mocks.place_market_order.assert_not_called()
+    stop_row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert stop_row[0] == "ALREADY_RESOLVED"
+
+
+def test_exit_cancel_404_but_position_still_open_places_the_sell_anyway(db_engine, v2_mocks, mocker):
+    """The other branch of the same race: cancel_order() 404s, but a
+    fresh get_position() check shows the position is genuinely STILL
+    open (the stop resolved some other way, e.g. cancelled manually) --
+    the exit SELL must still be placed as normal, not skipped."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+    v2_mocks.cancel_order.side_effect = _FakeHTTPStatus(404, "order not found")
+    v2_mocks.get_position.return_value = {"ticker": "AAPL_US_EQ", "quantity": 10.0}  # still open
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 0.01, days_ago=999, is_etf=False,
+        stop_order_id="stop-order-4", stop_order_status="PLACED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.place_market_order.assert_called_once()
+    stop_row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert stop_row[0] == "ALREADY_RESOLVED"
+
+
+def test_exit_cancel_genuine_failure_still_places_sell_and_alerts_loudly(db_engine, v2_mocks, mocker):
+    """A cancel failure that is NOT "already resolved" (a genuine API
+    error) must not block the safety-critical exit SELL -- the exit
+    condition is real, so it proceeds regardless -- but this is exactly
+    the orphan risk the cancel-fix exists to close, so it must alert
+    loudly rather than fail silently."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+    v2_mocks.cancel_order.side_effect = RuntimeError("simulated T212 outage")
+    spy = mocker.patch("brokers.trading212._send_t212_error_email")
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 0.01, days_ago=999, is_etf=False,
+        stop_order_id="stop-order-5", stop_order_status="PLACED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    # The exit SELL still goes out despite the cancel failure.
+    v2_mocks.place_market_order.assert_called_once()
+    stop_row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status, stop_order_note FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert stop_row[0] == "CANCEL_FAILED"
+    assert "simulated T212 outage" in stop_row[1]
+    # An alert about the FAILED CANCEL specifically, distinct from any
+    # exit-SELL-failure alert this same run might also produce.
+    cancel_alert_calls = [
+        c for c in spy.call_args_list if c.kwargs.get("direction") == "STOP-CANCEL"
+    ]
+    assert len(cancel_alert_calls) == 1
+    _, kwargs = cancel_alert_calls[0]
+    assert kwargs["ticker"] == "AAPL"
+    assert "stop-order-5" in kwargs["next_steps"]
+
+
+def test_exit_cancel_fix_only_considers_a_stop_order_in_placed_status(db_engine, v2_mocks, mocker):
+    """A stop_order_status of anything other than PLACED (e.g. already
+    FAILED, or already CANCELLED from a prior cycle) must not trigger a
+    fresh cancel attempt -- there is nothing standing left to cancel."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 0.01, days_ago=999, is_etf=False,
+        stop_order_id="stop-order-6", stop_order_status="FAILED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.cancel_order.assert_not_called()
+    v2_mocks.place_market_order.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# poll_placed_orders() — broker-side stop placement on a genuine BUY fill
+# ---------------------------------------------------------------------------
+
+def _seed_placed_buy_order(engine, *, ticker, t212_ticker, order_id, quantity, stop_price, currency="USD"):
+    """A PLACED BUY row (not yet FILLED) -- the state poll_placed_orders()
+    reads and, on a genuine FILLED transition, may place a broker-side
+    stop against."""
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (order_id, ticker, t212_ticker, direction, quantity, status,
+                 is_etf, account_type, currency_code, stop_price, placed_at, created_at)
+            VALUES (:oid, :t, :tt, 'BUY', :qty, 'PLACED', 0, 'DEMO', :ccy, :stop, :now, :now)
+        """), {"oid": order_id, "t": ticker, "tt": t212_ticker, "qty": quantity,
+               "ccy": currency, "stop": stop_price, "now": datetime.utcnow().isoformat()})
+
+
+def _poll_config(enabled_stop=True) -> dict:
+    return {
+        "trading212_invest": {
+            "enabled": True, "live": False,
+            "broker_side_stop_enabled": enabled_stop,
+        },
+        "notifications": {"email": {"enabled": False}},
+    }
+
+
+def _mock_fx_conversion(mocker) -> None:
+    """Mocks Trading212Client's two static FX-conversion helpers so the
+    real _to_gbp() math runs deterministically instead of returning a
+    MagicMock (which breaks the SQL UPDATE parameter binding the moment a
+    test uses a real, non-None fill_price) -- every poll_placed_orders()
+    test below that exercises a genuine FILLED transition with a real
+    fillPrice needs this."""
+    from brokers.trading212 import Trading212Client
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch.object(
+        Trading212Client, "_to_gbp",
+        staticmethod(lambda price, currency, gbpusd, eurusd: price / gbpusd if gbpusd else None),
+    )
+
+
+def test_poll_places_broker_stop_when_buy_transitions_to_filled(db_engine, v2_mocks, mocker):
+    """The core placement proof: a BUY row genuinely resolving to FILLED,
+    with the flag enabled, must place a real stop order sized to the
+    REAL filled quantity and at the row's own already-computed
+    stop_price -- and record the resulting order id/status on that same
+    BUY row."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-1", quantity=10.0, stop_price=140.0)
+
+    v2_mocks.get_order.return_value = {
+        "status": "FILLED", "fillPrice": 150.0, "filledQuantity": 10.0,
+    }
+    v2_mocks.place_stop_order.return_value = {"id": "stop-order-99"}
+
+    updated = poll_placed_orders(_poll_config())
+    assert updated == 1
+
+    v2_mocks.place_stop_order.assert_called_once_with("AAPL_US_EQ", -10.0, 140.0)
+
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status, stop_order_id, stop_order_status FROM invest_orders WHERE order_id='buy-order-1'"
+    )).fetchone()
+    assert row[0] == "FILLED"
+    assert row[1] == "stop-order-99"
+    assert row[2] == "PLACED"
+
+
+def test_poll_stop_placement_sizes_to_the_real_filled_quantity_not_the_intended_one(db_engine, v2_mocks, mocker):
+    """A partial fill (filledQuantity < the originally queued quantity)
+    must size the stop order against the REAL filled amount -- otherwise
+    the stop would protect a quantity the account doesn't actually
+    hold."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-2", quantity=10.0, stop_price=140.0)
+
+    v2_mocks.get_order.return_value = {
+        "status": "FILLED", "fillPrice": 150.0, "filledQuantity": 6.5,  # partial fill
+    }
+    v2_mocks.place_stop_order.return_value = {"id": "stop-order-partial"}
+
+    poll_placed_orders(_poll_config())
+
+    v2_mocks.place_stop_order.assert_called_once_with("AAPL_US_EQ", -6.5, 140.0)
+
+
+def test_poll_does_not_place_a_stop_when_the_flag_is_disabled(db_engine, v2_mocks, mocker):
+    """The mechanism's own config gate -- with broker_side_stop_enabled
+    False (the shipped default), a genuine BUY fill must NOT place any
+    stop order at all, even though every other condition is met."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-3", quantity=10.0, stop_price=140.0)
+
+    v2_mocks.get_order.return_value = {
+        "status": "FILLED", "fillPrice": 150.0, "filledQuantity": 10.0,
+    }
+
+    updated = poll_placed_orders(_poll_config(enabled_stop=False))
+    assert updated == 1  # the BUY fill itself is still recorded normally
+
+    v2_mocks.place_stop_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_id, stop_order_status FROM invest_orders WHERE order_id='buy-order-3'"
+    )).fetchone()
+    assert row[0] is None
+    assert row[1] is None
+
+
+def test_poll_does_not_place_a_stop_for_a_sell_transitioning_to_filled(db_engine, v2_mocks, mocker):
+    """Only a BUY's own fill is a candidate for a NEW protective stop --
+    a SELL resolving to FILLED is a position CLOSING, not opening, and
+    must never trigger a stop-placement attempt."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (order_id, ticker, t212_ticker, direction, quantity, status,
+                 is_etf, account_type, currency_code, stop_price, placed_at, created_at)
+            VALUES ('sell-order-1', 'AAPL', 'AAPL_US_EQ', 'SELL', 10, 'PLACED',
+                    0, 'DEMO', 'USD', 140.0, :now, :now)
+        """), {"now": datetime.utcnow().isoformat()})
+
+    v2_mocks.get_order.return_value = {
+        "status": "FILLED", "fillPrice": 155.0, "filledQuantity": 10.0,
+    }
+
+    poll_placed_orders(_poll_config())
+
+    v2_mocks.place_stop_order.assert_not_called()
+
+
+def test_poll_stop_placement_failure_is_recorded_and_alerts_but_never_blocks_the_fill(db_engine, v2_mocks, mocker):
+    """A stop-placement failure must never be silent: the BUY row's own
+    fill is still correctly recorded (the position genuinely opened --
+    that fact must not be lost), stop_order_status is set to FAILED with
+    the real error message, and a loud alert fires naming the ticker and
+    stating the position currently has no broker-side stop."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-4", quantity=10.0, stop_price=140.0)
+
+    v2_mocks.get_order.return_value = {
+        "status": "FILLED", "fillPrice": 150.0, "filledQuantity": 10.0,
+    }
+    v2_mocks.place_stop_order.side_effect = RuntimeError("simulated T212 rejection")
+    spy = mocker.patch("brokers.trading212._send_t212_error_email")
+
+    updated = poll_placed_orders(_poll_config())
+    assert updated == 1  # the BUY fill itself is still recorded
+
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status, stop_order_id, stop_order_status, stop_order_note "
+        "FROM invest_orders WHERE order_id='buy-order-4'"
+    )).fetchone()
+    assert row[0] == "FILLED"       # the fill itself is unaffected
+    assert row[1] is None           # no order id -- placement never succeeded
+    assert row[2] == "FAILED"
+    assert "simulated T212 rejection" in row[3]
+
+    spy.assert_called_once()
+    _, kwargs = spy.call_args
+    assert kwargs["ticker"] == "AAPL"
+    assert kwargs["direction"] == "STOP"
+    assert "NO broker-side stop" in kwargs["next_steps"]
+
+
+def test_poll_does_not_attempt_stop_placement_when_row_has_no_stop_price(db_engine, v2_mocks, mocker):
+    """Defensive guard: a BUY row with no stop_price at all (should not
+    occur under the current pipeline, but checked anyway) must not
+    attempt a stop placement with a missing/invalid price."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-5", quantity=10.0, stop_price=None)
+
+    v2_mocks.get_order.return_value = {
+        "status": "FILLED", "fillPrice": 150.0, "filledQuantity": 10.0,
+    }
+
+    poll_placed_orders(_poll_config())
+
+    v2_mocks.place_stop_order.assert_not_called()
+
+
 def _n_ticker_mapping(n: int) -> dict:
     return {
         f"T{i}": {"t212_instrument_id": f"T{i}_EQ", "currency": "USD", "is_etf": True}

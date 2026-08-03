@@ -250,6 +250,41 @@ def _throttle_t212_request() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dedicated, stricter pacing for POST /equity/orders/stop (2026-08-04) — see
+# Trading212Client.place_stop_order() below and CLAUDE.md's "Broker-side
+# stop order" investigation. T212's real, confirmed rate limit for this
+# specific endpoint is 1 request/2s — materially tighter than the 150ms
+# floor _throttle_t212_request() above already applies to every other
+# endpoint (adequate for market orders/reads, not for this one). Applied
+# IN ADDITION to the general throttle, not instead of it — a stop-order
+# call still respects the shared cross-endpoint floor too.
+# ---------------------------------------------------------------------------
+_STOP_ORDER_MIN_INTERVAL_SECONDS = 2.1
+_t212_stop_order_pacing_lock = threading.Lock()
+_t212_last_stop_order_at = 0.0
+
+
+def _throttle_t212_stop_order() -> None:
+    """Blocks the calling thread, if needed, so this call lands at least
+    _STOP_ORDER_MIN_INTERVAL_SECONDS after the previous real
+    POST /equity/orders/stop call made by ANY Trading212Client instance in
+    ANY thread of this process. Same lock-protected shape as
+    _throttle_t212_request(), a separate lock/timestamp pair since this is
+    an endpoint-specific floor on top of the general one, not a
+    replacement for it."""
+    global _t212_last_stop_order_at
+    with _t212_stop_order_pacing_lock:
+        now = time.monotonic()
+        elapsed = now - _t212_last_stop_order_at
+        if elapsed < _STOP_ORDER_MIN_INTERVAL_SECONDS:
+            wait = _STOP_ORDER_MIN_INTERVAL_SECONDS - elapsed
+            time.sleep(wait)
+            _t212_last_stop_order_at = now + wait
+        else:
+            _t212_last_stop_order_at = now
+
+
+# ---------------------------------------------------------------------------
 # Trading212Client
 # ---------------------------------------------------------------------------
 
@@ -437,7 +472,74 @@ class Trading212Client:
         # call site that produced a real bug (see
         # data/scheduler.py:_cancel_stale_weekend_orders(), which
         # previously treated a genuinely successful cancellation as
-        # FAILED purely because this raised on the empty body).
+        # FAILED purely because this raised on the empty body). Generic
+        # per-order-id endpoint -- also used to cancel a standing STOP
+        # order (see place_stop_order() below); confirmed against T212's
+        # own API directly before this was relied on (see CLAUDE.md's
+        # "Broker-side stop order" investigation, probe 3).
+        return self._parse_json(r, allow_empty=True)
+
+    def place_stop_order(self, ticker: str, quantity: float, stop_price: float) -> dict:
+        """Place a genuine broker-side stop order (POST /equity/orders/stop)
+        — monitored and triggered continuously by T212 itself, independent
+        of whether this system's own scheduler is even running. Positive
+        quantity = buy-stop, negative = sell-stop (this system only ever
+        uses this to protect a long position with a sell-stop). See
+        CLAUDE.md's "Broker-side stop order" investigation for the full
+        API confirmation this is based on.
+
+        SINGLE ATTEMPT — deliberately does NOT go through _request()'s
+        3-retry exponential-backoff loop. T212's own docs state this
+        endpoint is not idempotent in its beta form ("sending the same
+        request multiple times may result in duplicate orders") — an
+        automatic retry on a timeout/connection error here risks creating
+        a genuine duplicate STANDING order (not just a duplicate one-shot
+        trade, which the market-order retry loop would also risk, but a
+        duplicate order that then sits resting on the account
+        indefinitely). A failure here is the caller's to handle explicitly
+        (log, alert, leave the position without a broker-side stop for
+        now) rather than silently retried.
+
+        Paced through BOTH the general, shared _throttle_t212_request()
+        (every T212 call gets this) AND the dedicated, stricter
+        _throttle_t212_stop_order() (this endpoint specifically — T212's
+        confirmed real limit here is 1 request/2s, materially tighter than
+        the 150ms floor that's adequate for market orders/reads).
+
+        Raises RuntimeError if self.live is True (same hard block as
+        place_market_order() — live trading is gated behind an explicit
+        opt-in that must be set in the constructor). Raises ValueError on
+        a zero quantity or a non-positive stop_price.
+        """
+        if self.live:
+            raise RuntimeError(
+                "Live trading not yet enabled — instantiate Trading212Client "
+                "with live=True only after thorough demo validation."
+            )
+        if quantity == 0:
+            raise ValueError("quantity must be non-zero")
+        if stop_price is None or stop_price <= 0:
+            raise ValueError("stop_price must be a positive number")
+
+        payload = {"ticker": ticker, "quantity": quantity, "stopPrice": stop_price}
+        url = f"{self.base_url}/equity/orders/stop"
+        timeout = 10
+
+        _throttle_t212_request()
+        _throttle_t212_stop_order()
+        r = requests.request("POST", url, headers=self.headers, timeout=timeout, json=payload)
+        if r.status_code >= 400:
+            try:
+                body = r.json()
+            except Exception:
+                body = r.text or "(no body)"
+            raise requests.exceptions.HTTPError(
+                f"{r.status_code} {r.reason} for url: {r.url} — T212: {body}",
+                response=r,
+            )
+        # allow_empty=True -- same reasoning as place_market_order()/
+        # cancel_order() above: the HTTP status already confirms the order
+        # was accepted by the time we're parsing the body.
         return self._parse_json(r, allow_empty=True)
 
     def get_order(self, order_id: str) -> dict:
@@ -658,6 +760,38 @@ class Trading212Client:
             quantity, quantity * price_gbp,
         )
         return quantity
+
+
+# ---------------------------------------------------------------------------
+# Broker-side stop-loss — config gate (2026-08-04)
+# ---------------------------------------------------------------------------
+
+def _broker_stop_enabled(config: dict) -> bool:
+    """Whether the broker-side stop-loss mechanism (Trading212Client.
+    place_stop_order(), wired into poll_placed_orders() at the moment a BUY
+    genuinely transitions to FILLED) is active right now.
+
+    Defaults False (absent key = disabled) — deliberately conservative,
+    unlike most flags in this codebase (which default enabled once
+    validated). This mirrors the precedent already set by
+    etf_submission_enabled ("ships paused" pending live verification — see
+    CLAUDE.md's "Exchange-aware order submission" section), for the same
+    reason: place_stop_order() places a REAL standing order against a
+    confirmed non-idempotent endpoint, and this must not fire even once
+    automatically before a single, deliberately supervised real-order test
+    has confirmed T212's actual pending-order status string and currency
+    behaviour for this endpoint. Flip trading212_invest.broker_side_stop_
+    enabled to true in config.yaml only after that test has passed — see
+    CLAUDE.md's "Broker-side stop order" section for the investigation
+    this closes and the exact unknowns the supervised test resolves.
+
+    While this is False, maybe_exit_positions()'s own local stop-loss
+    check (evaluate_exit_reason()'s STOP_LOSS branch, unchanged) remains
+    the only stop-loss protection in effect — nothing about this flag
+    weakens that; it only gates whether an ADDITIONAL, broker-enforced
+    stop is also placed.
+    """
+    return bool(config.get("trading212_invest", {}).get("broker_side_stop_enabled", False))
 
 
 # ---------------------------------------------------------------------------
@@ -1042,16 +1176,21 @@ def _load_open_order_tickers(days: int = REENTRY_COOLDOWN_DAYS) -> set:
 
 
 def _load_open_position_context() -> dict:
-    """Per t212_ticker: {entry_date, stop_price, momentum_pct} from the
-    latest FILLED BUY row — used by the exit check for holding_days and the
-    fixed-at-entry stop comparison."""
+    """Per t212_ticker: {entry_date, stop_price, momentum_pct,
+    buy_order_row_id, stop_order_id, stop_order_status} from the latest
+    FILLED BUY row — used by the exit check for holding_days, the
+    fixed-at-entry stop comparison, and (buy_order_row_id/stop_order_id/
+    stop_order_status, added 2026-08-04) the orphaned-broker-stop
+    cancel-fix in maybe_exit_positions() — see CLAUDE.md's "Broker-side
+    stop order" section."""
     try:
         from sqlalchemy import text as sa_text
         from data.database import get_engine
         eng = get_engine()
         with eng.connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT t212_ticker, ticker, filled_at, stop_price, momentum_pct
+                SELECT id, t212_ticker, ticker, filled_at, stop_price, momentum_pct,
+                       stop_order_id, stop_order_status
                 FROM invest_orders
                 WHERE direction = 'BUY' AND status = 'FILLED'
                 AND id IN (
@@ -1069,6 +1208,8 @@ def _load_open_position_context() -> dict:
             out[r["t212_ticker"]] = {
                 "ticker": r["ticker"], "entry_date": entry_dt,
                 "stop_price": r["stop_price"], "momentum_pct": r["momentum_pct"],
+                "buy_order_row_id": r["id"], "stop_order_id": r["stop_order_id"],
+                "stop_order_status": r["stop_order_status"],
             }
         return out
     except Exception as exc:
@@ -1857,6 +1998,16 @@ def poll_placed_orders(config: dict) -> int:
     is tried first as the authoritative source; falls back to a live
     position lookup, then to the instrument's current quote. Returns the
     count of rows updated.
+
+    Also the placement point for the broker-side stop-loss mechanism
+    (2026-08-04, see CLAUDE.md's "Broker-side stop order" section): the
+    instant a BUY row's own status genuinely transitions to FILLED here
+    (never at BUY submission time — a stop-loss SELL placed before the BUY
+    has actually filled would have no position to reference), and
+    _broker_stop_enabled(config) is true, a real T212 stop order is placed
+    at that BUY's own already-computed stop_price, sized to the row's REAL
+    filled quantity (effective_qty — correctly handles a partial fill with
+    no extra tracking). See _place_broker_stop_for_filled_buy() below.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -1864,13 +2015,15 @@ def poll_placed_orders(config: dict) -> int:
     if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
         return 0
 
+    stop_placement_enabled = _broker_stop_enabled(config)
+
     try:
         from sqlalchemy import text as sa_text
         from data.database import get_engine
         eng = get_engine()
         with eng.connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT id, order_id, ticker, t212_ticker, direction, quantity, currency_code
+                SELECT id, order_id, ticker, t212_ticker, direction, quantity, currency_code, stop_price
                 FROM invest_orders
                 WHERE status = 'PLACED' AND order_id IS NOT NULL AND order_id != ''
                 ORDER BY placed_at DESC
@@ -2005,11 +2158,116 @@ def poll_placed_orders(config: dict) -> int:
             updated += 1
         except Exception as exc:
             logger.warning("poll_placed_orders: DB update failed for order %s — %s", order_id, exc)
+            time.sleep(0.2)
+            continue
+
+        # Broker-side stop-loss placement — see this function's own
+        # docstring and CLAUDE.md's "Broker-side stop order" section.
+        # Only on a BUY row that just genuinely reached FILLED, only when
+        # the mechanism is enabled, and only when there's a real stop_price
+        # and quantity to place it against (both should always be present
+        # for a BUY placed under the current pipeline — defensively
+        # checked anyway rather than assumed).
+        if (
+            new_status == "FILLED"
+            and (row.get("direction") or "").upper() == "BUY"
+            and stop_placement_enabled
+            and row.get("stop_price")
+            and effective_qty
+        ):
+            _place_broker_stop_for_filled_buy(
+                client, config, buy_row_id=row_id, ticker=row.get("ticker"),
+                t212_ticker=row.get("t212_ticker"), quantity=effective_qty,
+                stop_price=row["stop_price"],
+            )
 
         time.sleep(0.2)
 
     logger.info("poll_placed_orders: %d of %d order(s) updated.", updated, len(placed))
     return updated
+
+
+def _update_stop_order_status(
+    row_id: int, status: str, *, stop_order_id: Optional[str] = None, note: Optional[str] = None,
+) -> None:
+    """Best-effort update of one invest_orders BUY row's broker-side
+    stop-order tracking columns (stop_order_id/stop_order_status/
+    stop_order_note — see InvestOrder's own column comments in
+    data/database.py). stop_order_id is only ever set on the initial
+    successful placement (COALESCE preserves it on every later status
+    transition — CANCELLED/ALREADY_RESOLVED/CANCEL_FAILED all still refer
+    to the SAME order_id, they don't get a new one). Never raises."""
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        with get_engine().begin() as conn:
+            conn.execute(sa_text("""
+                UPDATE invest_orders
+                SET stop_order_status = :status,
+                    stop_order_id     = COALESCE(:stop_order_id, stop_order_id),
+                    stop_order_note   = :note
+                WHERE id = :row_id
+            """), {
+                "status": status, "stop_order_id": stop_order_id, "note": note, "row_id": row_id,
+            })
+    except Exception as exc:
+        logger.warning("Failed to update stop_order_status for invest_orders id=%s: %s", row_id, exc)
+
+
+def _place_broker_stop_for_filled_buy(
+    client: "Trading212Client", config: dict, *, buy_row_id: int, ticker: str,
+    t212_ticker: str, quantity: float, stop_price: float,
+) -> None:
+    """Place a real broker-side stop order for a BUY that just transitioned
+    to FILLED, using the row's own already-resolved effective_qty (the
+    REAL filled quantity — a partial fill is sized correctly with no extra
+    tracking) and stop_price (the exact same ATR-based value both the
+    local exit check, analysis/decision.py:evaluate_exit_reason()'s
+    STOP_LOSS branch, and the validated backtest already use — one shared
+    number computed once at entry, now two consumers rather than a second,
+    independently-derived one).
+
+    Single-attempt by construction — place_stop_order() itself never
+    retries (see its own docstring for why: the endpoint's confirmed
+    non-idempotency in beta). A failure here is logged, recorded on the
+    BUY row as FAILED, and alerted loudly via the existing T212
+    error-email infrastructure — the position remains protected by the
+    LOCAL stop-loss check in maybe_exit_positions() in the meantime
+    (entirely unaffected by this mechanism; see CLAUDE.md).
+
+    Never raises — one BUY row's stop-placement failure must never abort
+    the rest of poll_placed_orders()'s loop over every other PLACED row.
+    """
+    try:
+        response = client.place_stop_order(t212_ticker, -abs(quantity), stop_price)
+        stop_order_id = str(response.get("id", ""))
+        _update_stop_order_status(buy_row_id, "PLACED", stop_order_id=stop_order_id)
+        logger.info(
+            "Broker-side stop placed for %s (%s): qty=%.4f stop=%.2f id=%s",
+            ticker, t212_ticker, quantity, stop_price, stop_order_id,
+        )
+    except Exception as exc:
+        error_msg = str(exc)
+        logger.error(
+            "Failed to place broker-side stop for %s (%s) at %.2f: %s",
+            ticker, t212_ticker, stop_price, exc,
+        )
+        _update_stop_order_status(buy_row_id, "FAILED", note=error_msg)
+        _send_t212_error_email(
+            error_msg, config,
+            context=f"Broker-side stop order placement failed for {ticker}",
+            ticker=ticker, direction="STOP",
+            next_steps=(
+                f"{ticker}'s position has NO broker-side stop protecting it right "
+                f"now. It remains protected by this system's own local hourly "
+                f"stop-loss check in the meantime (unaffected by this failure), "
+                f"but that check only runs once an hour and only while the "
+                f"scheduler is running. This is NOT automatically retried — a "
+                f"manual stop order (or a code fix + redeploy, if the failure "
+                f"looks systemic rather than one-off) is needed to close this "
+                f"gap for this specific position."
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2170,6 +2428,107 @@ def maybe_exit_positions(config: dict) -> None:
                     "flagged for manual review (position_reconciliations).",
                     ticker, recent_failures,
                 )
+                continue
+
+            # Orphaned broker-side stop cancel-fix (2026-08-04, PRIORITY
+            # mechanism prerequisite — see CLAUDE.md's "Broker-side stop
+            # order" section). A standing stop order left resting after
+            # THIS system closes the position for a DIFFERENT reason
+            # (SIGNAL_OFF/MAX_HOLDING/CRISIS_EXIT) could later fire against
+            # an unrelated FUTURE position opened in the same ticker.
+            # Cancelled here, before placing our own exit SELL, whenever
+            # the actual exit reason is not itself STOP_LOSS — when it IS
+            # STOP_LOSS, the standing stop and this exit are the SAME
+            # protection firing (whichever gets there first), so there is
+            # nothing to cancel and no orphan risk.
+            skip_this_position = False
+            if (
+                exit_reason != "STOP_LOSS"
+                and ctx.get("stop_order_id")
+                and ctx.get("stop_order_status") == "PLACED"
+            ):
+                stop_order_id = ctx["stop_order_id"]
+                buy_row_id = ctx.get("buy_order_row_id")
+                try:
+                    client.cancel_order(stop_order_id)
+                    if buy_row_id:
+                        _update_stop_order_status(
+                            buy_row_id, "CANCELLED",
+                            note=f"cancelled before {exit_reason} exit",
+                        )
+                    logger.info(
+                        "Cancelled standing broker-side stop %s for %s before %s exit.",
+                        stop_order_id, ticker, exit_reason,
+                    )
+                except Exception as cancel_exc:
+                    http_status = getattr(getattr(cancel_exc, "response", None), "status_code", None)
+                    if http_status == 404:
+                        # Already resolved -- most likely the stop itself
+                        # just fired. Re-check the LIVE position before
+                        # deciding whether our own exit SELL is still
+                        # needed, rather than blindly placing a redundant
+                        # one against a position that may already be
+                        # closed (see CLAUDE.md's investigation for why
+                        # this is the correct handling of a confirmed T212
+                        # behaviour, not a guess).
+                        logger.info(
+                            "Standing stop %s for %s already resolved (404 on cancel) — "
+                            "re-checking live position before placing exit SELL.",
+                            stop_order_id, ticker,
+                        )
+                        if buy_row_id:
+                            _update_stop_order_status(
+                                buy_row_id, "ALREADY_RESOLVED",
+                                note=f"cancel attempted before {exit_reason} exit, order already resolved",
+                            )
+                        try:
+                            fresh_position = client.get_position(t212_ticker)
+                        except Exception:
+                            fresh_position = None
+                        if not fresh_position or float(fresh_position.get("quantity", 0) or 0) <= 0:
+                            logger.info(
+                                "%s position already closed (broker-side stop fired first) — "
+                                "skipping redundant exit SELL.", ticker,
+                            )
+                            skip_this_position = True
+                        # else: position genuinely still open (the stop
+                        # resolved some other way, e.g. cancelled
+                        # manually) -- fall through and place our own exit
+                        # SELL as normal.
+                    else:
+                        # A genuine cancel failure (not "already
+                        # resolved"). The exit condition is real and
+                        # safety-critical, so we still proceed with the
+                        # SELL below -- but this is exactly the orphan
+                        # risk this fix exists to close, so it is loud,
+                        # not silent.
+                        cancel_error_msg = str(cancel_exc)
+                        logger.error(
+                            "Failed to cancel standing stop %s for %s before %s exit — "
+                            "proceeding with the exit SELL anyway (stale-stop risk): %s",
+                            stop_order_id, ticker, exit_reason, cancel_error_msg,
+                        )
+                        if buy_row_id:
+                            _update_stop_order_status(
+                                buy_row_id, "CANCEL_FAILED",
+                                note=f"cancel failed before {exit_reason} exit: {cancel_error_msg}",
+                            )
+                        _send_t212_error_email(
+                            cancel_error_msg, config,
+                            context=f"Failed to cancel standing broker-side stop for {ticker} before {exit_reason} exit",
+                            ticker=ticker, direction="STOP-CANCEL",
+                            next_steps=(
+                                f"The exit SELL for {ticker} is being placed anyway "
+                                f"({exit_reason}). Its standing broker-side stop "
+                                f"(order_id={stop_order_id}) was NOT successfully "
+                                f"cancelled and may still be resting at T212 — if a "
+                                f"NEW position in {ticker} is opened later before this "
+                                f"is manually cancelled, that stale stop could "
+                                f"incorrectly fire against it. Verify directly on T212 "
+                                f"and cancel manually if still present."
+                            ),
+                        )
+            if skip_this_position:
                 continue
 
             close_qty = abs(current_qty)
