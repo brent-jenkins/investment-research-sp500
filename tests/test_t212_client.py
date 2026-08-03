@@ -25,10 +25,29 @@ level specifically so the real client code (construction, _request(),
 _parse_json()) all actually runs.
 """
 import json as _json
+import time
 
 import pytest
 
+import brokers.trading212 as t212_module
 from brokers.trading212 import Trading212Client
+
+
+@pytest.fixture(autouse=True)
+def _reset_t212_request_pacing():
+    """Resets the shared, module-level request-pacing state (added
+    2026-08-03, see CLAUDE.md's "structural safeguards against future
+    T212 API scheduling collisions" section, Part B) to "long enough ago
+    that the very first real _request() call in each test is never
+    throttled" -- this file is the only one in the suite that exercises
+    the real _request() method (every other T212-related test mocks at
+    a higher level), so without this reset, one test's pacing state
+    would bleed into the next test's timing (never a correctness issue
+    -- a throttled call still succeeds, just slower -- but genuinely
+    worth avoiding for both test independence and suite speed)."""
+    t212_module._t212_last_request_at = 0.0
+    yield
+    t212_module._t212_last_request_at = 0.0
 
 
 class _FakeResponse:
@@ -184,3 +203,86 @@ def test_get_order_history_parses_normal_response_shape(monkeypatch, mocker):
         return_value=_FakeResponse(json_data={"items": [{"order": {"id": "1"}}]}),
     )
     assert client.get_order_history() == [{"order": {"id": "1"}}]
+
+
+# ---------------------------------------------------------------------------
+# Shared, cross-job request pacing (2026-08-03) -- see CLAUDE.md's
+# "structural safeguards against future T212 API scheduling collisions"
+# section, Part B, for the full investigation. Every real HTTP attempt
+# routes through Trading212Client._request(), which now calls
+# _throttle_t212_request() first -- these tests exercise the REAL pacing
+# logic (real time.monotonic()/time.sleep(), not mocked away) since the
+# whole point is proving actual wall-clock behaviour, not just that a
+# function got called.
+# ---------------------------------------------------------------------------
+
+def test_throttle_delays_a_call_made_immediately_after_another():
+    """Two calls back-to-back must be spaced at least
+    _T212_MIN_REQUEST_INTERVAL_SECONDS apart in real wall-clock time --
+    the actual behaviour a rate-limit collision needs prevented, proven
+    with the real clock rather than a mocked one."""
+    t212_module._throttle_t212_request()
+    start = time.monotonic()
+    t212_module._throttle_t212_request()
+    elapsed = time.monotonic() - start
+    assert elapsed >= t212_module._T212_MIN_REQUEST_INTERVAL_SECONDS * 0.9, (
+        f"Second call returned after only {elapsed:.3f}s -- expected at least "
+        f"~{t212_module._T212_MIN_REQUEST_INTERVAL_SECONDS}s of real delay"
+    )
+
+
+def test_throttle_does_not_delay_when_enough_time_has_already_passed():
+    """A call made well after the pacing interval has already elapsed
+    must return immediately -- confirms this isn't an unconditional
+    sleep on every call, only a floor on how CLOSE together two calls
+    can land."""
+    t212_module._t212_last_request_at = time.monotonic() - 10.0  # 10s "ago"
+    start = time.monotonic()
+    t212_module._throttle_t212_request()
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.05, f"Throttle delayed an already-well-spaced call by {elapsed:.3f}s"
+
+
+def test_throttle_is_shared_across_separate_client_instances(monkeypatch):
+    """The core "shared" claim: pacing state lives at module level, not
+    per-Trading212Client-instance -- a second, independently-constructed
+    client's request is still throttled against the FIRST client's most
+    recent call, exactly the cross-job coordination this mechanism
+    exists to provide (two different scheduler jobs each construct their
+    own Trading212Client, but must still pace against each other)."""
+    client_a = _client(monkeypatch)
+    client_b = Trading212Client(live=False)  # a second, independent instance
+    fake_response = lambda *_a, **_kw: _FakeResponse(json_data={"totalValue": 1.0})
+    monkeypatch.setattr(t212_module.requests, "request", fake_response)
+
+    client_a.get_account_summary()
+    start = time.monotonic()
+    client_b.get_account_summary()
+    elapsed = time.monotonic() - start
+    assert elapsed >= t212_module._T212_MIN_REQUEST_INTERVAL_SECONDS * 0.9, (
+        f"A second, independent Trading212Client instance's request was not "
+        f"paced against the first instance's -- pacing state must be shared "
+        f"module-level state, not per-instance"
+    )
+
+
+def test_request_calls_throttle_before_each_physical_http_attempt(monkeypatch, mocker):
+    """Confirms _request() genuinely wires the throttle in -- not just
+    that the throttle function itself works in isolation. Mocks the
+    throttle away (this test cares whether it's CALLED, not real
+    timing) and confirms it fires once per physical attempt, including
+    on a retried attempt."""
+    client = _client(monkeypatch)
+    mock_throttle = mocker.patch("brokers.trading212._throttle_t212_request")
+    responses = iter([
+        _FakeResponse(status_code=429),  # first attempt: rate limited, retries
+        _FakeResponse(json_data={"totalValue": 1.0}),  # second attempt: succeeds
+    ])
+    monkeypatch.setattr(t212_module.requests, "request", lambda *_a, **_kw: next(responses))
+    monkeypatch.setattr(t212_module.time, "sleep", lambda _s: None)  # skip the real 429 backoff wait
+
+    client.get_account_summary()
+    assert mock_throttle.call_count == 2, (
+        "Expected the throttle to be called once per physical HTTP attempt "
+        "(including the retried one after a 429), not just once overall"
+    )

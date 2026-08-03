@@ -1581,6 +1581,111 @@ def test_exit_api_error_never_raises(db_engine, v2_mocks, mocker):
 
 
 # ---------------------------------------------------------------------------
+# Exit-check positions-fetch status (2026-08-03) — a distinct, always-
+# current signal (get_exit_check_fetch_status()) separate from the
+# existing generic invest_error key, closing the "only discoverable by
+# manually reconstructing the timeline" gap a real get_positions()
+# failure during the exit check previously had. See CLAUDE.md's
+# "structural safeguards against future T212 API scheduling collisions"
+# section, Part C.
+# ---------------------------------------------------------------------------
+
+def test_record_and_get_exit_check_fetch_status_round_trip(db_engine):
+    """The pure record/read mechanism itself, independent of
+    maybe_exit_positions() — confirms the JSON payload shape (status,
+    recorded_at, and any extra detail kwargs) round-trips correctly."""
+    from brokers.trading212 import _record_exit_check_fetch_status, get_exit_check_fetch_status
+
+    assert get_exit_check_fetch_status() is None, "must be None before anything has ever recorded"
+
+    _record_exit_check_fetch_status("FETCH_FAILED", error="boom")
+    status = get_exit_check_fetch_status()
+    assert status["status"] == "FETCH_FAILED"
+    assert status["error"] == "boom"
+    assert "recorded_at" in status
+
+    _record_exit_check_fetch_status("OK")
+    status = get_exit_check_fetch_status()
+    assert status["status"] == "OK"
+    assert "error" not in status, "a fresh OK record must not carry over the prior failure's detail"
+
+
+def test_exit_check_records_ok_on_a_successful_positions_fetch(db_engine, v2_mocks, mocker):
+    """A genuinely successful get_positions() call (even one returning no
+    open positions at all, the v2_mocks default) must record "OK" —
+    confirms the signal reflects "did the fetch itself succeed", not "did
+    any position actually need evaluating"."""
+    from brokers.trading212 import get_exit_check_fetch_status, maybe_exit_positions
+
+    maybe_exit_positions(_config(mocker=mocker, db_engine=db_engine))
+
+    status = get_exit_check_fetch_status()
+    assert status is not None
+    assert status["status"] == "OK"
+
+
+def test_exit_check_records_fetch_failed_with_the_real_error_message(db_engine, v2_mocks, mocker):
+    """The exact real gap this closes: a get_positions() failure during
+    the exit check must leave a distinct, directly-checkable
+    FETCH_FAILED record naming the real error — not just the generic,
+    UI-invisible invest_error key this same call site also writes."""
+    from brokers.trading212 import get_exit_check_fetch_status, maybe_exit_positions
+
+    v2_mocks.get_positions.side_effect = RuntimeError("T212 rate limited")
+    mocker.patch("brokers.trading212._send_t212_error_email")
+
+    maybe_exit_positions(_config(mocker=mocker, db_engine=db_engine))
+
+    status = get_exit_check_fetch_status()
+    assert status is not None
+    assert status["status"] == "FETCH_FAILED"
+    assert "T212 rate limited" in status["error"]
+
+
+def test_exit_check_fetch_failure_still_calls_the_existing_error_alert_path(db_engine, v2_mocks, mocker):
+    """The new FETCH_FAILED record is ADDITIVE — the pre-existing
+    _set_t212_error()/_send_t212_error_email() calls at this exact call
+    site must be completely unaffected, not replaced."""
+    from brokers.trading212 import maybe_exit_positions
+
+    v2_mocks.get_positions.side_effect = RuntimeError("T212 is down")
+    mock_email = mocker.patch("brokers.trading212._send_t212_error_email")
+    mock_set_error = mocker.patch("brokers.trading212._set_t212_error")
+
+    maybe_exit_positions(_config(mocker=mocker, db_engine=db_engine))
+
+    mock_set_error.assert_called_once_with("T212 is down")
+    mock_email.assert_called_once()
+    assert mock_email.call_args.kwargs["context"] == "Exit check setup — could not fetch open positions from T212"
+
+
+def test_exit_check_a_later_success_overwrites_an_earlier_failure(db_engine, v2_mocks, mocker):
+    """Self-healing, by design: the record always reflects the MOST
+    RECENT attempt only — a prior hour's real failure must not keep
+    showing as the current state once a later check succeeds (this is
+    what lets the Dashboard banner disappear on its own once the
+    underlying issue clears, with no separate "resolved" tracking
+    needed)."""
+    from brokers.trading212 import get_exit_check_fetch_status, maybe_exit_positions
+
+    # Config built once and reused for both calls -- _config() seeds
+    # instrument_resolutions on every call, so calling it twice against
+    # the same db_engine would hit a UNIQUE-constraint violation on the
+    # second insert.
+    cfg = _config(mocker=mocker, db_engine=db_engine)
+
+    v2_mocks.get_positions.side_effect = RuntimeError("T212 is down")
+    mocker.patch("brokers.trading212._send_t212_error_email")
+    maybe_exit_positions(cfg)
+    assert get_exit_check_fetch_status()["status"] == "FETCH_FAILED"
+
+    v2_mocks.get_positions.side_effect = None
+    v2_mocks.get_positions.return_value = []
+    maybe_exit_positions(cfg)
+    assert get_exit_check_fetch_status()["status"] == "OK"
+
+
+# ---------------------------------------------------------------------------
 # P&L reconstruction
 # ---------------------------------------------------------------------------
 

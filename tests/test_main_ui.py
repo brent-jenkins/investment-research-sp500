@@ -17,6 +17,8 @@ db_engine fixture's engine and to never start a real background
 scheduler, so this test never touches the real project database, calls
 yfinance, or starts a real APScheduler instance.
 """
+from datetime import datetime, timedelta
+
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -565,6 +567,90 @@ def test_dashboard_crisis_banner_text_describes_new_entries_only(db_engine, dash
     assert "new entries" in banner_text
     assert "existing positions" in banner_text
     assert "monitored" in banner_text and ("exited" in banner_text or "normally" in banner_text)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard exit-check positions-fetch failure banner (2026-08-03) --
+# sourced from brokers.trading212.get_exit_check_fetch_status(), a
+# distinct, always-current record separate from the generic invest_error
+# key. Same "shown or not present at all, never a muted third state"
+# convention as the crisis banner above -- see
+# _render_exit_check_fetch_status_banner()'s own docstring and
+# CLAUDE.md's "structural safeguards against future T212 API scheduling
+# collisions" section, Part C.
+# ---------------------------------------------------------------------------
+
+def test_dashboard_shows_exit_check_fetch_failure_banner(db_engine, dashboard_app, mocker):
+    mocker.patch("brokers.trading212.get_exit_check_fetch_status", return_value={
+        "status": "FETCH_FAILED", "error": "T212 rate limited",
+        "recorded_at": datetime.utcnow().isoformat(),
+    })
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    banner_text = " ".join(e.value.lower() for e in at.error)
+    assert "could not fetch open positions" in banner_text
+    assert "t212 rate limited" in banner_text
+
+
+def test_dashboard_no_exit_check_banner_when_status_is_ok(db_engine, dashboard_app, mocker):
+    mocker.patch("brokers.trading212.get_exit_check_fetch_status", return_value={
+        "status": "OK", "recorded_at": datetime.utcnow().isoformat(),
+    })
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    assert not any("could not fetch open positions" in e.value.lower() for e in at.error)
+
+
+def test_dashboard_no_exit_check_banner_when_nothing_ever_recorded(db_engine, dashboard_app, mocker):
+    """A brand-new deployment with no exit check having run yet must not
+    show a false alarm -- absence of a record is not evidence of a
+    failure."""
+    mocker.patch("brokers.trading212.get_exit_check_fetch_status", return_value=None)
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    assert not any("could not fetch open positions" in e.value.lower() for e in at.error)
+
+
+def test_dashboard_no_exit_check_banner_when_failure_record_is_stale(db_engine, dashboard_app, mocker):
+    """A real failure recorded days ago (e.g. trading was disabled
+    afterward, or a long weekend/holiday gap with no real exit check
+    since) must not keep showing as a current alarm -- confirms the
+    _EXIT_CHECK_FETCH_STALE_HOURS cutoff is actually applied, the same
+    "don't show a possibly-false alarm" discipline the EOD status
+    badge's own staleness check already established."""
+    old_recorded_at = (datetime.utcnow() - timedelta(hours=100)).isoformat()
+    mocker.patch("brokers.trading212.get_exit_check_fetch_status", return_value={
+        "status": "FETCH_FAILED", "error": "T212 is down", "recorded_at": old_recorded_at,
+    })
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    assert not any("could not fetch open positions" in e.value.lower() for e in at.error)
+
+
+def test_dashboard_exit_check_banner_states_which_exit_checks_were_skipped(db_engine, dashboard_app, mocker):
+    """The banner must name what was actually skipped -- not a vague
+    "something went wrong" -- so an operator immediately understands the
+    real, concrete consequence (every exit-priority check for every
+    open position, for that one cycle)."""
+    mocker.patch("brokers.trading212.get_exit_check_fetch_status", return_value={
+        "status": "FETCH_FAILED", "error": "boom", "recorded_at": datetime.utcnow().isoformat(),
+    })
+
+    at = dashboard_app.run()
+
+    banner_text = " ".join(e.value.lower() for e in at.error)
+    assert "stop-loss" in banner_text
+    assert "signal-off" in banner_text
+    assert "crisis-exit" in banner_text
+    assert "max-holding" in banner_text
 
 
 # ---------------------------------------------------------------------------

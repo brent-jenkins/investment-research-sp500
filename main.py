@@ -990,6 +990,73 @@ def _render_crisis_banner() -> None:
     )
 
 
+_EXIT_CHECK_FETCH_STALE_HOURS = 72
+
+
+def _render_exit_check_fetch_status_banner() -> None:
+    """A prominent warning banner shown ONLY when the hourly exit check's
+    most recent attempt to fetch open positions from T212 genuinely
+    failed (2026-08-03) — sourced from brokers.trading212.get_exit_
+    check_fetch_status(), a dedicated record written on every real
+    fetch attempt (success or failure), independent of the shared T212
+    error-email cooldown. See that function's own docstring and
+    CLAUDE.md's "structural safeguards against future T212 API
+    scheduling collisions" section, Part C, for the incident this
+    closes: a get_positions() failure aborts the WHOLE exit check for
+    that hour (stop-loss / signal-off / crisis-exit / max-holding all
+    skipped for every open position) — genuinely expected, unavoidable
+    behaviour when the position list itself can't be fetched, but
+    previously had no distinct, UI-visible signal at all (the existing
+    generic "invest_error" key this same failure path also writes is
+    never read by this page — see get_exit_check_fetch_status()'s own
+    docstring for the pre-existing key-duplication this sidesteps
+    rather than tries to fully reconcile).
+
+    Same "shown or not present at all, never a muted third state"
+    convention as _render_crisis_banner() above — a genuine failure is
+    the only thing worth interrupting the page for. Self-healing: the
+    very next successful exit check overwrites this record with "OK",
+    so the banner disappears on its own once the underlying issue
+    clears, with no separate "resolved" tracking needed.
+
+    Staleness-gated (unlike the crisis banner, which is always either
+    genuinely current or absent): the exit check only runs when NYSE is
+    in session, so a weekend/holiday gap of up to ~65 hours between
+    real checks is normal, not a problem — a record older than
+    _EXIT_CHECK_FETCH_STALE_HOURS is treated as too old to trust either
+    way (e.g. trading was disabled after the failure, or credentials
+    were removed) and is silently ignored rather than shown as a
+    possibly-false alarm."""
+    try:
+        from brokers.trading212 import get_exit_check_fetch_status
+        status = get_exit_check_fetch_status()
+    except Exception:
+        status = None
+
+    if not status or status.get("status") != "FETCH_FAILED":
+        return
+
+    recorded_at_raw = status.get("recorded_at")
+    if recorded_at_raw:
+        try:
+            age_hours = (datetime.utcnow() - datetime.fromisoformat(recorded_at_raw)).total_seconds() / 3600.0
+            if age_hours > _EXIT_CHECK_FETCH_STALE_HOURS:
+                return
+        except (ValueError, TypeError):
+            pass
+
+    st.error(
+        "⚠️ **The last exit check could not fetch open positions from "
+        "T212** — stop-loss, signal-off, crisis-exit, and max-holding "
+        "checks were all skipped for every open position that cycle. "
+        f"Error: {status.get('error', 'unknown')}. This is not a stuck "
+        "order — it retries automatically on the next scheduled check "
+        "(hourly during NYSE hours). If this persists across several "
+        "consecutive checks, investigate directly rather than assuming "
+        "it will self-resolve."
+    )
+
+
 def _render_dashboard_page(config: dict) -> None:
     """Render the Dashboard: account balance, account-value history, top
     winning/losing closed trades, the queued-candidate list, and
@@ -1009,6 +1076,7 @@ def _render_dashboard_page(config: dict) -> None:
         return
 
     _render_crisis_banner()
+    _render_exit_check_fetch_status_banner()
 
     # --- Account balance ---------------------------------------------------
     summary = _get_account_summary()

@@ -65,6 +65,7 @@ import base64
 import logging
 import math
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -154,6 +155,96 @@ def _get_cached_price_gbp(t212_ticker: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Shared, cross-job request pacing (2026-08-03) — see CLAUDE.md's
+# "structural safeguards against future T212 API scheduling collisions"
+# section, Part B, for the full investigation this closes.
+#
+# The 2026-08-03 rate-limit incident (market_hours_check and
+# account_state_refresh both registered at the identical cron minute)
+# was fixed at the specific-instance level by offsetting the two jobs'
+# minutes, and the general CLASS of "two T212-calling scheduler jobs
+# land on the same declared cron time" is now caught mechanically by
+# tests/test_scheduler_t212_collision.py before it can ship. Neither of
+# those closes a DIFFERENT, narrower residual risk: two jobs that do NOT
+# share a declared cron time, but happen to overlap in real, live
+# execution anyway — one job running long, a 429 retry backing into
+# another job's own start — since a static schedule scanner only ever
+# checks DECLARED triggers, never actual runtime timing.
+#
+# This throttle closes that residual gap directly, at the one place
+# every real T212 HTTP request in this codebase already funnels through
+# regardless of which job or code path made it — Trading212Client._
+# request(). It is a genuinely shared, cross-CALLER (not just
+# cross-job) pacing floor: every Trading212Client instance, in every
+# thread within this process, is paced against the SAME module-level
+# _t212_last_request_at, so two jobs racing each other via APScheduler's
+# thread pool are naturally serialised to at least
+# _T212_MIN_REQUEST_INTERVAL_SECONDS apart, rather than firing their
+# first HTTP call simultaneously.
+#
+# Deliberately a simple minimum-interval pacer, NOT a precise
+# token-bucket calibrated to T212's own documented limit — T212's real
+# rate limit is confirmed to differ meaningfully by ENDPOINT (50
+# requests/minute for market orders, 1 request/2s for stop orders — see
+# CLAUDE.md's stop-order investigation), and this project has no
+# authoritative, endpoint-by-endpoint number for every read endpoint
+# (account summary, positions) this throttle also covers. Building a
+# precise token-bucket around an incompletely-known limit would risk
+# being confidently wrong in either direction (too loose to help, or
+# too strict for routine bulk operations like a stock-submission run
+# placing 15-20+ orders in one pass). 150ms is a conservative,
+# clearly-justified floor instead: negligible overhead for a single
+# job's own normal sequential calls (a 20-call run adds at most ~3s
+# total, against a job that already runs for seconds to minutes), while
+# still meaningfully serialising two jobs' concurrent bursts rather
+# than letting them collide at the exact same instant.
+#
+# What this does NOT cover, stated plainly rather than overclaimed: it
+# is in-process, module-level state — it coordinates every scheduled
+# job running inside the ONE scheduler process (either the standalone
+# daemon or, when that's not running, the Streamlit UI's in-process
+# fallback — CLAUDE.md's own heartbeat mechanism already guarantees
+# only one of those two is ever active at a time), but it does NOT
+# coordinate across the two separate systemd services/processes this
+# app actually runs as: the Status page's "Danger Zone" buttons
+# (`main.py`'s "Refresh Data + Orders Now" / "Order Logic Only") call
+# maybe_place_orders() directly from the STREAMLIT UI PROCESS, a
+# genuinely different OS process from the scheduler daemon, with no
+# shared Python memory to pace against. A human manually clicking one
+# of those buttons at the exact moment a scheduled job is also mid-run
+# is a real, but rare, one-off coincidence, not the every-hour-forever
+# structural risk two always-firing scheduled jobs sharing a cron
+# minute was — see the CLAUDE.md section above for the full
+# in-process-vs-cross-process reasoning and why a cross-process (e.g.
+# DB-backed) version of this mechanism was investigated and explicitly
+# NOT built as part of this change.
+# ---------------------------------------------------------------------------
+_T212_MIN_REQUEST_INTERVAL_SECONDS = 0.15
+_t212_pacing_lock = threading.Lock()
+_t212_last_request_at = 0.0
+
+
+def _throttle_t212_request() -> None:
+    """Blocks the calling thread, if needed, so this call lands at least
+    _T212_MIN_REQUEST_INTERVAL_SECONDS after the previous real T212 HTTP
+    request made by ANY Trading212Client instance in ANY thread of this
+    process. Lock-protected so two threads racing to check/update
+    _t212_last_request_at concurrently can't both read a stale value and
+    both proceed unthrottled — the exact race this mechanism exists to
+    prevent, applied to its own internal bookkeeping too."""
+    global _t212_last_request_at
+    with _t212_pacing_lock:
+        now = time.monotonic()
+        elapsed = now - _t212_last_request_at
+        if elapsed < _T212_MIN_REQUEST_INTERVAL_SECONDS:
+            wait = _T212_MIN_REQUEST_INTERVAL_SECONDS - elapsed
+            time.sleep(wait)
+            _t212_last_request_at = now + wait
+        else:
+            _t212_last_request_at = now
+
+
+# ---------------------------------------------------------------------------
 # Trading212Client
 # ---------------------------------------------------------------------------
 
@@ -177,6 +268,15 @@ class Trading212Client:
 
         HTTP 429 (rate limit) is handled as a retryable condition with a
         longer wait.  Other 4xx errors are raised immediately (no retry).
+
+        Every physical HTTP attempt is paced via _throttle_t212_request()
+        first (2026-08-03) — a shared, cross-job/cross-thread minimum
+        interval enforced regardless of which caller is making the
+        request, closing the residual "two jobs don't share a cron
+        minute but happen to overlap in real, live execution anyway"
+        risk a static schedule scanner can't catch. See that function's
+        own docstring and CLAUDE.md's "structural safeguards against
+        future T212 API scheduling collisions" section, Part B.
         """
         url     = f"{self.base_url}{path}"
         timeout = kwargs.pop("timeout", 10)
@@ -184,6 +284,7 @@ class Trading212Client:
 
         for attempt in range(3):
             try:
+                _throttle_t212_request()
                 r = requests.request(
                     method, url,
                     headers=self.headers,
@@ -572,6 +673,81 @@ def _clear_t212_error() -> None:
         clear_metadata(_ERROR_KEY)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Exit-check positions-fetch status (2026-08-03) — see CLAUDE.md's
+# "structural safeguards against future T212 API scheduling collisions"
+# section, Part C, for the full investigation this closes.
+#
+# maybe_exit_positions() can only evaluate exit conditions for open
+# positions it actually knows about — if client.get_positions() itself
+# fails (a genuine T212-side outage, a network blip, or, before Part
+# B's shared pacing throttle above, a rate-limit collision), the WHOLE
+# exit check for that hour has to abort before any per-ticker exit
+# logic runs at all: there is no per-ticker exception isolation that
+# could apply to a fetch that hasn't produced a ticker list yet. This
+# is expected, structural behaviour — not itself a bug to "fix" by
+# somehow evaluating exits for positions we don't know exist — but it
+# means a genuine outage silently skips a full hour of stop-loss/
+# signal-off/crisis-exit/max-holding protection, and the ONLY existing
+# signal for this (_set_t212_error()'s generic "invest_error" key, plus
+# an alert email gated by an 8h cooldown SHARED across every other T212
+# error type) is neither distinct to this specific failure mode nor
+# even displayed anywhere in the UI today (main.py's Status page only
+# ever reads the separate "t212_invest_error" key written by
+# _fetch_t212_snapshot() — a pre-existing, documented key duplication,
+# see output/briefing.py's own dual-key check — meaning a real
+# get_positions() failure during the exit check was, until this fix,
+# invisible on the UI entirely and only discoverable from raw logs).
+#
+# _record_exit_check_fetch_status()/get_exit_check_fetch_status() close
+# that gap directly: a dedicated, always-current record of the MOST
+# RECENT exit-check positions-fetch outcome (OK or FETCH_FAILED),
+# written on every single attempt regardless of the shared email
+# cooldown, so a persistent recurring failure is visible on the very
+# next check rather than only on the first (whichever alert email the
+# cooldown happened to let through). Deliberately additive, not a
+# replacement for the existing _set_t212_error()/_send_t212_error_email()
+# calls at this same call site — those remain unchanged.
+# ---------------------------------------------------------------------------
+_EXIT_CHECK_FETCH_STATUS_KEY = "exit_check_fetch_status"
+
+
+def _record_exit_check_fetch_status(status: str, **details) -> None:
+    """Write a definitive, directly-checkable verdict for the MOST
+    RECENT exit check's own positions fetch — status is "OK" or
+    "FETCH_FAILED". Mirrors data/scheduler.py:_record_eod_completion()'s
+    exact shape (one dedicated metadata key, a JSON payload with a
+    recorded_at timestamp, never raises). Called on every real fetch
+    attempt (success or failure) inside maybe_exit_positions() — never
+    gated by the shared T212 error-email cooldown, so this stays an
+    accurate, always-current signal even when a recurring failure's own
+    alert email is being suppressed by that cooldown."""
+    try:
+        from data.database import set_metadata
+        import json as _json
+        payload = {
+            "status": status,
+            "recorded_at": datetime.utcnow().isoformat(),
+            **details,
+        }
+        set_metadata(_EXIT_CHECK_FETCH_STATUS_KEY, _json.dumps(payload))
+    except Exception as exc:
+        logger.warning("Could not record exit-check fetch status: %s", exc)
+
+
+def get_exit_check_fetch_status() -> "dict | None":
+    """Read back the most recent _record_exit_check_fetch_status()
+    payload, or None if no exit check has ever recorded one since this
+    feature shipped. Never raises."""
+    try:
+        from data.database import get_metadata_str
+        import json as _json
+        raw = get_metadata_str(_EXIT_CHECK_FETCH_STATUS_KEY)
+        return _json.loads(raw) if raw else None
+    except Exception:
+        return None
 
 
 _T212_ERROR_EMAIL_LAST_SENT_KEY = "t212_error_email_last_sent"
@@ -1872,6 +2048,12 @@ def maybe_exit_positions(config: dict) -> None:
     except Exception as exc:
         logger.error("API error during exit check — %s", exc, exc_info=True)
         _set_t212_error(str(exc))
+        # Distinct, always-current signal for THIS specific failure mode
+        # (2026-08-03) — never gated by _send_t212_error_email()'s own
+        # shared cooldown, so a recurring failure stays visible on every
+        # check even while that email is being suppressed. See
+        # _record_exit_check_fetch_status()'s own docstring.
+        _record_exit_check_fetch_status("FETCH_FAILED", error=str(exc))
         _send_t212_error_email(
             str(exc), config,
             context="Exit check setup — could not fetch open positions from T212",
@@ -1885,6 +2067,8 @@ def maybe_exit_positions(config: dict) -> None:
             ),
         )
         return
+
+    _record_exit_check_fetch_status("OK")
 
     if not positions_by_t212:
         return
