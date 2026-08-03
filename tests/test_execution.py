@@ -987,6 +987,110 @@ def test_live_current_price_uses_yfinance_fast_info_and_handles_failure(mocker):
 
 
 # ---------------------------------------------------------------------------
+# Submission-time crisis re-check (2026-08-03) -- passes_entry_gate()'s
+# crisis block is only ever evaluated once, at EOD decide time. Stock
+# submission fires up to ~17 hours later; without a fresh re-check, a
+# genuine crisis developing between decide and submission would never
+# stop yesterday's now-stale BUY decisions from still going out.
+# ---------------------------------------------------------------------------
+
+def test_submission_blocked_by_fresh_intraday_crisis_not_yet_in_stored_data(db_engine, v2_mocks, mocker):
+    """The decisive test for the actual gap this closes: ^GSPC's STORED
+    daily-bar data (price_data) shows no crisis at all -- is_entry_blocked()
+    alone would see nothing wrong, identically to what decide time already
+    saw. Only a genuinely live ^GSPC quote, down >=7% from that stored
+    close, reveals the crisis. Submission must still block on this."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    gspc_frame = _bullish_frame()  # no crisis anywhere in stored ^GSPC data
+    gspc_last_close = float(gspc_frame["close"].iloc[-1])
+    stock_last_close = float(frame["close"].iloc[-1])
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=stock_last_close)
+    _mock_price_data(mocker, {"AAPL": frame, "^GSPC": gspc_frame})
+
+    def _fake_live(ticker):
+        if ticker == "^GSPC":
+            return gspc_last_close * 0.90  # -10% intraday -- past -7%, invisible to stored data
+        return stock_last_close
+    mocker.patch("brokers.trading212._live_current_price", side_effect=_fake_live)
+
+    n = submit_pending_stock_orders(_submission_config())
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="SKIPPED_CRISIS_BLOCKED")
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "AAPL"
+    assert "crisis" in rows[0]["resolution_note"].lower()
+
+
+def test_submission_blocked_by_daily_bar_crisis_still_in_cooldown(db_engine, v2_mocks, mocker):
+    """A crisis already reflected in stored data (a trigger day within its
+    5-day cooldown window) must still block submission via
+    crisis.is_entry_blocked() -- re-confirmed fresh, not merely inherited
+    from decide time, even though this specific case doesn't need the new
+    intraday path to catch it."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    gspc_crisis_frame = _bullish_with_crisis_today()  # crisis already IN stored data
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=float(frame["close"].iloc[-1]))
+    _mock_price_data(mocker, {"AAPL": frame, "^GSPC": gspc_crisis_frame})
+
+    n = submit_pending_stock_orders(_submission_config())
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    rows = _pending_rows(db_engine, status="SKIPPED_CRISIS_BLOCKED")
+    assert len(rows) == 1
+
+
+def test_submission_proceeds_normally_when_no_crisis_present(db_engine, v2_mocks, mocker):
+    """Control/regression -- no crisis anywhere (stored or live), the
+    fresh re-check must not block a genuinely normal submission run."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=float(frame["close"].iloc[-1]))
+    _mock_price_data(mocker, {"AAPL": frame})  # ^GSPC defaults to _bullish_frame() too
+
+    n = submit_pending_stock_orders(_submission_config())
+
+    assert n == 1
+    v2_mocks.place_market_order.assert_called_once()
+    assert len(_pending_rows(db_engine, status="SUBMITTED")) == 1
+    assert len(_pending_rows(db_engine, status="SKIPPED_CRISIS_BLOCKED")) == 0
+
+
+def test_submission_crisis_check_failure_leaves_rows_pending_not_blocked_or_submitted(db_engine, v2_mocks, mocker):
+    """A failure reading/computing the crisis check itself (e.g. a DB
+    read error) must fail safe: no order is placed (never guess it's
+    safe), but the row is also left PENDING for the next window to
+    retry, not permanently resolved to SKIPPED_CRISIS_BLOCKED on a mere
+    check failure -- mirroring how a single ticker's own missing live
+    price already leaves that row pending rather than assuming either
+    outcome."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    frame = _bullish_frame()
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False,
+                        decided_price=float(frame["close"].iloc[-1]))
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("brokers.trading212._load_gspc_close", side_effect=RuntimeError("DB read failed"))
+
+    n = submit_pending_stock_orders(_submission_config())
+
+    assert n == 0
+    v2_mocks.place_market_order.assert_not_called()
+    assert len(_pending_rows(db_engine, status="PENDING")) == 1
+    assert len(_pending_rows(db_engine, status="SKIPPED_CRISIS_BLOCKED")) == 0
+
+
+# ---------------------------------------------------------------------------
 # max_total_deployed gate, applied at submission time -- and confirmation
 # that NO position-count gate exists any more (retired 2026-08-01).
 # ---------------------------------------------------------------------------
@@ -2736,11 +2840,22 @@ def test_capacity_fit_reason_matches_real_submission_rejection_for_the_same_inpu
     v2_mocks.get_quantity_for_gbp.return_value = 10.0
     v2_mocks.get_instrument_price_gbp.return_value = 250.0
     v2_mocks.get_instruments.return_value = [{"ticker": "OVERCAP_EQ", "minTradeQuantity": 1.0}]
+    # ^GSPC needs real (non-crashed) price data too -- submission now runs
+    # a fresh crisis re-check (2026-08-03) before anything else, and an
+    # unmocked, empty ^GSPC series would fail that check and block
+    # submission before ever reaching the capacity logic this test is
+    # actually proving. _mock_price_data(mocker, {}) gives every ticker,
+    # including ^GSPC, a normal bullish default (no crisis anywhere).
+    _mock_price_data(mocker, {})
     # Real submission also runs the price-sanity check, which needs a live
     # current price -- irrelevant to what THIS test is proving (that the
-    # two paths agree on capacity), so held equal to decided_price (100.0,
-    # _seed_pending_order's default) to guarantee it never blocks first.
-    mocker.patch("brokers.trading212._live_current_price", return_value=100.0)
+    # two paths agree on capacity), so OVERCAP's is held equal to its
+    # decided_price (100.0, _seed_pending_order's default) to guarantee it
+    # never blocks first; ^GSPC keeps its own (unmoved) default so the new
+    # crisis re-check above stays a no-op for this test.
+    def _fake_live(ticker):
+        return 100.0 if ticker == "OVERCAP" else float(_bullish_frame()["close"].iloc[-1])
+    mocker.patch("brokers.trading212._live_current_price", side_effect=_fake_live)
 
     _seed_pending_order(db_engine, ticker="OVERCAP", t212_ticker="OVERCAP_EQ", is_etf=False,
                          momentum_pct=1.0, position_gbp=6000.0)  # alone exceeds a 50% cap

@@ -54,3 +54,42 @@ def is_entry_blocked(gspc_close: pd.Series, check_date) -> bool:
     if check_date not in extended.index:
         return False
     return bool(extended.loc[check_date])
+
+
+def is_intraday_crisis(gspc_close: pd.Series, live_price: float) -> bool:
+    """True if a genuinely live S&P 500 price already represents a
+    single-day decline of PRICE_GAP_THRESHOLD or worse from the most
+    recent STORED daily close — i.e. a crisis that compute_raw_trigger()
+    would confirm once today's own close is finally recorded, detected
+    NOW, hours before that close exists (2026-08-03).
+
+    Why this exists, separately from is_entry_blocked() above:
+    compute_raw_trigger()/is_entry_blocked() are daily-bar-only by
+    design — they can only ever see a date once its close is stored in
+    price_data, which happens once a day at the 21:30 UTC EOD pull.
+    Entries decided at that same EOD run are queued into pending_orders
+    and submitted up to ~17 hours later (07:00/14:30 UTC the *next*
+    calendar day) — hours before that day's own close is known. A crisis
+    developing overnight or during that morning would not be visible to
+    is_entry_blocked() at submission time at all: the stored gspc_close
+    series submission-time would read would be identical to what decide
+    time already saw the night before, since no new daily bar has been
+    written in between. See CLAUDE.md's "Submission-time crisis
+    re-check" section for the full investigation this closes — including
+    why merely re-calling is_entry_blocked() with the same stored data
+    would NOT have been a real fix, only one that looked like one.
+
+    Not a replacement for is_entry_blocked() — the two are complementary
+    and both should be checked before submitting a new entry: this
+    catches a crisis that has NOT yet been recorded as a daily bar;
+    is_entry_blocked() catches one that has (including the multi-day
+    cooldown window after a trigger day, which this function has no
+    concept of on its own).
+    """
+    if gspc_close.empty or live_price is None or live_price <= 0:
+        return False
+    last_close = float(gspc_close.iloc[-1])
+    if last_close <= 0:
+        return False
+    intraday_return = (live_price - last_close) / last_close
+    return intraday_return <= PRICE_GAP_THRESHOLD

@@ -208,7 +208,7 @@ class PendingOrder(Base):
     momentum_pct     = Column(Float)
     stop_price       = Column(Float)
     var_pct          = Column(Float)
-    status           = Column(String(24), default="PENDING")  # PENDING / SUBMITTED / FAILED / SKIPPED_PRICE_MOVED / SKIPPED_ALREADY_HELD / REJECTED_CAPACITY / SUPERSEDED
+    status           = Column(String(24), default="PENDING")  # PENDING / SUBMITTED / FAILED / SKIPPED_PRICE_MOVED / SKIPPED_ALREADY_HELD / REJECTED_CAPACITY / SKIPPED_CRISIS_BLOCKED / SUPERSEDED
     resolution_note  = Column(Text)
     resolved_at      = Column(DateTime)
     created_at       = Column(DateTime, default=datetime.utcnow)

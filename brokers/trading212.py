@@ -2671,6 +2671,64 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
         logger.debug("No pending %s orders to submit.", label)
         return 0
 
+    # Fresh crisis re-check (2026-08-03) -- passes_entry_gate()'s crisis
+    # block (analysis/decision.py) is only ever evaluated once, at EOD
+    # decide time (21:30 UTC). Stock submission fires up to ~17 hours
+    # later, hours before that day's own close is even pulled -- without
+    # this, a genuine, severe decline developing overnight or that
+    # morning would never stop yesterday's now-stale BUY decisions from
+    # still going out, exactly defeating the crisis override's own
+    # purpose. Re-checking crisis.is_entry_blocked() alone against the
+    # same stored daily-bar gspc_close data decide time already saw would
+    # be a no-op -- it can only ever reflect *yesterday's* close at this
+    # point, identically to decide time -- so this also checks
+    # crisis.is_intraday_crisis() against a genuinely live S&P quote; see
+    # that function's own docstring and CLAUDE.md's "Submission-time
+    # crisis re-check" section for the full investigation. Checked once
+    # per run (market-wide, not per-ticker) -- blocks or defers every
+    # currently-pending entry for this asset class together, not just
+    # whichever candidate happens to be evaluated first.
+    #
+    # "Fail loud, don't guess" (same principle as _live_current_price()'s
+    # own failure handling below): a genuinely CONFIRMED block resolves
+    # every pending row to a terminal SKIPPED_CRISIS_BLOCKED (tomorrow's
+    # EOD decide cycle will naturally re-queue anything still valid once
+    # the block clears -- nothing is permanently lost). A check FAILURE
+    # (a data-read error) is treated as "unknown, don't act" -- rows are
+    # left untouched (still PENDING) for the next submission window to
+    # retry, mirroring how a single ticker's own missing live price
+    # already leaves that row pending rather than assuming it's safe.
+    try:
+        gspc_close = _load_gspc_close()
+        live_gspc = _live_current_price("^GSPC")
+        latest_stored_date = gspc_close.index[-1] if not gspc_close.empty else None
+        crisis_blocked = (
+            (latest_stored_date is not None and crisis.is_entry_blocked(gspc_close, latest_stored_date))
+            or crisis.is_intraday_crisis(gspc_close, live_gspc)
+        )
+    except Exception as exc:
+        logger.error(
+            "Crisis re-check failed during %s submission -- leaving all %d pending "
+            "row(s) untouched for retry rather than guessing it's safe to proceed: %s",
+            label, len(pending), exc, exc_info=True,
+        )
+        return 0
+
+    if crisis_blocked:
+        logger.warning(
+            "%s submission blocked -- crisis override active at submission time (S&P "
+            ">= 7%% single-day decline, live or within the daily-bar cooldown window) "
+            "-- skipping all %d pending %s entr%s this run.",
+            label, len(pending), label.lower(), "y" if len(pending) == 1 else "ies",
+        )
+        for row in pending:
+            _resolve_pending(
+                row["id"], "SKIPPED_CRISIS_BLOCKED",
+                note="crisis override active at submission time -- re-evaluated fresh "
+                     "against live data, not inherited from decide time",
+            )
+        return 0
+
     threshold_pct = float(t212_cfg.get("price_sanity_threshold_pct", 0.03))
     live = t212_cfg.get("live", False)
     max_deployed_pct  = float(t212_cfg.get("max_total_deployed", 0.5))
