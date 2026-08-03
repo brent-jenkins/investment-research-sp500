@@ -344,6 +344,50 @@ def test_sidebar_nav_has_instruments_not_charts(instruments_app):
     assert "Charts" not in nav_options
 
 
+def _seed_instrument_resolution(db_engine, *, ticker, status, t212_instrument_id=None,
+                                 currency=None, note=None):
+    from sqlalchemy import text as sa_text
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO instrument_resolutions
+                (ticker, t212_instrument_id, currency, status, note)
+            VALUES (:ticker, :t212_instrument_id, :currency, :status, :note)
+        """), {
+            "ticker": ticker, "t212_instrument_id": t212_instrument_id,
+            "currency": currency, "status": status, "note": note,
+        })
+
+
+def test_instruments_page_shows_resolution_status_alongside_each_ticker(db_engine, instruments_app):
+    """Resolution status moved here 2026-08-03 from a disconnected
+    "Instrument Mapping" expander on the Status page (see CLAUDE.md's
+    Status-page-restructuring section) -- it belongs alongside each
+    ticker's other details on this already-per-instrument page, joined by
+    ticker, not a second separate table. A ticker with no resolution row
+    (e.g. ^GSPC, a reference ticker never evaluated as a trading
+    candidate) shows "—", not a fabricated status."""
+    _seed_instrument_resolution(db_engine, ticker="AAPL", status="VERIFIED",
+                                 t212_instrument_id="AAPL_US_EQ", currency="USD")
+    _seed_instrument_resolution(db_engine, ticker="MSFT", status="FAILED",
+                                 note="no confident match found")
+
+    at = instruments_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Resolution Status" in df.columns
+    assert df.loc[df["Ticker"] == "AAPL", "Resolution Status"].iloc[0] == "VERIFIED"
+    assert df.loc[df["Ticker"] == "AAPL", "T212 Instrument"].iloc[0] == "AAPL_US_EQ"
+    assert df.loc[df["Ticker"] == "MSFT", "Resolution Status"].iloc[0] == "FAILED"
+    assert df.loc[df["Ticker"] == "MSFT", "Note"].iloc[0] == "no confident match found"
+    # ^GSPC has no resolution row at all -- shown as "—", not fabricated.
+    assert df.loc[df["Ticker"] == "^GSPC", "Resolution Status"].iloc[0] == "—"
+
+    all_text = " ".join(c.value for c in at.caption)
+    assert "1 verified" in all_text
+    assert "1 failed" in all_text
+
+
 def test_old_charts_page_functions_are_gone_not_dormant():
     """The old Charts page (grouped landing cards + per-ticker candlestick
     detail view) must be removed entirely, not left as unreachable dead
@@ -548,6 +592,58 @@ def _seed_dashboard_pending_row(db_engine, *, ticker, momentum_pct, position_gbp
             "now": now, "position_gbp": position_gbp, "momentum_pct": momentum_pct,
             "status": status, "resolution_note": resolution_note,
         })
+
+
+def _seed_invest_order(db_engine, *, ticker, direction="BUY", status="FILLED",
+                        estimated_value_gbp=1000.0, is_etf=False, placed_at=None):
+    from sqlalchemy import text as sa_text
+    from datetime import datetime
+    now = placed_at or datetime.utcnow().isoformat()
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders
+                (ticker, t212_ticker, direction, quantity, estimated_value_gbp,
+                 var_pct, momentum_pct, status, is_etf, account_type, placed_at)
+            VALUES (:ticker, :t212_ticker, :direction, 10.0, :estimated_value_gbp,
+                    0.02, 0.15, :status, :is_etf, 'DEMO', :now)
+        """), {
+            "ticker": ticker, "t212_ticker": f"{ticker}_US_EQ", "direction": direction,
+            "estimated_value_gbp": estimated_value_gbp, "status": status,
+            "is_etf": is_etf, "now": now,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Dashboard "Recent Orders" (2026-08-03) -- moved here from the Status page
+# (see CLAUDE.md's Status-page-restructuring section). invest_orders is
+# real, permanent order history -- a genuinely different table from
+# pending_orders (the Candidate Queue above), so this is a relocation for
+# organisation, not a de-duplication.
+# ---------------------------------------------------------------------------
+
+def test_dashboard_recent_orders_shows_real_invest_orders_rows(db_engine, dashboard_app):
+    _seed_invest_order(db_engine, ticker="AAPL", direction="BUY", status="FILLED", estimated_value_gbp=2500.0)
+    _seed_invest_order(db_engine, ticker="MSFT", direction="SELL", status="FAILED", estimated_value_gbp=1800.0)
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Recent Orders" in all_text
+
+    dfs = [d.value for d in at.dataframe if "Ticker" in d.value.columns and "Dir" in d.value.columns]
+    assert dfs, "expected a Recent Orders dataframe with Ticker/Dir columns"
+    odf = dfs[0]
+    assert set(odf["Ticker"]) == {"AAPL", "MSFT"}
+    assert odf.loc[odf["Ticker"] == "AAPL", "Status"].iloc[0] == "FILLED"
+    assert odf.loc[odf["Ticker"] == "MSFT", "Status"].iloc[0] == "FAILED"
+
+
+def test_dashboard_recent_orders_empty_state(dashboard_app):
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "No orders recorded yet" in all_text
 
 
 def test_dashboard_candidate_table_shows_status_from_the_real_projection(db_engine, dashboard_app, mocker):
@@ -1066,3 +1162,90 @@ def test_status_page_scheduler_health_appears_before_scheduled_runs(status_app):
     sh_idx = next(i for i, m in enumerate(at.markdown) if "Scheduler Health" in m.value)
     sr_idx = next(i for i, m in enumerate(at.markdown) if "### Scheduled Runs" in m.value)
     assert sh_idx < sr_idx, "Scheduler Health must render before Scheduled Runs"
+
+
+# ---------------------------------------------------------------------------
+# Status page restructuring (2026-08-03) — Manual Controls moved to a
+# bottom "Danger Zone", Email Notifications removed entirely, T212 Invest
+# Account split (live state removed as a Dashboard duplicate, config/
+# methodology kept), Recent Orders moved to the Dashboard, Instrument
+# Mapping moved to the Instruments page. See CLAUDE.md's
+# Status-page-restructuring section.
+# ---------------------------------------------------------------------------
+
+def test_status_page_email_notifications_section_is_gone(status_app):
+    at = status_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Email Notifications" not in all_text
+
+
+def test_status_page_danger_zone_holds_manual_controls_at_the_bottom(status_app):
+    """Manual Controls must still exist and still work (same button keys),
+    just under a red-tinted "Danger Zone" heading, positioned after every
+    other section on the page (Log Viewer included) — genuinely at the
+    bottom, not just relabelled in place."""
+    at = status_app.run()
+    assert not at.exception
+
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Danger Zone" in all_text
+    assert "Manual Controls" in all_text
+
+    dz_idx = next(i for i, m in enumerate(at.markdown) if "Danger Zone" in m.value)
+    lv_idx = next(i for i, m in enumerate(at.markdown) if "### Log Viewer" in m.value)
+    assert dz_idx > lv_idx, "Danger Zone must render after Log Viewer -- genuinely at the bottom"
+
+    button_keys = {b.key for b in at.button}
+    assert "status_full_refresh" in button_keys
+    assert "status_run_orders" in button_keys
+
+
+def test_status_page_t212_account_no_longer_shows_live_state(db_engine, status_app, monkeypatch):
+    """Account value/cash/invested/open-position count are genuinely
+    duplicated by the Dashboard's own account cards -- confirmed removed
+    from the Status page's T212 Invest Account section (config.yaml in
+    this repo already has trading212_invest.enabled: true, so this
+    exercises the real "enabled" branch; T212 credentials are set via
+    monkeypatch to reach the branch that used to render the metrics)."""
+    import json as _json
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+    _seed_metadata(db_engine, "t212_account_snapshot", _json.dumps({
+        "totalValue": 50000.0,
+        "cash": {"availableToTrade": 40000.0},
+        "investments": {"currentValue": 10000.0},
+    }))
+    _seed_metadata(db_engine, "t212_positions_snapshot", _json.dumps([{"ticker": "AAPL_US_EQ"}]))
+
+    at = status_app.run()
+
+    assert not at.exception
+    metric_labels = {m.label for m in at.metric}
+    assert "Account Value" not in metric_labels
+    assert "Available Cash" not in metric_labels
+    assert "Invested" not in metric_labels
+    assert "Open Positions" not in metric_labels
+
+    all_text = " ".join(m.value for m in at.markdown) + " ".join(c.value for c in at.caption)
+    assert "Dashboard" in all_text
+    assert "Instruments" in all_text
+
+    # The refresh action itself is kept -- it's a still-useful ACTION, not
+    # duplicated "state", and it refreshes the same snapshot the Dashboard
+    # reads.
+    button_keys = {b.key for b in at.button}
+    assert "t212_refresh_btn" in button_keys
+
+
+def test_status_page_recent_orders_and_instrument_mapping_sections_are_gone(status_app, monkeypatch):
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Recent Orders" not in all_text
+    assert "Instrument mapping" not in all_text
+    assert "instrument resolutions" not in all_text.lower()

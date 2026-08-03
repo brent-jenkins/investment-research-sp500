@@ -576,6 +576,33 @@ def get_pending_candidates() -> list[dict]:
         return []
 
 
+def get_recent_orders(limit: int = 10) -> list[dict]:
+    """The most recent *limit* invest_orders rows, any status/direction —
+    real, permanent order history (placed/filled/failed/cancelled/
+    rejected, BUY and SELL alike), not the transient pre-trade decision
+    queue get_pending_candidates() reads from pending_orders. Moved here
+    2026-08-03 from an inline raw-SQL block in main.py's Status page (see
+    CLAUDE.md's Status-page-restructuring section) as part of relocating
+    this table to the Dashboard, alongside get_pending_candidates()/
+    get_unconfirmed_exits() — following this module's own established
+    "one shared reader per invest_orders/pending_orders shape" pattern
+    rather than leaving the query duplicated inline in the UI layer."""
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT ticker, t212_ticker, direction, quantity,
+                       estimated_value_gbp, var_pct, status, is_etf,
+                       momentum_pct, account_type, error_message, placed_at
+                FROM invest_orders
+                ORDER BY placed_at DESC
+                LIMIT :limit
+            """), {"limit": limit}).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
 def get_unconfirmed_exits() -> list[dict]:
     """SELL orders (invest_orders) sitting in PLACED status — accepted by
     T212 but not yet resolved to FILLED/CANCELLED/REJECTED via

@@ -1525,9 +1525,11 @@ def _load_all_verified_instrument_resolutions() -> dict[str, dict]:
 
 def load_all_instrument_resolutions() -> list[dict]:
     """Return every instrument_resolutions row (any status), sorted by
-    ticker — for operational/UI visibility (e.g. the Status page's
-    instrument-mapping display), not used by any decision-making code
-    path. VERIFIED rows show what's safe to trade and how it resolved;
+    ticker — for operational/UI visibility (the Instruments page's
+    per-ticker Resolution Status column — moved there 2026-08-03 from a
+    disconnected expander on the Status page, see CLAUDE.md's
+    Status-page-restructuring section), not used by any decision-making
+    code path. VERIFIED rows show what's safe to trade and how it resolved;
     FAILED rows are exactly what needs manual review (see
     resolve_and_cache_instrument()'s own docstring); PENDING rows show
     what's still waiting on an operational retry."""

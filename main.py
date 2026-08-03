@@ -44,6 +44,7 @@ from output.performance import (
     get_current_account_summary,
     get_pending_candidates,
     get_pnl_rows,
+    get_recent_orders,
     get_ticker_status,
     get_top_trades,
     get_unconfirmed_exits,
@@ -669,10 +670,11 @@ def _initialise() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_instruments_page(config: dict) -> None:
-    """Searchable table of every tracked instrument -- ticker, name, and a
-    direct link to its Yahoo Finance quote page. No in-app price chart --
-    Yahoo Finance's own quote page already does that; this page's job is
-    "what's tracked and where do I look it up," not charting.
+    """Searchable table of every tracked instrument -- ticker, name, T212
+    instrument-resolution status, and a direct link to its Yahoo Finance
+    quote page. No in-app price chart -- Yahoo Finance's own quote page
+    already does that; this page's job is "what's tracked and where do I
+    look it up," not charting.
 
     The "Name" column reflects whatever name source already exists in
     get_all_watchlist_entries() -- a real display name for reference
@@ -680,8 +682,18 @@ def _render_instruments_page(config: dict) -> None:
     the ~503 dynamic S&P 500 candidates, since this codebase has no
     company-name lookup/store for that pool. Stated here rather than
     silently presented as a real company-name lookup.
+
+    Resolution Status/T212 Instrument/Currency/Note moved here 2026-08-03
+    from a disconnected "Instrument Mapping" expander on the Status page
+    (see CLAUDE.md's Status-page-restructuring section) -- a ticker's T212
+    resolution is exactly the kind of "other detail" that belongs alongside
+    it here, on the one page already organised per-instrument, rather than
+    living on a separate page keyed by nothing but "system status." A
+    ticker with no resolution row (every reference ticker; a live S&P 500
+    candidate not yet evaluated) shows "—", not a fabricated status.
     """
     from urllib.parse import quote as _url_quote
+    from brokers.trading212 import load_all_instrument_resolutions
 
     _render_page_wordmark("Instruments")
     st.markdown("## Instruments")
@@ -691,12 +703,18 @@ def _render_instruments_page(config: dict) -> None:
         "plus the core index/FX reference tickers. Click through to Yahoo Finance for a price chart."
     )
 
+    resolutions_by_ticker = {r["ticker"]: r for r in load_all_instrument_resolutions()}
+
     entries = get_all_watchlist_entries(config)
     rows = sorted(
         (
             {
                 "Ticker": e["ticker"],
                 "Name": e.get("name", e["ticker"]),
+                "Resolution Status": resolutions_by_ticker.get(e["ticker"], {}).get("status", "—"),
+                "T212 Instrument": resolutions_by_ticker.get(e["ticker"], {}).get("t212_instrument_id") or "—",
+                "Currency": resolutions_by_ticker.get(e["ticker"], {}).get("currency") or "—",
+                "Note": resolutions_by_ticker.get(e["ticker"], {}).get("note") or "—",
                 "Yahoo Finance": f"https://finance.yahoo.com/quote/{_url_quote(e['ticker'], safe='')}",
             }
             for e in entries
@@ -711,10 +729,24 @@ def _render_instruments_page(config: dict) -> None:
         _q = search.strip().lower()
         rows = [r for r in rows if _q in r["Ticker"].lower() or _q in r["Name"].lower()]
 
-    st.caption(f"{len(rows)} of {len(entries)} instruments shown")
+    n_verified = sum(1 for r in rows if r["Resolution Status"] == "VERIFIED")
+    n_failed = sum(1 for r in rows if r["Resolution Status"] == "FAILED")
+    n_pending = sum(1 for r in rows if r["Resolution Status"] == "PENDING")
+    _res_caption = f"{n_verified} verified"
+    if n_failed:
+        _res_caption += f" · {n_failed} failed — needs review"
+    if n_pending:
+        _res_caption += f" · {n_pending} pending retry"
+    st.caption(f"{len(rows)} of {len(entries)} instruments shown · {_res_caption}")
 
+    _cols = ["Ticker", "Name", "Resolution Status", "T212 Instrument", "Currency", "Note", "Yahoo Finance"]
     st.dataframe(
-        pd.DataFrame(rows, columns=["Ticker", "Name", "Yahoo Finance"]),
+        pd.DataFrame(rows, columns=_cols).style.map(
+            lambda v: "color:#16a34a" if v == "VERIFIED"
+            else ("color:#dc2626" if v == "FAILED"
+            else ("color:#d97706" if v == "PENDING" else "")),
+            subset=["Resolution Status"],
+        ),
         width="stretch",
         hide_index=True,
         column_config={
@@ -771,6 +803,12 @@ def _get_projected_admission_cached(_config: dict) -> list[dict]:
 def _get_unconfirmed_exits_cached() -> list[dict]:
     """Thin cached wrapper around output/performance.py:get_unconfirmed_exits()."""
     return get_unconfirmed_exits()
+
+
+@st.cache_data(ttl=60)
+def _get_recent_orders_cached(limit: int = 10) -> list[dict]:
+    """Thin cached wrapper around output/performance.py:get_recent_orders()."""
+    return get_recent_orders(limit)
 
 
 def _compute_momentum_strength_bands(momentum_values: pd.Series) -> dict:
@@ -1026,6 +1064,50 @@ def _render_dashboard_page(config: dict) -> None:
                 st.dataframe(ldf, width="stretch", hide_index=True)
             else:
                 st.caption("No losing trades yet.")
+
+    st.divider()
+
+    # --- Recent orders ---------------------------------------------------
+    # Moved here 2026-08-03 from the Status page (see CLAUDE.md's
+    # Status-page-restructuring section) -- invest_orders is real,
+    # permanent trade history (any status: PLACED/FILLED/FAILED/
+    # CANCELLED/REJECTED, BUY and SELL), a genuinely different table from
+    # pending_orders (the transient pre-trade decision queue the Candidate
+    # Queue section below reads) -- this is a relocation for
+    # organisation, not a de-duplication, since there was no overlap to
+    # begin with.
+    st.markdown("### Recent Orders")
+    orders = _get_recent_orders_cached()
+    if not orders:
+        st.caption("No orders recorded yet.")
+    else:
+        odf = pd.DataFrame(orders).copy()
+        odf["Type"] = odf["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+        odf["var_pct"] = odf["var_pct"].map(lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—")
+        odf["momentum_pct"] = odf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
+        odf = odf[[
+            "ticker", "t212_ticker", "Type", "direction", "quantity",
+            "estimated_value_gbp", "var_pct", "momentum_pct", "status",
+            "account_type", "error_message", "placed_at",
+        ]]
+        odf.columns = [
+            "Ticker", "T212 Ticker", "Type", "Dir", "Qty",
+            "Est. Value (£)", "VaR at Entry", "Momentum at Entry", "Status",
+            "Account", "Error", "Placed At",
+        ]
+        st.dataframe(
+            odf.style.map(
+                lambda v: "color:#16a34a" if v == "FILLED"
+                else ("color:#d97706" if v == "PLACED"
+                else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
+                subset=["Status"],
+            ).map(
+                lambda v: "color:#16a34a" if v == "BUY"
+                else ("color:#dc2626" if v == "SELL" else ""),
+                subset=["Dir"],
+            ),
+            width="stretch", hide_index=True,
+        )
 
     st.divider()
 
@@ -1512,64 +1594,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     _status_card(cc3, "Missing entirely", f"{len(missing)} ticker{'s' if len(missing) != 1 else ''}",
                  ", ".join(missing[:5]) + ("…" if len(missing) > 5 else "") if missing else "none", missing_level)
 
-    st.divider()
-    st.markdown("### Manual Controls")
-    st.caption("Trigger the data pull + order pipeline immediately without waiting for the next scheduled run.")
-    _mc1, _mc2 = st.columns(2)
-
-    with _mc1:
-        if st.button("Refresh Data + Orders Now", width="stretch", type="primary",
-                     key="status_full_refresh"):
-            _cfg     = _load_config()
-            _tickers = get_all_tickers(_cfg)
-            with st.spinner("Pulling latest prices…"):
-                try:
-                    _results  = pull_incremental(tickers=_tickers)
-                    _new_rows = sum(_results.values())
-                    if _new_rows > 0:
-                        set_metadata("last_full_refresh", datetime.utcnow().isoformat())
-                except Exception as _exc:
-                    st.error(f"Data pull failed: {_exc}")
-                    _new_rows = 0
-            with st.spinner("Running order pipeline…"):
-                try:
-                    from brokers.trading212 import maybe_place_orders
-                    maybe_place_orders(_cfg, run_type="full")
-                    set_metadata("last_run_type", "full")
-                    st.success(
-                        f"Done — {_new_rows} new price rows · order pipeline ran at "
-                        f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
-                    )
-                    st.cache_data.clear()
-                except Exception as _exc:
-                    st.error(f"Order pipeline failed: {_exc}")
-
-    with _mc2:
-        if st.button("Order Logic Only", width="stretch", key="status_run_orders"):
-            _cfg = _load_config()
-            with st.spinner("Running order pipeline…"):
-                try:
-                    from brokers.trading212 import maybe_place_orders
-                    maybe_place_orders(_cfg, run_type="analysis_only")
-                    set_metadata("last_run_type", "analysis_only")
-                    st.success(f"Done — exit check ran at {_fmt_uk(datetime.utcnow(), '%H:%M')}.")
-                    st.cache_data.clear()
-                except Exception as _exc:
-                    st.error(f"Order pipeline failed: {_exc}")
-
-    notif_cfg = config.get("notifications", {}).get("email", {})
-    st.divider()
-    st.markdown("### Email Notifications")
-    _from    = notif_cfg.get("from_address") or notif_cfg.get("smtp_user", "—")
-    _to      = ", ".join(notif_cfg.get("to_addresses") or []) or "—"
-    _relay   = f"{notif_cfg.get('smtp_host', 'smtp-relay.brevo.com')}:{notif_cfg.get('smtp_port', 587)}"
-    _enabled = notif_cfg.get("enabled", False)
-    st.caption(
-        f"From: **{_from}** · To: **{_to}** · Via: {_relay} · "
-        f"Alerts: {'**enabled**' if _enabled else 'disabled'} "
-        "(order-placement error alerts only — see brokers/trading212.py)"
-    )
-
     # ── T212 Invest Account ───────────────────────────────────────────────
     st.divider()
     st.markdown("### T212 Invest Account")
@@ -1637,9 +1661,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                 "in the systemd service file and restart the service."
             )
         else:
-            import json as _json
-            snap_raw     = get_metadata_str("t212_account_snapshot")
-            pos_raw      = get_metadata_str("t212_positions_snapshot")
             snap_fetched = get_metadata_str("t212_snapshot_fetched_at")
             pending_fetch = get_metadata_str("pending_t212_fetch")
 
@@ -1664,144 +1685,23 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                     except Exception:
                         pass
 
-            if snap_raw:
-                try:
-                    summary   = _json.loads(snap_raw)
-                    positions = _json.loads(pos_raw) if pos_raw else []
-                    cash_obj  = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
-                    inv_obj   = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
-                    total_val = float(summary.get("totalValue", 0) or 0)
-                    free_val  = float(cash_obj.get("availableToTrade", 0) or 0)
-                    invested  = float(inv_obj.get("currentValue", 0) or 0)
-                    deployed  = (invested / total_val * 100) if total_val else 0.0
-                    pos_count = len(positions) if isinstance(positions, list) else 0
-
-                    a1, a2, a3, a4 = st.columns(4)
-                    a1.metric("Account Value", f"£{total_val:,.2f}")
-                    a2.metric("Available Cash", f"£{free_val:,.2f}")
-                    a3.metric("Invested", f"£{invested:,.2f}", delta=f"{deployed:.0f}% deployed")
-                    a4.metric("Open Positions", str(pos_count))
-
-                    deploy_limit = float(t212_cfg.get("max_total_deployed", 0.5))
-                    bar_pct      = min(1.0, (invested / total_val) if total_val else 0.0)
-                    bar_colour   = "#dc2626" if bar_pct >= deploy_limit else (
-                        "#f97316" if bar_pct >= deploy_limit * 0.85 else "#6366f1"
-                    )
-                    st.markdown(
-                        f'<div style="margin:4px 0 2px;font-size:0.75rem;color:#8899AA">'
-                        f'Deployed: £{invested:,.0f} of £{total_val:,.0f} '
-                        f'(limit {int(deploy_limit * 100)}%)</div>'
-                        f'<div style="background:#1E2D45;border-radius:4px;height:6px">'
-                        f'<div style="background:{bar_colour};width:{bar_pct * 100:.1f}%;'
-                        f'height:6px;border-radius:4px"></div></div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
-                    st.caption("Open positions are shown in full on the **Performance** page.")
-
-                    if snap_fetched:
-                        try:
-                            fetched_disp = _fmt_uk(datetime.fromisoformat(snap_fetched))
-                        except (ValueError, TypeError):
-                            fetched_disp = snap_fetched[:16].replace("T", " ")
-                        st.caption(f"Updated {fetched_disp}")
-                except Exception:
-                    st.caption("No account data yet — click Refresh Account to fetch.")
-            else:
-                st.caption("No account data yet — click Refresh Account to fetch.")
-
-            try:
-                from sqlalchemy import text as _sa_ord
-                with get_engine().connect() as _conn:
-                    ord_rows = _conn.execute(_sa_ord("""
-                        SELECT ticker, t212_ticker, direction, quantity,
-                               estimated_value_gbp, var_pct, status, is_etf,
-                               momentum_pct, account_type, error_message, placed_at
-                        FROM invest_orders
-                        ORDER BY placed_at DESC
-                        LIMIT 10
-                    """)).mappings().all()
-                ord_data = [dict(r) for r in ord_rows]
-            except Exception:
-                ord_data = []
-
-            st.markdown("#### Recent Orders")
-            if ord_data:
-                ord_df = pd.DataFrame(ord_data)
-                ord_df["Type"] = ord_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-                ord_df["var_pct"] = ord_df["var_pct"].map(
-                    lambda v: f"{v * 100:.2f}%" if pd.notna(v) else "—"
-                )
-                ord_df["momentum_pct"] = ord_df["momentum_pct"].map(
-                    lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—"
-                )
-                ord_df = ord_df[[
-                    "ticker", "t212_ticker", "Type", "direction", "quantity",
-                    "estimated_value_gbp", "var_pct", "momentum_pct", "status",
-                    "account_type", "error_message", "placed_at",
-                ]]
-                ord_df.columns = [
-                    "Ticker", "T212 Ticker", "Type", "Dir", "Qty",
-                    "Est. Value (£)", "VaR at Entry", "Momentum at Entry", "Status",
-                    "Account", "Error", "Placed At",
-                ]
-                st.dataframe(
-                    ord_df.style.map(
-                        lambda v: "color:#16a34a" if v == "FILLED"
-                        else ("color:#d97706" if v == "PLACED"
-                        else ("color:#dc2626" if v in ("FAILED", "CANCELLED", "REJECTED") else "")),
-                        subset=["Status"],
-                    ).map(
-                        lambda v: "color:#16a34a" if v == "BUY"
-                        else ("color:#dc2626" if v == "SELL" else ""),
-                        subset=["Dir"],
-                    ),
-                    width="stretch", hide_index=True,
-                )
-            else:
-                st.caption("No orders recorded yet.")
-
-            # Instrument mapping is resolved dynamically now (2026-08-02) --
-            # see CLAUDE.md's "wire the momentum-only, full-S&P-500
-            # selection into live execution" section. Shows every ticker
-            # ever resolved (any status), not just today's live candidates
-            # -- a FAILED row is exactly what needs manual review, and a
-            # formerly-eligible ticker's VERIFIED row must stay visible for
-            # as long as a position might still be open against it.
-            from brokers.trading212 import load_all_instrument_resolutions
-            resolutions = load_all_instrument_resolutions()
-            if resolutions:
-                n_verified = sum(1 for r in resolutions if r["status"] == "VERIFIED")
-                n_failed = sum(1 for r in resolutions if r["status"] == "FAILED")
-                n_pending = sum(1 for r in resolutions if r["status"] == "PENDING")
-                label = f"Instrument mapping ({n_verified} verified"
-                if n_failed:
-                    label += f", {n_failed} failed — needs review"
-                if n_pending:
-                    label += f", {n_pending} pending retry"
-                label += ")"
-                with st.expander(label):
-                    map_rows = [
-                        {
-                            "Ticker": r["ticker"],
-                            "T212 Instrument": r["t212_instrument_id"] or "—",
-                            "Currency": r["currency"] or "—",
-                            "Status": r["status"],
-                            "Note": r["note"] or "",
-                        }
-                        for r in resolutions
-                    ]
-                    st.dataframe(
-                        pd.DataFrame(map_rows).style.map(
-                            lambda v: "color:#16a34a" if v == "VERIFIED"
-                            else ("color:#dc2626" if v == "FAILED"
-                            else ("color:#d97706" if v == "PENDING" else "")),
-                            subset=["Status"],
-                        ),
-                        width="stretch", hide_index=True,
-                    )
-            else:
-                st.caption("No instrument resolutions recorded yet — none needed until the first live candidate is evaluated.")
+            # Live account value/cash/invested/open-position count, the
+            # Recent Orders table, and instrument-resolution status all
+            # moved off this page 2026-08-03 (see CLAUDE.md's
+            # Status-page-restructuring section) -- the first is genuinely
+            # duplicated by the Dashboard's own account cards; the latter
+            # two are relocations for organisation, not de-duplication.
+            # This button is kept here since it's the one thing in this
+            # section that's an ACTION, not state -- it refreshes the same
+            # underlying T212 snapshot both this page and the Dashboard
+            # read, so it still belongs with the account configuration
+            # context above rather than only on the page that displays the
+            # resulting numbers.
+            st.caption(
+                "Account value, cash, invested, and open-position count are on the "
+                "**Dashboard** page. Recent Orders is there too. Instrument resolution "
+                "status is on the **Instruments** page."
+            )
 
     # ── Log Viewer ─────────────────────────────────────────────────────────
     st.divider()
@@ -1963,6 +1863,72 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                 mime="text/plain",
                 key="log_dl_7d",
             )
+
+    # ── Danger Zone ────────────────────────────────────────────────────────
+    # Manual Controls moved here 2026-08-03 (see CLAUDE.md's
+    # Status-page-restructuring section) — same visual pattern GitHub uses
+    # for destructive/high-consequence actions: separated from routine
+    # informational sections, at the very bottom of the page, with a
+    # deliberately red-tinted heading rather than sitting inline with
+    # everything else. Both buttons can trigger real T212 order placement
+    # immediately — genuinely live-affecting, unlike anything else on this
+    # page — so they get that visual weight. Functionally unchanged: same
+    # two buttons, same behaviour, only the placement/styling changed.
+    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(
+            '<div style="border-left:3px solid #dc2626;background:#dc262614;'
+            'padding:10px 14px;border-radius:0 6px 6px 0;margin-bottom:10px">'
+            '<div style="color:#dc2626;font-weight:700;font-size:1.05rem">⚠ Danger Zone</div>'
+            '<div style="color:#8899AA;font-size:0.82rem;margin-top:2px">'
+            'Both actions below can trigger real T212 order placement immediately, '
+            'without waiting for the next scheduled run.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("### Manual Controls")
+        st.caption("Trigger the data pull + order pipeline immediately without waiting for the next scheduled run.")
+        _mc1, _mc2 = st.columns(2)
+
+        with _mc1:
+            if st.button("Refresh Data + Orders Now", width="stretch", type="primary",
+                         key="status_full_refresh"):
+                _cfg     = _load_config()
+                _tickers = get_all_tickers(_cfg)
+                with st.spinner("Pulling latest prices…"):
+                    try:
+                        _results  = pull_incremental(tickers=_tickers)
+                        _new_rows = sum(_results.values())
+                        if _new_rows > 0:
+                            set_metadata("last_full_refresh", datetime.utcnow().isoformat())
+                    except Exception as _exc:
+                        st.error(f"Data pull failed: {_exc}")
+                        _new_rows = 0
+                with st.spinner("Running order pipeline…"):
+                    try:
+                        from brokers.trading212 import maybe_place_orders
+                        maybe_place_orders(_cfg, run_type="full")
+                        set_metadata("last_run_type", "full")
+                        st.success(
+                            f"Done — {_new_rows} new price rows · order pipeline ran at "
+                            f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
+                        )
+                        st.cache_data.clear()
+                    except Exception as _exc:
+                        st.error(f"Order pipeline failed: {_exc}")
+
+        with _mc2:
+            if st.button("Order Logic Only", width="stretch", key="status_run_orders"):
+                _cfg = _load_config()
+                with st.spinner("Running order pipeline…"):
+                    try:
+                        from brokers.trading212 import maybe_place_orders
+                        maybe_place_orders(_cfg, run_type="analysis_only")
+                        set_metadata("last_run_type", "analysis_only")
+                        st.success(f"Done — exit check ran at {_fmt_uk(datetime.utcnow(), '%H:%M')}.")
+                        st.cache_data.clear()
+                    except Exception as _exc:
+                        st.error(f"Order pipeline failed: {_exc}")
 
     _render_footer()
 
