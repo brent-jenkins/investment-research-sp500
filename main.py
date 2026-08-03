@@ -46,7 +46,6 @@ from output.performance import (
     get_pnl_rows,
     get_recent_orders,
     get_ticker_status,
-    get_top_trades,
     get_unconfirmed_exits,
     position_context_style,
     position_exit_rule_text,
@@ -777,12 +776,6 @@ def _get_value_history(days: int) -> list[dict]:
 
 
 @st.cache_data(ttl=60)
-def _get_top_trades_cached() -> tuple[list[dict], list[dict]]:
-    """Thin cached wrapper around output/performance.py:get_top_trades()."""
-    return get_top_trades(limit=5)
-
-
-@st.cache_data(ttl=60)
 def _get_pending_candidates_cached() -> list[dict]:
     """Thin cached wrapper around output/performance.py:get_pending_candidates()."""
     return get_pending_candidates()
@@ -1058,13 +1051,23 @@ def _render_exit_check_fetch_status_banner() -> None:
 
 
 def _render_dashboard_page(config: dict) -> None:
-    """Render the Dashboard: account balance, account-value history, top
-    winning/losing closed trades, the queued-candidate list, and
-    placed-but-unconfirmed exits. Replaces the Daily Briefing page
-    (2026-08-02) — full open-position monitoring remains on the
-    Performance page (unchanged), and per-ticker momentum/eligibility
-    detail remains reachable via the Status page; this page's job is
-    account-level overview, not per-position or per-ticker detail."""
+    """Render the Dashboard: account balance, account-value history, full
+    open-position monitoring, recent orders, the complete closed-position
+    ledger, and aggregate performance metrics. Replaces the Daily Briefing
+    page (2026-08-02).
+
+    Restructured 2026-08-03 (see CLAUDE.md's "Performance page removed —
+    content relocated" section): the Performance page's three real
+    sections (Open Positions, Closed Positions, Performance Metrics) moved
+    here in full — confirmed, database-only, no live T212 call anywhere in
+    their backing chain — under a three-way principle: the Dashboard now
+    holds confirmed, settled real-money activity (positions, fills,
+    performance), while the Status page holds anything still pending or
+    in flight, awaiting resolution (the candidate queue, placed-but-
+    unconfirmed exits) alongside system health/config. Candidate Queue and
+    Placed, Unconfirmed Exits moved to the Status page for exactly that
+    reason — neither is a settled outcome yet. Per-ticker momentum/
+    eligibility detail remains reachable via the Status page."""
     _render_page_wordmark("Dashboard")
     st.markdown("## Dashboard")
     _render_eod_status_badge()
@@ -1102,36 +1105,31 @@ def _render_dashboard_page(config: dict) -> None:
 
     st.divider()
 
-    # --- Top winners / losers -----------------------------------------
-    st.markdown("### Top Trades")
-    winners, losers = _get_top_trades_cached()
-    if not winners and not losers:
-        st.info("No closed trades yet — no live position has closed since the account reset. "
-                 "This section will populate as real trading accumulates.")
+    # --- Open Positions -----------------------------------------------
+    # Moved here from the (now-removed) Performance page 2026-08-03 --
+    # replaces the old "Top Trades" section. Confirmed database-only
+    # before relocating: _get_open_cards() -> output/performance.py:
+    # get_brief_cards() reads exclusively from the scheduler-maintained
+    # t212_positions_snapshot (system_metadata), invest_orders, and
+    # price_data (via Trading212Client's static _fx_rates()/_to_gbp()
+    # helpers and get_ticker_status()'s own get_price_df() reads) -- no
+    # live T212 API call anywhere in this chain, so no new snapshot
+    # mechanism was needed to relocate it safely.
+    st.markdown("### Open Positions")
+    open_cards = _get_open_cards(config)
+    st.markdown(f"**{positions_summary_text(len(open_cards))}**")
+    if open_cards:
+        st.caption(POSITIONS_RULES_EXPLANATION)
+    if not open_cards:
+        st.info("No open positions.")
     else:
-        wcol, lcol = st.columns(2)
-        with wcol:
-            st.markdown("**Top 5 Winners**")
-            if winners:
-                wdf = pd.DataFrame(winners)[["ticker", "exit_date", "pnl_gbp", "pnl_pct", "exit_reason"]].copy()
-                wdf["exit_date"] = pd.to_datetime(wdf["exit_date"]).dt.strftime("%Y-%m-%d")
-                wdf["pnl_gbp"] = wdf["pnl_gbp"].map(lambda v: f"+£{v:,.2f}")
-                wdf["pnl_pct"] = wdf["pnl_pct"].map(lambda v: f"+{v * 100:.1f}%")
-                wdf.columns = ["Ticker", "Closed", "P&L (£)", "P&L (%)", "Exit Reason"]
-                st.dataframe(wdf, width="stretch", hide_index=True)
-            else:
-                st.caption("No winning trades yet.")
-        with lcol:
-            st.markdown("**Top 5 Losers**")
-            if losers:
-                ldf = pd.DataFrame(losers)[["ticker", "exit_date", "pnl_gbp", "pnl_pct", "exit_reason"]].copy()
-                ldf["exit_date"] = pd.to_datetime(ldf["exit_date"]).dt.strftime("%Y-%m-%d")
-                ldf["pnl_gbp"] = ldf["pnl_gbp"].map(lambda v: f"£{v:,.2f}")
-                ldf["pnl_pct"] = ldf["pnl_pct"].map(lambda v: f"{v * 100:.1f}%")
-                ldf.columns = ["Ticker", "Closed", "P&L (£)", "P&L (%)", "Exit Reason"]
-                st.dataframe(ldf, width="stretch", hide_index=True)
-            else:
-                st.caption("No losing trades yet.")
+        # Stable, neutral order — alphabetical by ticker, not by status/
+        # proximity to a threshold, which would imply some positions need
+        # more attention than others (see CLAUDE.md's "Decision-relevant,
+        # tone-neutral context on open position cards" section).
+        all_cards = sorted(open_cards, key=lambda x: x.get("ticker", ""))
+        for e in all_cards:
+            _render_trade_card(e)
 
     st.divider()
 
@@ -1179,111 +1177,120 @@ def _render_dashboard_page(config: dict) -> None:
 
     st.divider()
 
-    # --- Candidate queue -----------------------------------------------
-    st.markdown("### Candidate Queue")
-    st.caption(
-        "Every decision queued at EOD, still retained by the 30-day pending_orders "
-        "retention policy — whatever became of it: still awaiting its exchange-timed "
-        "submission window (14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware order "
-        "submission\" section), or already resolved (submitted, skipped, rejected on "
-        "capacity, or superseded by a fresh re-run). A resolved row is a real, final, "
-        "historical outcome — not something that disappears once decided."
-    )
-    candidates = _get_pending_candidates_cached()
-    if not candidates:
-        st.info("No candidates currently queued or retained.")
-    else:
-        projected = _get_projected_admission_cached(config)
-        projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
+    # --- Closed Positions (collapsible) --------------------------------
+    # Moved here from the (now-removed) Performance page 2026-08-03 --
+    # the complete closed-position ledger (get_pnl_rows(), a plain SQL
+    # read of the `pnl` table -- confirmed database-only). Collapsed by
+    # default (unlike Open Positions/Recent Orders above, which stay
+    # flat and always-visible) so the Dashboard remains scannable at a
+    # glance for the account's CURRENT state, with the fuller historical
+    # record one click away rather than pushing the page length down
+    # for every visit.
+    pnl_rows = _get_closed_rows()
+    with st.expander(f"📋 Closed Positions ({len(pnl_rows)})", expanded=False):
+        if not pnl_rows:
+            st.info("No closed positions yet — data will appear as positions close.")
+        else:
+            show_df = pd.DataFrame(pnl_rows)
+            show_df["Type"] = show_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
+            show_df["entry_date"] = pd.to_datetime(show_df["entry_date"]).dt.strftime("%Y-%m-%d")
+            show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
+            show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
+            show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
+            show_df["momentum_pct_at_entry"] = (show_df["momentum_pct_at_entry"] * 100).round(1)
 
-        cdf = pd.DataFrame(candidates).copy()
-        # Real status wins for an already-resolved row — only a genuinely
-        # still-PENDING row gets the live re-projected status. Looked up per
-        # ROW, not by ticker: a ticker can have several historical rows
-        # (e.g. an earlier SUPERSEDED decision and the later, final one that
-        # replaced it), and a ticker-keyed map would silently show one row's
-        # status on the other (2026-08-03 fix).
-        cdf["Status"] = cdf.apply(
-            lambda r: r["status"] if r["status"] != "PENDING"
-            else projected_by_ticker.get(r["ticker"], "PROJECTION_UNAVAILABLE"),
-            axis=1,
-        )
-        cdf["Note"] = cdf["resolution_note"].fillna("—")
-        cdf["decided_date"] = pd.to_datetime(cdf["decided_at"]).dt.date
-        cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
-
-        # Momentum-strength bands are computed per decision-date cohort, not
-        # across the whole table (2026-08-03) -- now that resolved rows from
-        # earlier days are shown alongside today's, computing one set of
-        # bands across every day at once would silently mix different days'
-        # momentum distributions together, breaking _compute_momentum_
-        # strength_bands()'s own documented "relative to that day's pool"
-        # design. Grouping by decided_date keeps each day's candidates
-        # judged only against their own day's real pool, exactly as before
-        # this fix for whichever day is the most recent.
-        def _label_group(s: pd.Series) -> pd.Series:
-            bands = _compute_momentum_strength_bands(s)
-            return s.map(lambda v: _momentum_strength_label(v, bands))
-        cdf["Strength"] = cdf.groupby("decided_date")["momentum_pct"].transform(_label_group)
-
-        cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
-        cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
-
-        st.caption(
-            "⚠️ **A `PROJECTED_*` status is a projection, not a guarantee** — shown only for "
-            "a row still genuinely `PENDING`. Computed by replaying the same momentum-ranked, "
-            "skip-and-continue capacity check real submission uses, against the account's "
-            "real state *right now* — the actual decision only happens at real submission "
-            "time, against whatever the account's state is *at that moment*, which can "
-            "genuinely change in between (a position closing, an emergency exit). Any other "
-            "status shown is the row's real, final, historical outcome — not a projection."
-        )
-        st.caption(
-            "**Strength** is relative to that candidate's own decision-date cohort (bottom "
-            "25% Weak · middle 50% Moderate · next 15% Strong · top 10% Very Strong), "
-            "recalculated fresh per day — not a fixed threshold — so it reflects that day's "
-            "real conditions rather than going stale as the market moves. The raw percentage "
-            "is always shown alongside it."
-        )
-        status_options = sorted(cdf["Status"].unique().tolist())
-        status_filter = st.multiselect(
-            "Filter by status", options=status_options, default=status_options,
-            key="candidate_status_filter",
-        )
-        cdf = cdf[cdf["Status"].isin(status_filter)]
-
-        cdf = cdf[["ticker", "Status", "momentum_pct", "Strength", "position_gbp", "decided_at", "Note"]]
-        cdf.columns = ["Ticker", "Status", "Momentum", "Strength", "Sized Position", "Decided At", "Note"]
-        st.caption(f"{len(cdf)} of {len(candidates)} candidates shown")
-        st.dataframe(cdf, width="stretch", hide_index=True)
+            show_df = show_df[[
+                "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
+                "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
+                "momentum_pct_at_entry", "exit_reason",
+            ]]
+            show_df.columns = [
+                "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
+                "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
+                "Momentum at Entry %", "Exit Reason",
+            ]
+            st.dataframe(
+                show_df.style
+                    .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
+                    .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
+                width="stretch", hide_index=True,
+            )
 
     st.divider()
 
-    # --- Placed, unconfirmed exits --------------------------------------
-    st.markdown("### Placed, Unconfirmed Exits")
-    st.caption(
-        "SELL orders T212 has accepted but not yet resolved to FILLED/CANCELLED/REJECTED. "
-        "Status here only updates when poll_placed_orders() next runs — hourly via the "
-        "Open Trade Monitor job, or sooner via a manual account refresh — so a row a few minutes "
-        "old is routine, not stuck. A 2026-07 finding once cited a 60+ hour resolution gap "
-        "on this account as a documented characteristic; tracing its origin (2026-08-03) "
-        "found that figure was based on this system's own polling timing, not T212's real "
-        "fill timestamp, and could not be independently re-verified — every currently-real "
-        "fill on this account has resolved within seconds. Treat a row that lingers for an "
-        "unusually long time as worth checking directly against the T212 app, not "
-        "automatically dismissed as a known, harmless artifact."
-    )
-    exits = _get_unconfirmed_exits_cached()
-    if not exits:
-        st.info("No exits currently awaiting confirmation.")
-    else:
-        edf = pd.DataFrame(exits).copy()
-        edf["placed_at"] = pd.to_datetime(edf["placed_at"])
-        edf["age_hours"] = ((datetime.utcnow() - edf["placed_at"]).dt.total_seconds() / 3600).round(1)
-        edf["placed_at"] = edf["placed_at"].dt.strftime("%Y-%m-%d %H:%M")
-        edf = edf[["ticker", "exit_reason", "quantity", "placed_at", "age_hours"]]
-        edf.columns = ["Ticker", "Exit Reason", "Quantity", "Placed At", "Age (hours)"]
-        st.dataframe(edf, width="stretch", hide_index=True)
+    # --- Performance Metrics (collapsible) ------------------------------
+    # Moved here from the (now-removed) Performance page 2026-08-03 --
+    # confirmed database-only before relocating: pnl_metrics_df() is a
+    # pure pandas transform of pnl_rows (already fetched above), and
+    # compute_metrics()/equity_curve_gbp() (analysis/backtest.py) are
+    # pure-pandas functions over that DataFrame -- no DB or T212 call in
+    # either. Collapsed by default, same reasoning as Closed Positions.
+    n_closed = len(pnl_rows)
+    with st.expander(f"📈 Performance Metrics", expanded=False):
+        if n_closed < 5:
+            st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_closed}/5).")
+            if n_closed:
+                wins = sum(1 for r in pnl_rows if (r.get("pnl_gbp") or 0) > 0)
+                losses = n_closed - wins
+                total_pnl = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
+                st.caption(
+                    f"So far: {wins} win{'s' if wins != 1 else ''} / "
+                    f"{losses} loss{'es' if losses != 1 else ''} · "
+                    f"total realised P&L £{total_pnl:+,.2f}."
+                )
+        else:
+            mdf  = pnl_metrics_df(pnl_rows)
+            mets = compute_metrics(mdf)
+
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Closed Positions", mets.get("total_trades", 0))
+            wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
+            c2.metric("Win Rate", f"{wr_pct}%")
+            c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
+            c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
+            c5.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
+            c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
+
+            total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
+            st.caption(
+                f"Total realised P&L: £{total_pnl_gbp:+,.2f} across {n_closed} closed positions · "
+                f"avg hold {mets.get('avg_holding_days', 0):.0f} days."
+            )
+
+            starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
+            ec = equity_curve_gbp(mdf, starting_capital_gbp=starting_capital)
+            if not ec.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=ec["date"], y=ec["equity_gbp"],
+                    mode="lines", name="Portfolio (£)",
+                    line=dict(color="#3b82f6", width=2, shape="linear"),
+                    fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                    hovertemplate="%{x|%Y-%m-%d}<br>Equity: £%{y:,.2f}<extra></extra>",
+                ))
+                fig.update_layout(
+                    title="Equity Curve (£, daily)",
+                    xaxis_title="Date", yaxis_title="Portfolio Value (£)",
+                    height=320, margin=dict(l=0, r=0, t=40, b=0),
+                    xaxis=dict(type="date"),
+                )
+                _apply_dark_theme(fig)
+                st.plotly_chart(fig, width="stretch")
+
+            exit_df = mdf.groupby("exit_reason").agg(
+                trades=("pnl_pct", "count"),
+                win_rate=("is_win", "mean"),
+                avg_return=("pnl_pct", "mean"),
+                avg_hold=("holding_days", "mean"),
+            )
+            if not exit_df.empty:
+                st.markdown("#### Performance by Exit Reason")
+                exit_show = exit_df.copy()
+                exit_show["win_rate"] = (exit_show["win_rate"] * 100).round(1)
+                exit_show["avg_return"] = (exit_show["avg_return"] * 100).round(2)
+                exit_show["avg_hold"] = exit_show["avg_hold"].round(1)
+                exit_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
+                st.dataframe(exit_show, width="stretch")
 
     _render_footer()
 
@@ -1790,6 +1797,125 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                 "status is on the **Instruments** page."
             )
 
+    # ── Candidate Queue ────────────────────────────────────────────────────
+    # Moved here from the (now-removed) Dashboard section 2026-08-03 (see
+    # CLAUDE.md's "Performance page removed — content relocated" section)
+    # — positioned beneath T212 Account Status, unconditionally (not
+    # gated on trading212_invest.enabled, matching Log Viewer below):
+    # both this and Placed, Unconfirmed Exits represent PENDING, not-yet-
+    # resolved state ("will this candidate get admitted?" / "will this
+    # sell get confirmed?") — a coherent pairing distinct from the
+    # Dashboard's confirmed, settled real-money activity, and grouped
+    # here with the rest of the Status page's system-state content
+    # rather than the Dashboard's historical record.
+    st.divider()
+    st.markdown("### Candidate Queue")
+    st.caption(
+        "Every decision queued at EOD, still retained by the 30-day pending_orders "
+        "retention policy — whatever became of it: still awaiting its exchange-timed "
+        "submission window (14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware order "
+        "submission\" section), or already resolved (submitted, skipped, rejected on "
+        "capacity, or superseded by a fresh re-run). A resolved row is a real, final, "
+        "historical outcome — not something that disappears once decided."
+    )
+    candidates = _get_pending_candidates_cached()
+    if not candidates:
+        st.info("No candidates currently queued or retained.")
+    else:
+        projected = _get_projected_admission_cached(config)
+        projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
+
+        cdf = pd.DataFrame(candidates).copy()
+        # Real status wins for an already-resolved row — only a genuinely
+        # still-PENDING row gets the live re-projected status. Looked up per
+        # ROW, not by ticker: a ticker can have several historical rows
+        # (e.g. an earlier SUPERSEDED decision and the later, final one that
+        # replaced it), and a ticker-keyed map would silently show one row's
+        # status on the other (2026-08-03 fix).
+        cdf["Status"] = cdf.apply(
+            lambda r: r["status"] if r["status"] != "PENDING"
+            else projected_by_ticker.get(r["ticker"], "PROJECTION_UNAVAILABLE"),
+            axis=1,
+        )
+        cdf["Note"] = cdf["resolution_note"].fillna("—")
+        cdf["decided_date"] = pd.to_datetime(cdf["decided_at"]).dt.date
+        cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
+
+        # Momentum-strength bands are computed per decision-date cohort, not
+        # across the whole table (2026-08-03) -- now that resolved rows from
+        # earlier days are shown alongside today's, computing one set of
+        # bands across every day at once would silently mix different days'
+        # momentum distributions together, breaking _compute_momentum_
+        # strength_bands()'s own documented "relative to that day's pool"
+        # design. Grouping by decided_date keeps each day's candidates
+        # judged only against their own day's real pool, exactly as before
+        # this fix for whichever day is the most recent.
+        def _label_group(s: pd.Series) -> pd.Series:
+            bands = _compute_momentum_strength_bands(s)
+            return s.map(lambda v: _momentum_strength_label(v, bands))
+        cdf["Strength"] = cdf.groupby("decided_date")["momentum_pct"].transform(_label_group)
+
+        cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
+        cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
+
+        st.caption(
+            "⚠️ **A `PROJECTED_*` status is a projection, not a guarantee** — shown only for "
+            "a row still genuinely `PENDING`. Computed by replaying the same momentum-ranked, "
+            "skip-and-continue capacity check real submission uses, against the account's "
+            "real state *right now* — the actual decision only happens at real submission "
+            "time, against whatever the account's state is *at that moment*, which can "
+            "genuinely change in between (a position closing, an emergency exit). Any other "
+            "status shown is the row's real, final, historical outcome — not a projection."
+        )
+        st.caption(
+            "**Strength** is relative to that candidate's own decision-date cohort (bottom "
+            "25% Weak · middle 50% Moderate · next 15% Strong · top 10% Very Strong), "
+            "recalculated fresh per day — not a fixed threshold — so it reflects that day's "
+            "real conditions rather than going stale as the market moves. The raw percentage "
+            "is always shown alongside it."
+        )
+        status_options = sorted(cdf["Status"].unique().tolist())
+        status_filter = st.multiselect(
+            "Filter by status", options=status_options, default=status_options,
+            key="candidate_status_filter",
+        )
+        cdf = cdf[cdf["Status"].isin(status_filter)]
+
+        cdf = cdf[["ticker", "Status", "momentum_pct", "Strength", "position_gbp", "decided_at", "Note"]]
+        cdf.columns = ["Ticker", "Status", "Momentum", "Strength", "Sized Position", "Decided At", "Note"]
+        st.caption(f"{len(cdf)} of {len(candidates)} candidates shown")
+        st.dataframe(cdf, width="stretch", hide_index=True)
+
+    # ── Placed, Unconfirmed Exits ──────────────────────────────────────────
+    # Alongside Candidate Queue, not on the Dashboard -- same reasoning:
+    # a pending, not-yet-resolved state (a SELL order sent but not yet
+    # confirmed FILLED/CANCELLED/REJECTED).
+    st.divider()
+    st.markdown("### Placed, Unconfirmed Exits")
+    st.caption(
+        "SELL orders T212 has accepted but not yet resolved to FILLED/CANCELLED/REJECTED. "
+        "Status here only updates when poll_placed_orders() next runs — hourly via the "
+        "Open Trade Monitor job, or sooner via a manual account refresh — so a row a few minutes "
+        "old is routine, not stuck. A 2026-07 finding once cited a 60+ hour resolution gap "
+        "on this account as a documented characteristic; tracing its origin (2026-08-03) "
+        "found that figure was based on this system's own polling timing, not T212's real "
+        "fill timestamp, and could not be independently re-verified — every currently-real "
+        "fill on this account has resolved within seconds. Treat a row that lingers for an "
+        "unusually long time as worth checking directly against the T212 app, not "
+        "automatically dismissed as a known, harmless artifact."
+    )
+    exits = _get_unconfirmed_exits_cached()
+    if not exits:
+        st.info("No exits currently awaiting confirmation.")
+    else:
+        edf = pd.DataFrame(exits).copy()
+        edf["placed_at"] = pd.to_datetime(edf["placed_at"])
+        edf["age_hours"] = ((datetime.utcnow() - edf["placed_at"]).dt.total_seconds() / 3600).round(1)
+        edf["placed_at"] = edf["placed_at"].dt.strftime("%Y-%m-%d %H:%M")
+        edf = edf[["ticker", "exit_reason", "quantity", "placed_at", "age_hours"]]
+        edf.columns = ["Ticker", "Exit Reason", "Quantity", "Placed At", "Age (hours)"]
+        st.dataframe(edf, width="stretch", hide_index=True)
+
     # ── Log Viewer ─────────────────────────────────────────────────────────
     st.divider()
     st.markdown("### Log Viewer")
@@ -1960,24 +2086,19 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Performance page
+# Backtest page
 # ---------------------------------------------------------------------------
-
-def _asset_type_map(config: dict) -> dict[str, str]:
-    """Map research ticker -> 'ETF' or 'STOCK', sourced from every VERIFIED
-    T212 instrument resolution (see CLAUDE.md's "wire the momentum-only,
-    full-S&P-500 selection into live execution" section). Every resolved
-    ticker is a stock in practice today -- the ETF sleeve was removed from
-    live trading entirely -- but this reads genuinely per-ticker rather
-    than assuming that, in case a future re-addition ever changes it."""
-    from brokers.trading212 import load_all_instrument_resolutions
-    asset_types: dict[str, str] = {}
-    for r in load_all_instrument_resolutions():
-        if r["status"] != "VERIFIED":
-            continue
-        asset_types[r["ticker"]] = "STOCK"
-    return asset_types
-
+# (This header previously read "Performance page" -- a stale label left
+# over from an earlier reorganisation; _asset_type_map(), _block_pass_
+# style(), and _render_backtest_page() below are all genuinely Backtest-
+# page content, and the ACTUAL Performance page (which lived further down
+# this file) was removed entirely 2026-08-03 -- see CLAUDE.md's
+# "Performance page removed — content relocated" section. Fixed in place
+# rather than left mislabeled, since it was already touched while removing
+# the real Performance page function. _asset_type_map() itself was also
+# removed here -- confirmed genuinely dead code, zero call sites anywhere
+# in this file, not even from the Performance page it was originally
+# built for.)
 
 def _block_pass_style(val) -> str:
     return "color:#16a34a;font-weight:700" if val == "PASS" else "color:#dc2626;font-weight:700"
@@ -2220,145 +2341,6 @@ def _render_backtest_page(config: dict) -> None:
     _render_footer()
 
 
-def _render_performance_page(config: dict) -> None:
-    """Execution performance driven entirely by real T212 order fills — see
-    "T212 P&L reconstruction" in CLAUDE.md. No simulated/paper trades."""
-    _render_page_wordmark("Performance")
-    st.title("Performance")
-
-    t212_enabled = config.get("trading212_invest", {}).get("enabled", False)
-    st.markdown(
-        (
-            '<span style="background:#16a34a;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700">🟢 LIVE (DEMO)</span>'
-            if t212_enabled else
-            '<span style="background:#8899AA;color:#fff;padding:2px 9px;border-radius:4px;'
-            'font-size:0.78rem;font-weight:700">NOT ENABLED</span>'
-        ),
-        unsafe_allow_html=True,
-    )
-
-    st.divider()
-    st.markdown("### Open Positions")
-    open_cards = _get_open_cards(config)
-    st.markdown(f"**{positions_summary_text(len(open_cards))}**")
-    if open_cards:
-        st.caption(POSITIONS_RULES_EXPLANATION)
-    if not open_cards:
-        st.info("No open positions.")
-    else:
-        # Stable, neutral order — alphabetical by ticker, not by status/
-        # proximity to a threshold, which would imply some positions need
-        # more attention than others (see CLAUDE.md's "Decision-relevant,
-        # tone-neutral context on open position cards" section).
-        all_cards = sorted(open_cards, key=lambda x: x.get("ticker", ""))
-        for e in all_cards:
-            _render_trade_card(e)
-
-    st.divider()
-    st.markdown("### Closed Positions")
-    pnl_rows = _get_closed_rows()
-
-    if not pnl_rows:
-        st.info("No closed positions yet — data will appear as positions close.")
-    else:
-        show_df = pd.DataFrame(pnl_rows)
-        show_df["Type"] = show_df["is_etf"].map(lambda b: "ETF" if b else "STOCK")
-        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"]).dt.strftime("%Y-%m-%d")
-        show_df["exit_date"]  = pd.to_datetime(show_df["exit_date"]).dt.strftime("%Y-%m-%d")
-        show_df["pnl_pct"]    = (show_df["pnl_pct"] * 100).round(2)
-        show_df["pnl_gbp"]    = show_df["pnl_gbp"].round(2)
-        show_df["momentum_pct_at_entry"] = (show_df["momentum_pct_at_entry"] * 100).round(1)
-
-        show_df = show_df[[
-            "ticker", "Type", "entry_date", "exit_date", "entry_price", "exit_price",
-            "quantity", "currency", "pnl_gbp", "pnl_pct", "holding_days",
-            "momentum_pct_at_entry", "exit_reason",
-        ]]
-        show_df.columns = [
-            "Ticker", "Type", "Entry Date", "Exit Date", "Entry Price", "Exit Price",
-            "Qty", "Ccy", "P&L £", "P&L %", "Hold Days",
-            "Momentum at Entry %", "Exit Reason",
-        ]
-        st.dataframe(
-            show_df.style
-                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L £"])
-                .map(lambda v: f"color:{'#16a34a' if v >= 0 else '#dc2626'}", subset=["P&L %"]),
-            width="stretch", hide_index=True,
-        )
-
-    st.divider()
-    st.markdown("### Performance Metrics")
-    n_closed = len(pnl_rows)
-
-    if n_closed < 5:
-        st.caption(f"Statistical metrics unlock at 5 closed positions (currently {n_closed}/5).")
-        if n_closed:
-            wins = sum(1 for r in pnl_rows if (r.get("pnl_gbp") or 0) > 0)
-            losses = n_closed - wins
-            total_pnl = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
-            st.caption(
-                f"So far: {wins} win{'s' if wins != 1 else ''} / "
-                f"{losses} loss{'es' if losses != 1 else ''} · "
-                f"total realised P&L £{total_pnl:+,.2f}."
-            )
-    else:
-        mdf  = pnl_metrics_df(pnl_rows)
-        mets = compute_metrics(mdf)
-
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Closed Positions", mets.get("total_trades", 0))
-        wr_pct = round((mets.get("win_rate") or 0) * 100, 1)
-        c2.metric("Win Rate", f"{wr_pct}%")
-        c3.metric("Avg Return", f"{mets.get('avg_return_pct', 0):+.2f}%")
-        c4.metric("Total Return", f"{mets.get('total_return_pct', 0):+.1f}%")
-        c5.metric("Profit Factor", f"{mets.get('profit_factor', 0):.2f}")
-        c6.metric("Max Drawdown", f"{mets.get('max_drawdown_pct', 0):.1f}%")
-
-        total_pnl_gbp = sum(r.get("pnl_gbp") or 0 for r in pnl_rows)
-        st.caption(
-            f"Total realised P&L: £{total_pnl_gbp:+,.2f} across {n_closed} closed positions · "
-            f"avg hold {mets.get('avg_holding_days', 0):.0f} days."
-        )
-
-        starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
-        ec = equity_curve_gbp(mdf, starting_capital_gbp=starting_capital)
-        if not ec.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=ec["date"], y=ec["equity_gbp"],
-                mode="lines", name="Portfolio (£)",
-                line=dict(color="#3b82f6", width=2, shape="linear"),
-                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
-                hovertemplate="%{x|%Y-%m-%d}<br>Equity: £%{y:,.2f}<extra></extra>",
-            ))
-            fig.update_layout(
-                title="Equity Curve (£, daily)",
-                xaxis_title="Date", yaxis_title="Portfolio Value (£)",
-                height=320, margin=dict(l=0, r=0, t=40, b=0),
-                xaxis=dict(type="date"),
-            )
-            _apply_dark_theme(fig)
-            st.plotly_chart(fig, width="stretch")
-
-        exit_df = mdf.groupby("exit_reason").agg(
-            trades=("pnl_pct", "count"),
-            win_rate=("is_win", "mean"),
-            avg_return=("pnl_pct", "mean"),
-            avg_hold=("holding_days", "mean"),
-        )
-        if not exit_df.empty:
-            st.markdown("#### Performance by Exit Reason")
-            exit_show = exit_df.copy()
-            exit_show["win_rate"] = (exit_show["win_rate"] * 100).round(1)
-            exit_show["avg_return"] = (exit_show["avg_return"] * 100).round(2)
-            exit_show["avg_hold"] = exit_show["avg_hold"].round(1)
-            exit_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
-            st.dataframe(exit_show, width="stretch")
-
-    _render_footer()
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -2390,11 +2372,10 @@ def main() -> None:
         """, unsafe_allow_html=True)
         st.divider()
 
-        _PAGES = ["Dashboard", "Instruments", "Performance", "Backtest", "Status"]
+        _PAGES = ["Dashboard", "Instruments", "Backtest", "Status"]
         _PAGE_KEYS = {
             "Dashboard":      "dashboard",
             "Instruments":    "instruments",
-            "Performance":    "performance",
             "Backtest":       "backtest",
             "Status":         "status",
         }
@@ -2431,10 +2412,6 @@ def main() -> None:
 
     if page_key == "status":
         _render_status_page(config, watchlist)
-        return
-
-    if page_key == "performance":
-        _render_performance_page(config)
         return
 
     if page_key == "backtest":

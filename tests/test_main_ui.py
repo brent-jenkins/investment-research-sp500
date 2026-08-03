@@ -653,33 +653,6 @@ def test_dashboard_exit_check_banner_states_which_exit_checks_were_skipped(db_en
     assert "max-holding" in banner_text
 
 
-# ---------------------------------------------------------------------------
-# Dashboard candidate-queue Status column + filter (2026-08-02) -- sourced
-# from brokers.trading212.project_pending_order_admission(), the same
-# read-only projection built during the urgent capacity/momentum
-# verification, not a separate/approximate computation.
-# ---------------------------------------------------------------------------
-
-def _seed_dashboard_pending_row(db_engine, *, ticker, momentum_pct, position_gbp=1000.0,
-                                 is_etf=False, status="PENDING", resolution_note=None,
-                                 decided_at=None):
-    from sqlalchemy import text as sa_text
-    from datetime import datetime
-    now = decided_at or datetime.utcnow().isoformat()
-    with db_engine.begin() as conn:
-        conn.execute(sa_text("""
-            INSERT INTO pending_orders
-                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                 position_gbp, momentum_pct, stop_price, var_pct, status, resolution_note, created_at)
-            VALUES (:ticker, :t212_ticker, :is_etf, 'USD', :now, 100.0,
-                    :position_gbp, :momentum_pct, 90.0, 0.02, :status, :resolution_note, :now)
-        """), {
-            "ticker": ticker, "t212_ticker": f"{ticker}_US_EQ", "is_etf": is_etf,
-            "now": now, "position_gbp": position_gbp, "momentum_pct": momentum_pct,
-            "status": status, "resolution_note": resolution_note,
-        })
-
-
 def _seed_invest_order(db_engine, *, ticker, direction="BUY", status="FILLED",
                         estimated_value_gbp=1000.0, is_etf=False, placed_at=None):
     from sqlalchemy import text as sa_text
@@ -732,277 +705,107 @@ def test_dashboard_recent_orders_empty_state(dashboard_app):
     assert "No orders recorded yet" in all_text
 
 
-def test_dashboard_candidate_table_shows_status_from_the_real_projection(db_engine, dashboard_app, mocker):
-    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0, position_gbp=806.81)
-    _seed_dashboard_pending_row(db_engine, ticker="WBD", momentum_pct=0.98, position_gbp=2500.0)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "SNDK", "momentum_pct": 27.0, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
-        {"ticker": "WBD", "momentum_pct": 0.98, "position_gbp": 2500.0, "projected_status": "PROJECTED_REJECT_CAPACITY"},
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert "Status" in df.columns
-    assert df.loc[df["Ticker"] == "SNDK", "Status"].iloc[0] == "PROJECTED_ADMIT"
-    assert df.loc[df["Ticker"] == "WBD", "Status"].iloc[0] == "PROJECTED_REJECT_CAPACITY"
-    # Sourced from the real function, not a separate computation -- confirmed
-    # it was actually called, not just that the right values happened to appear.
-    from brokers.trading212 import project_pending_order_admission
-    project_pending_order_admission.assert_called_once()
-
-
-def test_dashboard_candidate_status_labelled_as_projection_not_guarantee(db_engine, dashboard_app, mocker):
-    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "AAPL", "momentum_pct": 0.5, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    all_text = " ".join(c.value for c in at.caption)
-    assert "projection" in all_text.lower()
-    assert "not a guarantee" in all_text.lower()
-
-
-def test_dashboard_candidate_status_filter_narrows_the_table(db_engine, dashboard_app, mocker):
-    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0)
-    _seed_dashboard_pending_row(db_engine, ticker="WBD", momentum_pct=0.98)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "SNDK", "momentum_pct": 27.0, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
-        {"ticker": "WBD", "momentum_pct": 0.98, "position_gbp": 2500.0, "projected_status": "PROJECTED_REJECT_CAPACITY"},
-    ])
-
-    at = dashboard_app.run()
-    at.multiselect(key="candidate_status_filter").set_value(["PROJECTED_ADMIT"]).run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert set(df["Ticker"]) == {"SNDK"}
-
-
-def test_dashboard_candidate_status_shows_unavailable_when_projection_fails(db_engine, dashboard_app, mocker):
-    """A ticker with no matching projection entry (e.g. the projection
-    call itself failed and returned []) must show a distinct
-    "unavailable" status, never silently read as rejected."""
-    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert df.loc[df["Ticker"] == "AAPL", "Status"].iloc[0] == "PROJECTION_UNAVAILABLE"
-
-
 # ---------------------------------------------------------------------------
-# Resolved candidates must not silently disappear from the dashboard
-# (2026-08-03) -- real incident: SNDK was the top-ranked overnight candidate,
-# 16 real orders were placed via the 14:30 UTC submission job, and SNDK was
-# nowhere to be found on the Candidate Queue once it resolved to
-# SKIPPED_PRICE_MOVED -- get_pending_candidates() filtered to
-# WHERE status = 'PENDING' only, even though the row was still sitting in
-# pending_orders, fully within its 30-day retention window. See CLAUDE.md's
-# write-up of the real SNDK resolution for the exact evidence.
+# Performance page removed 2026-08-03 -- content relocated onto the
+# Dashboard (Open Positions replacing Top Trades, plus new collapsible
+# Closed Positions/Performance Metrics sections) and the Status page
+# (Candidate Queue, tested in its own dedicated section above; Placed,
+# Unconfirmed Exits). See CLAUDE.md's "Performance page removed — content
+# relocated" section for the full three-way principle behind this split.
 # ---------------------------------------------------------------------------
 
-def test_dashboard_candidate_table_shows_a_resolved_candidate_not_just_pending_ones(db_engine, dashboard_app, mocker):
-    """The real SNDK scenario: a resolved (SKIPPED_PRICE_MOVED) row must
-    still appear in the table -- not disappear -- showing its real,
-    final status (not a PROJECTED_* guess) and its resolution_note."""
-    _seed_dashboard_pending_row(
-        db_engine, ticker="SNDK", momentum_pct=26.997925, position_gbp=806.81,
-        status="SKIPPED_PRICE_MOVED",
-        resolution_note="price moved +3.11% since decision (decided 1214.83 -> now 1252.56), exceeds 3% sanity threshold",
+def test_dashboard_shows_open_positions_replacing_top_trades(dashboard_app):
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Open Positions" in all_text
+    assert "Top Trades" not in all_text
+    assert "Top 5 Winners" not in all_text
+    assert "Top 5 Losers" not in all_text
+
+
+def test_dashboard_open_positions_empty_state(dashboard_app):
+    """No T212 credentials in the test environment -- get_brief_cards()
+    correctly returns [] (see tests/test_performance.py:test_brief_cards_
+    no_credentials_returns_empty), so the Dashboard's own empty-state
+    copy must render, not an exception or a blank section."""
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(i.value for i in at.info)
+    assert "No open positions" in all_text
+
+
+def test_dashboard_closed_positions_is_a_collapsible_expander(dashboard_app):
+    """A genuine st.expander (collapsible by construction -- the widget
+    itself IS the "one click away" mechanism), not a flat, always-visible
+    section like Open Positions/Recent Orders above it. AppTest's public
+    Expander element doesn't expose its expanded=False default as a
+    readable attribute, so this confirms presence/labelling -- the
+    underlying source (main.py) is the direct source of truth for the
+    expanded=False default itself."""
+    at = dashboard_app.run()
+    assert not at.exception
+    labels = [e.label for e in at.expander]
+    assert any("Closed Positions" in label for label in labels)
+
+
+def test_dashboard_performance_metrics_is_a_collapsible_expander(dashboard_app):
+    at = dashboard_app.run()
+    assert not at.exception
+    labels = [e.label for e in at.expander]
+    assert any("Performance Metrics" in label for label in labels)
+
+
+def test_dashboard_candidate_queue_and_unconfirmed_exits_are_gone(dashboard_app):
+    """Both moved to the Status page 2026-08-03 -- neither is confirmed,
+    settled real-money activity, so neither belongs on the Dashboard any
+    more (see CLAUDE.md's three-way relocation principle)."""
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Candidate Queue" not in all_text
+    assert "Placed, Unconfirmed Exits" not in all_text
+
+
+def test_status_page_shows_placed_unconfirmed_exits_section(status_app):
+    """Alongside Candidate Queue (covered by its own dedicated test
+    section above) -- confirms this second relocated section also
+    genuinely renders on the Status page, with its own empty-state copy
+    in the default (no seeded SELL orders) test environment."""
+    at = status_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "Placed, Unconfirmed Exits" in all_text
+    info_text = " ".join(i.value for i in at.info)
+    assert "No exits currently awaiting confirmation" in info_text
+
+
+def test_performance_page_and_route_are_fully_removed():
+    """Confirmed genuinely removed, not disabled or hidden -- matching
+    this project's own "confirmed removed, stays removed" pattern (e.g.
+    test_scheduler_never_registers_monday_premarket_job, test_old_
+    charts_page_functions_are_gone_not_dormant, test_status_page_danger_
+    zone_and_manual_trigger_buttons_are_gone)."""
+    import main
+    assert not hasattr(main, "_render_performance_page")
+    assert not hasattr(main, "_asset_type_map"), (
+        "_asset_type_map was confirmed genuinely dead code (zero call sites, "
+        "not even from the Performance page it was originally built for) "
+        "and removed alongside the page -- its continued presence suggests "
+        "the cleanup wasn't actually done"
     )
-    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0, status="PENDING")
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
-    ])
 
+
+def test_dashboard_navigation_no_longer_offers_performance(dashboard_app):
     at = dashboard_app.run()
-
     assert not at.exception
-    df = at.dataframe[0].value
-    assert "SNDK" in set(df["Ticker"])
-    sndk_row = df.loc[df["Ticker"] == "SNDK"].iloc[0]
-    assert sndk_row["Status"] == "SKIPPED_PRICE_MOVED"
-    assert "price moved +3.11%" in sndk_row["Note"]
-
-
-def test_dashboard_candidate_status_filter_offers_resolved_statuses_not_just_projected(db_engine, dashboard_app, mocker):
-    """The filter dropdown's options come from whatever's genuinely in the
-    data (main.py already derives it dynamically via cdf["Status"].unique())
-    -- this failed silently before the fix only because the underlying
-    query itself excluded every non-PENDING row, so the dropdown never had
-    a resolved status to offer in the first place."""
-    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=26.9, status="SKIPPED_PRICE_MOVED",
-                                resolution_note="price moved too much")
-    _seed_dashboard_pending_row(db_engine, ticker="WBD", momentum_pct=6.6, status="REJECTED_CAPACITY",
-                                resolution_note="capacity already full")
-    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0, status="PENDING")
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    options = set(at.multiselect(key="candidate_status_filter").options)
-    assert {"SKIPPED_PRICE_MOVED", "REJECTED_CAPACITY", "PROJECTED_ADMIT"} <= options
-
-    at.multiselect(key="candidate_status_filter").set_value(["SKIPPED_PRICE_MOVED"]).run()
-    df = at.dataframe[0].value
-    assert set(df["Ticker"]) == {"SNDK"}
-
-
-def test_dashboard_candidate_table_a_ticker_with_two_historical_rows_shows_each_rows_own_status(db_engine, dashboard_app, mocker):
-    """A ticker can have several historical pending_orders rows (e.g. an
-    earlier SUPERSEDED decision and the later, final one that replaced
-    it) -- confirms Status is looked up per ROW, not by ticker, which
-    would otherwise silently show one row's status on the other."""
-    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=26.0, status="SUPERSEDED",
-                                resolution_note="cleared for fresh re-run", decided_at="2026-08-02T21:31:10")
-    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0, status="SKIPPED_PRICE_MOVED",
-                                resolution_note="price moved too much", decided_at="2026-08-02T21:50:29")
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    sndk_rows = df.loc[df["Ticker"] == "SNDK"]
-    assert len(sndk_rows) == 2
-    assert set(sndk_rows["Status"]) == {"SUPERSEDED", "SKIPPED_PRICE_MOVED"}
-
-
-def test_dashboard_candidate_table_no_change_to_retention_only_to_visibility(db_engine, dashboard_app, mocker):
-    """Explicit confirmation this is a query/filter fix, not a retention
-    change: a resolved row from several days ago (well within the
-    existing 30-day pending_orders retention window -- unaffected by this
-    task) is shown exactly like a same-day one; nothing here alters how
-    long rows are kept, only whether the UI can reach them."""
-    _seed_dashboard_pending_row(
-        db_engine, ticker="OLDROW", momentum_pct=5.0, status="SUBMITTED",
-        decided_at="2026-07-20T21:30:00",
-    )
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert "OLDROW" in set(df["Ticker"])
-    assert df.loc[df["Ticker"] == "OLDROW", "Status"].iloc[0] == "SUBMITTED"
-
-
-# ---------------------------------------------------------------------------
-# Dashboard candidate-table momentum-strength label (2026-08-02) -- a
-# qualitative label (Weak/Moderate/Strong/Very Strong) alongside the raw
-# momentum percentage, using RELATIVE percentile bands recomputed from the
-# current live candidate pool every render (see
-# main.py:_compute_momentum_strength_bands()'s own docstring for the
-# relative-vs-absolute reasoning). Also removes the "Type" column, which
-# always read "STOCK" for every row now that ETFs are fully out of live
-# trading (see CLAUDE.md's "ETF sleeve removed from live trading").
-# ---------------------------------------------------------------------------
-
-def test_dashboard_candidate_table_strength_label_uses_relative_percentile_bands(db_engine, dashboard_app, mocker):
-    """10 candidates with momentum 1..10 -- exact, hand-computed pandas
-    quantile boundaries (q25=3.25, q75=7.75, q90=9.1) put 1-3 in Weak,
-    4-7 in Moderate, 8-9 in Strong, and 10 alone in Very Strong. Proves
-    the bands are genuinely derived from THIS pool's own distribution,
-    not a fixed/arbitrary cutoff."""
-    tickers = [f"T{i}" for i in range(1, 11)]
-    projection = []
-    for i, t in enumerate(tickers, start=1):
-        _seed_dashboard_pending_row(db_engine, ticker=t, momentum_pct=float(i))
-        projection.append({"ticker": t, "momentum_pct": float(i), "position_gbp": 1000.0,
-                            "projected_status": "PROJECTED_ADMIT"})
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=projection)
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    strength_by_ticker = dict(zip(df["Ticker"], df["Strength"]))
-    for t in ["T1", "T2", "T3"]:
-        assert strength_by_ticker[t] == "Weak", strength_by_ticker
-    for t in ["T4", "T5", "T6", "T7"]:
-        assert strength_by_ticker[t] == "Moderate", strength_by_ticker
-    for t in ["T8", "T9"]:
-        assert strength_by_ticker[t] == "Strong", strength_by_ticker
-    assert strength_by_ticker["T10"] == "Very Strong", strength_by_ticker
-
-
-def test_dashboard_candidate_table_raw_momentum_percentage_still_shown_alongside_strength(db_engine, dashboard_app, mocker):
-    """The qualitative label must be ADDITIVE, never a replacement for the
-    raw figure -- same "show both, hide neither" principle as the
-    fixed-denominator/peak-relative drawdown pair shown together
-    elsewhere on this page."""
-    _seed_dashboard_pending_row(db_engine, ticker="SNDK", momentum_pct=26.997925)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "SNDK", "momentum_pct": 26.997925, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert "Momentum" in df.columns
-    assert "Strength" in df.columns
-    row = df.loc[df["Ticker"] == "SNDK"].iloc[0]
-    assert "2699.8%" in row["Momentum"]  # raw percentage, unmodified
-    assert row["Strength"]  # a real qualitative label, not blank
-
-
-def test_dashboard_candidate_table_type_column_removed(db_engine, dashboard_app, mocker):
-    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert "Type" not in df.columns
-
-
-def test_dashboard_candidate_table_strength_shows_placeholder_with_too_few_candidates(db_engine, dashboard_app, mocker):
-    """Fewer than 4 usable momentum values -- not enough to form 4
-    meaningful percentile bands -- must show a plain placeholder, never a
-    misleading or arbitrarily-assigned label."""
-    _seed_dashboard_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0)
-    _seed_dashboard_pending_row(db_engine, ticker="MSFT", momentum_pct=2.0)
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
-        {"ticker": "MSFT", "momentum_pct": 2.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    df = at.dataframe[0].value
-    assert set(df["Strength"]) == {"—"}
-
-
-def test_dashboard_candidate_table_strength_caption_states_relative_reasoning(db_engine, dashboard_app, mocker):
-    for i, t in enumerate(["A", "B", "C", "D"], start=1):
-        _seed_dashboard_pending_row(db_engine, ticker=t, momentum_pct=float(i))
-    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
-        {"ticker": t, "momentum_pct": float(i), "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"}
-        for i, t in enumerate(["A", "B", "C", "D"], start=1)
-    ])
-
-    at = dashboard_app.run()
-
-    assert not at.exception
-    all_text = " ".join(c.value for c in at.caption)
-    assert "relative" in all_text.lower()
-    assert "recalculated" in all_text.lower() or "fresh" in all_text.lower()
+    # Select by option content, not index -- the Dashboard page's own
+    # "Account Value" range selector (Week/Month/Year) is also an
+    # st.radio and renders before the sidebar nav in element order.
+    nav_radio = next(r for r in at.radio if "Dashboard" in r.options)
+    nav_options = list(nav_radio.options)
+    assert "Performance" not in nav_options
+    assert set(nav_options) == {"Dashboard", "Instruments", "Backtest", "Status"}
 
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +910,313 @@ def status_app(db_engine, monkeypatch, mocker):
     at = AppTest.from_file("main.py", default_timeout=30)
     at.session_state["page"] = "status"
     return at
+
+
+# ---------------------------------------------------------------------------
+# Status page Candidate Queue Status column + filter (2026-08-02, relocated
+# here 2026-08-03 from the Dashboard — see CLAUDE.md's "Performance page
+# removed — content relocated" section for the three-way principle: the
+# Dashboard now holds confirmed, settled real-money activity, while the
+# Status page holds anything still pending or in flight, awaiting
+# resolution, grouped with system health/config). Sourced from brokers.
+# trading212.project_pending_order_admission(), the same read-only
+# projection built during the urgent capacity/momentum verification, not a
+# separate/approximate computation. Test names/logic are otherwise
+# unchanged from their original Dashboard-page form — only the fixture
+# (status_app instead of dashboard_app) and function names moved.
+# ---------------------------------------------------------------------------
+
+def _seed_pending_row(db_engine, *, ticker, momentum_pct, position_gbp=1000.0,
+                       is_etf=False, status="PENDING", resolution_note=None,
+                       decided_at=None):
+    from sqlalchemy import text as sa_text
+    from datetime import datetime
+    now = decided_at or datetime.utcnow().isoformat()
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, stop_price, var_pct, status, resolution_note, created_at)
+            VALUES (:ticker, :t212_ticker, :is_etf, 'USD', :now, 100.0,
+                    :position_gbp, :momentum_pct, 90.0, 0.02, :status, :resolution_note, :now)
+        """), {
+            "ticker": ticker, "t212_ticker": f"{ticker}_US_EQ", "is_etf": is_etf,
+            "now": now, "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+            "status": status, "resolution_note": resolution_note,
+        })
+
+
+def test_status_page_candidate_table_shows_status_from_the_real_projection(db_engine, status_app, mocker):
+    _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0, position_gbp=806.81)
+    _seed_pending_row(db_engine, ticker="WBD", momentum_pct=0.98, position_gbp=2500.0)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "SNDK", "momentum_pct": 27.0, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
+        {"ticker": "WBD", "momentum_pct": 0.98, "position_gbp": 2500.0, "projected_status": "PROJECTED_REJECT_CAPACITY"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Status" in df.columns
+    assert df.loc[df["Ticker"] == "SNDK", "Status"].iloc[0] == "PROJECTED_ADMIT"
+    assert df.loc[df["Ticker"] == "WBD", "Status"].iloc[0] == "PROJECTED_REJECT_CAPACITY"
+    # Sourced from the real function, not a separate computation -- confirmed
+    # it was actually called, not just that the right values happened to appear.
+    from brokers.trading212 import project_pending_order_admission
+    project_pending_order_admission.assert_called_once()
+
+
+def test_status_page_candidate_status_labelled_as_projection_not_guarantee(db_engine, status_app, mocker):
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 0.5, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "projection" in all_text.lower()
+    assert "not a guarantee" in all_text.lower()
+
+
+def test_status_page_candidate_status_filter_narrows_the_table(db_engine, status_app, mocker):
+    _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0)
+    _seed_pending_row(db_engine, ticker="WBD", momentum_pct=0.98)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "SNDK", "momentum_pct": 27.0, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
+        {"ticker": "WBD", "momentum_pct": 0.98, "position_gbp": 2500.0, "projected_status": "PROJECTED_REJECT_CAPACITY"},
+    ])
+
+    at = status_app.run()
+    at.multiselect(key="candidate_status_filter").set_value(["PROJECTED_ADMIT"]).run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"SNDK"}
+
+
+def test_status_page_candidate_status_shows_unavailable_when_projection_fails(db_engine, status_app, mocker):
+    """A ticker with no matching projection entry (e.g. the projection
+    call itself failed and returned []) must show a distinct
+    "unavailable" status, never silently read as rejected."""
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert df.loc[df["Ticker"] == "AAPL", "Status"].iloc[0] == "PROJECTION_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# Resolved candidates must not silently disappear (2026-08-03) -- real
+# incident: SNDK was the top-ranked overnight candidate, 16 real orders
+# were placed via the 14:30 UTC submission job, and SNDK was nowhere to be
+# found on the Candidate Queue once it resolved to SKIPPED_PRICE_MOVED --
+# get_pending_candidates() filtered to WHERE status = 'PENDING' only, even
+# though the row was still sitting in pending_orders, fully within its
+# 30-day retention window. See CLAUDE.md's write-up of the real SNDK
+# resolution for the exact evidence.
+# ---------------------------------------------------------------------------
+
+def test_status_page_candidate_table_shows_a_resolved_candidate_not_just_pending_ones(db_engine, status_app, mocker):
+    """The real SNDK scenario: a resolved (SKIPPED_PRICE_MOVED) row must
+    still appear in the table -- not disappear -- showing its real,
+    final status (not a PROJECTED_* guess) and its resolution_note."""
+    _seed_pending_row(
+        db_engine, ticker="SNDK", momentum_pct=26.997925, position_gbp=806.81,
+        status="SKIPPED_PRICE_MOVED",
+        resolution_note="price moved +3.11% since decision (decided 1214.83 -> now 1252.56), exceeds 3% sanity threshold",
+    )
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0, status="PENDING")
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "SNDK" in set(df["Ticker"])
+    sndk_row = df.loc[df["Ticker"] == "SNDK"].iloc[0]
+    assert sndk_row["Status"] == "SKIPPED_PRICE_MOVED"
+    assert "price moved +3.11%" in sndk_row["Note"]
+
+
+def test_status_page_candidate_status_filter_offers_resolved_statuses_not_just_projected(db_engine, status_app, mocker):
+    """The filter dropdown's options come from whatever's genuinely in the
+    data (main.py already derives it dynamically via cdf["Status"].unique())
+    -- this failed silently before the fix only because the underlying
+    query itself excluded every non-PENDING row, so the dropdown never had
+    a resolved status to offer in the first place."""
+    _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=26.9, status="SKIPPED_PRICE_MOVED",
+                      resolution_note="price moved too much")
+    _seed_pending_row(db_engine, ticker="WBD", momentum_pct=6.6, status="REJECTED_CAPACITY",
+                      resolution_note="capacity already full")
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0, status="PENDING")
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    options = set(at.multiselect(key="candidate_status_filter").options)
+    assert {"SKIPPED_PRICE_MOVED", "REJECTED_CAPACITY", "PROJECTED_ADMIT"} <= options
+
+    at.multiselect(key="candidate_status_filter").set_value(["SKIPPED_PRICE_MOVED"]).run()
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"SNDK"}
+
+
+def test_status_page_candidate_table_a_ticker_with_two_historical_rows_shows_each_rows_own_status(db_engine, status_app, mocker):
+    """A ticker can have several historical pending_orders rows (e.g. an
+    earlier SUPERSEDED decision and the later, final one that replaced
+    it) -- confirms Status is looked up per ROW, not by ticker, which
+    would otherwise silently show one row's status on the other."""
+    _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=26.0, status="SUPERSEDED",
+                      resolution_note="cleared for fresh re-run", decided_at="2026-08-02T21:31:10")
+    _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0, status="SKIPPED_PRICE_MOVED",
+                      resolution_note="price moved too much", decided_at="2026-08-02T21:50:29")
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    sndk_rows = df.loc[df["Ticker"] == "SNDK"]
+    assert len(sndk_rows) == 2
+    assert set(sndk_rows["Status"]) == {"SUPERSEDED", "SKIPPED_PRICE_MOVED"}
+
+
+def test_status_page_candidate_table_no_change_to_retention_only_to_visibility(db_engine, status_app, mocker):
+    """Explicit confirmation this is a query/filter fix, not a retention
+    change: a resolved row from several days ago (well within the
+    existing 30-day pending_orders retention window -- unaffected by this
+    task) is shown exactly like a same-day one; nothing here alters how
+    long rows are kept, only whether the UI can reach them."""
+    _seed_pending_row(
+        db_engine, ticker="OLDROW", momentum_pct=5.0, status="SUBMITTED",
+        decided_at="2026-07-20T21:30:00",
+    )
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "OLDROW" in set(df["Ticker"])
+    assert df.loc[df["Ticker"] == "OLDROW", "Status"].iloc[0] == "SUBMITTED"
+
+
+# ---------------------------------------------------------------------------
+# Candidate-table momentum-strength label (2026-08-02) -- a qualitative
+# label (Weak/Moderate/Strong/Very Strong) alongside the raw momentum
+# percentage, using RELATIVE percentile bands recomputed from the current
+# live candidate pool every render (see main.py:_compute_momentum_
+# strength_bands()'s own docstring for the relative-vs-absolute
+# reasoning). Also removes the "Type" column, which always read "STOCK"
+# for every row now that ETFs are fully out of live trading (see
+# CLAUDE.md's "ETF sleeve removed from live trading").
+# ---------------------------------------------------------------------------
+
+def test_status_page_candidate_table_strength_label_uses_relative_percentile_bands(db_engine, status_app, mocker):
+    """10 candidates with momentum 1..10 -- exact, hand-computed pandas
+    quantile boundaries (q25=3.25, q75=7.75, q90=9.1) put 1-3 in Weak,
+    4-7 in Moderate, 8-9 in Strong, and 10 alone in Very Strong. Proves
+    the bands are genuinely derived from THIS pool's own distribution,
+    not a fixed/arbitrary cutoff."""
+    tickers = [f"T{i}" for i in range(1, 11)]
+    projection = []
+    for i, t in enumerate(tickers, start=1):
+        _seed_pending_row(db_engine, ticker=t, momentum_pct=float(i))
+        projection.append({"ticker": t, "momentum_pct": float(i), "position_gbp": 1000.0,
+                            "projected_status": "PROJECTED_ADMIT"})
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=projection)
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    strength_by_ticker = dict(zip(df["Ticker"], df["Strength"]))
+    for t in ["T1", "T2", "T3"]:
+        assert strength_by_ticker[t] == "Weak", strength_by_ticker
+    for t in ["T4", "T5", "T6", "T7"]:
+        assert strength_by_ticker[t] == "Moderate", strength_by_ticker
+    for t in ["T8", "T9"]:
+        assert strength_by_ticker[t] == "Strong", strength_by_ticker
+    assert strength_by_ticker["T10"] == "Very Strong", strength_by_ticker
+
+
+def test_status_page_candidate_table_raw_momentum_percentage_still_shown_alongside_strength(db_engine, status_app, mocker):
+    """The qualitative label must be ADDITIVE, never a replacement for the
+    raw figure -- same "show both, hide neither" principle as the
+    fixed-denominator/peak-relative drawdown pair shown together
+    elsewhere in this app."""
+    _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=26.997925)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "SNDK", "momentum_pct": 26.997925, "position_gbp": 806.81, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Momentum" in df.columns
+    assert "Strength" in df.columns
+    row = df.loc[df["Ticker"] == "SNDK"].iloc[0]
+    assert "2699.8%" in row["Momentum"]  # raw percentage, unmodified
+    assert row["Strength"]  # a real qualitative label, not blank
+
+
+def test_status_page_candidate_table_type_column_removed(db_engine, status_app, mocker):
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert "Type" not in df.columns
+
+
+def test_status_page_candidate_table_strength_shows_placeholder_with_too_few_candidates(db_engine, status_app, mocker):
+    """Fewer than 4 usable momentum values -- not enough to form 4
+    meaningful percentile bands -- must show a plain placeholder, never a
+    misleading or arbitrarily-assigned label."""
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=1.0)
+    _seed_pending_row(db_engine, ticker="MSFT", momentum_pct=2.0)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 1.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+        {"ticker": "MSFT", "momentum_pct": 2.0, "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Strength"]) == {"—"}
+
+
+def test_status_page_candidate_table_strength_caption_states_relative_reasoning(db_engine, status_app, mocker):
+    for i, t in enumerate(["A", "B", "C", "D"], start=1):
+        _seed_pending_row(db_engine, ticker=t, momentum_pct=float(i))
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": t, "momentum_pct": float(i), "position_gbp": 1000.0, "projected_status": "PROJECTED_ADMIT"}
+        for i, t in enumerate(["A", "B", "C", "D"], start=1)
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "relative" in all_text.lower()
+    assert "recalculated" in all_text.lower() or "fresh" in all_text.lower()
 
 
 def test_status_page_price_refresh_not_stale_after_one_trading_day_gap(db_engine, status_app):
