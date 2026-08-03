@@ -4,6 +4,7 @@ strategy's execution path. The Trading212 HTTP client is mocked entirely
 (pytest-mock); no real API call is ever made. All DB reads/writes go through
 the db_engine fixture's in-memory SQLite database (tests/conftest.py).
 """
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -12,6 +13,20 @@ import pytest
 from sqlalchemy import text as sa_text
 
 from data.database import InvestOrder
+
+# Captured at MODULE IMPORT time (pytest collection, before any fixture in
+# this file has ever run) -- `time` is a single shared module object, so
+# `brokers.trading212.time IS time` (not a separate copy); v2_mocks'
+# monkeypatch.setattr("brokers.trading212.time.sleep", ...) therefore
+# mutates the SAME time.sleep every other importer of `time` sees too,
+# including this file's own `import time`. Grabbing the real function here,
+# before any per-test fixture exists to patch it away, is the only way to
+# get back the genuine, blocking time.sleep later inside a test whose own
+# v2_mocks fixture has already (within that same test's execution, before
+# monkeypatch's teardown-time revert) replaced it with a no-op -- see
+# test_exit_check_live_pricing_completes_comfortably_within_the_hourly_
+# window(), the one test in this file that needs a REAL, measurable sleep.
+_REAL_TIME_SLEEP = time.sleep
 
 
 def _price_frame(n_days: int, start_price: float, daily_drift: float, last_day_shock: float = 0.0) -> pd.DataFrame:
@@ -898,6 +913,419 @@ def test_no_exit_when_nothing_fires(db_engine, v2_mocks, mocker):
         max_holding_days=90,
     )
     v2_mocks.place_market_order.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Live pricing for the exit check (2026-08-03) -- STOP_LOSS now compares
+# against a genuinely live price, not the once-daily stored close
+# _ticker_state() reads from price_data. See CLAUDE.md's "live pricing for
+# the exit check" section for the full investigation, and
+# brokers/trading212.py:_live_exit_check_price()'s own docstring for the
+# two-tier mechanism (T212's own currentPrice, already fetched in the same
+# get_positions() call -- zero extra network calls -- falling back to
+# _live_current_price() / yfinance, paced, only when T212's own price is
+# missing).
+# ---------------------------------------------------------------------------
+
+def _mock_yfinance_fast(mocker, price: float) -> None:
+    """Patches yfinance.Ticker(...).fast_info.last_price to return *price*
+    instantly, with no real network call. Used only by the two timing
+    tests below, which specifically need _live_current_price()'s REAL
+    code -- including its embedded _throttle_yfinance_request() call -- to
+    actually run, unlike every other test in this file (which mocks
+    _live_current_price() itself directly, via _mock_price_data() or a
+    direct mocker.patch, bypassing the throttle entirely)."""
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.fast_info.last_price = price
+    mocker.patch("yfinance.Ticker", return_value=mock_ticker)
+
+
+def test_exit_stop_loss_uses_live_t212_current_price_not_stale_stored_close(db_engine, v2_mocks, mocker):
+    """The decisive proof this fix exists to provide: stop_price sits
+    BETWEEN the stale stored close (well above it -- would NOT have
+    triggered STOP_LOSS under the old code) and T212's own live
+    currentPrice (well below it -- genuinely breaches the stop). Only a
+    fix that is actually reading the live value, not the stored close,
+    can produce STOP_LOSS here."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    stale_close = float(frame["close"].iloc[-1])
+    stop_price = stale_close * 0.9        # stale close (100%) sits ABOVE this -- old code would NOT fire
+    live_price = stale_close * 0.5        # live price sits BELOW this -- must fire if live is genuinely used
+
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0, "currentPrice": live_price},
+    ]
+    _mock_price_data(mocker, {"AAPL": frame})
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=stop_price, days_ago=1, is_etf=False)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.place_market_order.assert_called_once()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "STOP_LOSS", (
+        "STOP_LOSS must fire from the live T212 currentPrice (below stop) -- "
+        "the stale stored close (above stop) could never have produced this on its own"
+    )
+
+
+def test_exit_stop_loss_does_not_fire_on_a_stale_close_the_live_price_has_since_recovered_past(db_engine, v2_mocks, mocker):
+    """The mirror of the test above: the STALE stored close sits at or
+    below stop_price (the OLD, once-daily-close-based code would have
+    wrongly force-sold this position), but the live T212 currentPrice has
+    genuinely recovered back above the stop. The live price must win --
+    no SELL should be placed at all."""
+    from brokers.trading212 import maybe_exit_positions
+
+    # Flat close at 100.0 with an exact, known-positive momentum anchor --
+    # decouples the stop-loss price level from the momentum signal, so
+    # SIGNAL_OFF can't also fire and confound the "no SELL at all" assertion.
+    frame = _frame_with_exact_momentum(0.05)
+    stale_close = float(frame["close"].iloc[-1])
+    assert stale_close == 100.0
+    stop_price = 150.0    # stale close (100) is BELOW this -- old code WOULD wrongly fire
+    live_price = 200.0    # live price is ABOVE this -- must NOT fire
+
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0, "currentPrice": live_price},
+    ]
+    _mock_price_data(mocker, {"AAPL": frame})
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=stop_price, days_ago=1, is_etf=False)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.place_market_order.assert_not_called()
+
+
+def test_exit_falls_back_to_yfinance_live_price_when_t212_current_price_missing(db_engine, v2_mocks, mocker):
+    """When T212's own currentPrice is absent from the position dict (tier
+    1 unavailable), the exit check must fall back to _live_current_price()
+    (yfinance) -- the identical mechanism the crisis check and the
+    submission-time price-sanity check already use -- rather than silently
+    reverting to the stale stored close."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    stale_close = float(frame["close"].iloc[-1])
+    stop_price = stale_close * 0.5   # stale close does NOT breach this
+    fallback_live_price = stop_price * 0.5  # the yfinance fallback value DOES breach it
+
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0},  # deliberately no currentPrice key at all
+    ]
+    _mock_price_data(mocker, {"AAPL": frame})
+    live_price_mock = mocker.patch("brokers.trading212._live_current_price", return_value=fallback_live_price)
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=stop_price, days_ago=1, is_etf=False)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    live_price_mock.assert_called_with("AAPL")
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "STOP_LOSS"
+
+
+def test_missing_live_price_skips_only_stop_loss_other_exit_conditions_still_fire(db_engine, v2_mocks, mocker):
+    """A total live-price fetch failure (both tiers exhausted -- no T212
+    currentPrice AND _live_current_price() returns None) must degrade
+    gracefully, exactly as evaluate_exit_reason()'s own None-tolerance
+    promises: STOP_LOSS simply doesn't fire for that ticker this cycle,
+    but MAX_HOLDING (which never consumes price at all) still correctly
+    fires for it -- proving the failure is isolated to the one condition
+    that actually needs a price, not the whole ticker's exit evaluation."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0},  # no currentPrice -- forces the yfinance tier
+    ]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("brokers.trading212._live_current_price", return_value=None)  # both tiers now exhausted
+    # stop_price deliberately absurdly low -- would never fire even if a
+    # price WERE available, isolating this test to "does MAX_HOLDING still
+    # work when price is None", not "does a low stop coincidentally fire".
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=0.01, days_ago=999, is_etf=False)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)  # must not raise despite price being unavailable
+
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row is not None, "MAX_HOLDING must still fire even though no live price was ever obtained"
+    assert row[0] == "MAX_HOLDING"
+
+
+def test_missing_live_price_for_one_position_does_not_block_evaluation_of_another(db_engine, v2_mocks, mocker):
+    """Per-ticker isolation, across two DIFFERENT positions in the same
+    run: AAPL's live price is entirely unavailable (both tiers fail);
+    VOO's is fine. Both are evaluated independently via MAX_HOLDING (which
+    doesn't depend on price at all), confirming AAPL's failure doesn't
+    prevent VOO -- or AAPL itself, for its own non-price-dependent
+    conditions -- from being correctly evaluated and exited."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame_a = _bullish_frame()
+    frame_b = _bullish_frame()
+
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0},                     # no currentPrice -- yfinance tier
+        {"ticker": "I50Dl_EQ", "quantity": 10.0, "currentPrice": 999999.0},  # T212 tier works fine
+    ]
+    _mock_price_data(mocker, {"AAPL": frame_a, "VOO": frame_b})
+
+    def _live_price_side_effect(ticker):
+        return None if ticker == "AAPL" else float(frame_b["close"].iloc[-1])
+
+    mocker.patch("brokers.trading212._live_current_price", side_effect=_live_price_side_effect)
+
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=0.01, days_ago=999, is_etf=False)
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ",
+                         stop_price=0.01, days_ago=999, is_etf=True)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    cfg = _config(
+        mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+                 "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+        mocker=mocker, db_engine=db_engine,
+    )
+    maybe_exit_positions(cfg)
+
+    assert v2_mocks.place_market_order.call_count == 2
+    rows = db_engine.connect().execute(sa_text(
+        "SELECT ticker, exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchall()
+    by_ticker = {r[0]: r[1] for r in rows}
+    assert by_ticker == {"AAPL": "MAX_HOLDING", "VOO": "MAX_HOLDING"}
+
+
+def test_live_price_fetch_exception_isolates_the_failing_position_from_the_rest(db_engine, v2_mocks, mocker):
+    """A genuinely unexpected exception out of _live_exit_check_price()
+    itself (not just a clean None return -- _live_current_price() already
+    catches everything internally, so this simulates a failure mode
+    outside that internal safety net) must still be caught by the
+    EXISTING per-position try/except this call now sits inside
+    (2026-07-31 -- 'one position's unhandled exception must never
+    silently stop every other open position from being checked for
+    exit'). AAPL's own exception must not prevent VOO, evaluated
+    afterward in the same run, from exiting normally."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bullish_frame()
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0},
+        {"ticker": "I50Dl_EQ", "quantity": 10.0},
+    ]
+    _mock_price_data(mocker, {"AAPL": frame, "VOO": frame})
+    mocker.patch(
+        "brokers.trading212._live_exit_check_price",
+        side_effect=[RuntimeError("simulated unexpected failure"), 10.0],
+    )
+    _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                         stop_price=999999.0, days_ago=1, is_etf=False)
+    _seed_open_position(db_engine, ticker="VOO", t212_ticker="I50Dl_EQ",
+                         stop_price=999999.0, days_ago=1, is_etf=True)  # 10.0 <= 999999.0 -- STOP_LOSS fires
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=30)
+
+    cfg = _config(
+        mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+                 "VOO": {"t212_instrument_id": "I50Dl_EQ", "currency": "USD", "is_etf": True}},
+        mocker=mocker, db_engine=db_engine,
+    )
+    maybe_exit_positions(cfg)  # must not raise
+
+    rows = db_engine.connect().execute(sa_text(
+        "SELECT ticker FROM invest_orders WHERE direction='SELL'"
+    )).fetchall()
+    tickers_sold = {r[0] for r in rows}
+    assert "AAPL" not in tickers_sold, "AAPL's own exception must not have produced a SELL for it"
+    assert "VOO" in tickers_sold, "VOO must still be evaluated and exited normally despite AAPL's exception"
+
+
+def test_exit_check_t212_current_price_tier_costs_zero_extra_calls_at_current_scale(db_engine, v2_mocks, mocker):
+    """The realistic current-production case: T212 already returns
+    currentPrice for every held position, in the SAME get_positions() call
+    the exit loop already makes for its own quantity check. This proves
+    -- via a call-count assertion, not inferred from timing alone, which
+    could coincidentally look fast even if a slow path were silently
+    taken -- that the exit check makes ZERO additional network calls
+    (yfinance or otherwise) regardless of position count in this case,
+    which is exactly why the "scale" concern this fix was built against
+    doesn't bite in the common case."""
+    from brokers.trading212 import maybe_exit_positions
+
+    n = 16  # today's real open-position count
+    frame = _bullish_frame()
+    live_price = 999999.0  # never breaches any stop below -- isolates this to a pure fetch-path check
+
+    positions, mapping = [], {}
+    for i in range(n):
+        ticker, t212_ticker = f"TICK{i}", f"TICK{i}_US_EQ"
+        positions.append({"ticker": t212_ticker, "quantity": 10.0, "currentPrice": live_price})
+        mapping[ticker] = {"t212_instrument_id": t212_ticker, "currency": "USD", "is_etf": False}
+        _seed_open_position(db_engine, ticker=ticker, t212_ticker=t212_ticker,
+                             stop_price=1.0, days_ago=1, is_etf=False)
+
+    v2_mocks.get_positions.return_value = positions
+    _mock_price_data(mocker, {f"TICK{i}": frame for i in range(n)})
+    # Overrides _mock_price_data()'s own default _live_current_price mock
+    # with one that FAILS the test loudly if ever reached -- the strongest
+    # possible proof the yfinance fallback tier is never touched here.
+    live_price_mock = mocker.patch(
+        "brokers.trading212._live_current_price",
+        side_effect=AssertionError(
+            "the yfinance fallback tier must never be reached when every "
+            "position already has a usable T212 currentPrice"
+        ),
+    )
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=999999)
+
+    cfg = _config(mapping=mapping, mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)  # would raise AssertionError if the fallback tier were ever reached
+
+    v2_mocks.place_market_order.assert_not_called()
+    live_price_mock.assert_not_called()
+
+
+def test_exit_check_live_pricing_completes_comfortably_within_the_hourly_window(db_engine, v2_mocks, mocker):
+    """Real wall-clock timing at today's real open-position count (16),
+    WORST CASE -- every single position falls through to the paced
+    yfinance fallback tier (T212 currentPrice missing for all of them, the
+    least favourable real scenario this mechanism has to handle).
+    Confirms the throttle is genuinely wired in and running (a real,
+    measured lower bound on elapsed time), and that even the worst case
+    completes with enormous margin against the hourly market_hours_check_
+    job() window.
+
+    Restores the REAL, original time.sleep -- v2_mocks patches
+    brokers.trading212.time.sleep (== the single shared `time` module's own
+    sleep, not a private copy) to a no-op for every OTHER test in this file
+    (correct for tests that don't measure timing; it would silently hide
+    the throttle's real overhead here). By the point THIS test's body
+    runs, that no-op is already installed (v2_mocks, a fixture dependency,
+    has already executed) -- a fresh `import time` here would just hand
+    back the already-patched module. _REAL_TIME_SLEEP (captured at this
+    test FILE's own import time, before any fixture in it ever ran) is the
+    only reliably-genuine reference left. Also mocks yfinance's own
+    network call directly (not _live_current_price() itself), so
+    _throttle_yfinance_request()'s real sleep still executes, with no real
+    network latency or flakiness feeding into the measurement.
+    """
+    from brokers.trading212 import _YFINANCE_MIN_REQUEST_INTERVAL_SECONDS, maybe_exit_positions
+    import brokers.trading212 as t212_module
+
+    mocker.patch("brokers.trading212.time.sleep", _REAL_TIME_SLEEP)
+    # Clean starting state for a reproducible measurement -- otherwise the
+    # very first call in this test could inherit an already-elapsed
+    # interval from whatever ran immediately before it in the same pytest
+    # process, under- or over-stating the throttle's own contribution.
+    t212_module._yfinance_last_request_at = 0.0
+
+    n = 16  # today's real open-position count
+    frame = _bullish_frame()
+
+    positions, mapping = [], {}
+    for i in range(n):
+        ticker, t212_ticker = f"TICK{i}", f"TICK{i}_US_EQ"
+        positions.append({"ticker": t212_ticker, "quantity": 10.0})  # no currentPrice -- forces the yfinance tier for everyone
+        mapping[ticker] = {"t212_instrument_id": t212_ticker, "currency": "USD", "is_etf": False}
+        _seed_open_position(db_engine, ticker=ticker, t212_ticker=t212_ticker,
+                             stop_price=1.0, days_ago=1, is_etf=False)
+
+    v2_mocks.get_positions.return_value = positions
+    # _mock_price_data() itself ALSO patches _live_current_price() to a
+    # mock (its own documented default -- see that helper's docstring) --
+    # this is the ONE test in the file that specifically needs that
+    # function's REAL body (throttle included) to run, not its mocked
+    # replacement. Capturing the genuine function BEFORE _mock_price_data()
+    # ever touches it, then explicitly restoring it as _mock_price_data()'s
+    # side_effect afterward, is what makes _mock_yfinance_fast()'s patch of
+    # the deeper yfinance.Ticker boundary actually reachable -- patching
+    # yfinance.Ticker alone does nothing if _live_current_price() itself is
+    # still a mock sitting in front of it (confirmed directly: without this
+    # restore, a spy showed _live_current_price() being called 16 times but
+    # _throttle_yfinance_request() 0 times -- the mocked function was still
+    # the one running, never reaching its own real body at all).
+    real_live_current_price = t212_module._live_current_price
+    _mock_price_data(mocker, {f"TICK{i}": frame for i in range(n)})
+    mocker.patch("brokers.trading212._live_current_price", side_effect=real_live_current_price)
+    _mock_yfinance_fast(mocker, price=999999.0)  # never breaches any stop below
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=999999)
+
+    cfg = _config(mapping=mapping, mocker=mocker, db_engine=db_engine)
+
+    start = time.monotonic()
+    maybe_exit_positions(cfg)
+    elapsed = time.monotonic() - start
+
+    # Confirms nothing else (order-placement's own separate 0.5s
+    # inter-order sleep) contaminated this measurement -- stop_price=1.0
+    # against a mocked live price of 999999.0 means no exit condition
+    # should ever fire, isolating the timing to the price-fetch/throttle
+    # path alone.
+    v2_mocks.place_market_order.assert_not_called()
+
+    min_expected = (n - 1) * _YFINANCE_MIN_REQUEST_INTERVAL_SECONDS
+    hourly_window_seconds = 3600.0
+    margin_x = hourly_window_seconds / elapsed if elapsed > 0 else float("inf")
+    print(
+        f"\n[timing] {n} positions, worst case (every one via the paced "
+        f"yfinance fallback tier): {elapsed:.3f}s total -- "
+        f"{margin_x:,.0f}x margin against the {hourly_window_seconds:.0f}s "
+        f"hourly market_hours_check_job() window."
+    )
+
+    assert elapsed >= min_expected * 0.9, (
+        f"expected at least ~{min_expected:.2f}s from {n} paced calls, got {elapsed:.3f}s -- "
+        "the throttle may not genuinely be running"
+    )
+    # Generous sanity ceiling -- catches an accidental huge/wrong sleep,
+    # while leaving enormous headroom under the real 3600s hourly window.
+    assert elapsed < 30.0
 
 
 # ---------------------------------------------------------------------------

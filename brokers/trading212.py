@@ -249,6 +249,45 @@ def _throttle_t212_request() -> None:
             _t212_last_request_at = now
 
 
+# Separate pacing state for yfinance-backed live price fetches
+# (_live_current_price(), below) — deliberately its OWN lock/timestamp
+# pair, not sharing _t212_pacing_lock/_t212_last_request_at above (2026-08-03,
+# built for the exit-check live-pricing fix — see CLAUDE.md's "live pricing
+# for the exit check" section). yfinance and T212 are two independent
+# external services with their own, unrelated limits: recording "a T212
+# call landed 0.1s ago" would not actually protect yfinance from a burst
+# of its own calls, and vice versa — conflating the two into one shared
+# timestamp would make the throttle less meaningful for BOTH services, not
+# more. Same interval as the T212 throttle, for simplicity and because
+# it's comfortably below _live_current_price()'s own observed per-call
+# latency (~0.2-0.4s, see that function's own docstring) — a normal
+# sequential loop over open positions essentially never needs this to
+# actually sleep; it exists to bound a genuine burst (e.g. many positions
+# whose T212 currentPrice is simultaneously unavailable, all falling
+# through to the yfinance tier in quick succession) rather than to slow
+# down the common case.
+_YFINANCE_MIN_REQUEST_INTERVAL_SECONDS = 0.15
+_yfinance_pacing_lock = threading.Lock()
+_yfinance_last_request_at = 0.0
+
+
+def _throttle_yfinance_request() -> None:
+    """Same mechanism as _throttle_t212_request() above, applied to
+    yfinance calls instead of T212 ones — see the module-level comment
+    immediately above _YFINANCE_MIN_REQUEST_INTERVAL_SECONDS for why this
+    is a separate instance rather than reusing that one's state."""
+    global _yfinance_last_request_at
+    with _yfinance_pacing_lock:
+        now = time.monotonic()
+        elapsed = now - _yfinance_last_request_at
+        if elapsed < _YFINANCE_MIN_REQUEST_INTERVAL_SECONDS:
+            wait = _YFINANCE_MIN_REQUEST_INTERVAL_SECONDS - elapsed
+            time.sleep(wait)
+            _yfinance_last_request_at = now + wait
+        else:
+            _yfinance_last_request_at = now
+
+
 # ---------------------------------------------------------------------------
 # Trading212Client
 # ---------------------------------------------------------------------------
@@ -1436,7 +1475,17 @@ def _live_current_price(ticker: str) -> Optional[float]:
     caller already treats as "leave pending, retry next window" rather than
     falling back to a stale value that would silently reproduce the exact
     staleness bug this function exists to fix.
+
+    Paced via _throttle_yfinance_request() (2026-08-03, added for the
+    exit-check live-pricing fix) — embedded HERE, at the true chokepoint,
+    rather than left for each caller to remember, mirroring exactly how
+    _throttle_t212_request() lives inside Trading212Client._request()
+    rather than at each of ITS call sites. This means every existing
+    caller (the crisis check, the submission-time price-sanity check) gets
+    the same protection automatically, with no risk of a future new call
+    site forgetting to pace itself.
     """
+    _throttle_yfinance_request()
     try:
         import yfinance as yf  # noqa: PLC0415
         price = yf.Ticker(ticker).fast_info.last_price
@@ -1446,6 +1495,73 @@ def _live_current_price(ticker: str) -> Optional[float]:
     except Exception as exc:
         logger.warning("_live_current_price failed for %s: %s", ticker, exc)
         return None
+
+
+def _live_exit_check_price(ticker: str, t212_position: dict, currency: str) -> Optional[float]:
+    """A genuinely live price for an ALREADY-HELD position, for the exit
+    check's STOP_LOSS comparison (2026-08-03) — replaces the once-daily
+    stored close that used to flow into evaluate_exit_reason()'s price=
+    parameter here. See CLAUDE.md's "live pricing for the exit check"
+    section for the investigation this closes: _ticker_state()'s "price"
+    field is the last row of price_data, written once daily by
+    pull_incremental() (only ever called from _eod_job(), 21:30 UTC) — the
+    hourly market_hours_check_job() was re-evaluating that same unchanged
+    value on every firing throughout a trading day, providing no intraday
+    responsiveness at all despite being correctly gated to NYSE hours.
+
+    _ticker_state() itself is deliberately left untouched — it is also
+    called by maybe_place_orders()'s decide phase, where the stored EOD
+    close IS the correct price (entry decisions are made once daily, right
+    after that close is captured — there's nothing stale about it there).
+    This function only replaces the price fed into evaluate_exit_reason()
+    for the EXIT check specifically, leaving entry-decision pricing, and
+    every other field _ticker_state() returns (is_etf, sig_on, momentum,
+    crisis_now, close_series — all correctly still EOD-based, none of them
+    consume a live tick), completely unaffected.
+
+    Two tiers, in order:
+
+    1. T212's own `currentPrice` from get_positions() — the SAME API call
+       maybe_exit_positions() already makes for every open position in
+       ONE request, so this tier costs zero additional network calls
+       regardless of how many positions are open (the real scale concern
+       here — 16 positions today, growing). Already trusted elsewhere in
+       this module as genuinely live for a currently-held instrument (see
+       get_instrument_price_gbp()'s own "Primary path" docstring). Only
+       used when `currency` is USD — the only currency this system's
+       stop_price/state["price"] values are ever expressed in (the
+       research ticker's own close from price_data, always native-currency
+       for this system's US-equity-only universe) — a non-USD instrument
+       currency would need FX conversion this function deliberately
+       doesn't attempt (shouldn't occur in practice for this universe, but
+       handled defensively rather than assumed away); it falls through to
+       tier 2 instead, which is already in the ticker's own native
+       currency by construction.
+    2. _live_current_price() (yfinance) — the IDENTICAL mechanism the
+       crisis check and the submission-time price-sanity check already
+       use, called directly rather than a second, parallel implementation.
+       Paced by that function's own embedded throttle (see its docstring)
+       so a partial T212 outage across many positions at once can't turn
+       into an unpaced burst of yfinance calls.
+
+    "Fail loud, don't guess" — returns None if both tiers fail (missing/
+    non-positive T212 currentPrice AND a non-USD currency or a yfinance
+    failure). The caller passes this straight through to
+    evaluate_exit_reason()'s price= parameter, which already tolerates
+    None: STOP_LOSS simply doesn't fire this cycle for that one ticker —
+    CRISIS_EXIT/SIGNAL_OFF/MAX_HOLDING are entirely unaffected, since none
+    of them consume price at all.
+    """
+    if currency == "USD":
+        cp = t212_position.get("currentPrice")
+        if cp is not None:
+            try:
+                cp = float(cp)
+                if cp > 0:
+                    return cp
+            except (TypeError, ValueError):
+                pass
+    return _live_current_price(ticker)
 
 
 def _ticker_state(ticker: str, config: dict, gspc_close: pd.Series) -> Optional[dict]:
@@ -2117,6 +2233,26 @@ def maybe_exit_positions(config: dict) -> None:
             max_hold = get_max_holding_days(ticker, config)
             holding_days = (datetime.utcnow() - entry_date).days if entry_date else 0
 
+            # Live price for the STOP_LOSS comparison (2026-08-03) — see
+            # _live_exit_check_price()'s own docstring for the full
+            # investigation and mechanism. state["price"] (the once-daily
+            # stored close _ticker_state() returns) is deliberately NOT
+            # used here any more — it remains correct and unchanged for
+            # maybe_place_orders()'s entry-decision use of _ticker_state().
+            # None on failure is a genuine, tolerated outcome, not an
+            # error to swallow silently: evaluate_exit_reason() already
+            # treats a None price as "STOP_LOSS contributes nothing this
+            # check" — CRISIS_EXIT/SIGNAL_OFF/MAX_HOLDING (none of which
+            # consume price) are entirely unaffected.
+            live_price = _live_exit_check_price(ticker, position, ccy_map.get(t212_ticker, "USD"))
+            if live_price is None:
+                logger.warning(
+                    "%s: no live price available for this exit check — "
+                    "STOP_LOSS skipped this cycle (SIGNAL_OFF/MAX_HOLDING/"
+                    "CRISIS_EXIT unaffected, will retry live pricing next hour).",
+                    ticker,
+                )
+
             # Exit priority — the single shared implementation
             # (analysis/decision.py:evaluate_exit_reason()), also called by
             # every backtest engine in analysis/backtest.py and by
@@ -2129,7 +2265,7 @@ def maybe_exit_positions(config: dict) -> None:
             # it still gates NEW entries in maybe_place_orders() below.
             exit_reason = evaluate_exit_reason(
                 crisis_now=state["crisis_now"],
-                price=state["price"], stop_price=stop_price, sig_on=state["sig_on"],
+                price=live_price, stop_price=stop_price, sig_on=state["sig_on"],
                 holding_days=holding_days, max_holding_days=max_hold,
             )
 
@@ -2202,7 +2338,15 @@ def maybe_exit_positions(config: dict) -> None:
 
             _log_order(
                 ticker=ticker, t212_ticker=t212_ticker, direction="SELL",
-                quantity=close_qty, estimated_price=state["price"], estimated_value_gbp=None,
+                # live_price when the fetch succeeded (the price this
+                # decision was actually made against) — falls back to the
+                # stored close only in the rare case live pricing failed
+                # for this ticker this cycle; this is a logged/audit field,
+                # not a gating decision, so a stale-but-real value here is
+                # strictly better than logging nothing.
+                quantity=close_qty,
+                estimated_price=(live_price if live_price is not None else state["price"]),
+                estimated_value_gbp=None,
                 status=status, order_id=order_id, is_etf=state["is_etf"],
                 account_type=account_label, currency_code=ccy_map.get(t212_ticker),
                 exit_reason=exit_reason, error_message=error_msg,
