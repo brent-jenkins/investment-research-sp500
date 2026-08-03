@@ -7219,6 +7219,45 @@ Non-monotonic again, for the identical structural reason documented in the re-en
 
 Research-only — nothing in `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, or `brokers/trading212.py` changed as a result of this investigation. The local scratch clone was deleted after these figures were captured; production was never touched (this task was explicitly local and read-only relative to the live system throughout).
 
+### Is the 5-day re-entry cooldown result real, or a lucky historical sequence? (2026-08-03)
+
+**Question.** The re-entry cooldown sweep found 5 days as the strongest single point (CAGR 21.09% vs. 0's 19.86%) — but the sweep itself flagged a real structural path-dependency: entries are capacity-constrained, so blocking one re-entry hands that slot to a different candidate, cascading into a materially different trade sequence over the full 19-year continuous walk. Each cooldown value's result is therefore one single realized path, not an independent sample. This investigation tests whether 5 days holds up as a genuinely robust effect once that path-dependency is controlled for.
+
+**Methodology — genuinely independent per-block resets, not a slice of one continuous run.** Built a new engine variant (same source-introspection technique as every prior injection in this file) that truncates the day-by-day event list to `[block_start, block_end]` and force-closes any still-open position at the block's own end (a corrected `END_OF_DATA`, keyed to the block boundary rather than each ticker's absolute last date — without this, a position still open when a block's truncated walk ran out of days would silently vanish from that block's own results rather than being recorded). Because every ticker starts with zero open positions and a fresh £50,000 the instant the truncated walk begins, no separate "reset cash" step is needed — the walk's first visited day already has that pristine state by construction, since nothing before `block_start` is ever touched. Verified faithful (inert defaults reproduce the real function exactly) and verified the truncation mechanism itself (all trades bounded within the window; still-open positions correctly force-closed via `END_OF_DATA`, not dropped) before trusting it for anything.
+
+Reused the exact same 16-block boundaries this project already trusts elsewhere (`analysis.backtest.make_blocks(analysis.validation.VALIDATION_START, end, n_blocks=16)`), `end` pinned explicitly to `2026-08-03` for reproducibility. Four cooldown values tested: 0 (deployed), 4, 5, 6 days — each run as 16 fully independent £50,000 simulations, not 16 slices of one compounding run.
+
+**Per-block CAGR, all four values, all 16 blocks:**
+
+| Block | Window | 0d | 4d | 5d | 6d | Winner |
+|---|---|---|---|---|---|---|
+| 0 | 2007-01-01→2008-03-23 | 6.23% | 9.85% | 6.37% | 6.27% | 4d |
+| 1 | 2008-03-23→2009-06-13 | −22.14% | −20.94% | −18.79% | −19.79% | 5d* |
+| 2 | 2009-06-13→2010-09-03 | 11.96% | 13.98% | 12.57% | 11.67% | 4d |
+| 3 | 2010-09-03→2011-11-24 | 8.98% | 10.21% | 9.20% | 10.45% | 6d |
+| 4 | 2011-11-24→2013-02-13 | 8.21% | 9.83% | 8.22% | 9.62% | 4d |
+| 5 | 2013-02-13→2014-05-06 | 10.16% | 7.80% | 6.36% | 7.89% | 0d |
+| 6 | 2014-05-06→2015-07-27 | 8.75% | 13.16% | 12.68% | 13.10% | 4d |
+| 7 | 2015-07-27→2016-10-17 | 16.96% | 17.19% | 14.73% | 16.64% | 4d |
+| 8 | 2016-10-17→2018-01-07 | 13.62% | 10.77% | 9.60% | 7.93% | 0d |
+| 9 | 2018-01-07→2019-03-30 | 6.09% | 11.29% | 3.84% | 5.29% | 4d |
+| 10 | 2019-03-30→2020-06-19 | 13.56% | 13.50% | 13.00% | 13.39% | 0d |
+| 11 | 2020-06-19→2021-09-09 | 12.16% | 11.37% | 11.22% | 10.55% | 0d |
+| 12 | 2021-09-09→2022-11-30 | 10.33% | 8.73% | 9.11% | 9.18% | 0d |
+| 13 | 2022-11-30→2024-02-20 | 15.25% | 18.14% | 17.19% | 16.64% | 4d |
+| 14 | 2024-02-20→2025-05-12 | 9.11% | 13.09% | 12.93% | 14.02% | 6d |
+| 15 | 2025-05-12→2026-08-03 | 38.18% | 37.44% | 34.44% | 37.69% | 0d |
+
+*Block 1 (GFC-acute) fails on every single value tested (all four badly negative, matching this file's own established "blocks 0/1 always fail" finding) — "winning" among four losses isn't a meaningful win and isn't counted as evidence for 5 below.
+
+**Win count (highest CAGR per block, 16 blocks): 0d = 6, 4d = 7, 5d = 1, 6d = 2.** 5 days — the value the continuous-walk sweep found strongest overall — wins exactly **one** of 16 genuinely independent blocks, and that one win is the always-failing GFC-acute block where all four values lose money. Excluding that block, 5 days never wins a single one of the remaining 15. Aggregate mean/median CAGR across the 16 independent blocks: 0d = 10.46%/10.25%, 4d = **11.59%/11.33%** (highest), 5d = 10.17%/10.41% (lowest), 6d = 10.66%/10.50%. Under genuine per-block independence, 5 days is not merely "not the best" — it is the **weakest** of the four values tested on both win count and aggregate CAGR, the exact opposite of what the continuous-walk sweep showed.
+
+**Neighbor-smoothness check.** In **9 of 16 blocks**, 5 days is a **local trough** — worse than *both* its immediate neighbors (4 and 6 days) — not a smooth peak with 4 and 6 tapering off on either side. Only 1 block shows 5 as a spike-up (better than both neighbors); the remaining 6 show a smooth, monotonic relationship. A genuine, structural "5 days is a real local optimum" effect should show a curve that peaks smoothly at 5 and falls off symmetrically to either side — the data shows almost the reverse: 5 is more often the *worst* of the three immediate neighbors than the best.
+
+**Verdict — stated plainly, not forced into a clean recommendation the data doesn't support: the continuous-walk sweep's "5 days is best" finding does not survive block-independent validation.** It looks like a favourable interaction with one specific realized historical sequence (the exact path-dependency effect the sweep itself flagged as the reason to distrust a single continuous walk), not a genuine, robust property of a 5-day cooldown. 0 days — production's current, already-deployed value — performs competitively under this stricter test (6/16 wins, second only to 4 days, and a higher mean CAGR than 5 days) and retains its own independent, non-empirical mechanistic justification (it's `_admit_group()`'s own natural floor, not a chosen parameter) that neither 4, 5, nor 6 have. **This is not a recommendation to switch to 4 days either** — 4 winning 7/16 blocks here is a genuinely stronger showing than 5's, but this is one robustness check with 16 blocks, not a validated finding in its own right, and the same caution this whole investigation exists to demonstrate (one favourable-looking result is not evidence until it survives a check like this) applies equally to treating 4's showing here as settled. Production stays at `reentry_cooldown_days: 0`, unchanged.
+
+Research-only — nothing in `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, or `brokers/trading212.py` changed as a result of this investigation. The local scratch clone was deleted after these figures were captured; production was never touched.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
