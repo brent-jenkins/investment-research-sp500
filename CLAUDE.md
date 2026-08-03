@@ -7384,6 +7384,82 @@ Covered by 15 new tests: 8 pure unit tests in `tests/test_decision.py` (the floo
 
 Covered by 11 new tests in `tests/test_scheduler.py`: `_is_nyse_open_now()` checked directly against real, unmocked NYSE data (a genuine mid-session moment on an ordinary Tuesday returns `True`; a moment hours before that day's own open, a moment after that day's own close, and a genuine Saturday at the identical clock time all return `False`); `_market_hours_check_job()` confirmed to skip cleanly (no poll, no exit check attempted) on a real NYSE-closed moment and to run both on a real NYSE-open moment, plus its own failure-isolation case; `_account_state_job()` confirmed to run reconciliation and the snapshot refresh identically on both a real NYSE-open and a real NYSE-closed moment — the decisive proof it carries no hidden gate — plus its own reconciliation-failure-doesn't-block-snapshot case; and two registration-level tests confirming both jobs are registered with `hour == "*"` and `day_of_week == "*"` (never excluded from firing at all, gating happens only inside the job body) and that the `market_hours_check` trigger's own computed next-fire-time genuinely lands on a Saturday. Full local suite: 631 passing.
 
+### VIX/ADX entry-time volatility gating — researched, not adopted (2026-08-03)
+
+Tested whether tracking VIX/ADX and adjusting for high-volatility conditions at EOD decide time improves or worsens performance — motivated directly by the old, removed V1 regime system's own documented failure ("2023 underperformance: system returned −5.4% while S&P gained +26.3% ... ADX insufficient for TRENDING_BULL"), one real precedent, not conclusive on its own, but enough to set the working hypothesis that a hard volatility gate risks blocking genuine opportunity the same way the old market-cap gate did (see "Present-day market-cap ranking bias" above). Tested properly against the current live engine rather than deciding from precedent alone. Run entirely in a local, isolated `git worktree` (`../sp500invest-vix-adx-test`, branch `research/vix-adx-volatility-sweep`) — never the shared main working directory, since another local session was active concurrently at the time — production touched only via one read-only `scp` pull of the live database; every write stayed local to the worktree's own copy. Deleted after this write-up, per this project's standing "disposable research clone" practice.
+
+**Part A — VIX data feasibility, checked fresh, not assumed.** `^VIX` had **zero rows anywhere** — not just in a stale local copy, but on **production itself**. Backfilled via the existing `data/ingestion.py:backfill_price_history(tickers=["^VIX"], start_date="2007-01-01")` into the isolated worktree's own DB copy only (4,926 rows, 2007-01-03→2026-07-31). Verified against the real, known 2020-03-16 COVID peak close (82.69 — exact match) before trusting the series for anything. `analysis/backtest.py` has never had any ADX code at all (deleted with V1) — a Wilder's ADX(14) was hand-built on `^GSPC`'s own OHLC and sanity-checked against real market history before use: mean 32.0 during the 2008 GFC crash, 34.5 during the 2020 COVID crash (both correctly elevated — strong sustained trends), vs. 20.8 during 2023's narrow mega-cap rally — directly reproducing the exact V1-era low-trend-strength-during-a-real-rally pattern this investigation set out to test.
+
+**Methodology.** Reset-at-boundary convention throughout (stated explicitly, per the standing labeling requirement — this is a variant-comparison question, not a single-account track-record report). Base engine: `simulate_portfolio_compounding_mtm()`, the real, currently-deployed engine, run against the full live dynamic ~500-stock universe, current real config (`per_trade_pct=0.05`, `max_total_deployed=0.5`, `reentry_cooldown_days=0`, `min_momentum_pct=0.02`). An instrumented variant was built via the established source-injection technique (never modifying the real function) with VIX/ADX gate/soft-scale/cooldown injection points, and verified faithful — reproduces the real, unmodified engine's trades byte-for-byte under inert defaults (3,161 trades, identical) — before being trusted for anything.
+
+**Part B — hard entry gate.** Sweep of 11 configurations:
+
+| | Test CAGR | DD (peak-relative) | PF | Win rate |
+|---|---|---|---|---|
+| Baseline (no gate) | 19.84% | −11.19% | 1.77 | 48.9% |
+| VIX > 25/30/35/40 (all 4) | 13.50–17.77% | −10.98% to −12.21% | 1.55–1.69 | 44.9–48.5% |
+| ADX < 25 (V1's own literal historical threshold) | 14.36% | −8.29% | 2.57 | 56.2% |
+| **ADX < 20** | **20.75%** | **−7.74%** | **2.24** | **50.9%** |
+
+VIX hard gates are uniformly bad — every threshold reduces CAGR, and three of the four are *worse* than baseline on peak-relative drawdown too; blocking on VIX alone misses opportunity and buys no real protection. `ADX < 25` reproduces the V1 2023 failure directly at current scale (CAGR collapses, trade count nearly halves, 1179→496 test trades). `ADX < 20` initially looked like a genuine Pareto improvement — better on every metric simultaneously — the standout result of the whole investigation.
+
+**Part C — soft size-adjustment (position-size reduction instead of a block).** 16 configurations (VIX/ADX × scale factors 0.5/0.25). No clean winner — VIX soft-scaling is noisy (a few combinations show higher CAGR but consistently with worse fixed-denominator drawdown, the signature of a bigger compounded balance amplifying a later loss in £ terms). Critically, **softening the one gate that worked as a hard block makes it worse**: `ADX<20` soft (scale 0.5) — CAGR 18.15%, DD −8.62%, PF 1.60 — underperforms the hard version on every metric.
+
+**Part D — VIX-scaled re-entry cooldown**, tested against the validated, deployed 0-day baseline (not the flat-cooldown sweep's own retracted "5-day is best" figure — see "Is the 5-day re-entry cooldown result real, or a lucky historical sequence?" above for why that comparison point is invalid). Linear (`cooldown = clip(slope × max(0, VIX − base_vix), 0, max_days)`) and step functional forms, 6 variants plus the baseline:
+
+| | Test CAGR | DD (peak-relative) | PF |
+|---|---|---|---|
+| Baseline (fixed 0-day) | 19.84% | −11.19% | 1.77 |
+| Linear (conservative/moderate/aggressive) | 14.97–18.80% | −9.13% to −11.22% | 1.57–1.71 |
+| Step (simple/3-step/aggressive) | 17.24–17.92% | −9.60% to −10.48% | 1.68–1.70 |
+
+No functional form beat the baseline on CAGR — the best drawdown improvements come at real, substantial CAGR cost, failing the bar this investigation itself set ("must genuinely beat the baseline, not just perform adequately").
+
+**Block validation — the decisive check, per the flat-cooldown sweep's own precedent that a single-window "winner" can be a favorable coincidence of one historical path, not a real effect.** `ADX<20` (Part B's standout) and `D_linear_aggressive` (Part D's best-looking loser, checked anyway per the same discipline) were run across the same 16 independent historical blocks (`make_blocks(VALIDATION_START, END, n_blocks=16)`, each a genuinely fresh £50,000/zero-open-positions walk truncated to `[block_start, block_end]` with a corrected `END_OF_DATA` keyed to the block's own last visited date):
+
+| | Win count (16 blocks) | Mean CAGR | Median CAGR |
+|---|---|---|---|
+| Baseline (0-day, no gate) | 6/16 | 12.44% | 15.31% |
+| ADX < 20 hard gate | 6/16 | 12.18% | 14.04% |
+| D_linear_aggressive cooldown | 4/16 | 10.70% | 14.74% |
+
+**`ADX<20`'s apparent Pareto win does not survive.** Tied with baseline on win count; baseline actually has the *higher* mean and median CAGR across the genuinely independent blocks — the exact same failure shape already documented for the flat re-entry cooldown's own retracted 5-day finding, now confirmed a second time on a structurally different mechanism. `D_linear_aggressive` loses on block validation too, consistent with its own reset-at-boundary result. All three candidates show identical 14/16 PF>1.0 pass rates (failing only blocks 0 and 1, the pre-GFC/GFC-acute windows) — matching this project's own already-established block-pass pattern, a sanity check on the methodology itself, not a finding.
+
+**Conclusion: rejected, not adopted, on all three mechanisms.** The working hypothesis is confirmed directly and repeatedly: VIX gating never earns its keep at any threshold or in either form; the literal V1 ADX threshold reproduces the exact 2023 failure at current scale; and the one configuration that initially looked like a real, clean improvement failed the block-independence check this project's own prior research established as necessary before trusting a single-window result. The system's current, deployed configuration (no volatility gate) remains the best-supported choice.
+
+### VIX/ADX submission-time gate — researched, not adopted (2026-08-03)
+
+Direct follow-up to the entry-time investigation immediately above, using the same isolated worktree and VIX/ADX series (reused, not rebuilt). A genuinely different, more specific question: not an EOD-decide-phase gate, but a market-wide check at the exact moment of submission — the same point in the pipeline as the existing `analysis/crisis.py:is_intraday_crisis()` re-check (see "Submission-time crisis re-check" above), tested as a second, complementary trigger alongside it, not a replacement.
+
+**Overlap diagnostic — the decisive early signal, computed directly rather than assumed.** VIX/ADX levels on the 33 days `is_entry_blocked()`'s trigger-plus-5-day-cooldown window actually blocks: mean VIX **60.4** (minimum **39.4**), mean ADX **38.5** (minimum **26.1**) — genuinely extreme readings. Every submission-time-gate threshold worth testing sits far below that floor, so overlap with the existing mechanism stays essentially flat (~33 days) regardless of threshold, while "genuinely new" gated days explode: **847 days at VIX>25 across 49 separate episodes**, including 219-day, 139-day, and 126-day contiguous stretches spanning the 2008–09 recovery, the 2011 crisis, and 2022's bear market — the exact shape of the "broad, frequently-firing overlay suppresses genuine opportunity more than it protects" pattern this project already found and rejected once (Phase 2's danger/exposure gate — see "V2 architecture — phased rebuild, Stage 1" above).
+
+**Cost diagnostic — real, but not the hypothesized directional pattern.** Checked whether blocked-candidate momentum concentrates high, mirroring the real price-sanity-threshold incident (see "Live pricing bug, exception isolation, and ETF mapping audit" / "Urgent pre-submission verification" above). It doesn't, directionally: blocked candidates' *average* momentum is actually **below** the overall eligible population (VIX>30: blocked mean 26.3% vs. overall mean 33.8%, computed across 1,366,373 eligible ticker-days total). But the absolute scale is real regardless: **63,892 ticker-days blocked at VIX>30 alone** (4.7% of all eligible candidate-days across the full 2007–2026 history), indiscriminately sweeping up both ordinary trend continuations and genuine extreme momentum stories — SNDK (1070%), LITE (963%), TSLA (819%), MRNA (725%) — the same class of names named in the real price-sanity-threshold incident, caught here purely because the market as a whole was volatile that day, regardless of the individual candidate's own trend quality.
+
+**Performance sweep — 8 configurations** (VIX>{28,30,33,35}, ADX>{28,30,33} — deliberately "block when ABOVE threshold" for both, the opposite ADX direction from the entry-time investigation's "min ADX required" test, since this is a genuinely different question — an already-extended/powerful move being risky to newly enter into, not insufficient trend strength — reused the identical instrumented engine via a sign-flip trick, `adx_series=-adx, adx_gate_threshold=-threshold`, documented rather than left implicit), stacked on top of the always-active existing crisis mechanism:
+
+| | Test CAGR | DD (peak-relative) | PF |
+|---|---|---|---|
+| Baseline (existing −7% check alone) | 19.84% | −11.19% | 1.77 |
+| VIX > 28/30/33/35 | 17.35–18.61% | −10.49% to −12.13% | 1.65–1.72 |
+| ADX > 28/30/33 | 14.92–17.49% | −8.37% to −9.55% | 1.66–1.70 |
+| Combined (VIX>30 or ADX>30) | 14.08% | −9.02% | 1.61 |
+
+Every single configuration reduces CAGR versus the existing check alone — unlike the entry-time investigation, nothing here even superficially wins in the aggregate sweep.
+
+**Block validation — confirms and sharpens the negative result.** The sweep's best-CAGR (`VIX>33`) and best-drawdown-tradeoff (`ADX>28`) configs, run across the same 16 independent blocks, compared against the entry-time investigation's own already-block-validated baseline (identical config — reused directly, not re-run):
+
+| | Win count (16 blocks) | Mean CAGR | Median CAGR |
+|---|---|---|---|
+| Baseline (existing check alone) | 11/16 | 12.44% | 15.31% |
+| VIX > 33 | 3/16 | 12.25% | 14.85% |
+| ADX > 28 | 2/16 | 8.00% | 9.41% |
+
+Baseline wins decisively. `ADX>28` is *worse* under block-independent validation than the aggregate sweep suggested, including a direct counter-example on Block 0 (2007–08, the pre-GFC window): the gate makes that already-bad block *worse* (−29.0% CAGR vs. baseline's −20.6%), contradicting the "protects during bad periods" intuition outright. All three again show identical 14/16 PF>1.0 pass rates.
+
+**Conclusion: rejected, not adopted.** The existing `is_intraday_crisis()` + `is_entry_blocked()` mechanism already covers what matters — genuine crisis-level VIX/ADX readings (60+/38+) — and any submission-time gate loose enough to catch "sustained but not acute" stress necessarily fires across a much broader range that mostly overlaps with genuine recovery periods, not genuine danger. The existing −7% single-day check remains the sole submission-time gate; no complementary VIX/ADX layer is added.
+
+Both investigations reached the same conclusion through independent evidence, on structurally different mechanisms (an EOD-decide-phase gate and a submission-time gate): this codebase's volatility-gating instinct, however well-motivated by the V1 precedent, does not survive block-independent testing at current scale.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
