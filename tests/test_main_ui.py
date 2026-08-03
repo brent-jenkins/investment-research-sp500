@@ -716,3 +716,150 @@ def test_dashboard_candidate_table_strength_caption_states_relative_reasoning(db
     all_text = " ".join(c.value for c in at.caption)
     assert "relative" in all_text.lower()
     assert "recalculated" in all_text.lower() or "fresh" in all_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Status page — job-recency staleness fixes (2026-08-03)
+#
+# The Status page's "Last Data Refresh"/"Last Scheduled Run" cards and the
+# Pipeline table's two rows used a plain elapsed-hours count
+# (main.py:_age_level(), warn 48h/error 96h for price refresh, 48h/72h for
+# order logic) to decide OK/STALE/OVERDUE. A real production incident
+# (16 positions opened at 14:30 UTC / 15:30 BST on a Monday, right after
+# the stock_order_submission job actually ran) showed two separate bugs:
+#
+# 1. last_scheduled_run/last_scheduled_run_name were only ever stamped by
+#    _eod_job()/_monday_premarket_job() — _stock_order_submission_job()
+#    (the job that places real orders) and _weekly_summary_job() never
+#    touched either key, so these two widgets (and the sidebar's "Last
+#    scheduled run" caption, which reads the identical key) kept showing
+#    an older job's name/timestamp long after a newer, more relevant job
+#    had genuinely fired. Fixed in data/scheduler.py (see
+#    tests/test_scheduler.py's own stamping tests for that half).
+# 2. The naive 48h/96h-style thresholds misread an ordinary Friday-to-
+#    Monday gap (63+ real hours, but only ONE genuine NYSE trading day) as
+#    stale — inconsistent with the same page's own "Fresh (≤3 trading
+#    days)" convention used for per-ticker price coverage. Fixed by
+#    _trading_day_age_level()/_nyse_trading_days_since() (main.py),
+#    reusing the identical NYSE-trading-day-count approach.
+#
+# Both fixes are exercised below via real, independently-computed NYSE
+# calendar dates (pandas_market_calendars) rather than a frozen/mocked
+# "today" — so these tests pass regardless of which real calendar day the
+# suite happens to run on, the same discipline used elsewhere in this
+# project for calendar-dependent tests.
+# ---------------------------------------------------------------------------
+
+def _real_nyse_sessions_last_30_days():
+    """The exact NYSE session list main.py:_nyse_trading_days_since() itself
+    computes (same library, same ~30-day lookback ending today) — used here
+    to derive test timestamps that are genuinely N trading days stale as of
+    whenever this test actually runs, without needing to freeze time."""
+    import pandas_market_calendars as mcal
+    from datetime import datetime as _dt, timedelta as _td
+
+    today = _dt.utcnow().date()
+    lookback = (_dt.utcnow() - _td(days=30)).date()
+    cal = mcal.get_calendar("NYSE")
+    sched = cal.schedule(start_date=lookback.strftime("%Y-%m-%d"), end_date=today.strftime("%Y-%m-%d"))
+    return sorted(pd.Timestamp(d).date() for d in sched.index)
+
+
+def _seed_metadata(db_engine, key: str, value: str) -> None:
+    from sqlalchemy import text as sa_text
+    with db_engine.begin() as conn:
+        conn.execute(sa_text(
+            "CREATE TABLE IF NOT EXISTS system_metadata (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"
+        ))
+        conn.execute(sa_text(
+            "INSERT OR REPLACE INTO system_metadata (key, value, updated_at) VALUES (:k, :v, :t)"
+        ), {"k": key, "v": value, "t": "2026-01-01T00:00:00"})
+
+
+def _pipeline_row_badge(markdown_html: str, row_label: str, next_row_label: str) -> str:
+    """Extract the OK/STALE/OVERDUE badge text for one Pipeline row out of
+    the single concatenated markdown string _render_status_page() renders
+    both rows into — bounded between this row's own label and the next
+    row's label so a badge search never accidentally matches the other
+    row's badge (or the word "stale" appearing in a row's own description
+    text, e.g. "N stale tickers")."""
+    start = markdown_html.index(row_label)
+    end = markdown_html.index(next_row_label, start) if next_row_label else len(markdown_html)
+    segment = markdown_html[start:end]
+    for badge in ("OVERDUE", "STALE", "OK"):
+        if f'">{badge}</div>' in segment:
+            return badge
+    raise AssertionError(f"No badge found in segment for {row_label!r}: {segment!r}")
+
+
+@pytest.fixture
+def status_app(db_engine, monkeypatch, mocker):
+    """Same import-ordering discipline as the `app`/`dashboard_app` fixtures
+    above — see the `app` fixture's own docstring for why every patch must
+    happen before AppTest.from_file("main.py") is constructed."""
+    import streamlit as st
+    st.cache_data.clear()
+    mocker.patch("data.scheduler.start_scheduler")
+    monkeypatch.setattr("main.get_engine", lambda: db_engine)
+    monkeypatch.setattr(
+        "data.ingestion.get_all_watchlist_entries",
+        lambda config: [{"ticker": "AAPL", "name": "Apple", "exchange": "NYSE"}],
+    )
+
+    at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["page"] = "status"
+    return at
+
+
+def test_status_page_price_refresh_not_stale_after_one_trading_day_gap(db_engine, status_app):
+    """A refresh genuinely only 1 NYSE trading day old (e.g. Friday's EOD
+    run, as of the following Monday) must show OK — not the STALE/OVERDUE
+    a plain elapsed-hours count would incorrectly show for a 63+ hour gap
+    that is still only one real trading day."""
+    sessions = _real_nyse_sessions_last_30_days()
+    one_trading_day_ago = sessions[-2]  # exactly 1 session strictly after this date
+    _seed_metadata(db_engine, "last_full_refresh", f"{one_trading_day_ago.isoformat()}T21:30:00")
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_markdown = "\n".join(m.value for m in at.markdown)
+    badge = _pipeline_row_badge(all_markdown, "1 · Price Data Refresh", "2 · Order Logic")
+    assert badge == "OK", f"expected OK for a 1-trading-day-old refresh, got {badge}"
+
+
+def test_status_page_price_refresh_shows_overdue_for_a_genuine_multi_day_gap(db_engine, status_app):
+    """Confirms the fix isn't just 'always OK' — a refresh genuinely many
+    NYSE trading days old must still show OVERDUE."""
+    sessions = _real_nyse_sessions_last_30_days()
+    many_trading_days_ago = sessions[0]  # the oldest date in the whole lookback window
+    _seed_metadata(db_engine, "last_full_refresh", f"{many_trading_days_ago.isoformat()}T21:30:00")
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_markdown = "\n".join(m.value for m in at.markdown)
+    badge = _pipeline_row_badge(all_markdown, "1 · Price Data Refresh", "2 · Order Logic")
+    assert badge == "OVERDUE", f"expected OVERDUE for a many-trading-day-old refresh, got {badge}"
+
+
+def test_status_page_order_logic_row_shows_most_recent_job_not_an_older_one(db_engine, status_app):
+    """The Pipeline "Order Logic" row and the "Last Scheduled Run" card
+    both read last_scheduled_run/last_scheduled_run_name — this confirms
+    the page genuinely surfaces whatever job most recently stamped that
+    key (here: a real, current Stock Order Submission run), not a stale
+    value left over from an older job. The scheduler-side fix that makes
+    _stock_order_submission_job() actually stamp this key is covered in
+    tests/test_scheduler.py — this test covers the display side."""
+    sessions = _real_nyse_sessions_last_30_days()
+    today_or_last_session = sessions[-1]
+    _seed_metadata(db_engine, "last_scheduled_run", f"{today_or_last_session.isoformat()}T14:30:00")
+    _seed_metadata(db_engine, "last_scheduled_run_name", "Stock Order Submission")
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_markdown = "\n".join(m.value for m in at.markdown)
+    badge = _pipeline_row_badge(all_markdown, "2 · Order Logic", "")
+    assert badge == "OK"
+    assert any("Stock Order Submission" in m.value for m in at.markdown)

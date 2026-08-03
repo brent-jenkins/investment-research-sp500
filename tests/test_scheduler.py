@@ -539,6 +539,12 @@ def test_weekly_summary_cron_trigger_correctly_resolves_gmt_and_bst():
 def test_weekly_summary_job_calls_send_weekly_summary_email(mocker):
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mock_send = mocker.patch("output.briefing.send_weekly_summary_email", return_value=(True, "Sent to 1 recipient(s)"))
+    # set_metadata is mocked here (2026-08-03) -- the job now also stamps
+    # last_scheduled_run/last_scheduled_run_name (see the dedicated stamping
+    # test below); unmocked, this would call the real data.database.set_metadata,
+    # which resolves its own DB path independently of data.scheduler._load_config
+    # above and would silently write to the real local project database.
+    mocker.patch("data.scheduler.set_metadata")
 
     scheduler._weekly_summary_job()
 
@@ -548,13 +554,34 @@ def test_weekly_summary_job_calls_send_weekly_summary_email(mocker):
 def test_weekly_summary_job_never_raises_on_failure(mocker):
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mocker.patch("output.briefing.send_weekly_summary_email", side_effect=RuntimeError("SMTP is down"))
+    mocker.patch("data.scheduler.set_metadata")
 
     scheduler._weekly_summary_job()  # must not raise
+
+
+def test_weekly_summary_job_stamps_last_scheduled_run(mocker):
+    """2026-08-03 fix — this job previously never touched
+    last_scheduled_run/last_scheduled_run_name at all, so the Status page's
+    "Last Scheduled Run" card, the Pipeline "Order Logic" row, and the
+    sidebar's "Last scheduled run" caption (all three read the same key)
+    could keep showing a much older job as the most recent one indefinitely,
+    even on a Sunday when this was genuinely the most recent job to fire."""
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mocker.patch("output.briefing.send_weekly_summary_email", return_value=(True, "ok"))
+    mock_meta = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._weekly_summary_job()
+
+    mock_meta.assert_any_call("last_scheduled_run_name", "Weekly Summary")
+    assert any(c.args[0] == "last_scheduled_run" for c in mock_meta.call_args_list)
 
 
 def test_stock_order_submission_job_calls_submit_pending_stock_orders(mocker):
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
+    # set_metadata is mocked here for the same reason as the weekly-summary
+    # tests above -- see that comment.
+    mocker.patch("data.scheduler.set_metadata")
 
     scheduler._stock_order_submission_job()
 
@@ -564,8 +591,26 @@ def test_stock_order_submission_job_calls_submit_pending_stock_orders(mocker):
 def test_stock_order_submission_job_never_raises_on_failure(mocker):
     mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
     mocker.patch("brokers.trading212.submit_pending_stock_orders", side_effect=RuntimeError("boom"))
+    mocker.patch("data.scheduler.set_metadata")
 
     scheduler._stock_order_submission_job()  # must not raise
+
+
+def test_stock_order_submission_job_stamps_last_scheduled_run(mocker):
+    """2026-08-03 fix — same issue, same reason as the weekly-summary job
+    above. This is the job that actually places real orders (see the
+    2026-08-03 incident: 16 real positions opened at 14:30 UTC / 15:30 BST,
+    yet the Status page's job-recency widgets still showed the 07:00 UTC /
+    08:00 BST Monday Pre-Market run as the most recent event, since this
+    job never stamped last_scheduled_run at all)."""
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
+    mock_meta = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._stock_order_submission_job()
+
+    mock_meta.assert_any_call("last_scheduled_run_name", "Stock Order Submission")
+    assert any(c.args[0] == "last_scheduled_run" for c in mock_meta.call_args_list)
 
 
 def test_membership_refresh_job_calls_refresh_and_logs_changes(monkeypatch, mocker, caplog):

@@ -875,8 +875,23 @@ def _weekly_summary_job() -> None:
     summary email — see output/briefing.py:send_weekly_summary_email() for
     the full content and why this uses its own trigger path, deliberately
     separate from brokers/trading212.py's error-alert cooldown.
+
+    Stamps last_scheduled_run/last_scheduled_run_name (2026-08-03) — this
+    job previously never touched either key, so the Status page's "Last
+    Scheduled Run" card, the Pipeline "Order Logic" row, and the sidebar's
+    "Last scheduled run" caption (all three read the same key — see
+    CLAUDE.md's "Status page scheduler-health/job-recency fixes" section) could
+    silently show a stale, out-of-date job as the most recent one even
+    though this job had genuinely just fired. Matches the exact pattern
+    _eod_job()/_monday_premarket_job() already use.
     """
     from output.briefing import send_weekly_summary_email  # noqa: PLC0415
+
+    try:
+        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
+        set_metadata("last_scheduled_run_name", "Weekly Summary")
+    except Exception as _exc:
+        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
 
     config = _load_config()
     try:
@@ -915,8 +930,27 @@ def _stock_order_submission_job() -> None:
     this move — it already reads a genuinely live price
     (`_live_current_price()`, fixed the same day this timing change
     shipped — see CLAUDE.md) regardless of what time it runs.
+
+    Stamps last_scheduled_run/last_scheduled_run_name (2026-08-03) — this
+    is the job that actually places real orders, but until this fix it
+    never touched either key, so the Status page's "Last Scheduled Run"
+    card, the Pipeline "Order Logic" row, and the sidebar's "Last
+    scheduled run" caption (all three read the same key) kept showing
+    whatever earlier job — e.g. Monday's 07:00 UTC pre-market run — had
+    last stamped it, even hours after real positions had been opened by
+    this run. Matches the exact pattern _eod_job()/_monday_premarket_job()
+    already use; stamped unconditionally once the job genuinely fires
+    (mirroring _monday_premarket_job(), which has no internal no-op gate
+    either), not only when an order was actually placed — "the job ran"
+    is the signal this key represents, not "the job did something."
     """
     logger.info("Stock order submission job starting (14:30 UTC, 60min after NYSE open)…")
+    try:
+        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
+        set_metadata("last_scheduled_run_name", "Stock Order Submission")
+    except Exception as _exc:
+        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
+
     config = _load_config()
     try:
         from brokers.trading212 import submit_pending_stock_orders  # noqa: PLC0415

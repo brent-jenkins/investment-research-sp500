@@ -193,19 +193,6 @@ def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") 
     )
 
 
-def _age_level(ts: datetime | None, warn_hours: float = 48.0, error_hours: float = 168.0) -> str:
-    """Return 'ok' / 'warn' / 'error' based on how many hours old *ts* is."""
-    if ts is None:
-        return "error"
-    _ts = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
-    hours = (datetime.utcnow() - _ts).total_seconds() / 3600
-    if hours < warn_hours:
-        return "ok"
-    if hours < error_hours:
-        return "warn"
-    return "error"
-
-
 def _age_display(ts: datetime | None) -> tuple[str, str]:
     """Return (primary_value, sub_caption) strings for a stored timestamp."""
     if ts is None:
@@ -219,6 +206,67 @@ def _age_display(ts: datetime | None) -> tuple[str, str]:
     else:
         age = f"{hours / 24:.1f}d ago"
     return _fmt_uk(_ts, "%Y-%m-%d %H:%M"), age
+
+
+def _nyse_trading_days_since(ts: datetime | None) -> int:
+    """Count genuine NYSE trading sessions strictly after *ts*'s date,
+    through today — a calendar-aware alternative to a raw elapsed-hours
+    count, for any status widget gated on a daily (or better) job cadence.
+
+    A plain hours count misfires over an ordinary weekend: Friday 21:30 UTC
+    to Monday is a real 63+ hour gap, but only ONE genuine NYSE trading day
+    has actually passed, and must not read as several days stale (confirmed
+    2026-08-03 — the "Last Data Refresh"/"Price Data Refresh" widgets were
+    doing exactly this with a flat 48h/96h threshold, while the "Data
+    Coverage" section on the same page already correctly used a genuine
+    NYSE-trading-day count via _price_coverage()'s own per-ticker logic —
+    an inconsistency between two widgets on the same page describing the
+    same underlying concept two different ways).
+
+    Deliberately NYSE-only, not routed through _price_coverage()'s own
+    per-exchange `_MCAL_MAP` — this is used for whole-database timestamps
+    (`last_full_refresh`, `last_scheduled_run`), not a specific ticker's own
+    exchange, and NYSE is the only calendar this system's live decisions
+    depend on since the ETF sleeve's removal (see CLAUDE.md's "ETF sleeve
+    removed from live trading" section). Returns a large sentinel (999)
+    when *ts* is None or the calendar lookup fails, so "never happened"/
+    "couldn't determine" always sorts as maximally stale rather than
+    silently reading as fresh.
+    """
+    if ts is None:
+        return 999
+    _ts = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+    last_date = _ts.date() if hasattr(_ts, "date") else _ts
+    today = datetime.utcnow().date()
+    lookback = (datetime.utcnow() - timedelta(days=30)).date()
+    try:
+        import pandas_market_calendars as mcal
+        cal = mcal.get_calendar("NYSE")
+        sched = cal.schedule(
+            start_date=lookback.strftime("%Y-%m-%d"), end_date=today.strftime("%Y-%m-%d"),
+        )
+        sessions = [pd.Timestamp(d).date() for d in sched.index]
+    except Exception:
+        return 999
+    return sum(1 for d in sessions if d > last_date)
+
+
+def _trading_day_age_level(ts: datetime | None, warn_td: int = 3, error_td: int = 6) -> str:
+    """NYSE-trading-day-aware counterpart to _age_level() — see
+    _nyse_trading_days_since()'s own docstring for why a plain elapsed-hours
+    count is wrong for a daily (or better) job. warn_td/error_td default to
+    the same "Fresh (≤3 trading days)" convention already used for
+    per-ticker price staleness in _price_coverage()'s Data Coverage section,
+    so the whole Status page agrees with itself on what "stale" means.
+    """
+    if ts is None:
+        return "error"
+    td = _nyse_trading_days_since(ts)
+    if td <= warn_td:
+        return "ok"
+    if td <= error_td:
+        return "warn"
+    return "error"
 
 
 def _next_run_for_time(hour: int, minute: int) -> datetime:
@@ -1069,14 +1117,24 @@ def _render_dashboard_page(config: dict) -> None:
 # Status page
 # ---------------------------------------------------------------------------
 
-def _pipeline_row(label: str, ts: "datetime | None", warn_h: float, error_h: float,
+def _pipeline_row(label: str, ts: "datetime | None", level: str,
                    desc: str, never_badge: str = "PENDING") -> str:
-    """Build one row of the Status page's Pipeline table as an HTML string."""
+    """Build one row of the Status page's Pipeline table as an HTML string.
+
+    *level* ("ok"/"warn"/"error") must be precomputed by the caller, via
+    whichever staleness rule actually fits that row — e.g.
+    _trading_day_age_level() for a daily (or better) job, where a genuine
+    NYSE-calendar-aware count is needed so an ordinary weekend gap doesn't
+    misread as stale (see that function's own docstring). This function
+    used to hardcode _age_level()'s naive elapsed-hours rule for every row
+    it renders — fixed 2026-08-03, since that's exactly what made the
+    "Price Data Refresh" row show STALE for data only one real trading day
+    old.
+    """
     if ts is None:
         badge, colour = never_badge, ("#8899AA" if never_badge != "PENDING" else "#f59e0b")
         age_str = "—"
     else:
-        level = _age_level(ts, warn_h, error_h)
         colour = _LEVEL_COLOUR.get(level, "#8899AA")
         badge = {"ok": "OK", "warn": "STALE", "error": "OVERDUE"}.get(level, "OK")
         _, age_str = _age_display(ts)
@@ -1117,25 +1175,20 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
     pr1, pr2, pr3 = st.columns(3)
 
+    # Both cards below use _trading_day_age_level() (2026-08-03), a genuine
+    # NYSE-calendar-aware staleness check, in place of a naive elapsed-hours
+    # count — a plain hours threshold misreads an ordinary Friday-to-Monday
+    # weekend gap (63+ real hours, but only ONE genuine trading day) as
+    # several days stale. See _nyse_trading_days_since()'s own docstring.
     _ref_val, _ref_sub = _age_display(last_refresh)
     _status_card(pr1, "Last Data Refresh", _ref_val, _ref_sub,
-                 _age_level(last_refresh, warn_hours=48.0, error_hours=96.0))
+                 _trading_day_age_level(last_refresh))
 
     _sched_val, _sched_sub = _age_display(last_sched)
     if last_sched_name:
         _sched_sub = f"{last_sched_name} · {_sched_sub}"
-    _now_check  = datetime.utcnow()
-    _sched_hrs  = (
-        (_now_check - last_sched.replace(tzinfo=None)).total_seconds() / 3600
-        if last_sched else float("inf")
-    )
-    _is_weekday = _now_check.weekday() < 5
-    _sched_lvl  = (
-        "error" if (_sched_hrs > 26 and _is_weekday)
-        else "warn" if _sched_hrs > 14
-        else ("ok" if last_sched else "error")
-    )
-    _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub, _sched_lvl)
+    _status_card(pr2, "Last Scheduled Run", _sched_val, _sched_sub,
+                 _trading_day_age_level(last_sched))
 
     _sched_cfg_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_LABELS = {"eod": "End of Day"}
@@ -1210,11 +1263,11 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     rows = "".join([
         _pipeline_row(
             "1 · Price Data Refresh", last_refresh,
-            warn_h=48.0, error_h=96.0, desc=price_desc, never_badge="PENDING",
+            level=_trading_day_age_level(last_refresh), desc=price_desc, never_badge="PENDING",
         ),
         _pipeline_row(
             "2 · Order Logic", last_sched,
-            warn_h=48.0, error_h=72.0, desc=order_desc, never_badge="PENDING",
+            level=_trading_day_age_level(last_sched), desc=order_desc, never_badge="PENDING",
         ),
     ])
     st.markdown(_THEAD + rows + _TFOOT, unsafe_allow_html=True)
