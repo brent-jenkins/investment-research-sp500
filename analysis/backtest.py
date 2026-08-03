@@ -23,6 +23,7 @@ from analysis import universe
 from analysis.decision import (
     evaluate_exit_reason,
     is_position_size_viable,
+    is_reentry_blocked,
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
@@ -243,7 +244,15 @@ def simulate_trades(
     crisis override (force-exit + entry block), index-membership gating
     (stocks only), the ATR stop, the momentum signal turning off, and the
     per-ticker max-holding backstop. Position sizing is the shared VaR
-    formula every prior research path has used."""
+    formula every prior research path has used.
+
+    Deliberately exempt from the 2026-08-03 re-entry-cooldown fix (see
+    analysis/decision.py:is_reentry_blocked()'s own docstring) — this is
+    the frozen engine every "Current baseline" figure in CLAUDE.md was
+    generated with; adding new behaviour here would break that
+    reproducibility guarantee rather than close a live-parity gap that
+    matters for anything this engine is still used for.
+    """
     bt_cfg = config.get("backtest", {})
     max_hold = get_max_holding_days(ticker, config)
 
@@ -447,6 +456,16 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
 
     `max_position_gbp` is enforced exactly as before, inside
     _var_position_size_core() itself — unaffected by any of the above.
+
+    Deliberately exempt from the 2026-08-03 re-entry-cooldown fix (see
+    analysis/decision.py:is_reentry_blocked()'s own docstring) — a
+    position that closes today is genuinely entry-eligible again its own
+    next trading day, no 30-day gap, matching this function's already-
+    documented same-day-only restriction above. This is a frozen,
+    historical-reproduction engine (see "Portfolio-capped validation
+    findings" in CLAUDE.md); adding new behaviour here would break the
+    reproducibility of already-published figures rather than close a
+    live-parity gap that matters for anything this engine still drives.
     """
     bt_cfg = config.get("backtest", {})
     var_cfg = config.get("trading212_invest", {})
@@ -820,6 +839,13 @@ def simulate_portfolio_compounding(
        job" design (see brokers/trading212.py's `_submit_pending_orders()`
        docstring) -- there is no equivalent of "yesterday's leftover
        capacity" to accidentally carry over, by construction.
+
+    Deliberately exempt from the 2026-08-03 re-entry-cooldown fix (see
+    analysis/decision.py:is_reentry_blocked()'s own docstring) -- this
+    cost-basis engine is frozen specifically so every already-published
+    figure that cites it (e.g. the "Compounding portfolio backtest" sweep
+    in CLAUDE.md) stays exactly reproducible; simulate_portfolio_
+    compounding_mtm() below is the corrected, live-matching engine.
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -1167,6 +1193,13 @@ def simulate_portfolio_compounding_mtm(
     return-shape toggle — is identical in behaviour to
     simulate_portfolio_compounding(); only the numbers feeding the capacity
     check and the sizing formula differ.
+
+    **30-day re-entry cooldown (2026-08-03)** — this is the one engine
+    that enforces analysis/decision.py:is_reentry_blocked(), since this
+    is the engine analysis/validation.py:run_full_validation() actually
+    defaults to and the one confirmed to match live order placement.
+    Every other engine in this file is deliberately exempt — see
+    is_reentry_blocked()'s own docstring for the full reasoning.
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -1204,6 +1237,10 @@ def simulate_portfolio_compounding_mtm(
             "max_hold": get_max_holding_days(ticker, config),
             "open_trade": None,
             "last_price": None,
+            # Re-entry cooldown (2026-08-03) -- set the instant a trade
+            # closes (Phase A below); is_reentry_blocked() reads it in
+            # _admit_group(). None means "never traded", never blocked.
+            "last_exit_date": None,
         }
         for dt in frame.index:
             events.append((dt, event_rank, ticker))
@@ -1256,6 +1293,17 @@ def simulate_portfolio_compounding_mtm(
             )
             blocked_now = bool(st["entry_blocked"].loc[dt])
             if not passes_entry_gate(sig_on=sig_on, is_member=is_member, entry_blocked=blocked_now):
+                continue
+            # Re-entry cooldown (2026-08-03) -- mirrors live's
+            # _load_open_order_tickers(): a ticker whose last trade
+            # closed fewer than REENTRY_COOLDOWN_DAYS calendar days ago
+            # is not yet eligible for a new entry, regardless of how
+            # strong today's signal is. See analysis/decision.py:
+            # is_reentry_blocked()'s own docstring for why this can't be
+            # one shared function with live's bulk SQL check.
+            last_exit = st.get("last_exit_date")
+            days_since_exit = (dt - last_exit).days if last_exit is not None else None
+            if is_reentry_blocked(days_since_exit):
                 continue
             momentum_val = row.get("momentum")
             momentum_val = float(momentum_val) if pd.notna(momentum_val) else float("-inf")
@@ -1415,6 +1463,7 @@ def simulate_portfolio_compounding_mtm(
                 })
                 cash += ot["position_gbp"] + pnl_gbp
                 st["open_trade"] = None
+                st["last_exit_date"] = dt
 
         # Phase B — entries. current_balance/current_deployed are both
         # recomputed fresh, mark-to-market, once for the whole day (after

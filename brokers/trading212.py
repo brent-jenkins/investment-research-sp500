@@ -75,6 +75,7 @@ import requests
 
 from analysis import crisis, signals, universe
 from analysis.decision import (
+    REENTRY_COOLDOWN_DAYS,
     evaluate_exit_reason,
     is_asset_class_enabled,
     is_position_size_viable,
@@ -766,7 +767,16 @@ def _reconstruct_pnl(config: dict) -> None:
         logger.warning("P&L reconstruction failed: %s", exc)
 
 
-def _load_open_order_tickers(days: int = 30) -> set:
+def _load_open_order_tickers(days: int = REENTRY_COOLDOWN_DAYS) -> set:
+    """Every ticker with a PLACED/FILLED order (either direction) within
+    the last *days* calendar days -- a new entry into any of these is
+    skipped by the decide phase. `days` defaults to the single shared
+    REENTRY_COOLDOWN_DAYS constant (analysis/decision.py) rather than its
+    own hardcoded literal -- see that constant's own docstring for why
+    this bulk SQL query and the backtest engine's per-ticker Python check
+    (analysis/backtest.py:simulate_portfolio_compounding_mtm()) can't
+    literally share one function call, but both read the same threshold.
+    """
     try:
         from sqlalchemy import text as sa_text
         from data.database import get_engine

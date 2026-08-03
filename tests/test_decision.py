@@ -6,9 +6,11 @@ path) is actually wired to these functions, not just that the functions
 themselves are correct in isolation.
 """
 from analysis.decision import (
+    REENTRY_COOLDOWN_DAYS,
     evaluate_exit_reason,
     is_asset_class_enabled,
     is_position_size_viable,
+    is_reentry_blocked,
     passes_entry_gate,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
@@ -223,3 +225,33 @@ def test_resolve_cash_constrained_position_gbp_is_never_inflated_by_unrealized_g
     regardless of how inflated a separate account_value_gbp figure
     elsewhere becomes."""
     assert resolve_cash_constrained_position_gbp(1e60, 1_000, cash_fraction=0.25) == 250.0
+
+
+# ---------------------------------------------------------------------------
+# is_reentry_blocked() (2026-08-03) -- the shared 30-day re-entry cooldown
+# threshold. See tests/test_portfolio_backtest.py for the MTM-engine-level
+# proof this is genuinely wired in, and tests/test_execution.py for live's
+# own _load_open_order_tickers() boundary confirmation.
+# ---------------------------------------------------------------------------
+
+def test_reentry_cooldown_default_is_30_days():
+    assert REENTRY_COOLDOWN_DAYS == 30
+
+
+def test_is_reentry_blocked_true_within_window_false_at_and_past_boundary():
+    assert is_reentry_blocked(0) is True
+    assert is_reentry_blocked(29) is True
+    assert is_reentry_blocked(29.9) is True
+    assert is_reentry_blocked(30) is False  # exactly 30 days -- no longer blocked
+    assert is_reentry_blocked(31) is False
+
+
+def test_is_reentry_blocked_none_never_blocks():
+    """A ticker with no order/trade history at all has nothing to cool
+    down from -- must never be blocked."""
+    assert is_reentry_blocked(None) is False
+
+
+def test_is_reentry_blocked_respects_a_custom_cooldown_period():
+    assert is_reentry_blocked(10, cooldown_days=14) is True
+    assert is_reentry_blocked(14, cooldown_days=14) is False

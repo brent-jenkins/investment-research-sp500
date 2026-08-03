@@ -163,6 +163,61 @@ def is_asset_class_enabled(*, is_etf: bool, config: dict) -> bool:
     return bool(t212_cfg.get(key, True))
 
 
+REENTRY_COOLDOWN_DAYS = 30
+"""Calendar days after a ticker's last order (PLACED/FILLED, either
+direction) during which a new entry into that same ticker is blocked.
+
+Found missing from the backtest engine entirely on 2026-08-03: live
+order placement has enforced this since brokers/trading212.py's
+_load_open_order_tickers() was first written, but no simulation engine
+had an equivalent -- meaning every backtest run could freely re-enter
+a ticker the instant it exited, a genuine extra degree of freedom live
+has never had. See CLAUDE.md's "30-day re-entry cooldown -- live/
+backtest parity gap closed" section for the investigation, the fix,
+and the direct headline-figure sensitivity check that followed.
+
+Expressed as accepted, reviewed duplication (the same shape as
+candidate-priority-ranking above): live's own check
+(brokers/trading212.py:_load_open_order_tickers()) runs as a single
+bulk SQL query over every ticker at once, since re-deriving ~500
+tickers' own order history in Python per decide-run would be needless
+overhead an efficient batch query already avoids; the backtest
+engine's own check runs per-ticker, inline, inside its own day-by-day
+walk, since it has no equivalent bulk-query mechanism to reuse. These
+cannot literally share one function call for that reason -- but both
+sides read this ONE constant rather than each hardcoding their own
+"30", and both are independently tested to enforce the identical
+30-calendar-day boundary against the same synthetic scenario.
+
+Only simulate_portfolio_compounding_mtm() (analysis/backtest.py) --
+the engine analysis/validation.py:run_full_validation() actually
+defaults to, the one confirmed to genuinely match what live order
+placement does -- enforces this. simulate_trades()/simulate_portfolio()/
+simulate_portfolio_compounding() are deliberately left unchanged: each
+is an intentionally frozen engine, kept alongside the corrected one
+specifically so an already-published historical figure that cites it
+stays exactly reproducible on demand (the same "frozen engine, new one
+added alongside it" pattern this file's own history follows repeatedly
+-- see each function's own docstring for its specific frozen-figure
+citation). Adding a new behavioural change to a frozen engine would
+break that reproducibility guarantee, not fix a parity gap that
+matters for anything live currently does.
+"""
+
+
+def is_reentry_blocked(
+    days_since_last_order: Optional[float], cooldown_days: int = REENTRY_COOLDOWN_DAYS,
+) -> bool:
+    """True if a ticker's most recent order (of either direction) was
+    fewer than cooldown_days CALENDAR days ago, and a new entry must not
+    be placed into it yet. days_since_last_order=None (no order/trade
+    history at all for this ticker) is never blocked -- a ticker that
+    has literally never been traded has nothing to cool down from."""
+    if days_since_last_order is None:
+        return False
+    return days_since_last_order < cooldown_days
+
+
 def resolve_dynamic_max_position_gbp(
     account_value_gbp: float, per_trade_pct: float, absolute_max_position_gbp: float,
 ) -> float:

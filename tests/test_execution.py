@@ -787,6 +787,49 @@ def _n_ticker_mapping(n: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 30-day re-entry cooldown, live side (2026-08-03) -- _load_open_order_
+# tickers() is live's own half of the shared analysis.decision.
+# REENTRY_COOLDOWN_DAYS boundary; see tests/test_decision.py's pure
+# is_reentry_blocked() tests and tests/test_portfolio_backtest.py's
+# MTM-engine-level proof for the other two legs of the same rule.
+# ---------------------------------------------------------------------------
+
+def test_load_open_order_tickers_default_matches_shared_reentry_constant():
+    from brokers.trading212 import _load_open_order_tickers
+    from analysis.decision import REENTRY_COOLDOWN_DAYS
+    import inspect
+    default = inspect.signature(_load_open_order_tickers).parameters["days"].default
+    assert default == REENTRY_COOLDOWN_DAYS == 30
+
+
+def test_load_open_order_tickers_boundary_matches_backtests_own_boundary(db_engine):
+    """A real DB-backed confirmation that live's SQL-day-count and the
+    backtest's Python day-count agree at the identical 30-day boundary --
+    an order 29 days old is still within the cooldown (ticker returned,
+    entry blocked); an order 31 days old is not (ticker not returned,
+    entry allowed) -- exactly matching is_reentry_blocked(29)=True /
+    is_reentry_blocked(31)=False proven in isolation in test_decision.py."""
+    from brokers.trading212 import _load_open_order_tickers
+
+    within_window = (datetime.utcnow() - timedelta(days=29)).isoformat()
+    past_window = (datetime.utcnow() - timedelta(days=31)).isoformat()
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('RECENT', 'RECENT_EQ', 'SELL', 'FILLED', :ts, :ts)
+        """), {"ts": within_window})
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, status, placed_at, created_at)
+            VALUES ('OLD', 'OLD_EQ', 'SELL', 'FILLED', :ts, :ts)
+        """), {"ts": past_window})
+
+    blocked = _load_open_order_tickers()
+
+    assert "RECENT" in blocked   # 29 days -- still within cooldown
+    assert "OLD" not in blocked  # 31 days -- cooldown cleared
+
+
+# ---------------------------------------------------------------------------
 # Exchange-aware order submission (2026-07-31, see CLAUDE.md) --
 # _submit_pending_orders() / submit_pending_etf_orders() /
 # submit_pending_stock_orders(). max_total_deployed / the price-sanity

@@ -1250,3 +1250,60 @@ def test_mtm_collect_rejections_preserves_return_signature(mocker):
     assert isinstance(result_tuple, tuple) and len(result_tuple) == 2
     trades, rejections = result_tuple
     assert isinstance(trades, list) and isinstance(rejections, list)
+
+
+# ---------------------------------------------------------------------------
+# 30-day re-entry cooldown (2026-08-03) -- the decisive proof this project's
+# own live/backtest parity invariant is genuinely closed, not just tested in
+# isolation via analysis/decision.py:is_reentry_blocked()'s own pure unit
+# tests (tests/test_decision.py). See CLAUDE.md's "30-day re-entry cooldown
+# -- live/backtest parity gap closed" section.
+# ---------------------------------------------------------------------------
+
+def test_mtm_reentry_blocked_within_30_days_of_exit_allowed_after(mocker):
+    """A ticker exits via SIGNAL_OFF on day 10, then its signal turns back
+    on the very next day (day 11) and stays on -- without the fix, this
+    engine would have re-entered on day 11, exactly the extra degree of
+    freedom live has never had. With the fix, re-entry must wait until the
+    exit is >=30 calendar days old."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+
+    n = 120
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    signal = [True] * 10 + [False] + [True] * (n - 11)  # off on day index 10 only
+    close = pd.Series([100.0] * n, index=dates)  # flat -- no stop-loss noise
+    atr = pd.Series([1.0] * n, index=dates)
+    frame = pd.DataFrame({"close": close, "atr": atr, "signal": pd.Series(signal, index=dates)})
+
+    cfg = _compounding_config()
+    cfg["trading212_invest"]["stock_max_holding_days"] = 200  # don't let max-holding interfere
+
+    cached = [{"ticker": "REENTRY", "frame": frame}]
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    assert len(trades) == 2, f"expected exactly 2 trades (initial + re-entry), got {len(trades)}: {trades}"
+    first, second = trades[0], trades[1]
+    assert first["exit_date"] == dates[10].date()
+    assert first["exit_reason"] == "SIGNAL_OFF"
+
+    # Decisive: must NOT have re-entered the very next day -- exactly what
+    # the pre-fix engine did.
+    assert second["entry_date"] != dates[11].date()
+
+    days_gap = (pd.Timestamp(second["entry_date"]) - pd.Timestamp(first["exit_date"])).days
+    assert days_gap >= 30, f"re-entered only {days_gap} days after exit -- cooldown not enforced"
+
+
+def test_mtm_reentry_never_blocked_for_a_tickers_very_first_entry(mocker):
+    """A ticker with no prior trade at all (last_exit_date=None) must never
+    be treated as cooling down -- confirms is_reentry_blocked(None) is
+    genuinely wired through, not just correct in isolation."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 40
+    cached = [{"ticker": "SOLO", "frame": _frame(n)}]
+    cfg = _compounding_config()
+
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    assert len(trades) >= 1
+    assert trades[0]["entry_date"] == pd.Timestamp("2020-01-01").date()
