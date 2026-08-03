@@ -7116,14 +7116,41 @@ Implements the mechanism the section immediately above recommended, following it
 
 **Built in an isolated `git worktree`** (`feature/broker-side-stop-loss`), not the main checkout — a second, unrelated Claude Code session was found mid-task in the shared working directory (uncommitted changes to a different feature, live exit-check pricing) partway through this build. Per this project's own standing practice for exactly this situation (see "Experimental/research work runs locally, not on the server" above), the work was moved into its own worktree rather than continuing to co-edit the same files as the other session — the main checkout's own uncommitted state was never touched or reverted.
 
-### Broker-side stop replaces local evaluation, and reconciliation gains STOP_LOSS precision — held, not yet started
+### Position-by-position backfill onto every pre-existing open position (2026-08-04)
 
-Two follow-on tasks, explicitly sequenced after the mechanism above AND a position-by-position backfill of real broker-side stops onto every currently-open position are both confirmed complete:
+16 of 16 currently-open real positions (the account's complete position list at the time) each got a real, individually-placed, individually-verified `POST /equity/orders/stop` — using that position's own already-computed `stop_price` (the exact value `_load_open_position_context()` already returns, the same one the local hourly check reads), not a placeholder or re-derived figure. Run as one continuous, real, sequential Python session (each `place_stop_order()` call already paced ≥2.1s apart by the mechanism's own dedicated throttle — see above), not a batch/fire-and-forget script: every single placement was followed immediately by an independent `GET /equity/orders/{id}` re-read confirming the real order (status, stop price) before moving to the next ticker, and the local `invest_orders` BUY row's `stop_order_id`/`stop_order_status` was updated via the same `_update_stop_order_status()` the automated pipeline itself uses — no separate, parallel bookkeeping path.
+
+| Ticker | Qty | stop_price | Order ID | Verified status |
+|---|---|---|---|---|
+| CIEN | 4.0 | 314.17 | 52900700727 | NEW |
+| FIX | 1.0 | 1487.95 | 52900700729 | NEW |
+| INTC | 21.0 | 72.96 | 52900700731 | NEW |
+| DELL | 5.0 | 337.46 | 52900700733 | NEW |
+| FLEX | 19.0 | 94.63 | 52900700735 | NEW |
+| LRCX | 6.0 | 237.81 | 52900700737 | NEW |
+| MU | 2.0 | 641.94 | 52900700739 | NEW |
+| TER | 4.0 | 300.24 | 52900700743 | NEW |
+| AMD | 4.0 | 395.49 | 52900700745 | NEW |
+| VLO | 10.0 | 290.94 | 52900700747 | NEW |
+| CNC | 53.0 | 56.70 | 52900700749 | NEW |
+| KLAC | 10.0 | 150.82 | 52900700751 | NEW |
+| AMAT | 3.0 | 419.95 | 52900700753 | NEW |
+| HPE | 51.0 | 42.19 | 52900700755 | NEW |
+| MRVL | 8.0 | 148.50 | 52900700757 | NEW |
+| WBD | 128.0 | 25.22 | 52900700759 | NEW |
+
+**16/16 placed, 16/16 independently verified, 0 failures.** A final, separate re-read (fresh `_load_open_position_context()` call plus a fresh `client.get_positions()` call) confirmed all 16 DB rows show `stop_order_status == "PLACED"` with a real `stop_order_id`, and all 16 real T212 positions remained at their exact pre-backfill quantities with ordinary market-driven `ppl` — the backfill itself touched nothing about the underlying holdings, exactly as expected for a protective order placed against an already-owned position. Every real order's `currency`/`instrument.currency` split matched the supervised test's own finding (`GBP`/`USD`) across all 16, not just the one ticker the original supervised test used — confirming that finding generalises rather than being specific to `KLAC`.
+
+Every currently-open position genuinely has a real, T212-enforced stop resting on it as of this backfill. This is the condition the two follow-on tasks immediately below were waiting on.
+
+### Broker-side stop replaces local evaluation, and reconciliation gains STOP_LOSS precision — unblocked, not yet started
+
+Two follow-on tasks, explicitly sequenced after the mechanism above AND the position-by-position backfill immediately above — both are now confirmed complete, so this section is unblocked:
 
 1. **Remove local `STOP_LOSS` evaluation/closing from `maybe_exit_positions()`** — the broker owns this once every open position genuinely has a real, confirmed-working stop resting at T212. `CRISIS_EXIT`/`SIGNAL_OFF`/`MAX_HOLDING` are untouched; none of the three can move to the broker (all depend on this system's own signal/crisis logic, not a fixed price level).
 2. **Sharpen `reconcile_positions_with_broker()`** to distinguish a routine broker-side stop firing (a vanished position with a matching, recently-placed `stop_order_id` on its BUY row) from the genuinely unexpected events it already handles (`BROKER_CLOSED_NO_SELL` for a real cash-out acquisition, `UNRECOGNIZED_POSITION` for a stock-swap) — recording the former precisely as a `STOP_LOSS`-exited `t212_pnl` row instead of folding it into the generic manual-review bucket. This is what closes the P&L-recording gap named directly above, and is what makes "Performance by Exit Reason" (a real, visible Dashboard section) trustworthy for stop-fired closes once the broker owns stop evaluation entirely.
 
-Not started — held deliberately until the backfill (next section) is confirmed working position-by-position.
+Not started — tracked as a distinct, separate task from the backfill above, not folded in here.
 
 ### Submission-time crisis re-check (2026-08-03) — confirmed real gap, fixed before Monday
 
