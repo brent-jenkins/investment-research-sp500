@@ -1621,12 +1621,20 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     except Exception:
         pass
 
+    # Labels must match the *real* jobs data/scheduler.py:start_scheduler()
+    # registers, not a stale snapshot — scheduled_eod/membership_refresh
+    # fire daily now (no day_of_week filter, NYSE-calendar-gated
+    # internally, see _is_scheduled_trading_day()), and
+    # stock_order_submission/weekly_summary are genuine, order-affecting
+    # jobs that must appear here, not silently fall back to a raw job id.
     _JOB_LABELS: dict[str, tuple[str, str]] = {
-        "scheduled_eod":        ("End of Day",    f"{_uk_sched_time(21, 30)} · Mon–Fri"),
-        "monday_premarket":     ("Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday"),
-        "trade_alert_check":    ("Trade Alerts",  "Hourly 00–21, 23 · Mon–Fri"),
-        "membership_refresh":   ("Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri"),
-        "job_dispatcher":       ("job_dispatcher","—"),
+        "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} daily · NYSE-gated"),
+        "monday_premarket":       ("Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday"),
+        "trade_alert_check":      ("Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri"),
+        "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
+        "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri"),
+        "weekly_summary":         ("Weekly Summary",    "09:00 UK time · Sunday"),
+        "job_dispatcher":         ("job_dispatcher",    "—"),
     }
 
     if _daemon_active:
@@ -1715,22 +1723,42 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         for _rn, _rc in _cfg_s.get("runs", {}).items():
             _sid = f"scheduled_{_rn}"
             _jlabel, _jsched = _JOB_LABELS.get(_sid, (_sid, "—"))
+            # No day_of_week filter — matches the real trigger in
+            # data/scheduler.py:start_scheduler() exactly. These jobs fire
+            # every calendar day and gate themselves internally via
+            # _is_scheduled_trading_day() (NYSE calendar); a reconstructed
+            # Mon-Fri-only trigger here would silently show the wrong next
+            # fire time on a weekend/holiday.
             _trigger = _CronTrigger(
                 hour=_rc["hour"], minute=_rc["minute"],
-                day_of_week="mon-fri", timezone=_tz_s,
+                timezone=_tz_s,
             )
             _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
 
         # Monday pre-market is fixed at 07:00 UTC directly in
         # data/scheduler.py, not driven by scheduler.runs (see that
-        # module's own comment on why).
+        # module's own comment on why). membership_refresh is likewise
+        # fixed at 21:15 rather than derived from scheduler.runs, and —
+        # like scheduled_eod above — has no day_of_week filter on its real
+        # trigger. stock_order_submission (14:30 UTC weekdays) and
+        # weekly_summary (09:00 Europe/London, Sunday — its own explicit
+        # timezone, not this scheduler's UTC default) are real, currently
+        # registered jobs that were previously missing from this
+        # reconstruction entirely, making the actual order-submission job
+        # invisible on the Status page whenever the standalone daemon
+        # (rather than the in-process fallback) is what's running —
+        # exactly the case in normal production operation.
         _extra_static = [
             ("monday_premarket", "Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday",
              _CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=_tz_s)),
             ("trade_alert_check", "Trade Alerts", "Hourly 00–21, 23 · Mon–Fri",
              _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
-            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} · Mon–Fri",
-             _CronTrigger(hour=21, minute=15, day_of_week="mon-fri", timezone=_tz_s)),
+            ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
+             _CronTrigger(hour=21, minute=15, timezone=_tz_s)),
+            ("stock_order_submission", "Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri",
+             _CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone=_tz_s)),
+            ("weekly_summary", "Weekly Summary", "09:00 UK time · Sunday",
+             _CronTrigger(day_of_week="sun", hour=9, minute=0, timezone="Europe/London")),
         ]
         _static_jobs.extend(_extra_static)
 
