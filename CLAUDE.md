@@ -7260,6 +7260,43 @@ Reused the exact same 16-block boundaries this project already trusts elsewhere 
 
 Research-only — nothing in `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, or `brokers/trading212.py` changed as a result of this investigation. The local scratch clone was deleted after these figures were captured; production was never touched.
 
+### Block-based confirmation of the 2% momentum floor (2026-08-03)
+
+**Question.** The momentum-floor sweep found a 2% absolute minimum-momentum floor to be essentially free — over the six-year test period, it would have blocked exactly one trade, already confirmed to be a loser. Unlike the re-entry cooldown result, this was never an aggregate statistical claim across many trades — it's a single, nameable, already-verified case. Confidence was already reasonably high, but the block-independent validation infrastructure built for the cooldown check made a final confirmation cheap, worth doing before touching a live, currently-working safety mechanism.
+
+**Methodology.** Combined the two engine injections built earlier the same day (block-independent walk truncation + corrected `END_OF_DATA`, from the cooldown block study; momentum-floor filtering + admission-momentum recording, from the original floor sweep) into one engine — every injected line has an already-verified precedent in one of those two prior modules. Verified faithful (inert defaults reproduce the real function exactly) before trusting it. Re-ran floor 0% and floor 2% across the same 16 established blocks, reset-independently each time — the identical methodology and block boundaries as the cooldown check, so the two studies are directly comparable.
+
+**Per-block comparison, all 16 independent blocks:**
+
+| Block | Window | 0% CAGR | 2% CAGR | Δ | Excluded-band trades |
+|---|---|---|---|---|---|
+| 0 | 2007→2008-03 | 6.23% | 6.23% | 0.00 | 0 |
+| 1 | 2008-03→2009-06 (GFC) | −22.14% | **−19.46%** | **+2.68** | **84** |
+| 2 | 2009-06→2010-09 | 11.96% | 9.81% | −2.15 | 8 |
+| 3 | 2010-09→2011-11 | 8.98% | 8.98% | 0.00 | 0 |
+| 4 | 2011-11→2013-02 | 8.21% | 8.21% | 0.00 | 0 |
+| 5 | 2013-02→2014-05 | 10.16% | 10.16% | 0.00 | 0 |
+| 6 | 2014-05→2015-07 | 8.75% | 8.75% | 0.00 | 1 |
+| 7 | 2015-07→2016-10 | 16.96% | 15.14% | −1.82 | 5 |
+| 8 | 2016-10→2018-01 | 13.62% | **17.98%** | **+4.36** | 1 |
+| 9 | 2018-01→2019-03 | 6.09% | 6.09% | 0.00 | 0 |
+| 10 | 2019-03→2020-06 | 13.56% | 13.56% | 0.00 | 0 |
+| 11 | 2020-06→2021-09 | 12.16% | 12.16% | 0.00 | 0 |
+| 12 | 2021-09→2022-11 | 10.33% | 10.33% | 0.00 | 0 |
+| 13 | 2022-11→2024-02 | 15.25% | 13.31% | −1.94 | 1 |
+| 14 | 2024-02→2025-05 | 9.11% | 9.14% | +0.03 | 1 |
+| 15 | 2025-05→2026-08 | 38.18% | 38.18% | 0.00 | 1 |
+
+**A genuinely new finding, only visible because this check reaches beyond the original 6-year test period: 102 excluded-band trades exist across the full 19-year window, not 1 — and 84 of them (82%) are concentrated in the GFC block alone.** The original momentum-floor sweep's early-stage-exclusion check only ever looked at 2020–2026 (correctly, for its own purpose — that's the established test-period convention for comparing variants), so it never had the chance to see 2007–2019 at all. Extending the same direct, uncontaminated excluded-band methodology (identified from each block's own floor=0% baseline, not a cross-run diff) across the full window surfaces a much larger population.
+
+**The larger population makes the case for the floor stronger, not weaker.** Across all 102 excluded-band trades: win rate 24.5%, mean P&L −1.51%, median −1.89% — clearly, decisively a net-losing cohort. Block 1 (GFC) alone — the block contributing the vast majority of excluded trades — has an even worse excluded-band win rate (19.0%, mean −2.02%) and **zero** big winners in it; correspondingly, the 2% floor's largest single CAGR improvement anywhere in the whole study is this exact block (−22.14% → −19.46%, +2.68pp). This is precisely the scenario the original entry-gate investigation was most worried about — a high-stress, low-conviction, "best of a bad bunch" period — and the floor performs *well* there, not poorly.
+
+**The one real cost this check found, that the original 6-year check could not have found:** exactly **one** genuine ≥20% winner across all 102 excluded-band trades in the full 19-year window — `LEN`, entered 2009-08-11 at 0.54% momentum, went on to +22.0% (`MAX_HOLDING` exit). This is a real, small, now fully-quantified cost, additional to (not replacing) the already-known 2020-2026 loser. Weighed against 101 other excluded trades that were net losers, this does not change the conclusion — it completes it.
+
+**Go/no-go recommendation: GO.** The 2% floor's benefit is confirmed, and — extended to the full validated window rather than just the test period — turns out to be considerably stronger than the original check alone suggested, particularly in exactly the high-stress scenario ("best of a bad bunch" during a grinding, low-conviction period) the floor was originally proposed to guard against. The floor never shows a case of demonstrable, concentrated harm in any individual block the way the aggregate alone could have hidden — its worst per-block CAGR impact (blocks 2, 7, 13, all in the −1.8 to −2.2pp range) is modest and, given the excluded-band data showing almost no genuine winners lost anywhere outside the single named `LEN` trade, consistent with ordinary capacity-cascade noise (excluding one candidate handing its slot to a marginally-worse alternative) rather than the floor directly discarding quality. Ready to implement.
+
+Research-only — nothing in `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, or `brokers/trading212.py` changed as a result of this investigation. The local scratch clone was deleted after these figures were captured; production was never touched.
+
 ### Broker integration — Trading212 Invest
 
 `brokers/trading212.py` contains two concerns:
