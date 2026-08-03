@@ -152,19 +152,21 @@ trading212_invest:
   # additional floor) via the MIN_MOMENTUM_FLOOR constant.
   min_momentum_pct: 0.02
   # Real, broker-side stop-loss orders (2026-08-04) -- see CLAUDE.md's
-  # "Broker-side stop order" section. When true, brokers/trading212.py:
+  # "Broker-side stop order" sections. brokers/trading212.py:
   # poll_placed_orders() places a genuine T212 POST /equity/orders/stop
   # for every BUY the instant it fills, at that entry's already-computed
   # stop_price -- enforced continuously by T212 itself, independent of
   # whether this system's own scheduler is even running (a materially
-  # stronger guarantee than the once-an-hour local check alone). Starts
-  # FALSE deliberately -- must not flip to true until a single,
-  # supervised real-order test on the demo account has confirmed T212's
-  # actual pending-order status string and currency behaviour for this
-  # endpoint, which is confirmed not-yet-idempotent in beta (a retry on
-  # timeout can create a duplicate standing order -- see
-  # place_stop_order()'s own docstring for why placement is single-
-  # attempt only, never retried). The existing local stop-loss check
+  # stronger guarantee than the once-an-hour local check alone). Flipped
+  # to true only after the required single supervised real-order test on
+  # the demo account confirmed T212's actual pending-order status string
+  # ("NEW") and currency behaviour (order-level "currency" is the
+  # account's own GBP; instrument.currency correctly stays USD; stop
+  # price is interpreted in the instrument's own currency) -- this
+  # endpoint is confirmed not-yet-idempotent in beta (a retry on timeout
+  # can create a duplicate standing order -- see place_stop_order()'s own
+  # docstring for why placement is single-attempt only, never retried).
+  # The existing local stop-loss check
   # (analysis/decision.py:evaluate_exit_reason()'s STOP_LOSS branch)
-  # keeps running regardless of this flag.
-  broker_side_stop_enabled: false
+  # keeps running regardless of this flag -- both layers are active now.
+  broker_side_stop_enabled: true
