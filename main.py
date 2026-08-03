@@ -1556,12 +1556,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
 
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
     st.markdown("### Scheduled Runs")
-    st.caption(
-        "The 07:00 (Tue–Fri) pre-market and 13:30 US-open analysis-only runs "
-        "that used to sit here were removed 2026-07-31 — confirmed redundant "
-        "with the hourly Open Trade Monitor job above, not just assumed. See "
-        "CLAUDE.md's \"Pre-market/US-open scheduled runs removed\" section."
-    )
+    st.caption("Next fire time for each automated data/order-pipeline run.")
     sched_runs = config.get("scheduler", {}).get("runs", {})
     _RUN_DISPLAY = {
         "eod": ("End of Day", "Full data refresh + order logic after NYSE close"),
