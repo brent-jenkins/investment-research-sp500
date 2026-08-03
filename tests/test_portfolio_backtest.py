@@ -1338,3 +1338,81 @@ def test_mtm_reentry_never_blocked_for_a_tickers_very_first_entry(mocker):
 
     assert len(trades) >= 1
     assert trades[0]["entry_date"] == pd.Timestamp("2020-01-01").date()
+
+
+# ---------------------------------------------------------------------------
+# Minimum-momentum floor (2026-08-03) -- config-driven, mirrors the exact
+# resolve_min_momentum_floor()/passes_momentum_floor() pair live order
+# placement calls. See CLAUDE.md's "Does the entry gate need an absolute
+# minimum momentum floor?" and "Block-based confirmation of the 2% momentum
+# floor" sections.
+# ---------------------------------------------------------------------------
+
+def _momentum_frame(n, momentum_value, start="2020-01-01"):
+    dates = pd.date_range(start, periods=n, freq="D")
+    return pd.DataFrame({
+        "close": pd.Series([100.0] * n, index=dates),
+        "atr": pd.Series([1.0] * n, index=dates),
+        "signal": pd.Series([True] * n, index=dates),
+        "momentum": pd.Series([momentum_value] * n, index=dates),
+    })
+
+
+def test_mtm_momentum_floor_excludes_candidate_below_floor_admits_one_above(mocker):
+    """The decisive proof: two tickers, identical in every respect except
+    entry momentum -- one at 1% (below a configured 2% floor), one at 5%
+    (comfortably above it). Under min_momentum_pct=0.02, only the strong
+    ticker should ever be entered; the weak one, despite sig_on=True the
+    entire window, must never appear in the trade list at all."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 40
+    weak = _momentum_frame(n, 0.01)   # 1% -- below floor
+    strong = _momentum_frame(n, 0.05)  # 5% -- above floor
+
+    cached = [{"ticker": "WEAK1PCT", "frame": weak}, {"ticker": "STRONG5PCT", "frame": strong}]
+    cfg = _compounding_config()
+    cfg["trading212_invest"]["min_momentum_pct"] = 0.02
+
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    tickers_traded = {t["ticker"] for t in trades}
+    assert "STRONG5PCT" in tickers_traded, "the above-floor candidate must be admitted"
+    assert "WEAK1PCT" not in tickers_traded, (
+        f"the below-floor candidate must never be admitted, but appeared in: {tickers_traded}"
+    )
+
+
+def test_mtm_momentum_floor_is_config_driven_absent_key_admits_everything(mocker):
+    """A config predating this parameter (no min_momentum_pct key at all)
+    must behave exactly as before this feature shipped -- both the weak
+    and strong candidates above are admitted, since the only real gate is
+    momentum > 0.0 (already satisfied by sig_on=True for both)."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 40
+    weak = _momentum_frame(n, 0.01)
+    strong = _momentum_frame(n, 0.05)
+
+    cached = [{"ticker": "WEAK1PCT", "frame": weak}, {"ticker": "STRONG5PCT", "frame": strong}]
+    cfg = _compounding_config()
+    assert "min_momentum_pct" not in cfg["trading212_invest"]
+
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    tickers_traded = {t["ticker"] for t in trades}
+    assert "STRONG5PCT" in tickers_traded
+    assert "WEAK1PCT" in tickers_traded, "with no floor configured, a 1% candidate must still be admitted"
+
+
+def test_mtm_momentum_floor_boundary_exactly_at_floor_is_admitted(mocker):
+    """momentum == floor is inclusive (>=), matching passes_momentum_floor()'s
+    own documented boundary behaviour."""
+    mocker.patch.object(v2u, "is_member", return_value=True)
+    n = 40
+    frame = _momentum_frame(n, 0.02)  # exactly at a 2% floor
+    cached = [{"ticker": "EXACT2PCT", "frame": frame}]
+    cfg = _compounding_config()
+    cfg["trading212_invest"]["min_momentum_pct"] = 0.02
+
+    trades = v2b.simulate_portfolio_compounding_mtm(cached, cfg, _flat_gspc(n), 0.05, 0.90)
+
+    assert any(t["ticker"] == "EXACT2PCT" for t in trades)

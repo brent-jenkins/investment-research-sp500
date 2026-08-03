@@ -104,6 +104,96 @@ def passes_entry_gate(
     return sig_on is True and is_member is True and entry_blocked is False
 
 
+MIN_MOMENTUM_FLOOR = 0.0
+"""The FALLBACK default minimum-momentum floor, used only when
+trading212_invest.min_momentum_pct is absent from config entirely
+(backwards compatible with a config predating this parameter -- 0.0
+reproduces the exact pre-2026-08-03 behaviour, where the entry gate's
+only momentum requirement was momentum > 0.0, no additional floor).
+See resolve_min_momentum_floor() immediately below for the real, live
+value.
+
+Investigated 2026-08-03: the entry gate required only momentum > 0, no
+distinction between a genuinely trending candidate and one that is
+barely, statistically-indistinguishably positive. A historical
+frequency check found every real candidate being only marginally
+positive while account capacity sat idle is genuinely rare but not
+zero (0.9% of capacity-available days, ~3% of all admitted trades at a
+2% threshold). A reset-at-boundary sweep (0/2/5/10/15%) found 2% close
+to free (one excluded trade in the six-year test period, already a
+loser) while 15% had a demonstrated cost (excluding two real winners,
+TSLA and CEG). A follow-up block-independent confirmation across the
+full 19-year validated window found the excluded population at 2% is a
+clear net loser overall (24.5% win rate, -1.51% mean P&L), concentrated
+mostly in the GFC block -- exactly the "best of a bad bunch" scenario
+this floor exists to guard against -- with only one genuine winner
+(LEN, +22.0%) sacrificed across the entire window. See CLAUDE.md's
+"Does the entry gate need an absolute minimum momentum floor?" and
+"Block-based confirmation of the 2% momentum floor" sections for the
+full investigation. Production runs at 0.02 (2%), not this 0.0
+fallback.
+
+Only simulate_portfolio_compounding_mtm() (analysis/backtest.py) --
+the engine analysis/validation.py:run_full_validation() actually
+defaults to, the one confirmed to genuinely match live order placement
+-- enforces this, mirroring the exact same deliberate exemption
+REENTRY_COOLDOWN_DAYS/is_reentry_blocked() already established for
+simulate_trades()/simulate_portfolio()/simulate_portfolio_compounding():
+each of those three is an intentionally frozen engine, kept alongside
+the corrected one specifically so an already-published historical
+figure that cites it stays exactly reproducible on demand. Adding a
+new behavioural change to a frozen engine would break that
+reproducibility guarantee, not fix a parity gap that matters for
+anything live currently does.
+"""
+
+
+def resolve_min_momentum_floor(config: dict) -> float:
+    """The real, currently-configured minimum-momentum floor -- reads
+    trading212_invest.min_momentum_pct, falling back to MIN_MOMENTUM_FLOOR
+    (0.0, i.e. no additional floor) only when the key is absent entirely.
+
+    Both live order placement (brokers/trading212.py:maybe_place_orders())
+    and the backtest engine (simulate_portfolio_compounding_mtm()) call
+    this ONE function to resolve the value they then pass to
+    passes_momentum_floor() -- so neither can silently resolve a
+    different floor for the same config. This is the exact same
+    config-driven-parameter pattern already used for
+    resolve_reentry_cooldown_days() immediately below in this file's own
+    history, and for per_trade_pct / max_total_deployed elsewhere.
+    """
+    t212_cfg = config.get("trading212_invest", {}) or {}
+    return float(t212_cfg.get("min_momentum_pct", MIN_MOMENTUM_FLOOR))
+
+
+def passes_momentum_floor(momentum: Optional[float], floor: float = MIN_MOMENTUM_FLOOR) -> bool:
+    """True when floor is a no-op (<=0.0 -- the backwards-compatible
+    default, meaning "no additional requirement beyond momentum > 0.0,
+    already enforced by passes_entry_gate()'s sig_on"), regardless of
+    whether momentum itself is known. This is deliberate, not an
+    oversight: before this feature existed, momentum's exact value was
+    never part of entry-gate logic at all (only used for ranking), so a
+    caller/test fixture with sig_on=True but no separately-tracked
+    momentum value must keep working identically when the floor is
+    unconfigured -- exactly the same "a config/fixture predating this
+    parameter behaves exactly as before" guarantee every other
+    config-driven parameter in this file provides.
+
+    Once floor is a genuine, configured requirement (>0.0), an unknown
+    momentum (None) fails closed -- matching this module's own "None
+    (unknown) never passes" convention elsewhere: an entry decision
+    should never be made on incomplete data once there is a real
+    requirement to check it against. In practice a candidate only ever
+    reaches this check after already passing passes_entry_gate()
+    (sig_on=True, which itself requires momentum > 0.0), so momentum=None
+    with floor>0 should never actually occur at either real call site --
+    checked explicitly anyway, for the same reason.
+    """
+    if floor <= 0.0:
+        return True
+    return momentum is not None and momentum >= floor
+
+
 def is_asset_class_enabled(*, is_etf: bool, config: dict) -> bool:
     """True if NEW-ENTRY CANDIDACY is enabled for this asset class (ETF vs
     stock) — read identically by live order placement's decide phase

@@ -25,8 +25,10 @@ from analysis.decision import (
     is_position_size_viable,
     is_reentry_blocked,
     passes_entry_gate,
+    passes_momentum_floor,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
+    resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
 )
 from analysis.universe import get_max_holding_days
@@ -1214,6 +1216,7 @@ def simulate_portfolio_compounding_mtm(
     min_position_gbp = float(var_cfg.get("min_position_gbp", 50))
     absolute_max_position_gbp = float(var_cfg.get("absolute_max_position_gbp", 1_000_000))
     reentry_cooldown_days = resolve_reentry_cooldown_days(config)
+    min_momentum_floor = resolve_min_momentum_floor(config)
 
     per_ticker: dict[str, dict] = {}
     events: list[tuple] = []
@@ -1300,6 +1303,16 @@ def simulate_portfolio_compounding_mtm(
             blocked_now = bool(st["entry_blocked"].loc[dt])
             if not passes_entry_gate(sig_on=sig_on, is_member=is_member, entry_blocked=blocked_now):
                 continue
+            momentum_val = row.get("momentum")
+            momentum_val = float(momentum_val) if pd.notna(momentum_val) else None
+            # Minimum-momentum floor (2026-08-03) -- mirrors live's
+            # passes_momentum_floor() check: a genuinely trending
+            # candidate must clear a real, config-driven bar, not just
+            # momentum > 0.0 (already implied by sig_on above). See
+            # analysis/decision.py:resolve_min_momentum_floor()'s own
+            # docstring for the investigation this closes.
+            if not passes_momentum_floor(momentum_val, min_momentum_floor):
+                continue
             # Re-entry cooldown (2026-08-03) -- mirrors live's
             # _load_open_order_tickers(): a ticker whose last trade
             # closed fewer than REENTRY_COOLDOWN_DAYS calendar days ago
@@ -1311,9 +1324,12 @@ def simulate_portfolio_compounding_mtm(
             days_since_exit = (dt - last_exit).days if last_exit is not None else None
             if is_reentry_blocked(days_since_exit, cooldown_days=reentry_cooldown_days):
                 continue
-            momentum_val = row.get("momentum")
-            momentum_val = float(momentum_val) if pd.notna(momentum_val) else float("-inf")
-            candidates.append((ticker, momentum_val))
+            # Sort key must always be a real float -- momentum_val can only
+            # be None here when the floor itself is a no-op (<=0.0; see
+            # passes_momentum_floor()'s own docstring), in which case -inf
+            # is the same "sorts last, never wins ranking" placeholder this
+            # code used unconditionally before the floor existed.
+            candidates.append((ticker, momentum_val if momentum_val is not None else float("-inf")))
 
         candidates.sort(key=lambda c: (-c[1], per_ticker[c[0]]["idx"]))
 

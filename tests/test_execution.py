@@ -45,6 +45,23 @@ def _bullish_with_crisis_today() -> pd.DataFrame:
     return _price_frame(400, 100.0, 0.0015, last_day_shock=-0.09)
 
 
+def _frame_with_exact_momentum(target_momentum: float, n_days: int = 400) -> pd.DataFrame:
+    """A flat-price frame whose trailing 12-month (252-trading-day) momentum
+    on the final row is EXACTLY target_momentum -- not merely close to it.
+    Sets only the single anchor point compute_momentum_series() actually
+    reads (close[-253], i.e. 252 rows before the last), leaving every other
+    row flat at 100.0, so close[-1]/close[-253] - 1 == target_momentum to
+    floating-point precision. Used for the minimum-momentum-floor tests,
+    where an approximate (e.g. compounding-daily-drift) momentum value
+    would not reliably land on the correct side of an exact boundary."""
+    dates = pd.bdate_range(end=pd.Timestamp("2026-07-30"), periods=n_days)
+    closes = np.full(n_days, 100.0)
+    closes[-253] = 100.0 / (1 + target_momentum)
+    highs = closes * 1.01
+    lows = closes * 0.99
+    return pd.DataFrame({"date": dates, "open": closes, "high": highs, "low": lows, "close": closes})
+
+
 def _seed_resolutions_from_mapping(engine, mapping: dict) -> None:
     """Seed VERIFIED instrument_resolutions rows matching *mapping* --
     maybe_place_orders()/maybe_exit_positions() now resolve each ticker's
@@ -554,6 +571,88 @@ def test_decide_phase_calls_the_shared_asset_class_gate(db_engine, v2_mocks, moc
     assert seen_is_etf == {True, False}
     for call in spy.call_args_list:
         assert call.kwargs["config"] is cfg
+
+
+def test_below_floor_candidate_excluded_from_candidacy(db_engine, v2_mocks, mocker):
+    """The decisive live-side proof: a ticker with sig_on=True the entire
+    window (positive momentum, so it would have qualified before this
+    feature) but whose momentum sits below a configured 2% floor must
+    never reach pending_orders at all."""
+    from brokers.trading212 import maybe_place_orders
+
+    weak = _frame_with_exact_momentum(0.01)  # 1% -- below floor
+    _mock_price_data(mocker, {"AAPL": weak})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["min_momentum_pct"] = 0.02
+    maybe_place_orders(cfg, run_type="full")
+
+    assert len(_pending_rows(db_engine, status="PENDING")) == 0
+
+
+def test_above_floor_candidate_admitted_unaffected_by_floor(db_engine, v2_mocks, mocker):
+    """The same scenario, but with momentum comfortably above the
+    configured floor -- must be queued exactly as before this feature."""
+    from brokers.trading212 import maybe_place_orders
+
+    strong = _frame_with_exact_momentum(0.05)  # 5% -- above floor
+    _mock_price_data(mocker, {"AAPL": strong})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["min_momentum_pct"] = 0.02
+    maybe_place_orders(cfg, run_type="full")
+
+    tickers_queued = {r["ticker"] for r in _pending_rows(db_engine, status="PENDING")}
+    assert tickers_queued == {"AAPL"}
+
+
+def test_decide_phase_calls_the_shared_momentum_floor_functions(db_engine, v2_mocks, mocker):
+    """Proves maybe_place_orders() genuinely delegates to
+    analysis.decision.resolve_min_momentum_floor()/passes_momentum_floor()
+    per ticker rather than re-deriving the same config lookup/comparison
+    inline -- the same guarantee test_mtm_momentum_floor_excludes_
+    candidate_below_floor_admits_one_above (tests/test_portfolio_backtest.py)
+    checks on the backtest side, mirroring
+    test_decide_phase_calls_the_shared_asset_class_gate's own pattern for
+    is_asset_class_enabled()."""
+    import brokers.trading212 as t212mod
+    from brokers.trading212 import maybe_place_orders
+
+    resolve_spy = mocker.spy(t212mod, "resolve_min_momentum_floor")
+    floor_spy = mocker.spy(t212mod, "passes_momentum_floor")
+    _mock_price_data(mocker, {"VOO": _bullish_frame(), "AAPL": _bullish_frame()})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+
+    cfg = _config(mocker=mocker, db_engine=db_engine)  # default mapping: VOO (ETF) + AAPL (stock)
+    cfg["trading212_invest"]["min_momentum_pct"] = 0.02
+    maybe_place_orders(cfg, run_type="full")
+
+    assert resolve_spy.call_count == 2  # once per ticker in the mapping
+    for call in resolve_spy.call_args_list:
+        assert call.args[0] is cfg
+    assert floor_spy.call_count == 2
+    for call in floor_spy.call_args_list:
+        assert call.args[1] == 0.02  # the resolved floor, not a hardcoded literal
+
+
+def test_live_and_backtest_resolve_momentum_floor_from_the_identical_function(db_engine, v2_mocks, mocker):
+    """Direct identity proof, not just behavioural agreement: both
+    brokers.trading212 and analysis.backtest hold a reference to the
+    EXACT SAME function objects (not two independently-written
+    expressions of the same rule) -- the same standard already applied
+    to the ATR multiplier and the re-entry cooldown's shared resolver."""
+    import analysis.decision as decision_mod
+    import brokers.trading212 as t212mod
+    import analysis.backtest as backtest_mod
+
+    assert t212mod.resolve_min_momentum_floor is decision_mod.resolve_min_momentum_floor
+    assert t212mod.passes_momentum_floor is decision_mod.passes_momentum_floor
+    assert backtest_mod.resolve_min_momentum_floor is decision_mod.resolve_min_momentum_floor
+    assert backtest_mod.passes_momentum_floor is decision_mod.passes_momentum_floor
 
 
 def test_trading_enabled_with_submission_disabled_is_a_coherent_shadow_state(db_engine, v2_mocks, mocker):

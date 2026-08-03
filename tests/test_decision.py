@@ -6,14 +6,17 @@ path) is actually wired to these functions, not just that the functions
 themselves are correct in isolation.
 """
 from analysis.decision import (
+    MIN_MOMENTUM_FLOOR,
     REENTRY_COOLDOWN_DAYS,
     evaluate_exit_reason,
     is_asset_class_enabled,
     is_position_size_viable,
     is_reentry_blocked,
     passes_entry_gate,
+    passes_momentum_floor,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
+    resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
 )
 
@@ -284,3 +287,72 @@ def test_resolve_reentry_cooldown_days_zero_means_no_cooldown_at_all():
     assert is_reentry_blocked(0, cooldown_days=resolve_reentry_cooldown_days(
         {"trading212_invest": {"reentry_cooldown_days": 0}}
     )) is False
+
+
+# ---------------------------------------------------------------------------
+# passes_momentum_floor() / resolve_min_momentum_floor() (2026-08-03) -- the
+# shared minimum-momentum-floor threshold and config-lookup, both live order
+# placement and simulate_portfolio_compounding_mtm() call to resolve the
+# real floor value. Production sets trading212_invest.min_momentum_pct:
+# 0.02 -- see CLAUDE.md's "Does the entry gate need an absolute minimum
+# momentum floor?" and "Block-based confirmation of the 2% momentum floor"
+# sections.
+# ---------------------------------------------------------------------------
+
+def test_min_momentum_floor_default_is_zero():
+    assert MIN_MOMENTUM_FLOOR == 0.0
+
+
+def test_passes_momentum_floor_true_at_and_above_floor_false_below():
+    assert passes_momentum_floor(0.019, floor=0.02) is False
+    assert passes_momentum_floor(0.02, floor=0.02) is True  # exactly at floor -- passes
+    assert passes_momentum_floor(0.021, floor=0.02) is True
+    assert passes_momentum_floor(0.50, floor=0.02) is True
+
+
+def test_passes_momentum_floor_none_never_passes_a_genuine_configured_floor():
+    """Unknown momentum must never be treated as clearing a REAL,
+    configured (>0) floor -- matches this module's own "None never
+    silently passes" convention."""
+    assert passes_momentum_floor(None, floor=0.02) is False
+    assert passes_momentum_floor(None, floor=0.001) is False
+
+
+def test_passes_momentum_floor_zero_floor_is_a_true_no_op_even_with_unknown_momentum():
+    """The critical backwards-compatibility guarantee: at the default,
+    unconfigured floor (0.0), ANY candidate that already cleared
+    passes_entry_gate()'s sig_on check must keep passing -- including one
+    whose momentum value isn't separately known/tracked at all (e.g. a
+    test fixture or call site that predates this feature and never set a
+    momentum value, since momentum was never part of entry-gate logic
+    before this change). A stricter "None never passes" rule applied
+    unconditionally here would silently break every such caller."""
+    assert passes_momentum_floor(None) is True
+    assert passes_momentum_floor(None, floor=0.0) is True
+
+
+def test_passes_momentum_floor_default_floor_is_zero_reproduces_old_behaviour():
+    """With the fallback default (no floor beyond momentum > 0, already
+    enforced by the signal itself), any positive momentum passes --
+    reproducing the exact pre-2026-08-03 gate."""
+    assert passes_momentum_floor(0.001) is True
+    assert passes_momentum_floor(0.0) is True  # boundary: momentum==0 still "passes" this check specifically -- sig_on already requires strictly >0 upstream
+
+
+def test_resolve_min_momentum_floor_reads_the_configured_value():
+    assert resolve_min_momentum_floor({"trading212_invest": {"min_momentum_pct": 0.02}}) == 0.02
+    assert resolve_min_momentum_floor({"trading212_invest": {"min_momentum_pct": 0.05}}) == 0.05
+
+
+def test_resolve_min_momentum_floor_falls_back_to_zero_when_key_absent():
+    """A config predating this parameter (no min_momentum_pct key at all)
+    must behave exactly as before this change shipped -- no additional
+    floor beyond momentum > 0."""
+    assert resolve_min_momentum_floor({"trading212_invest": {}}) == 0.0
+    assert resolve_min_momentum_floor({}) == MIN_MOMENTUM_FLOOR
+
+
+def test_resolve_min_momentum_floor_two_percent_excludes_marginal_candidate():
+    floor = resolve_min_momentum_floor({"trading212_invest": {"min_momentum_pct": 0.02}})
+    assert passes_momentum_floor(0.005, floor) is False  # 0.5% momentum -- excluded
+    assert passes_momentum_floor(0.03, floor) is True     # 3% momentum -- unaffected

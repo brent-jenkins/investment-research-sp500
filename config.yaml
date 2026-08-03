@@ -137,3 +137,17 @@ trading212_invest:
   # (config-driven)" section. Absent entirely, both call sites fall back
   # to the 30-day REENTRY_COOLDOWN_DAYS constant.
   reentry_cooldown_days: 0
+  # Minimum absolute momentum an entry candidate must clear, on top of
+  # the existing momentum > 0 signal -- see analysis/decision.py:
+  # resolve_min_momentum_floor()/passes_momentum_floor(). Set to 0.02
+  # (2%, 2026-08-03): a reset-at-boundary sweep found 2% essentially
+  # free (one excluded trade in six years, already a loser), and a
+  # follow-up block-independent check across the full 19-year window
+  # found the excluded population is a clear net loser overall (24.5%
+  # win rate), concentrated mostly in the GFC block -- exactly the
+  # "best of a bad bunch" scenario this floor guards against. See
+  # CLAUDE.md's "Does the entry gate need an absolute minimum momentum
+  # floor?" and "Block-based confirmation of the 2% momentum floor"
+  # sections. Absent entirely, both call sites fall back to 0.0 (no
+  # additional floor) via the MIN_MOMENTUM_FLOOR constant.
+  min_momentum_pct: 0.02

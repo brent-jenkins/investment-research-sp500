@@ -80,8 +80,10 @@ from analysis.decision import (
     is_asset_class_enabled,
     is_position_size_viable,
     passes_entry_gate,
+    passes_momentum_floor,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
+    resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
 )
 from analysis.universe import get_max_holding_days
@@ -2430,6 +2432,15 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 sig_on=state["sig_on"], is_member=state["is_member"],
                 entry_blocked=state["entry_blocked"],
             ):
+                continue
+
+            # Minimum-momentum floor (2026-08-03) — a genuinely trending
+            # candidate must clear a real, config-driven bar, not just
+            # momentum > 0.0. Resolved from config the same way as every
+            # other tunable parameter (per_trade_pct, the re-entry
+            # cooldown) — see analysis/decision.py:resolve_min_momentum_
+            # floor()'s own docstring for the investigation this closes.
+            if not passes_momentum_floor(state["momentum_pct"], resolve_min_momentum_floor(config)):
                 continue
 
             # T212 instrument-ID resolution — deferred until every cheaper
