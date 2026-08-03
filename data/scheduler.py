@@ -1,10 +1,6 @@
 """APScheduler-based scheduled jobs: daily runs with per-exchange holiday awareness.
 
 Run schedule (UTC unless noted):
-  07:00  Monday pre-market (Mon only) — cancel stale weekend BUY orders left PLACED
-                       from Friday's EOD run, then run the order-logic-only pipeline
-                       so Friday's still-open orders are re-evaluated before markets
-                       reopen (see _monday_premarket_job())
   14:30  Stock order submission (weekdays) — submit queued stock entries, 60
                        minutes after NYSE's own regular open (moved from 13:30
                        2026-08-02 — see _stock_order_submission_job())
@@ -16,19 +12,35 @@ Run schedule (UTC unless noted):
                        summary email (see output/briefing.py:send_weekly_summary_email())
 
 The 07:00 (Tue-Fri) pre-market and 13:30 US-open "analysis only" runs that
-used to sit between Monday's job and the EOD run were removed 2026-07-31 —
-confirmed genuinely redundant, not just assumed. Both ever did was call
-maybe_exit_positions() (no BUY phase — analysis_only always skips it, and
-in the Tue-Fri pre-market job's case, its own data pull for "exchanges that
-just closed" had already become a permanent no-op: the current V2 universe
-is exclusively NYSE/FX-listed instruments, and NYSE never satisfies "closed
-before 07:00 UTC" — confirmed directly by calling
+used to sit between the old Monday-only job and the EOD run were removed
+2026-07-31 — confirmed genuinely redundant, not just assumed. Both ever did
+was call maybe_exit_positions() (no BUY phase — analysis_only always skips
+it, and in the Tue-Fri pre-market job's case, its own data pull for
+"exchanges that just closed" had already become a permanent no-op: the
+current V2 universe is exclusively NYSE/FX-listed instruments, and NYSE
+never satisfies "closed before 07:00 UTC" — confirmed directly by calling
 _exchanges_closed_before() against the live config). The hourly
 trade_alert_check job (below) already calls maybe_exit_positions() at the
 exact same 07:00 minute and again at 13:00/14:00 either side of 13:30 — so
 neither run added anything the hourly cadence didn't already cover. See
 CLAUDE.md's "Pre-market/US-open scheduled runs removed" section for the
 full investigation.
+
+The Monday-only 07:00 UTC "Monday Pre-Market" job (stale weekend BUY order
+cancellation + an order-logic re-run) was removed entirely 2026-08-03 for
+the identical reason, once checked directly rather than assumed:
+_cancel_stale_weekend_orders() guarded against a Friday-21:30-UTC EOD order
+sitting unfilled all weekend — a real risk under the old architecture,
+where a decision queued at EOD was submitted immediately. Under the
+current decide-then-submit architecture (queue at EOD, submit at 14:30 UTC
+mid-session, hours before NYSE close), no order is ever placed anywhere
+near market close or over a weekend in the first place, so the scenario
+this job existed to guard against cannot occur. Its "then re-run the
+order pipeline" half was, separately, confirmed genuinely redundant with
+the hourly trade_alert_check job, which fires at this exact same 07:00 UTC
+minute every Monday (see CLAUDE.md's "Monday Pre-Market removed" section
+for the full investigation, including real production-log evidence from
+five consecutive Mondays).
 
 The 07:00 UTC ETF order submission job (LSE regular open) was removed
 2026-08-02 alongside the rest of the ETF sleeve — see CLAUDE.md's "ETF
@@ -72,12 +84,6 @@ logger = logging.getLogger(__name__)
 
 RUN_FULL          = "full"
 RUN_ANALYSIS_ONLY = "analysis_only"
-
-# Age threshold (hours) for _monday_premarket_job() to treat a PLACED BUY order as a
-# stale weekend leftover. A Friday-21:30-UTC order is ~33.5h old by Monday 07:00 —
-# 30h comfortably covers that while staying well clear of same-day orders if this
-# job ever fires on an unexpected day.
-_STALE_ORDER_HOURS = 30
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -398,135 +404,6 @@ def _run_analysis_pipeline(
         logger.warning("Instrument resolution failure check/alert failed: %s", exc)
 
     logger.info("Order pipeline complete (run_type=%s).", run_type)
-
-
-def _cancel_stale_weekend_orders(config: dict) -> int:
-    """Cancel any PLACED BUY order in invest_orders older than _STALE_ORDER_HOURS.
-
-    The Friday 21:30 UTC EOD run can place BUY orders that are still sitting in
-    PLACED status when markets reopen Monday — T212 doesn't fill market orders
-    outside trading hours, so a Friday-evening order can sit unfilled all
-    weekend. A lot can change over a weekend (geopolitical events, Sunday
-    futures pricing, macro news), so an order that made sense Friday afternoon
-    may no longer reflect a signal worth acting on by Monday.
-
-    Cancelled orders are re-evaluated fresh by the order pipeline that
-    _monday_premarket_job() runs right after this — a ticker whose momentum
-    signal is still on gets a brand-new order; one whose signal turned off
-    over the weekend does not.
-
-    Never raises — a failure to cancel one order is logged and the rest
-    still get a chance; matches the "never raises" contract the rest of
-    brokers/trading212.py's automation functions follow.
-
-    Returns the number of orders cancelled.
-    """
-    if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
-        return 0
-
-    from sqlalchemy import text as sa_text  # noqa: PLC0415
-    from data.database import get_engine  # noqa: PLC0415
-
-    cutoff = datetime.utcnow() - timedelta(hours=_STALE_ORDER_HOURS)
-    engine = get_engine()
-
-    # SQLAlchemy's SQLite DateTime dialect stores "YYYY-MM-DD HH:MM:SS.ffffff"
-    # (space-separated). datetime.isoformat() produces "YYYY-MM-DDTHH:MM:SS.ffffff"
-    # (T-separated) — SQLite compares these as plain strings, and ' ' (0x20) sorts
-    # before 'T' (0x54), so any placed_at on the SAME calendar date as cutoff would
-    # lexicographically compare as "less than" regardless of actual clock time,
-    # incorrectly flagging same-day orders younger than _STALE_ORDER_HOURS as stale.
-    # strftime with the matching format avoids the mismatch entirely.
-    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S.%f")
-
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(sa_text("""
-                SELECT id, order_id, ticker, placed_at
-                FROM invest_orders
-                WHERE status = 'PLACED' AND direction = 'BUY' AND placed_at < :cutoff
-            """), {"cutoff": cutoff_str}).mappings().all()
-    except Exception as exc:
-        logger.error("Monday pre-market: could not read invest_orders: %s", exc)
-        return 0
-
-    if not rows:
-        return 0
-
-    live = config.get("trading212_invest", {}).get("live", False)
-    from brokers.trading212 import Trading212Client  # noqa: PLC0415
-    client = Trading212Client(live=live)
-
-    cancelled = 0
-    for row in rows:
-        placed_raw = row["placed_at"]
-        try:
-            placed_dt = (
-                placed_raw if isinstance(placed_raw, datetime)
-                else datetime.fromisoformat(placed_raw)
-            )
-            age_hours = (datetime.utcnow() - placed_dt).total_seconds() / 3600
-        except Exception:
-            age_hours = -1.0
-
-        logger.warning(
-            "Monday pre-market: cancelling stale weekend order for %s (placed %.1f hours ago).",
-            row["ticker"], age_hours,
-        )
-        try:
-            if row["order_id"]:
-                client.cancel_order(row["order_id"])
-            with engine.begin() as upd_conn:
-                upd_conn.execute(sa_text("""
-                    UPDATE invest_orders
-                    SET status = 'CANCELLED', cancelled_at = :now
-                    WHERE id = :row_id
-                """), {"now": datetime.utcnow().isoformat(), "row_id": row["id"]})
-            cancelled += 1
-        except Exception as exc:
-            logger.error(
-                "Monday pre-market: failed to cancel order id=%s (%s): %s",
-                row["id"], row["ticker"], exc,
-            )
-
-    return cancelled
-
-
-def _monday_premarket_job() -> None:
-    """07:00 UTC every Monday — cancel stale weekend BUY orders, then re-run
-    the order pipeline so entry/exit decisions are fresh before markets open.
-
-    Registered separately from _pre_market_job() (which fires Tuesday-Friday
-    only — see start_scheduler()) because Monday needs the extra stale-order
-    cancellation step first. Unlike _pre_market_job(), this does NOT pull
-    fresh Asian-market data — the point of this run is to re-evaluate signals
-    against Friday's closing prices before deciding whether Friday's
-    still-open BUY orders deserve to stand, not to ingest new data (prices
-    haven't changed since Friday close for anything this job needs to act on).
-
-    maybe_place_orders() (which calls maybe_exit_positions() first) fires as
-    part of _run_analysis_pipeline() below (same as every other run) — a
-    ticker whose momentum signal is still on after cancellation gets a fresh
-    order; a signal that turned off does not get a replacement, and any
-    position whose signal now calls for exit is closed.
-    """
-    logger.info("Scheduled Monday pre-market job starting (07:00 UTC)…")
-    try:
-        set_metadata("last_scheduled_run",      datetime.utcnow().isoformat())
-        set_metadata("last_scheduled_run_name", "Monday Pre-Market")
-    except Exception as _exc:
-        logger.warning("Could not stamp last_scheduled_run: %s", _exc)
-
-    config = _load_config()
-
-    try:
-        n_cancelled = _cancel_stale_weekend_orders(config)
-        if n_cancelled:
-            logger.info("Monday pre-market: cancelled %d stale weekend order(s).", n_cancelled)
-    except Exception as exc:
-        logger.error("Monday pre-market: stale order cancellation failed: %s", exc, exc_info=True)
-
-    _run_analysis_pipeline(config, get_all_tickers(config), run_type=RUN_ANALYSIS_ONLY)
 
 
 _EOD_COMPLETION_KEY = "eod_completion"
@@ -883,7 +760,7 @@ def _weekly_summary_job() -> None:
     CLAUDE.md's "Status page scheduler-health/job-recency fixes" section) could
     silently show a stale, out-of-date job as the most recent one even
     though this job had genuinely just fired. Matches the exact pattern
-    _eod_job()/_monday_premarket_job() already use.
+    _eod_job() already uses.
     """
     from output.briefing import send_weekly_summary_email  # noqa: PLC0415
 
@@ -936,13 +813,12 @@ def _stock_order_submission_job() -> None:
     never touched either key, so the Status page's "Last Scheduled Run"
     card, the Pipeline "Order Logic" row, and the sidebar's "Last
     scheduled run" caption (all three read the same key) kept showing
-    whatever earlier job — e.g. Monday's 07:00 UTC pre-market run — had
-    last stamped it, even hours after real positions had been opened by
-    this run. Matches the exact pattern _eod_job()/_monday_premarket_job()
-    already use; stamped unconditionally once the job genuinely fires
-    (mirroring _monday_premarket_job(), which has no internal no-op gate
-    either), not only when an order was actually placed — "the job ran"
-    is the signal this key represents, not "the job did something."
+    whatever earlier job had last stamped it, even hours after real
+    positions had been opened by this run. Matches the exact pattern
+    _eod_job() already uses; stamped unconditionally once the job
+    genuinely fires, not only when an order was actually placed — "the
+    job ran" is the signal this key represents, not "the job did
+    something."
     """
     logger.info("Stock order submission job starting (14:30 UTC, 60min after NYSE open)…")
     try:
@@ -1112,26 +988,17 @@ def start_scheduler() -> BackgroundScheduler:
             run_cfg.get("label", run_name), run_cfg["hour"], run_cfg["minute"], tz,
         )
 
-    # Monday-only pre-market job: cancels stale weekend BUY orders (Friday EOD
-    # orders that never filled over the weekend) before re-running the
-    # order-logic-only pipeline. Fixed at 07:00 UTC directly — this no longer
-    # tracks a config.yaml scheduler.runs.pre_market slot, since the Tue-Fri
-    # sibling job that slot used to also drive was removed (see above); there
-    # is still deliberately no separate scheduler.runs.monday_premarket
-    # config key for this one weekly job.
-    _scheduler.add_job(
-        _monday_premarket_job,
-        trigger=CronTrigger(
-            day_of_week="mon",
-            hour=7,
-            minute=0,
-            timezone=tz,
-        ),
-        id="monday_premarket",
-        name="Monday Pre-Market",
-        replace_existing=True,
-    )
-    logger.info("Scheduled Monday pre-market job (stale-order cancellation + order logic) at 07:00 %s.", tz)
+    # The Monday-only 07:00 UTC "Monday Pre-Market" job (stale weekend BUY
+    # order cancellation + an order-logic re-run) was removed entirely
+    # 2026-08-03 — confirmed genuinely unnecessary on both halves: the
+    # decide-then-submit architecture never places an order anywhere near
+    # market close or over a weekend in the first place (submission
+    # happens at 14:30 UTC mid-session, hours before NYSE close), so the
+    # scenario the cancellation step guarded against cannot occur; its
+    # order-logic half was separately confirmed redundant with the hourly
+    # trade_alert_check job below, which fires at this exact same 07:00
+    # UTC minute every Monday. See CLAUDE.md's "Monday Pre-Market removed"
+    # section for the full investigation.
 
     # 60-second dispatcher: executes pending UI-requested jobs (e.g. T212 refresh).
     _scheduler.add_job(
@@ -1190,10 +1057,9 @@ def start_scheduler() -> BackgroundScheduler:
     # Membership refresh — 15 minutes ahead of the EOD job's own 21:30 slot,
     # so any real S&P 500 addition/removal is reflected before that run's
     # trading decisions. Fixed at 21:15 rather than derived from
-    # sched_cfg["runs"]["eod"] — unlike the Monday pre-market job (which
-    # deliberately tracks the pre_market slot if it's ever retimed), this
-    # job's only requirement is "shortly before EOD", not "exactly N
-    # minutes before whatever EOD currently is". No day_of_week filter
+    # sched_cfg["runs"]["eod"] — this job's only requirement is "shortly
+    # before EOD", not "exactly N minutes before whatever EOD currently
+    # is". No day_of_week filter
     # (2026-08-02, matching the EOD loop above) — fires daily, gated
     # internally by the same _is_scheduled_trading_day() NYSE check EOD
     # itself uses, so the two jobs can never disagree about whether today

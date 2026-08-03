@@ -6,13 +6,16 @@ Before this fix, every one of Trading212Client's seven public methods
 called bare r.json() directly -- a malformed or empty response body on a
 genuinely successful (< 400) HTTP status raised an unguarded exception
 indistinguishable, to any caller's own `except Exception`, from a real
-request failure. The concrete, already-observed consequence:
-data/scheduler.py:_cancel_stale_weekend_orders() calls
-Trading212Client.cancel_order(), whose DELETE endpoint commonly returns
-200/204 with NO body at all (standard REST convention) -- a genuinely
-successful cancellation would raise on the empty body, get caught by that
-function's own `except Exception`, and be logged/counted as a FAILED
-cancellation even though T212 had already cancelled the order.
+request failure. The concrete, already-observed consequence (historical --
+the call site that surfaced this, data/scheduler.py:_cancel_stale_weekend_
+orders(), was removed entirely 2026-08-03, see CLAUDE.md's "Monday
+Pre-Market removed" section; the underlying cancel_order() fix itself is
+unaffected and still real): Trading212Client.cancel_order()'s DELETE
+endpoint commonly returns 200/204 with NO body at all (standard REST
+convention) -- a genuinely successful cancellation would raise on the
+empty body, get caught by a caller's own `except Exception`, and be
+logged/counted as a FAILED cancellation even though T212 had already
+cancelled the order.
 
 No existing test in this suite exercised Trading212Client's real HTTP
 layer at all before this file -- every prior test mocked the client's
@@ -181,54 +184,3 @@ def test_get_order_history_parses_normal_response_shape(monkeypatch, mocker):
         return_value=_FakeResponse(json_data={"items": [{"order": {"id": "1"}}]}),
     )
     assert client.get_order_history() == [{"order": {"id": "1"}}]
-
-
-# ---------------------------------------------------------------------------
-# End-to-end regression: the real Monday-premarket bug this was found via.
-# _cancel_stale_weekend_orders() must correctly record CANCELLED, not log
-# a false failure, when T212's cancel response body is empty.
-# ---------------------------------------------------------------------------
-
-def test_cancel_stale_weekend_orders_records_cancelled_when_t212_returns_empty_body(
-    db_engine, monkeypatch, mocker,
-):
-    """Before this fix: a genuinely successful T212 cancellation with an
-    empty/malformed DELETE response body raised inside cancel_order(),
-    which _cancel_stale_weekend_orders()'s own try/except caught and
-    treated identically to a real cancellation failure -- the order stayed
-    PLACED in the DB and an ERROR was logged, even though T212 had already
-    cancelled it. This confirms the fix: the order is correctly recorded
-    CANCELLED."""
-    from datetime import datetime, timedelta
-    from sqlalchemy.orm import Session
-    from data.database import InvestOrder
-    from data.scheduler import _cancel_stale_weekend_orders
-
-    monkeypatch.setenv("T212_API_KEY", "k")
-    monkeypatch.setenv("T212_API_SECRET", "s")
-
-    with Session(db_engine) as session:
-        session.add(InvestOrder(
-            order_id="order-stale-1",
-            ticker="AAPL",
-            t212_ticker="AAPL_US_EQ",
-            direction="BUY",
-            quantity=1.0,
-            status="PLACED",
-            account_type="DEMO",
-            placed_at=datetime.utcnow() - timedelta(hours=40),
-        ))
-        session.commit()
-
-    mocker.patch(
-        "brokers.trading212.requests.request",
-        return_value=_FakeResponse(status_code=204, raise_on_json=True, text=""),
-    )
-
-    cancelled = _cancel_stale_weekend_orders({"trading212_invest": {"live": False}})
-
-    assert cancelled == 1
-    with Session(db_engine) as session:
-        order = session.query(InvestOrder).filter_by(order_id="order-stale-1").one()
-    assert order.status == "CANCELLED"
-    assert order.cancelled_at is not None

@@ -224,8 +224,9 @@ def test_analysis_only_run_type_never_touches_pending_orders(db_engine, v2_mocks
     maybe_exit_positions() (brokers/trading212.py:maybe_place_orders()),
     never reaching the BUY/decide-and-queue phase that is the only code
     in this function that ever writes to pending_orders at all — this is
-    exactly what _monday_premarket_job() passes when it re-runs the order
-    pipeline after cancelling stale weekend broker orders."""
+    exactly what _eod_job() passes on a night with no upcoming trading
+    day to queue candidates for (see _is_scheduled_trading_day()'s own
+    docstring)."""
     from brokers.trading212 import maybe_place_orders
 
     _seed_pending_order(db_engine, ticker="STILLPENDING", t212_ticker="STILLPENDING_US_EQ",

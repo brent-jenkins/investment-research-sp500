@@ -280,20 +280,6 @@ def _next_run_for_time(hour: int, minute: int) -> datetime:
     return candidate
 
 
-def _next_monday_at(hour: int, minute: int) -> datetime:
-    """Return the next Monday's hour:minute UTC occurrence (today counts if
-    it's already Monday and that time hasn't passed yet). Used for the
-    Monday-only pre-market job (data/scheduler.py:_monday_premarket_job()),
-    which fires on no other day of the week -- unlike _next_run_for_time()
-    above, which only ever skips weekends, not the other four weekdays."""
-    now = datetime.utcnow()
-    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    days_ahead = (0 - candidate.weekday()) % 7   # 0 = Monday
-    if days_ahead == 0 and candidate <= now:
-        days_ahead = 7
-    return candidate + timedelta(days=days_ahead)
-
-
 def _git_log_info() -> tuple[str, str]:
     """Return (timestamp_str, short_message) for the most recent git commit."""
     try:
@@ -1127,9 +1113,15 @@ def _render_dashboard_page(config: dict) -> None:
     st.markdown("### Placed, Unconfirmed Exits")
     st.caption(
         "SELL orders T212 has accepted but not yet resolved to FILLED/CANCELLED/REJECTED. "
-        "This account has a documented lag here — orders have been observed sitting in this "
-        "state for 60+ hours before resolving — so this reflects the real order-status lag, "
-        "not a stuck order needing manual intervention."
+        "Status here only updates when poll_placed_orders() next runs — hourly via the "
+        "trade-alert job, or sooner via a manual account refresh — so a row a few minutes "
+        "old is routine, not stuck. A 2026-07 finding once cited a 60+ hour resolution gap "
+        "on this account as a documented characteristic; tracing its origin (2026-08-03) "
+        "found that figure was based on this system's own polling timing, not T212's real "
+        "fill timestamp, and could not be independently re-verified — every currently-real "
+        "fill on this account has resolved within seconds. Treat a row that lingers for an "
+        "unusually long time as worth checking directly against the T212 app, not "
+        "automatically dismissed as a known, harmless artifact."
     )
     exits = _get_unconfirmed_exits_cached()
     if not exits:
@@ -1231,12 +1223,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         _nt = _next_run_for_time(int(_rc.get("hour", 0)), int(_rc.get("minute", 0)))
         if _nxt_dt is None or _nt < _nxt_dt:
             _nxt_dt, _nxt_label = _nt, _rl
-    # Monday pre-market (stale-order cancellation) is a separate, Monday-only
-    # job fixed at 07:00 UTC (data/scheduler.py:_monday_premarket_job()) —
-    # included in the same "which fires soonest" comparison as EOD above.
-    _nt_mon = _next_monday_at(7, 0)
-    if _nxt_dt is None or _nt_mon < _nxt_dt:
-        _nxt_dt, _nxt_label = _nt_mon, "Monday Pre-Market"
     if _nxt_dt:
         _nxt_delta = (_nxt_dt - datetime.utcnow()).total_seconds()
         _nxt_until = (
@@ -1317,7 +1303,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     _RUN_DISPLAY = {
         "eod": ("End of Day", "Full data refresh + order logic after NYSE close"),
     }
-    run_cols = st.columns(len(_RUN_DISPLAY) + 1)
+    run_cols = st.columns(len(_RUN_DISPLAY))
     for col, (run_name, (label, desc)) in zip(run_cols, _RUN_DISPLAY.items()):
         run_cfg = sched_runs.get(run_name, {})
         h, m    = run_cfg.get("hour", 0), run_cfg.get("minute", 0)
@@ -1331,24 +1317,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
         )
         _status_card(col, f"{label} · {time_str}", _fmt_uk(nxt, "%a %H:%M"),
                      f"{until} — {desc}", "info")
-
-    # Monday-only stale-order cancellation — fixed at 07:00 UTC directly in
-    # data/scheduler.py, not driven by config.yaml's scheduler.runs (see that
-    # module's own comment on why there is deliberately no separate
-    # scheduler.runs.monday_premarket config key).
-    _mon_nxt = _next_monday_at(7, 0)
-    _mon_delta = (_mon_nxt - datetime.utcnow()).total_seconds()
-    _mon_until = (
-        f"in {int(_mon_delta / 60)}m" if _mon_delta < 3600
-        else f"in {_mon_delta / 3600:.1f}h" if _mon_delta < 86400
-        else f"in {_mon_delta / 86400:.1f}d"
-    )
-    _status_card(
-        run_cols[-1], f"Monday Pre-Market · {_uk_sched_time(7, 0)}",
-        _fmt_uk(_mon_nxt, "%a %H:%M"),
-        f"{_mon_until} — Cancels stale weekend BUY orders, then order logic",
-        "info",
-    )
 
     st.divider()
     st.markdown("### Data Coverage")
@@ -1715,7 +1683,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     # jobs that must appear here, not silently fall back to a raw job id.
     _JOB_LABELS: dict[str, tuple[str, str]] = {
         "scheduled_eod":          ("End of Day",       f"{_uk_sched_time(21, 30)} daily · NYSE-gated"),
-        "monday_premarket":       ("Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday"),
         "trade_alert_check":      ("Trade Alerts",      "Hourly 00–21, 23 · Mon–Fri"),
         "membership_refresh":     ("Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated"),
         "stock_order_submission": ("Stock Order Submission", f"{_uk_sched_time(14, 30)} · Mon–Fri"),
@@ -1821,22 +1788,22 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
             )
             _static_jobs.append((_sid, _jlabel, _jsched, _trigger))
 
-        # Monday pre-market is fixed at 07:00 UTC directly in
-        # data/scheduler.py, not driven by scheduler.runs (see that
-        # module's own comment on why). membership_refresh is likewise
-        # fixed at 21:15 rather than derived from scheduler.runs, and —
-        # like scheduled_eod above — has no day_of_week filter on its real
-        # trigger. stock_order_submission (14:30 UTC weekdays) and
-        # weekly_summary (09:00 Europe/London, Sunday — its own explicit
-        # timezone, not this scheduler's UTC default) are real, currently
-        # registered jobs that were previously missing from this
-        # reconstruction entirely, making the actual order-submission job
-        # invisible on the Status page whenever the standalone daemon
-        # (rather than the in-process fallback) is what's running —
-        # exactly the case in normal production operation.
+        # membership_refresh is fixed at 21:15 rather than derived from
+        # scheduler.runs, and — like scheduled_eod above — has no
+        # day_of_week filter on its real trigger. stock_order_submission
+        # (14:30 UTC weekdays) and weekly_summary (09:00 Europe/London,
+        # Sunday — its own explicit timezone, not this scheduler's UTC
+        # default) are real, currently registered jobs that were
+        # previously missing from this reconstruction entirely, making the
+        # actual order-submission job invisible on the Status page
+        # whenever the standalone daemon (rather than the in-process
+        # fallback) is what's running — exactly the case in normal
+        # production operation. monday_premarket was removed entirely
+        # 2026-08-03 — confirmed genuinely redundant with the hourly
+        # trade_alert_check job, which fires at the identical 07:00 UTC
+        # minute every Monday — see CLAUDE.md's "Monday Pre-Market removed"
+        # section.
         _extra_static = [
-            ("monday_premarket", "Monday Pre-Market", f"{_uk_sched_time(7, 0)} · Monday",
-             _CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=_tz_s)),
             ("trade_alert_check", "Trade Alerts", "Hourly 00–21, 23 · Mon–Fri",
              _CronTrigger(hour="0-21,23", minute=0, day_of_week="mon-fri", timezone=_tz_s)),
             ("membership_refresh", "Membership Refresh", f"{_uk_sched_time(21, 15)} daily · NYSE-gated",
