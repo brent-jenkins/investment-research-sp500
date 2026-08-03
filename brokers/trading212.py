@@ -200,24 +200,29 @@ def _get_cached_price_gbp(t212_ticker: str) -> Optional[float]:
 # than letting them collide at the exact same instant.
 #
 # What this does NOT cover, stated plainly rather than overclaimed: it
-# is in-process, module-level state — it coordinates every scheduled
-# job running inside the ONE scheduler process (either the standalone
-# daemon or, when that's not running, the Streamlit UI's in-process
-# fallback — CLAUDE.md's own heartbeat mechanism already guarantees
-# only one of those two is ever active at a time), but it does NOT
-# coordinate across the two separate systemd services/processes this
-# app actually runs as: the Status page's "Danger Zone" buttons
-# (`main.py`'s "Refresh Data + Orders Now" / "Order Logic Only") call
-# maybe_place_orders() directly from the STREAMLIT UI PROCESS, a
-# genuinely different OS process from the scheduler daemon, with no
-# shared Python memory to pace against. A human manually clicking one
-# of those buttons at the exact moment a scheduled job is also mid-run
-# is a real, but rare, one-off coincidence, not the every-hour-forever
-# structural risk two always-firing scheduled jobs sharing a cron
-# minute was — see the CLAUDE.md section above for the full
-# in-process-vs-cross-process reasoning and why a cross-process (e.g.
-# DB-backed) version of this mechanism was investigated and explicitly
-# NOT built as part of this change.
+# is in-process, module-level state — it coordinates every job running
+# inside the ONE scheduler process (either the standalone daemon or,
+# when that's not running, the Streamlit UI's in-process fallback —
+# CLAUDE.md's own heartbeat mechanism already guarantees only one of
+# those two is ever active at a time). At the time this shipped, the
+# Status page's "Danger Zone" buttons ("Refresh Data + Orders Now" /
+# "Order Logic Only") called maybe_place_orders() directly from the
+# STREAMLIT UI PROCESS — a genuinely different OS process from the
+# scheduler daemon, with no shared Python memory to pace against — so a
+# cross-process (e.g. DB-backed) version of this mechanism was
+# investigated and explicitly NOT built, on the reasoning that a human
+# manually clicking one of those buttons at the exact moment a
+# scheduled job was also mid-run was a real, but rare, one-off
+# coincidence, not the every-hour-forever structural risk two
+# always-firing scheduled jobs sharing a cron minute was. Those buttons
+# were removed entirely the same day (see CLAUDE.md's "remove the
+# manual 'trigger pipeline now' buttons entirely" section) — main.py no
+# longer has ANY code path that calls maybe_place_orders() or
+# constructs a Trading212Client, so the cross-process gap this
+# paragraph originally justified not closing is now moot by
+# construction, not merely accepted risk. Recorded here as historical
+# reasoning for why this throttle is in-process-only, not as a
+# description of a residual risk that still exists today.
 # ---------------------------------------------------------------------------
 _T212_MIN_REQUEST_INTERVAL_SECONDS = 0.15
 _t212_pacing_lock = threading.Lock()

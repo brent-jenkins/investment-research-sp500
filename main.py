@@ -33,7 +33,7 @@ import yaml
 from analysis.backtest import compute_metrics, equity_curve_gbp
 from analysis.universe import MEMBERSHIP_STALE_HOURS, is_membership_refresh_stale
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
-from data.ingestion import get_all_tickers, get_all_watchlist_entries, pull_incremental
+from data.ingestion import get_all_watchlist_entries
 from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
@@ -1951,72 +1951,6 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
                 mime="text/plain",
                 key="log_dl_7d",
             )
-
-    # ── Danger Zone ────────────────────────────────────────────────────────
-    # Manual Controls moved here 2026-08-03 (see CLAUDE.md's
-    # Status-page-restructuring section) — same visual pattern GitHub uses
-    # for destructive/high-consequence actions: separated from routine
-    # informational sections, at the very bottom of the page, with a
-    # deliberately red-tinted heading rather than sitting inline with
-    # everything else. Both buttons can trigger real T212 order placement
-    # immediately — genuinely live-affecting, unlike anything else on this
-    # page — so they get that visual weight. Functionally unchanged: same
-    # two buttons, same behaviour, only the placement/styling changed.
-    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-    with st.container(border=True):
-        st.markdown(
-            '<div style="border-left:3px solid #dc2626;background:#dc262614;'
-            'padding:10px 14px;border-radius:0 6px 6px 0;margin-bottom:10px">'
-            '<div style="color:#dc2626;font-weight:700;font-size:1.05rem">⚠ Danger Zone</div>'
-            '<div style="color:#8899AA;font-size:0.82rem;margin-top:2px">'
-            'Both actions below can trigger real T212 order placement immediately, '
-            'without waiting for the next scheduled run.</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("### Manual Controls")
-        st.caption("Trigger the data pull + order pipeline immediately without waiting for the next scheduled run.")
-        _mc1, _mc2 = st.columns(2)
-
-        with _mc1:
-            if st.button("Refresh Data + Orders Now", width="stretch", type="primary",
-                         key="status_full_refresh"):
-                _cfg     = _load_config()
-                _tickers = get_all_tickers(_cfg)
-                with st.spinner("Pulling latest prices…"):
-                    try:
-                        _results  = pull_incremental(tickers=_tickers)
-                        _new_rows = sum(_results.values())
-                        if _new_rows > 0:
-                            set_metadata("last_full_refresh", datetime.utcnow().isoformat())
-                    except Exception as _exc:
-                        st.error(f"Data pull failed: {_exc}")
-                        _new_rows = 0
-                with st.spinner("Running order pipeline…"):
-                    try:
-                        from brokers.trading212 import maybe_place_orders
-                        maybe_place_orders(_cfg, run_type="full")
-                        set_metadata("last_run_type", "full")
-                        st.success(
-                            f"Done — {_new_rows} new price rows · order pipeline ran at "
-                            f"{_fmt_uk(datetime.utcnow(), '%H:%M')}."
-                        )
-                        st.cache_data.clear()
-                    except Exception as _exc:
-                        st.error(f"Order pipeline failed: {_exc}")
-
-        with _mc2:
-            if st.button("Order Logic Only", width="stretch", key="status_run_orders"):
-                _cfg = _load_config()
-                with st.spinner("Running order pipeline…"):
-                    try:
-                        from brokers.trading212 import maybe_place_orders
-                        maybe_place_orders(_cfg, run_type="analysis_only")
-                        set_metadata("last_run_type", "analysis_only")
-                        st.success(f"Done — exit check ran at {_fmt_uk(datetime.utcnow(), '%H:%M')}.")
-                        st.cache_data.clear()
-                    except Exception as _exc:
-                        st.error(f"Order pipeline failed: {_exc}")
 
     _render_footer()
 

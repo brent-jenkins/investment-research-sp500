@@ -1266,25 +1266,45 @@ def test_status_page_email_notifications_section_is_gone(status_app):
     assert "Email Notifications" not in all_text
 
 
-def test_status_page_danger_zone_holds_manual_controls_at_the_bottom(status_app):
-    """Manual Controls must still exist and still work (same button keys),
-    just under a red-tinted "Danger Zone" heading, positioned after every
-    other section on the page (Log Viewer included) — genuinely at the
-    bottom, not just relabelled in place."""
+def test_status_page_danger_zone_and_manual_trigger_buttons_are_gone(status_app):
+    """The Danger Zone section (Manual Controls: "Refresh Data + Orders
+    Now" / "Order Logic Only") was removed entirely 2026-08-03, not
+    disabled or hidden — confirmed genuinely absent, matching this
+    project's own "confirmed removed, stays removed" pattern
+    (e.g. test_scheduler_never_registers_monday_premarket_job,
+    test_old_charts_page_functions_are_gone_not_dormant). Reasoning: the
+    manual buttons were a rare-but-real collision risk (a trigger firing
+    from the separate Streamlit UI process, outside every scheduling
+    safeguard built for the actual scheduled jobs — see CLAUDE.md's
+    "structural safeguards against future T212 API scheduling
+    collisions" section), and the original case for keeping them
+    (recovery from a missed scheduled run) has been substantially
+    superseded by autonomous monitoring built since: the EOD-completion
+    signal, the crisis banner, and the exit-check fetch-status banner
+    all now surface a missed or failed run automatically. See CLAUDE.md's
+    "remove the manual 'trigger pipeline now' buttons entirely" section."""
     at = status_app.run()
     assert not at.exception
 
     all_text = " ".join(m.value for m in at.markdown)
-    assert "Danger Zone" in all_text
-    assert "Manual Controls" in all_text
-
-    dz_idx = next(i for i, m in enumerate(at.markdown) if "Danger Zone" in m.value)
-    lv_idx = next(i for i, m in enumerate(at.markdown) if "### Log Viewer" in m.value)
-    assert dz_idx > lv_idx, "Danger Zone must render after Log Viewer -- genuinely at the bottom"
+    assert "Danger Zone" not in all_text
+    assert "Manual Controls" not in all_text
 
     button_keys = {b.key for b in at.button}
-    assert "status_full_refresh" in button_keys
-    assert "status_run_orders" in button_keys
+    assert "status_full_refresh" not in button_keys
+    assert "status_run_orders" not in button_keys
+
+    import main
+    assert not hasattr(main, "get_all_tickers"), (
+        "get_all_tickers was imported into main.py only for the removed "
+        "buttons' own use -- its continued presence suggests the import "
+        "wasn't actually cleaned up"
+    )
+    assert not hasattr(main, "pull_incremental"), (
+        "pull_incremental was imported into main.py only for the removed "
+        "'Refresh Data + Orders Now' button -- its continued presence "
+        "suggests the import wasn't actually cleaned up"
+    )
 
 
 def test_status_page_t212_account_no_longer_shows_live_state(db_engine, status_app, monkeypatch):
