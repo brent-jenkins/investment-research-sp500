@@ -916,6 +916,159 @@ def test_no_exit_when_nothing_fires(db_engine, v2_mocks, mocker):
 
 
 # ---------------------------------------------------------------------------
+# extendedHours for CRISIS_EXIT sells only (2026-08-04) -- see CLAUDE.md's
+# "extendedHours for sell orders" investigation for the full trade-off
+# reasoning. Only CRISIS_EXIT should pass extended_hours=True to
+# place_market_order(); every other exit reason, and every BUY, must keep
+# sending the exact same payload as before this feature existed.
+# ---------------------------------------------------------------------------
+
+def test_crisis_exit_sell_requests_extended_hours(db_engine, v2_mocks, mocker):
+    """The core proof: a CRISIS_EXIT sell must call place_market_order()
+    with extended_hours=True."""
+    _run_exit(
+        db_engine, v2_mocks, mocker,
+        ticker="VOO", t212_ticker="I50Dl_EQ",
+        frame=_price_frame(400, 100.0, 0.0015, last_day_shock=-0.09),
+        stop_price=99999.0,  # would also fire STOP_LOSS if crisis didn't win priority
+        days_ago=999,        # would also fire MAX_HOLDING
+        crisis_now=True,
+    )
+    v2_mocks.place_market_order.assert_called_once()
+    _args, kwargs = v2_mocks.place_market_order.call_args
+    assert kwargs.get("extended_hours") is True
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "CRISIS_EXIT"
+
+
+def test_signal_off_sell_does_not_request_extended_hours(db_engine, v2_mocks, mocker):
+    frame = _bearish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    _run_exit(
+        db_engine, v2_mocks, mocker,
+        ticker="VOO", t212_ticker="I50Dl_EQ",
+        frame=frame,
+        stop_price=last_price * 0.01,  # far below price -- stop does NOT fire
+        days_ago=1, max_holding_days=90,
+    )
+    v2_mocks.place_market_order.assert_called_once()
+    _args, kwargs = v2_mocks.place_market_order.call_args
+    assert kwargs.get("extended_hours") is False
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "SIGNAL_OFF"
+
+
+def test_max_holding_sell_does_not_request_extended_hours(db_engine, v2_mocks, mocker):
+    frame = _bullish_frame()  # signal stays on -- MAX_HOLDING fires instead
+    last_price = float(frame["close"].iloc[-1])
+    _run_exit(
+        db_engine, v2_mocks, mocker,
+        ticker="VOO", t212_ticker="I50Dl_EQ",
+        frame=frame,
+        stop_price=last_price * 0.01,
+        days_ago=999,
+        max_holding_days=30,
+    )
+    v2_mocks.place_market_order.assert_called_once()
+    _args, kwargs = v2_mocks.place_market_order.call_args
+    assert kwargs.get("extended_hours") is False
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "MAX_HOLDING"
+
+
+def test_stop_loss_sell_does_not_request_extended_hours(db_engine, v2_mocks, mocker):
+    """STOP_LOSS is deliberately out of scope for this feature (the
+    broker-side stop has no extendedHours field at all, and local
+    STOP_LOSS evaluation is slated for removal separately) -- confirms it
+    stays regular-hours-only, same as SIGNAL_OFF/MAX_HOLDING."""
+    frame = _bearish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    _run_exit(
+        db_engine, v2_mocks, mocker,
+        ticker="VOO", t212_ticker="I50Dl_EQ",
+        frame=frame,
+        stop_price=last_price * 10,  # guarantees price <= stop_price
+    )
+    v2_mocks.place_market_order.assert_called_once()
+    _args, kwargs = v2_mocks.place_market_order.call_args
+    assert kwargs.get("extended_hours") is False
+    row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM invest_orders WHERE direction='SELL'"
+    )).fetchone()
+    assert row[0] == "STOP_LOSS"
+
+
+def test_place_market_order_payload_only_adds_extended_hours_key_when_true(monkeypatch, mocker):
+    """Direct client-level proof, independent of the exit-check plumbing
+    above: the JSON payload itself must be byte-for-byte identical to the
+    pre-feature two-field shape ({"ticker", "quantity"}) whenever
+    extended_hours is left at its default -- no new key added at all, not
+    just a falsy one -- and must gain exactly one extra key, extendedHours:
+    true, when explicitly requested."""
+    from brokers.trading212 import Trading212Client
+
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    client = Trading212Client(live=False)
+
+    class _FakeResponse:
+        status_code = 200
+        reason = "OK"
+        url = "https://demo.trading212.com/api/v0/equity/orders/market"
+        text = ""
+
+        def json(self):
+            return {"id": "order-1"}
+
+    req = mocker.patch("brokers.trading212.requests.request", return_value=_FakeResponse())
+
+    client.place_market_order("AAPL_US_EQ", -5.0)
+    assert req.call_args.kwargs["json"] == {"ticker": "AAPL_US_EQ", "quantity": -5.0}
+
+    req.reset_mock()
+    client.place_market_order("AAPL_US_EQ", -5.0, extended_hours=True)
+    assert req.call_args.kwargs["json"] == {
+        "ticker": "AAPL_US_EQ", "quantity": -5.0, "extendedHours": True,
+    }
+
+
+def test_buy_order_payload_never_receives_extended_hours(db_engine, v2_mocks, mocker):
+    """The BUY submission call site (_submit_pending_orders()) must never
+    pass extended_hours at all -- confirms case 1 (new-entry buys) stays
+    genuinely untouched by this feature, not just defaulted to False."""
+    from brokers.trading212 import submit_pending_stock_orders
+
+    mapping = {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}}
+    cfg = _config(mapping=mapping, mocker=mocker, db_engine=db_engine)
+    _mock_price_data(mocker, {})
+    v2_mocks.get_positions.return_value = []
+    v2_mocks.get_account_summary.return_value = {
+        "totalValue": 10_000.0,
+        "cash": {"availableToTrade": 5_000.0},
+        "investments": {"currentValue": 0.0},
+    }
+    v2_mocks.get_instruments.return_value = [
+        {"ticker": "AAPL_US_EQ", "minTradeQuantity": 1, "maxQuantityPrecision": 0},
+    ]
+    v2_mocks.get_quantity_for_gbp.return_value = 10.0
+    v2_mocks.get_instrument_price_gbp.return_value = 50.0
+    v2_mocks.place_market_order.return_value = {"id": "buy-order-eh"}
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", is_etf=False)
+
+    submit_pending_stock_orders(cfg)
+
+    v2_mocks.place_market_order.assert_called_once()
+    _args, kwargs = v2_mocks.place_market_order.call_args
+    assert "extended_hours" not in kwargs
+
+
+# ---------------------------------------------------------------------------
 # Live pricing for the exit check (2026-08-03) -- STOP_LOSS now compares
 # against a genuinely live price, not the once-daily stored close
 # _ticker_state() reads from price_data. See CLAUDE.md's "live pricing for
@@ -3666,7 +3819,7 @@ def test_exit_sell_failure_does_not_halt_remaining_positions(db_engine, v2_mocks
         {"ticker": "AAPL_US_EQ", "quantity": 2.0},
     ]
 
-    def _fake_place_order(t212_ticker, qty):
+    def _fake_place_order(t212_ticker, qty, extended_hours=False):
         if t212_ticker == "I50Dl_EQ":
             raise RuntimeError("simulated T212 rejection -- no market")
         return {"id": "mock-order-ok"}
