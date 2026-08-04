@@ -560,7 +560,23 @@ class Trading212Client:
         if stop_price is None or stop_price <= 0:
             raise ValueError("stop_price must be a positive number")
 
-        payload = {"ticker": ticker, "quantity": quantity, "stopPrice": stop_price}
+        # timeValidity (2026-08-04) -- MUST be explicit. Omitting it does
+        # not mean "good till cancelled" the way one might assume for a
+        # standing protective order -- T212 applies its own default (not
+        # persistent past the trading day it was placed on), which is
+        # exactly what silently rejected all 16 backfilled stop orders
+        # placed after NYSE's regular close the same night this shipped.
+        # Confirmed directly against the live API before adopting this
+        # value: an invalid timeValidity produces a generic "Invalid
+        # payload" 400; "GOOD_TILL_CANCEL" is accepted (the request then
+        # fails validation on a genuinely unrelated field instead,
+        # proving the enum value itself was recognized) -- see CLAUDE.md's
+        # "Broker-side stop orders rejected after market close" section
+        # for the full incident.
+        payload = {
+            "ticker": ticker, "quantity": quantity, "stopPrice": stop_price,
+            "timeValidity": "GOOD_TILL_CANCEL",
+        }
         url = f"{self.base_url}/equity/orders/stop"
         timeout = 10
 

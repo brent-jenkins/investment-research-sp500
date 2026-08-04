@@ -7143,6 +7143,46 @@ Implements the mechanism the section immediately above recommended, following it
 
 Every currently-open position genuinely has a real, T212-enforced stop resting on it as of this backfill. This is the condition the two follow-on tasks immediately below were waiting on.
 
+### Broker-side stop orders rejected after market close — incident, root cause, fix, and remediation (2026-08-04)
+
+**All 16 stop orders from the backfill immediately above were rejected by T212 hours after being placed, silently leaving all 16 real positions unprotected.** Reported as "expired" orders for AMAT, CIEN, WBD, DELL, FLEX, CNC, MU, FIX, MRVL, LRCX, TER, KLAC, HPE, INTC, AMD, and (see below) `VLO` — the exact 16-ticker backfill set. Investigated against two competing hypotheses (a spurious exit-check price comparison across a market-closed gap, vs. a `timeValidity` placement bug) before assuming either; confirmed directly against T212's real API, not inferred.
+
+**Root cause, confirmed directly in the code before anything else: `Trading212Client.place_stop_order()`'s payload never set `timeValidity` at all** — `{"ticker": ticker, "quantity": quantity, "stopPrice": stop_price}`, no third field. Omitting it does not default to "good till cancelled" the way one might assume for a standing protective order; T212 applies its own, non-persistent default. Confirmed exactly this way, not guessed: an intentionally-invalid `timeValidity` value produces a generic `"Invalid payload"` 400 with no field-level detail, while `"GOOD_TILL_CANCEL"` is accepted — the same probe request then fails on a genuinely unrelated field (`"must trade at least 1.00"`, from a deliberately tiny test quantity), proving the enum value itself was recognized rather than merely not-yet-reached during validation.
+
+**Confirmed real order-level evidence, not inference — this was Hypothesis B, not Hypothesis A.** `GET /equity/orders/{id}` 404'd for all 16 stop_order_ids (order no longer active). Cross-referencing `GET /equity/history/orders` (its own real max `limit` is 50, not 100 — a first attempt at `limit=100` returned a 400 and zero rows, which would have wrongly suggested the orders had vanished from history entirely rather than merely needing a smaller page) found all 16 with `"status": "REJECTED"`, `"type": "STOP"`, `"side": "SELL"`, `createdAt` timestamps clustered at 23:23–23:24 UTC on 2026-08-03 — matching the backfill's own placement time (its commit was written at 00:25:51 BST = 23:25:51 UTC the same night) and, critically, **hours after NYSE's ~20:00 UTC regular close**. The backfill's own commit had already independently verified all 16 as genuinely accepted at placement time (`GET /equity/orders/{id}` succeeding, status `NEW`) — so this was a real accepted→rejected transition sometime after placement, not an immediate rejection, consistent with a day-scoped default order failing to survive past the session it was (mistakenly) associated with. This directly rules out Hypothesis A (an exit-check price-comparison artifact) — the exit check never touches stop-order placement or validity at all, and the rejection is recorded server-side, on T212's own order object, independent of anything this system's own scheduler did or didn't do around that time.
+
+**A separate, real ticker-identity mixup, confirmed and corrected, not left ambiguous.** The incident report named `CLO`, which has **zero presence anywhere in this system** — no `instrument_resolutions` row, no `invest_orders` row, nothing. Every other reported ticker matches the backfill's own 16-ticker table above exactly; the sole discrepancy is `CLO` vs. the backfill's own `VLO` (Valero Energy) — confirmed to be the ticker actually affected (real `VLO_US_EQ` BUY row, real backfilled stop, real rejection in T212's history, same as the other 15). Recorded here as a confirmed correction, not an assumption carried forward silently.
+
+**Current protection status, individually verified against T212's live API, not the local DB (which never actively re-polls a stop order's status once placed — a real, separate gap; see "Broker-side stop replaces local evaluation" below):**
+
+| Ticker | Old stop_order_id | Status found | New stop_order_id (remediation) | Re-verified |
+|---|---|---|---|---|
+| AMAT | 52900700753 | REJECTED | 52900702937 | ✅ NEW |
+| AMD | 52900700745 | REJECTED | 52900702939 | ✅ NEW |
+| CIEN | 52900700727 | REJECTED | 52900702941 | ✅ NEW |
+| CNC | 52900700749 | REJECTED | 52900702943 | ✅ NEW |
+| DELL | 52900700733 | REJECTED | 52900702945 | ✅ NEW |
+| FIX | 52900700729 | REJECTED | 52900702947 | ✅ NEW |
+| FLEX | 52900700735 | REJECTED | 52900702949 | ✅ NEW |
+| HPE | 52900700755 | REJECTED | 52900702951 | ✅ NEW |
+| INTC | 52900700731 | REJECTED | 52900702953 | ✅ NEW |
+| KLAC | 52900700751 | REJECTED | 52900702955 | ✅ NEW |
+| LRCX | 52900700737 | REJECTED | 52900702957 | ✅ NEW |
+| MRVL | 52900700757 | REJECTED | 52900702959 | ✅ NEW |
+| MU | 52900700739 | REJECTED | 52900702961 | ✅ NEW |
+| TER | 52900700743 | REJECTED | 52900702963 | ✅ NEW |
+| VLO | 52900700747 | REJECTED | 52900702965 | ✅ NEW |
+| WBD | 52900700759 | REJECTED | 52900702967 | ✅ NEW |
+
+**All 16 underlying stock positions were confirmed still genuinely held throughout, at their original quantities, via a fresh `client.get_positions()` read taken before any remediation action** — this was a stop-order-only incident; nothing was auto-sold or otherwise touched by the rejection itself.
+
+**Remediation, immediate — code fix plus a real, verified re-placement of all 16, not sequenced as "fix later."**
+1. `place_stop_order()`'s payload now explicitly includes `"timeValidity": "GOOD_TILL_CANCEL"` — the exact value confirmed accepted by the live API above. Covered by an updated existing test (`test_place_stop_order_sends_the_correct_payload_and_path`) and a new, dedicated regression test (`test_place_stop_order_always_sends_good_till_cancel_time_validity`) asserting this specific field/value pair directly. Full suite (741 tests) passing.
+2. All 16 positions' stops were re-placed **before** the code fix was even deployed — using the corrected payload directly against the live API (decoupled from the deploy pipeline, since every minute of the 16 positions sitting unprotected mattered) — each at the identical `stop_price`/quantity as the original backfill, and each independently re-verified via a fresh `GET /equity/orders/{id}` (status `NEW`, matching the exact pattern of a genuinely resting, working order from the original supervised test). `invest_orders.stop_order_id`/`stop_order_status` updated to the new order IDs and `'PLACED'` for all 16.
+3. The code fix itself was committed, tested, and deployed the same session — see the deploy log for the exact commit.
+
+**Open, deliberately-not-closed gap, named directly rather than left implicit: the local DB's `stop_order_status` column is write-mostly, not actively re-polled.** This incident was only fully invisible locally because nothing in this system's own automation currently re-checks a placed stop order's real, current T212 status — `stop_order_status='PLACED'` is set once at placement and only ever updated by the cancel-before-alternate-exit path (`maybe_exit_positions()`), never by an independent, periodic liveness check. Had the user not reported the T212-side "expired" notification directly, this incident would have had no automated detection path at all inside this system — `reconcile_positions_with_broker()`'s existing `BROKER_CLOSED_NO_SELL` flag only fires when a position itself vanishes, not when a stop order protecting a still-open position quietly disappears. This is exactly the class of gap the still-held "Sharpen `reconcile_positions_with_broker()` for STOP_LOSS precision" task below was already scoped to address (cross-referencing a position's `stop_order_id` against T212's own order history) — this incident is now a second, concrete, motivating reason to prioritize it, not a new task in its own right.
+
 ### Broker-side stop replaces local evaluation, and reconciliation gains STOP_LOSS precision — unblocked, not yet started
 
 Two follow-on tasks, explicitly sequenced after the mechanism above AND the position-by-position backfill immediately above — both are now confirmed complete, so this section is unblocked:

@@ -331,7 +331,34 @@ def test_place_stop_order_sends_the_correct_payload_and_path(monkeypatch, mocker
 
     assert captured["method"] == "POST"
     assert captured["url"] == f"{client.base_url}/equity/orders/stop"
-    assert captured["json"] == {"ticker": "AAPL_US_EQ", "quantity": -2.5, "stopPrice": 140.25}
+    assert captured["json"] == {
+        "ticker": "AAPL_US_EQ", "quantity": -2.5, "stopPrice": 140.25,
+        "timeValidity": "GOOD_TILL_CANCEL",
+    }
+
+
+def test_place_stop_order_always_sends_good_till_cancel_time_validity(monkeypatch, mocker):
+    """The exact regression this guards against (2026-08-04): omitting
+    timeValidity entirely does NOT mean "good till cancelled" -- T212
+    applies its own, non-persistent default, which silently rejected all
+    16 backfilled stop orders placed after NYSE's regular close the same
+    night this shipped. Confirmed directly against the live API before
+    fixing: an invalid timeValidity value produces a generic "Invalid
+    payload" 400, while "GOOD_TILL_CANCEL" is accepted (the request then
+    fails on a genuinely unrelated field, proving the enum itself is
+    recognized) -- see CLAUDE.md's "Broker-side stop orders rejected
+    after market close" section for the full incident."""
+    client = _client(monkeypatch)
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["json"] = kwargs.get("json")
+        return _FakeResponse(json_data={"id": "stop-1"})
+
+    mocker.patch("brokers.trading212.requests.request", side_effect=_fake_request)
+    client.place_stop_order("MSFT_US_EQ", -1.0, 300.0)
+
+    assert captured["json"]["timeValidity"] == "GOOD_TILL_CANCEL"
 
 
 def test_place_stop_order_with_malformed_body_on_success_does_not_raise(monkeypatch, mocker):
