@@ -71,7 +71,20 @@ LOCK_WAIT_INTERVAL_SECONDS="${DEPLOY_LOCK_WAIT_INTERVAL_SECONDS:-1}"
 # Bounded, same "never wait forever" philosophy as the blackout defer loop
 # below -- if a prior run crashed without cleaning up its lock directory,
 # this breaks it rather than hanging every future deploy indefinitely.
-LOCK_MAX_WAIT_SECONDS="${DEPLOY_LOCK_MAX_WAIT_SECONDS:-600}"
+#
+# MUST be comfortably longer than the blackout defer loop's own
+# DEPLOY_MAX_BLACKOUT_WAIT_SECONDS cap (1800s default) plus real
+# deploy_steps() runtime -- a legitimate first holder can hold this lock
+# for up to that entire duration. Confirmed as a REAL bug, not
+# theoretical: an earlier default of 600s here (shorter than the 1800s
+# blackout cap) meant a second, still-legitimately-waiting process would
+# hit ITS OWN 600s patience limit before the first process's 1800s
+# blackout wait finished, wrongly conclude the lock was stale, forcibly
+# break it, and start running concurrently with the still-very-much-alive
+# first process -- observed live in production as five separate deploy.sh
+# processes all running at once, each having stolen the lock from the
+# last, every one independently polling its own blackout-defer loop.
+LOCK_MAX_WAIT_SECONDS="${DEPLOY_LOCK_MAX_WAIT_SECONDS:-3600}"
 
 _release_deploy_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
 trap _release_deploy_lock EXIT

@@ -17,6 +17,7 @@ overrides used to make the blackout clock and the defer loop's timing
 deterministic and fast, rather than depending on real wall-clock time or
 sleeping for real minutes.
 """
+import re
 import shutil
 import subprocess
 import sys
@@ -237,6 +238,90 @@ def test_concurrent_invocations_serialize_rather_than_race(deploy_scratch):
         f"serialize (~6s) rather than race in parallel (~3s); the lock may not be "
         f"held for the whole run"
     )
+
+
+def test_lock_max_wait_default_exceeds_blackout_max_wait_default():
+    """Static regression guard for a real bug found live in production
+    (2026-08-05): DEPLOY_LOCK_MAX_WAIT_SECONDS's default (600s) was shorter
+    than DEPLOY_MAX_BLACKOUT_WAIT_SECONDS's default (1800s) -- a second
+    process waiting on the lock would hit its OWN patience limit before the
+    first process's legitimate, still-in-progress blackout wait finished,
+    wrongly conclude the lock was stale, forcibly break it, and start
+    running concurrently with the still-alive first process. Observed live:
+    five separate deploy.sh processes running at once, each having stolen
+    the lock from the last. The lock's own stale-break timeout must always
+    be comfortably longer than the longest legitimate hold time (the full
+    blackout wait plus real deploy_steps() runtime), or this exact failure
+    mode reoccurs the next time someone tunes either default without
+    checking the other."""
+    text = _DEPLOY_SH.read_text(encoding="utf-8")
+    blackout_match = re.search(r'DEPLOY_MAX_BLACKOUT_WAIT_SECONDS:-(\d+)\}', text)
+    lock_match = re.search(r'DEPLOY_LOCK_MAX_WAIT_SECONDS:-(\d+)\}', text)
+    assert blackout_match, "could not find DEPLOY_MAX_BLACKOUT_WAIT_SECONDS's default in deploy.sh"
+    assert lock_match, "could not find DEPLOY_LOCK_MAX_WAIT_SECONDS's default in deploy.sh"
+
+    blackout_default = int(blackout_match.group(1))
+    lock_default = int(lock_match.group(1))
+    assert lock_default > blackout_default, (
+        f"DEPLOY_LOCK_MAX_WAIT_SECONDS's default ({lock_default}s) must be greater than "
+        f"DEPLOY_MAX_BLACKOUT_WAIT_SECONDS's default ({blackout_default}s) -- a legitimate "
+        f"first lock holder can wait out the entire blackout cap before proceeding, and the "
+        f"lock must not be considered stale before that. See this test's own docstring for "
+        f"the real incident this guards against."
+    )
+
+
+def test_lock_waiter_does_not_steal_a_lock_still_legitimately_held(deploy_scratch):
+    """Dynamic proof of the fix above, not just the static ratio: process A
+    acquires the lock and holds it through a real (scaled-down) blackout
+    wait; process B, started concurrently, must wait for A to finish and
+    release the lock normally -- not conclude A's hold is stale and force
+    the lock while A is still genuinely running. Verified by asserting B's
+    own output never contains the "assuming it's stale" force-break
+    message, which would only appear if B's lock-wait cap were reached
+    before A voluntarily released it."""
+    scratch = deploy_scratch
+    import os
+
+    env = dict(os.environ)
+    env["PATH"] = str(scratch["stub_bin"]) + os.pathsep + env.get("PATH", "")
+    env["APP_DIR"] = str(scratch["app_dir"])
+    env["SERVICE"] = "test-investment-research"
+    env["SYSTEMD_DIR"] = str(scratch["systemd_dir"])
+    env["DEPLOY_TEST_MARKER_FILE"] = str(scratch["marker_file"])
+    # Wednesday 21:30 UTC -- inside the EOD blackout window for the whole run.
+    env["DEPLOY_TEST_NOW_HM"] = "2130"
+    env["DEPLOY_TEST_NOW_MIN"] = "30"
+    env["DEPLOY_TEST_NOW_DOW"] = "3"
+    # Scaled-down but same RATIO as production's real defaults (lock cap
+    # comfortably larger than blackout cap): process A's blackout wait maxes
+    # out at 3s; the lock's own stale-break threshold is 10s -- far longer
+    # than the ~3-4s A should actually take end to end, so B must never
+    # legitimately hit it.
+    env["DEPLOY_MAX_BLACKOUT_WAIT_SECONDS"] = "3"
+    env["DEPLOY_BLACKOUT_POLL_INTERVAL_SECONDS"] = "1"
+    env["DEPLOY_LOCK_MAX_WAIT_SECONDS"] = "10"
+    env["DEPLOY_LOCK_WAIT_INTERVAL_SECONDS"] = "1"
+
+    proc_a = subprocess.Popen(
+        ["bash", str(_DEPLOY_SH)], cwd=str(scratch["app_dir"]), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    proc_b = subprocess.Popen(
+        ["bash", str(_DEPLOY_SH)], cwd=str(scratch["app_dir"]), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out_a, _ = proc_a.communicate(timeout=30)
+    out_b, _ = proc_b.communicate(timeout=30)
+
+    assert proc_a.returncode == 0, out_a
+    assert proc_b.returncode == 0, out_b
+    assert "assuming it's stale" not in out_b, (
+        f"process B force-broke the lock instead of waiting for A to finish legitimately -- "
+        f"the lock's own stale-break timeout is too short relative to the blackout wait it's "
+        f"supposed to comfortably outlast.\n--- A's output ---\n{out_a}\n--- B's output ---\n{out_b}"
+    )
+    assert "assuming it's stale" not in out_a, f"unexpected force-break in A's own output:\n{out_a}"
 
 
 def test_blackout_clears_partway_through_the_wait(deploy_scratch, monkeypatch):
