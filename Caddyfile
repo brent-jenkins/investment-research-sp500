@@ -3,26 +3,16 @@
 # This file is copied to /etc/caddy/Caddyfile by setup.sh, which also
 # substitutes YOUR.DOMAIN.COM with your real domain automatically.
 #
-# Before running setup.sh you must fill in the password hash:
-#   1. On the server: caddy hash-password
-#   2. Enter your chosen password at the prompt
-#   3. Replace REPLACE_WITH_HASH below with the output
-#   4. Optionally change 'admin' to your preferred username
+# Access control lives in the app itself (per-user accounts, see auth.py
+# and CLAUDE.md's "Authentication" section) rather than here — Caddy's
+# `basic_auth` directive used to gate the whole site behind one shared
+# credential; that has been removed in favour of real per-user login,
+# so this file is TLS + reverse proxy only.
 #
 # After editing /etc/caddy/Caddyfile on the server:
 #   systemctl reload caddy
-#
-# SECURITY NOTE: if you fill in a real domain/hash here before committing,
-# add 'Caddyfile' to .gitignore to avoid exposing credentials.
 
 YOUR.DOMAIN.COM {
-
-    # ── Password protection ───────────────────────────────────────────────
-    # Caddy basic auth uses bcrypt hashes (not plaintext passwords).
-    # Generate with: caddy hash-password
-    basicauth * {
-        admin REPLACE_WITH_HASH
-    }
 
     # ── Streamlit reverse proxy ───────────────────────────────────────────
     # flush_interval -1 disables response buffering, which is required for

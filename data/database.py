@@ -386,6 +386,28 @@ class AccountValueHistory(Base):
     captured_at      = Column(DateTime, default=datetime.utcnow)
 
 
+class User(Base):
+    """A per-user web UI account — replaces the single shared Caddy
+    basic-auth credential (see CLAUDE.md's per-user-accounts section).
+    Passwords are never stored in plaintext; password_hash is a bcrypt
+    hash (see auth.py:hash_password()/verify_password()), and every
+    write to this table goes through auth.py rather than raw SQL/ORM
+    calls elsewhere, so hashing and role validation can't be bypassed.
+
+    role: "admin" (full access, including this table's own management UI
+    on the Users page) / "demo" (Dashboard only — a read-only investor
+    view, page-gated in main.py).
+    """
+
+    __tablename__ = "users"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    username      = Column(String(64), nullable=False, unique=True, index=True)
+    password_hash = Column(String(120), nullable=False)
+    role          = Column(String(16), nullable=False, default="demo")
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+
 class SystemMetadata(Base):
     """Key-value store for operational state (last refresh time, last analysis time, etc.)."""
 
@@ -551,6 +573,75 @@ def _apply_data_fixes(engine) -> None:
         pass
 
 
+def _seed_default_admin(engine) -> None:
+    """Create the initial admin account on first run, if the `users` table
+    is empty — nothing to do on every later startup.
+
+    Prefers the ADMIN_PASSWORD_HASH env var: a portable bcrypt hash lifted
+    verbatim from the pre-existing Caddy basic_auth credential this table
+    replaces (bcrypt's hash format is implementation-agnostic — a hash
+    Caddy generated verifies identically here), so the existing password
+    keeps working unchanged as the new admin account, with the real
+    plaintext never having to be known or re-entered. Falls back to a
+    freshly generated random password, logged once, for a brand-new
+    environment with no prior credential to migrate (e.g. local dev).
+
+    Races the identical check in another process on a genuine first
+    deploy: the `investment-research` and `investment-research-scheduler`
+    systemd services both call init_db() independently on startup, and
+    could both see an empty `users` table if they start close together.
+    `username` is UNIQUE, so the loser's INSERT raises IntegrityError,
+    caught here and treated as "someone else already seeded it" rather
+    than left to crash that service's startup. Only ever possible on the
+    very first deploy after this table is introduced — every later
+    startup finds a non-empty table and returns before either branch
+    below runs.
+    """
+    with engine.connect() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
+    if count:
+        return
+
+    password_hash = os.environ.get("ADMIN_PASSWORD_HASH")
+    generated_password = None
+    if not password_hash:
+        import secrets as _secrets
+
+        import bcrypt
+
+        generated_password = _secrets.token_urlsafe(16)
+        password_hash = bcrypt.hashpw(
+            generated_password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO users (username, password_hash, role, created_at) "
+                    "VALUES (:u, :h, 'admin', :t)"
+                ),
+                {"u": "admin", "h": password_hash, "t": datetime.utcnow()},
+            )
+    except IntegrityError:
+        # Another process won the race and already inserted 'admin' -- do
+        # NOT log generated_password below; it was never actually stored.
+        return
+
+    if generated_password:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "No ADMIN_PASSWORD_HASH set — created default admin account "
+            "'admin' with a freshly generated password: %s "
+            "(change this immediately via the Users page; this password is "
+            "logged only once, at first startup)",
+            generated_password,
+        )
+
+
 def init_db() -> None:
     """Create all tables in the database if they do not already exist.
 
@@ -569,6 +660,7 @@ def init_db() -> None:
         PendingOrder,
         InstrumentResolution,
         AccountValueHistory,
+        User,
         SystemMetadata,
         SchemaMigration,
     )
@@ -582,6 +674,7 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _apply_migrations(engine)
     _apply_data_fixes(engine)
+    _seed_default_admin(engine)
 
 
 def get_session() -> Session:

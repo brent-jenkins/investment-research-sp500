@@ -30,6 +30,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
+import auth
 from analysis.backtest import compute_metrics, equity_curve_gbp
 from analysis.universe import MEMBERSHIP_STALE_HOURS, is_membership_refresh_stale
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
@@ -655,6 +656,66 @@ def _initialise() -> None:
     """
     init_db()
     st.session_state.setdefault("app_initialised", True)
+
+
+# ---------------------------------------------------------------------------
+# Authentication — per-user accounts (see auth.py), replacing the previous
+# single shared Caddy basic-auth credential. `st.session_state["auth_user"]`
+# is the source of truth for the rest of a render; it is only ever set here,
+# on a successful auth.authenticate() call.
+# ---------------------------------------------------------------------------
+
+# Pages a "demo" role account may see. Every other page in _PAGE_KEYS
+# (main()) is admin-only. Kept as a plain module-level set (not derived from
+# _PAGE_KEYS) so it stays trivially readable independent of sidebar wiring.
+DEMO_ALLOWED_PAGES = {"dashboard"}
+
+
+def _render_login_page() -> None:
+    """Render a login form and authenticate against the users table.
+
+    On success, sets st.session_state["auth_user"] and reruns so the rest
+    of main() renders the authenticated app on the next pass.
+    """
+    st.markdown("""
+        <div style="padding: 2rem 0 1rem 0; text-align: center;">
+            <div style="font-size: 1.8rem; font-weight: 800; letter-spacing: 0.12em; color: #00C2FF;">
+                SP500INVEST
+            </div>
+            <div style="font-size: 0.85rem; color: #8899AA; letter-spacing: 0.05em; margin-top: 0.2rem;">
+                Systematic large-cap momentum research.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        with st.form("login_form"):
+            st.markdown("#### Sign in")
+            username = st.text_input("Username", key="login_username")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Sign in", use_container_width=True, key="login_submit")
+
+        if submitted:
+            user = auth.authenticate(username, password)
+            if user is None:
+                st.error("Invalid username or password.")
+            else:
+                st.session_state["auth_user"] = user
+                st.rerun()
+
+
+def _render_access_denied(page_name: str) -> None:
+    """Shown to a demo-role account that navigates (directly, via stale
+    session state) to a page reserved for admins — a polite notice rather
+    than an error or a broken/blank page. Includes a way back to Dashboard
+    since such a session's sidebar may only ever offer that one option."""
+    _render_page_wordmark(page_name)
+    st.markdown(f"## {page_name}")
+    st.info("This page isn't available in your view. Contact an administrator if you need access.")
+    if st.button("Return to Dashboard"):
+        st.session_state["page"] = "dashboard"
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -2102,6 +2163,93 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Users / Administration page (2026-08-04) — admin-only. Replaces the
+# previous single shared Caddy basic-auth credential with real per-user
+# accounts (see auth.py); this is where admins grant/revoke access rather
+# than sharing the real admin credential with a demo viewer. Kept as its
+# own page rather than folded into Status — access control is a genuinely
+# different concern from that page's operational-health content, and
+# Status has already absorbed a lot across several prior reorganizations.
+# ---------------------------------------------------------------------------
+
+def _render_users_page(config: dict) -> None:
+    """Admin-only user management: list accounts, add a new one, change a
+    role, reset a password, or remove an account."""
+    _render_page_wordmark("Users")
+    st.markdown("## Users")
+    st.caption("Manage who can sign in. `admin` accounts see every page; `demo` accounts see only the Dashboard.")
+
+    current_username = st.session_state.get("auth_user", {}).get("username")
+
+    users = auth.list_users()
+    if users:
+        df = pd.DataFrame(users)[["username", "role", "created_at"]]
+        df.columns = ["Username", "Role", "Created"]
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No user accounts exist.")
+
+    st.markdown("#### Add a user")
+    with st.form("add_user_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        new_username = c1.text_input("Username", key="add_user_username")
+        new_password = c2.text_input("Password", type="password", key="add_user_password")
+        new_role = c3.selectbox("Role", options=list(auth.VALID_ROLES), key="add_user_role")
+        add_submitted = st.form_submit_button("Add user", key="add_user_submit")
+    if add_submitted:
+        try:
+            auth.create_user(new_username, new_password, new_role)
+            st.success(f"Created user '{new_username}'.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    if users:
+        st.markdown("#### Edit or remove a user")
+        options = {f"{u['username']} ({u['role']})": u for u in users}
+        selected_label = st.selectbox("Account", options=list(options.keys()), key="users_edit_select")
+        selected = options[selected_label]
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            new_role_val = st.selectbox(
+                "Role", options=list(auth.VALID_ROLES),
+                index=list(auth.VALID_ROLES).index(selected["role"]),
+                key="users_role_select",
+            )
+            if st.button("Update role", key="users_update_role"):
+                try:
+                    auth.update_user_role(selected["id"], new_role_val)
+                    st.success(f"Updated '{selected['username']}' to {new_role_val}.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+        with c2:
+            reset_pw = st.text_input("New password", type="password", key="users_reset_pw")
+            if st.button("Reset password", key="users_do_reset_pw"):
+                try:
+                    auth.update_user_password(selected["id"], reset_pw)
+                    st.success(f"Password reset for '{selected['username']}'.")
+                except ValueError as exc:
+                    st.error(str(exc))
+        with c3:
+            st.write("")
+            st.write("")
+            if st.button("Delete user", key="users_delete", type="secondary"):
+                if selected["username"] == current_username:
+                    st.error("You cannot delete your own account while signed in as it.")
+                else:
+                    try:
+                        auth.delete_user(selected["id"])
+                        st.success(f"Deleted '{selected['username']}'.")
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+
+    _render_footer()
+
+
+# ---------------------------------------------------------------------------
 # Backtest page
 # ---------------------------------------------------------------------------
 # (This header previously read "Performance page" -- a stale label left
@@ -2371,10 +2519,38 @@ def main() -> None:
 
     _initialise()
 
+    # ---- Authentication --------------------------------------------------
+    # Replaces the previous single shared Caddy basic-auth credential with
+    # real per-user accounts (see auth.py). Nothing below this point renders
+    # for an unauthenticated session.
+    if not st.session_state.get("auth_user"):
+        _render_login_page()
+        return
+
+    auth_user = st.session_state["auth_user"]
+    role = auth_user["role"]
+
     config = _load_config()
     watchlist = _build_watchlist(config)
 
     # ---- Sidebar -------------------------------------------------------
+    _PAGES_ALL = ["Dashboard", "Instruments", "Backtest", "Status", "Users"]
+    _PAGE_KEYS = {
+        "Dashboard":      "dashboard",
+        "Instruments":    "instruments",
+        "Backtest":       "backtest",
+        "Status":         "status",
+        "Users":          "users",
+    }
+    # A demo account only ever sees pages in DEMO_ALLOWED_PAGES via the
+    # sidebar; everything else is admin-only. This filters what the radio
+    # WIDGET offers -- it deliberately does not touch st.session_state["page"]
+    # itself, so a foreign/stale page key (e.g. set directly, or inherited
+    # from before a role change) is still visible to the main-content
+    # routing below and renders the access-denied notice rather than being
+    # silently swapped out before anyone sees it.
+    _PAGES = [p for p in _PAGES_ALL if role == "admin" or _PAGE_KEYS[p] in DEMO_ALLOWED_PAGES]
+
     with st.sidebar:
         st.sidebar.markdown("""
             <div style="padding: 0.5rem 0 1rem 0;">
@@ -2388,16 +2564,9 @@ def main() -> None:
         """, unsafe_allow_html=True)
         st.divider()
 
-        _PAGES = ["Dashboard", "Instruments", "Backtest", "Status"]
-        _PAGE_KEYS = {
-            "Dashboard":      "dashboard",
-            "Instruments":    "instruments",
-            "Backtest":       "backtest",
-            "Status":         "status",
-        }
         current_key = st.session_state.get("page", "dashboard")
         default_idx = next(
-            (i for i, k in enumerate(_PAGE_KEYS.values()) if k == current_key), 0
+            (i for i, p in enumerate(_PAGES) if _PAGE_KEYS[p] == current_key), 0
         )
         page = st.radio(
             "Navigation",
@@ -2406,7 +2575,11 @@ def main() -> None:
             label_visibility="collapsed",
         )
         current_page = _PAGE_KEYS[page]
-        if st.session_state.get("page") != current_page:
+        # Only a genuine change in the WIDGET's own resolved selection (not
+        # a mismatch against a possibly-foreign current_key) writes back to
+        # session_state["page"] -- see the _PAGES comment above for why.
+        resolved_default_key = _PAGE_KEYS[_PAGES[default_idx]]
+        if current_page != resolved_default_key:
             st.session_state["page"] = current_page
             st.rerun()
 
@@ -2419,8 +2592,21 @@ def main() -> None:
         st.caption(f"**Last refresh:** {_sb_r_str}")
         st.caption(f"**Last scheduled run:** {_sb_s_str}")
 
+        st.divider()
+        st.caption(f"Signed in as **{auth_user['username']}** ({role})")
+        if st.button("Log out", use_container_width=True):
+            del st.session_state["auth_user"]
+            if "page" in st.session_state:
+                del st.session_state["page"]
+            st.rerun()
+
     # ---- Main content --------------------------------------------------
     page_key = st.session_state.get("page", "dashboard")
+
+    if role != "admin" and page_key not in DEMO_ALLOWED_PAGES:
+        _page_name = next((k for k, v in _PAGE_KEYS.items() if v == page_key), page_key)
+        _render_access_denied(_page_name)
+        return
 
     if page_key == "dashboard":
         _render_dashboard_page(config)
@@ -2432,6 +2618,10 @@ def main() -> None:
 
     if page_key == "backtest":
         _render_backtest_page(config)
+        return
+
+    if page_key == "users":
+        _render_users_page(config)
         return
 
     # Instruments page (2026-08-02, replaces Charts)
