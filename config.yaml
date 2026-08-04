@@ -28,10 +28,14 @@ database:
 
 scheduler:
   timezone: "UTC"
-  # The only scheduled run driven by this dict; the hourly trade-alert job
-  # and the Monday-only stale-order cancellation are registered directly
+  # The only scheduled run driven by this dict; every other job (the
+  # hourly market_hours_check/account_state_refresh pair, stock order
+  # submission, membership refresh, weekly summary) is registered directly
   # in data/scheduler.py:start_scheduler(). EOD is the only run that pulls
-  # prices.
+  # prices. (Corrected 2026-08-04 -- this comment previously named the
+  # single hourly trade-alert job and the Monday-only stale-order
+  # cancellation, both removed/split 2026-08-03; see CLAUDE.md's "Splitting
+  # the hourly trade-alert job" and "Monday Pre-Market removed" sections.)
   runs:
     eod:
       hour: 21
