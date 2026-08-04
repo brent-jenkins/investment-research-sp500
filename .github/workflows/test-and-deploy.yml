@@ -65,7 +65,16 @@ jobs:
           # over the identical bytes curl sends below -- printf, not echo,
           # so no trailing newline sneaks into either the signed content or
           # the sent body.
-          PAYLOAD='{"ref":"refs/heads/main","after":"'"${{ github.sha }}"'"}'
+          #
+          # `ref` is the ACTUAL triggering ref (github.ref), not hardcoded
+          # to main -- this step already only runs when github.ref really
+          # is refs/heads/main (the `if:` above), so in normal operation
+          # this changes nothing, but a hardcoded value would mean the
+          # payload keeps lying "this was a push to main" even if that `if:`
+          # condition were ever accidentally weakened later, silently
+          # defeating the listener's own independent ref check instead of
+          # the two layers providing genuine, independent defense-in-depth.
+          PAYLOAD='{"ref":"'"${{ github.ref }}"'","after":"'"${{ github.sha }}"'"}'
           SIGNATURE="sha256=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')"
           response=$(curl -sS -o /tmp/webhook_response.txt -w '%{http_code}' \
             -X POST https://platform.example.com/webhook/deploy \
