@@ -20,7 +20,6 @@ RestartSec=10
 # (or symlink it) with the same content as investment-research.service.d/secrets.conf.
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=/root
-Environment=FRED_API_KEY=
 Environment=SMTP_PASSWORD=
 Environment=T212_API_KEY=
 Environment=T212_API_SECRET=

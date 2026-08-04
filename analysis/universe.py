@@ -66,9 +66,9 @@ _SENTINEL_END = date(2099, 12, 31)  # "still a member as of the latest known dat
 # failure just logged a WARNING and returned silently -- no timestamp, no
 # alert, no way to tell "refreshed today" from "silently failing since a
 # deploy three weeks ago" short of grepping server logs. Mirrors the
-# existing FRED _calendar_staleness / EOD OVERDUE badge pattern rather than
-# inventing something new -- see main.py:_eod_overdue() for the sibling
-# implementation this one is modelled on.
+# existing EOD OVERDUE badge pattern rather than inventing something new --
+# see main.py:_eod_overdue() for the sibling implementation this one is
+# modelled on.
 _LAST_REFRESH_SUCCESS_KEY = "last_membership_refresh_success"
 
 # The job (data/scheduler.py:_membership_refresh_job()) fires Mon-Fri only,
