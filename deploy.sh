@@ -180,6 +180,9 @@ systemctl restart ${SERVICE}-scheduler
 echo "  Service status:"
 systemctl status ${SERVICE} --no-pager -l
 systemctl status ${SERVICE}-scheduler --no-pager -l
+
+echo "  Verifying deploy..."
+bash ${APP_DIR}/verify_deploy.sh
 REMOTE
 
 echo ""
