@@ -45,7 +45,6 @@ from output.performance import (
     get_pending_candidates,
     get_pnl_rows,
     get_recent_orders,
-    get_ticker_status,
     get_unconfirmed_exits,
     position_context_style,
     position_exit_rule_text,
@@ -578,21 +577,26 @@ def _render_trade_card(e: dict) -> None:
     )
 
 
-@st.cache_data(ttl=300)
-def _get_ticker_status() -> list[dict]:
-    """Per-ticker live status (momentum, index membership, crisis flags).
-    Thin cached wrapper — the data-shaping logic lives in
-    output/performance.py, which is directly unit-tested (main.py itself is
-    not importable in tests). Reads config fresh via _load_config() since
-    unhashable dicts can't be Streamlit cache keys."""
-    return get_ticker_status(_load_config())
+@st.cache_data(ttl=60)
+def _get_open_cards(_config: dict) -> list[dict]:
+    """Enriched trade-card dicts for open positions — thin cached wrapper
+    around output/performance.py:get_brief_cards(). Leading-underscore
+    parameter name is the Streamlit convention for "don't try to hash
+    this argument" (config is a plain dict, not needed as a cache key —
+    same pattern as _get_projected_admission_cached()).
 
-
-def _get_open_cards(config: dict) -> list[dict]:
-    """Enriched trade-card dicts for open positions — thin wrapper around
-    output/performance.py:get_brief_cards(), passing in this page's already-
-    cached _get_ticker_status() so the computation isn't repeated."""
-    return get_brief_cards(config, ticker_status_rows=_get_ticker_status())
+    Fixed 2026-08-04: this used to pre-fetch get_ticker_status() for the
+    FULL ~503-ticker live candidate pool (via a separate ttl=300-cached
+    wrapper) before ever knowing which tickers actually have an open
+    position — a real, measured ~60s delay on production data, since
+    get_brief_cards() only ever consults the handful of tickers (~16 as
+    of this fix) that are actually held. get_brief_cards() now scopes its
+    own internal get_ticker_status() call to just those tickers, so no
+    pre-fetch is needed here at all — this wrapper's only remaining job
+    is caching the whole (now genuinely fast) result for 60s so a widget
+    interaction elsewhere on the page doesn't recompute it on every
+    Streamlit rerun."""
+    return get_brief_cards(_config)
 
 
 def _get_closed_rows() -> list[dict]:
@@ -1115,6 +1119,18 @@ def _render_dashboard_page(config: dict) -> None:
     # helpers and get_ticker_status()'s own get_price_df() reads) -- no
     # live T212 API call anywhere in this chain, so no new snapshot
     # mechanism was needed to relocate it safely.
+    #
+    # Re-investigated 2026-08-04 after a real, direct report of "the
+    # Dashboard appears to be querying T212 again" -- traced end to end
+    # again, confirmed still no T212 call anywhere in this chain. What was
+    # actually happening: get_ticker_status() (called via _get_open_cards())
+    # was computing momentum/signal/membership status for the FULL live
+    # ~503-ticker candidate pool on every cache miss, a measured ~60s delay
+    # on production data, even though get_brief_cards() only ever consults
+    # the handful of tickers with an actual open position. The long delay
+    # was mistaken for an external-API call. Fixed by scoping
+    # get_ticker_status() to just the held tickers (see its own and
+    # get_brief_cards()'s docstrings) and caching _get_open_cards() itself.
     st.markdown("### Open Positions")
     open_cards = _get_open_cards(config)
     st.markdown(f"**{positions_summary_text(len(open_cards))}**")

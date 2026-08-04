@@ -16,24 +16,39 @@ import pandas as pd
 from data.database import get_engine, get_metadata_str
 
 
-def get_ticker_status(config: dict) -> list[dict]:
+def get_ticker_status(config: dict, tickers: Optional[list[str]] = None) -> list[dict]:
     """Per-ticker live status for every tracked ticker: momentum signal
     (long/flat), current index-membership eligibility, and whether today is
     a raw crisis day / inside the crisis entry-block window.
 
-    Recomputes momentum from full price history for every ticker in the
-    live, dynamically-refreshed S&P 500 candidate pool
+    Recomputes momentum from full price history for every ticker given.
+    When *tickers* is omitted (the default), uses the live,
+    dynamically-refreshed S&P 500 candidate pool
     (analysis/universe.py:get_live_stock_candidates() — replaces the old
     static config.yaml `instruments:` list, see CLAUDE.md's "wire the
     momentum-only, full-S&P-500 selection into live execution" section) —
     the same per-ticker cost brokers/trading212.py's own _ticker_state()
-    pays once per scheduled run. Callers on a page render should cache
-    this (see main.py:_get_ticker_status()'s st.cache_data wrapper).
+    pays once per scheduled run.
+
+    `tickers` (2026-08-04) lets a caller restrict this to a specific
+    subset instead of paying the full-universe cost — added after tracing
+    a real, measured ~60s Dashboard render delay directly to this
+    function on production data (503 live candidates, each its own
+    get_price_df() call + signal/momentum computation), even though
+    get_brief_cards() (the sole real caller) only ever consults the
+    handful of tickers with an actual open position (~16 of 503 as of
+    this fix) — the other ~487 rows were computed and then discarded on
+    every single call. Explicitly bypasses get_live_stock_candidates()
+    itself when tickers is given (that lookup alone measured ~11s on
+    production — a separate cost on top of the per-ticker loop), not just
+    the per-ticker loop. Defaults to None (full universe) so every other
+    existing caller/test keeps its exact prior behaviour.
     """
     from analysis import crisis, signals, universe
     from data.ingestion import get_price_df
 
-    tickers = universe.get_live_stock_candidates()
+    if tickers is None:
+        tickers = universe.get_live_stock_candidates()
     if not tickers:
         return []
 
@@ -112,7 +127,15 @@ def get_brief_cards(
 
     ticker_status_rows lets a caller pass in an already-computed
     get_ticker_status() result (e.g. main.py's cached version) instead of
-    recomputing it here; defaults to a fresh call when omitted.
+    recomputing it here; defaults to a fresh call when omitted — scoped
+    (2026-08-04) to only the research tickers that actually have an open
+    position (reverse_map filtered by pos_by_t212, both already computed
+    below by the time this fires), not get_ticker_status()'s own default
+    full ~503-ticker live candidate pool. This is what fixed a real,
+    measured ~60s Dashboard render delay traced directly to this
+    function computing full-universe status for every live candidate
+    when only the small handful of currently-held tickers were ever
+    consulted from status_by_ticker below.
     """
     import json
     import os
@@ -165,7 +188,11 @@ def get_brief_cards(
         entry_by_t212 = {}
 
     if ticker_status_rows is None:
-        ticker_status_rows = get_ticker_status(config)
+        held_tickers = sorted({
+            research_ticker for t212_ticker, (research_ticker, _is_etf) in reverse_map.items()
+            if t212_ticker in pos_by_t212
+        })
+        ticker_status_rows = get_ticker_status(config, tickers=held_tickers)
     status_by_ticker = {r["ticker"]: r for r in ticker_status_rows}
 
     # Reuse the exact same GBP conversion brokers/trading212.py itself uses
