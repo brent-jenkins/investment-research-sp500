@@ -17,6 +17,7 @@ from output.briefing import (
     send_instrument_resolution_failure_alert,
     send_membership_staleness_alert,
     send_position_reconciliation_alert,
+    send_stop_health_alert,
     send_weekly_summary_email,
 )
 
@@ -793,6 +794,175 @@ def test_position_reconciliation_alert_uses_its_own_cooldown_key_not_shared_with
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
     sent, _ = send_position_reconciliation_alert(_reconciliation_summary(broker_closed=["ACQD"]), _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# send_stop_health_alert() (2026-08-04) -- alerts when
+# brokers.trading212.check_stop_health() finds an open position believed
+# to have an active broker-side stop that is NOT genuinely active at T212
+# right now. Built directly from tonight's incident (all 16 stops silently
+# rejected, discovered only via an external T212 notification). Same
+# content-based dedup shape as send_instrument_resolution_failure_alert()
+# above, deliberately its own separate dedup key.
+# ---------------------------------------------------------------------------
+
+_STOP_HEALTH_KEY = "stop_health_last_unhealthy_tickers"
+
+
+def _unhealthy_row(ticker="AMAT", t212_ticker="AMAT_US_EQ", stop_order_id="52900700753"):
+    return {
+        "ticker": ticker, "t212_ticker": t212_ticker, "stop_order_id": stop_order_id,
+        "buy_order_row_id": 1,
+        "note": (
+            f"stop_order_id={stop_order_id} is recorded PLACED locally but was NOT "
+            "found in T212's current live order list — the position is still held "
+            "with no active broker-side stop protecting it (likely rejected, "
+            "expired, or cancelled outside this system)."
+        ),
+    }
+
+
+def test_stop_health_alert_empty_list_never_sends(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, detail = send_stop_health_alert([], _config())
+
+    assert sent is False
+    assert "no unhealthy" in detail.lower()
+    smtp_cls.assert_not_called()
+
+
+def test_stop_health_alert_disabled_skips_cleanly(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, _ = send_stop_health_alert([_unhealthy_row()], _config(enabled=False))
+
+    assert sent is False
+    smtp_cls.assert_not_called()
+
+
+def test_stop_health_alert_sends_on_first_occurrence(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_stop_health_alert([_unhealthy_row()], _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_stop_health_alert_names_the_ticker_and_order_id(db_engine, mocker):
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    send_stop_health_alert(
+        [_unhealthy_row(ticker="KLAC", t212_ticker="KLAC_US_EQ", stop_order_id="52900702955")],
+        _config(),
+    )
+
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = _email_pkg.message_from_string(raw)
+    combined = " ".join(
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    )
+    assert "KLAC" in combined
+    assert "52900702955" in combined
+    assert "not auto-remediated" in combined.lower() or "Not auto-remediated" in combined
+
+
+def test_stop_health_alert_unchanged_set_does_not_resend(db_engine, mocker):
+    """The identical unhealthy-ticker set across two consecutive hourly
+    checks must not trigger a repeat email -- content-based dedup, not a
+    cooldown window, is what prevents this (matches
+    send_instrument_resolution_failure_alert()'s own established shape)."""
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_stop_health_alert([_unhealthy_row(ticker="AMAT")], cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, detail = send_stop_health_alert([_unhealthy_row(ticker="AMAT")], cfg)
+
+    assert sent is False
+    assert "unchanged" in detail.lower()
+    mock_server.sendmail.assert_not_called()
+
+
+def test_stop_health_alert_a_second_different_ticker_going_unhealthy_sends_immediately(db_engine, mocker):
+    """The exact gap this pattern closes: a SECOND, different ticker's
+    stop going unhealthy immediately after the first (zero elapsed time)
+    must still trigger a fresh alert, since the affected set itself
+    genuinely changed. A time-based cooldown would have suppressed it."""
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_stop_health_alert([_unhealthy_row(ticker="AMAT")], cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, _ = send_stop_health_alert(
+        [_unhealthy_row(ticker="AMAT"), _unhealthy_row(ticker="MU", t212_ticker="MU_US_EQ")], cfg,
+    )
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_stop_health_alert_resolution_then_new_failure_sends_fresh_alert(db_engine, mocker):
+    """A resolved gap (set shrinks to empty, e.g. after manual
+    remediation) followed by a genuinely NEW gap -- even the same ticker
+    -- must send a fresh alert, not be silently treated as an
+    already-alerted repeat."""
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_stop_health_alert([_unhealthy_row(ticker="AMAT")], cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, _ = send_stop_health_alert([], cfg)
+    assert sent is False
+    mock_server.sendmail.assert_not_called()
+
+    sent, _ = send_stop_health_alert([_unhealthy_row(ticker="AMAT")], cfg)
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_stop_health_alert_disabled_does_not_record_unhealthy_set(db_engine, mocker):
+    mocker.patch("output.briefing.smtplib.SMTP")
+
+    send_stop_health_alert([_unhealthy_row()], _config(enabled=False))
+
+    from data.database import get_metadata_str
+    assert get_metadata_str(_STOP_HEALTH_KEY) is None
+
+
+def test_stop_health_alert_uses_its_own_dedup_key_not_shared_with_others(db_engine, mocker):
+    """A membership-staleness, instrument-resolution-failure, position-
+    reconciliation, or T212-error-alert cooldown already in effect must
+    never suppress this alert."""
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
+    set_metadata(_MEMBERSHIP_STALENESS_KEY, datetime.utcnow().isoformat())
+    set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_KEY, datetime.utcnow().isoformat())
+    set_metadata(_POSITION_RECONCILIATION_KEY, datetime.utcnow().isoformat())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_stop_health_alert([_unhealthy_row()], _config())
 
     assert sent is True
     mock_server.sendmail.assert_called_once()

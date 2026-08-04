@@ -24,6 +24,7 @@ _LAST_WEEKLY_SUMMARY_KEY = "last_weekly_summary_sent"
 _MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY = "membership_staleness_email_last_sent"
 _INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY = "instrument_resolution_failure_last_tickers"
 _POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY = "position_reconciliation_email_last_sent"
+_STOP_HEALTH_LAST_UNHEALTHY_KEY = "stop_health_last_unhealthy_tickers"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -642,4 +643,108 @@ def send_position_reconciliation_alert(summary: dict, config: dict) -> tuple[boo
             set_metadata(_POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY, datetime.utcnow().isoformat())
         except Exception as exc:
             logger.warning("Could not record position_reconciliation_email_last_sent: %s", exc)
+    return sent, detail
+
+
+def send_stop_health_alert(unhealthy: list[dict], config: dict) -> tuple[bool, str]:
+    """Alert that one or more open positions this system believes have an
+    active broker-side stop do NOT genuinely have one right now (T212's
+    own live order list doesn't show it) — brokers/trading212.py:
+    check_stop_health(), 2026-08-04. Built directly because of tonight's
+    incident: all 16 backfilled stops silently went REJECTED hours after
+    placement, and nothing inside this system noticed on its own — it
+    was only caught because a T212 notification happened to be seen
+    externally. See CLAUDE.md's "Broker-side stop orders rejected after
+    market close" section for the incident, and its own closing
+    paragraph naming this exact check as the concrete follow-up.
+
+    Content-based deduplication, not a time-based cooldown — the same
+    deliberate choice, for the same reason, as
+    send_instrument_resolution_failure_alert() immediately above (see
+    that function's own docstring for the full "a shared time cooldown
+    can silently suppress a genuinely new, different failure" reasoning
+    this mirrors). A missing stop is exactly the same shape of problem:
+    a SET of currently-affected tickers, re-checked hourly, where what
+    matters is whether that set has genuinely changed, not how recently
+    the last email went out — a persistent, already-known gap repeating
+    the identical email every hour is exactly the spam a real alert
+    should not produce, and a second, DIFFERENT ticker going unhealthy
+    within the same hour as an already-alerted one must never be
+    silently absorbed into a cooldown window meant for the first one.
+
+    The caller (check_stop_health()) always passes the full, current
+    list — including empty — every time it runs, mirroring
+    send_instrument_resolution_failure_alert()'s own calling convention
+    exactly: an empty list clears the stored set, so a LATER
+    re-occurrence of the identical ticker (stop re-placed, then goes
+    unhealthy again) is correctly treated as new rather than compared
+    against a stale pre-resolution record.
+
+    Deliberately does NOT recommend or perform automatic remediation —
+    see check_stop_health()'s own docstring for the full reasoning
+    (T212's stop endpoint is documented non-idempotent in its beta form;
+    the root cause of a missing stop is not known at alert time). The
+    email states the specific manual remediation available
+    (Trading212Client.place_stop_order(), the exact mechanism already
+    proven fixing tonight's incident) so a human can act quickly once
+    notified, without the system acting on its own.
+    """
+    from data.database import get_metadata_str, set_metadata
+
+    if not unhealthy:
+        try:
+            set_metadata(_STOP_HEALTH_LAST_UNHEALTHY_KEY, "")
+        except Exception as exc:
+            logger.warning("Could not clear stop_health_last_unhealthy_tickers: %s", exc)
+        return False, "no unhealthy stops"
+
+    tickers = sorted(u["ticker"] for u in unhealthy)
+    current_set_key = json.dumps(tickers)
+    last_sent_set_key = get_metadata_str(_STOP_HEALTH_LAST_UNHEALTHY_KEY)
+    if last_sent_set_key == current_set_key:
+        logger.info(
+            "Stop-health email skipped — unhealthy ticker set unchanged since last alert (%s)",
+            tickers,
+        )
+        return False, "unchanged unhealthy set"
+
+    n = len(unhealthy)
+    subject = f"SP500INVEST: {n} position(s) with a MISSING broker-side stop"
+    detail_lines = "\n".join(
+        f"  - {u['ticker']} ({u['t212_ticker']}): {u['note']}"
+        for u in sorted(unhealthy, key=lambda u: u["ticker"])
+    )
+    text_body = (
+        f"{n} open position(s) that this system believes have an active broker-side "
+        "stop (invest_orders.stop_order_status = 'PLACED') do NOT genuinely have one "
+        "right now — confirmed directly against T212's own live order list "
+        "(brokers/trading212.py:check_stop_health()), not inferred.\n\n"
+        f"{detail_lines}\n\n"
+        "These position(s) are currently held with NO active broker-side stop "
+        "protecting them. This is not auto-remediated — verify why the stop is "
+        "missing before re-placing one; if a fresh stop at the same level is what's "
+        "needed, Trading212Client.place_stop_order() is the already-proven mechanism "
+        "(see CLAUDE.md's 'Broker-side stop orders rejected after market close' "
+        "section for the exact remediation steps used to fix a prior occurrence of "
+        "this)."
+    )
+    detail_rows_html = "".join(
+        f"<li><b>{html.escape(u['ticker'])}</b> ({html.escape(u['t212_ticker'])}): {html.escape(u['note'])}</li>"
+        for u in sorted(unhealthy, key=lambda u: u["ticker"])
+    )
+    html_body = (
+        f'<p style="color:#dc2626;font-weight:bold">{n} position(s) with a MISSING broker-side stop</p>'
+        "<p>These positions are currently held with NO active broker-side stop protecting "
+        "them, confirmed directly against T212's own live order list.</p>"
+        f"<ul>{detail_rows_html}</ul>"
+        "<p><b>Not auto-remediated</b> — verify why before re-placing. See "
+        "Trading212Client.place_stop_order() and CLAUDE.md's incident section for the "
+        "proven remediation steps.</p>"
+    )
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_STOP_HEALTH_LAST_UNHEALTHY_KEY, current_set_key)
+        except Exception as exc:
+            logger.warning("Could not record stop_health_last_unhealthy_tickers: %s", exc)
     return sent, detail
