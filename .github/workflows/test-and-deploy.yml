@@ -19,9 +19,12 @@
 #
 # See CLAUDE.md's "GitHub webhook deploy" for the full design, including
 # why the native webhook and this workflow briefly ran side by side during
-# the staged rollout, and deploy.sh's own concurrency guard (a lock,
-# ${APP_DIR}/.deploy.lock.d) that made that overlap safe rather than merely
-# convenient.
+# the staged rollout (the native webhook has since been removed entirely,
+# once this workflow was proven working end to end), and deploy.sh's own
+# concurrency guard (a lock, ${APP_DIR}/.deploy.lock.d) that made that
+# overlap safe rather than merely convenient -- and which this workflow's
+# deploy call still benefits from as the sole remaining trigger, in case a
+# manual break-glass SSH deploy is ever run concurrently with it.
 name: Test and Deploy
 
 # Quoted ("on" rather than bare on:) -- unquoted `on:` is parsed as the
