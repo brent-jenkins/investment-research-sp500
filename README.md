@@ -280,12 +280,13 @@ The scheduler and webhook-listener services inherit the same credentials automat
 
 ### Deploying updates
 
-Deploys are triggered by a GitHub webhook, not by pushing directly from a developer machine — see CLAUDE.md's "Deployment" section for the full design. Once the webhook is configured on GitHub (one-time, manual — see CLAUDE.md), `git push origin main` is enough:
+Deploys are triggered by a GitHub webhook, not by pushing directly from a developer machine — see CLAUDE.md's "Deployment" section for the full design. Once the webhook and the GitHub Actions test gate are both configured (one-time, manual — see CLAUDE.md), `git push origin main` is enough:
 
 ```bash
-bash setup-hooks.sh   # install the pre-push test-gate hook, once
-git push origin main   # runs the full test suite locally, then GitHub's webhook deploys automatically
+git push origin main   # GitHub Actions runs the full test suite; on success it deploys automatically
 ```
+
+There is no local pre-push hook any more — GitHub Actions is the real, unbypassable test gate (a local hook could always be skipped via `--no-verify` or simply not installed). Run `pytest` locally before pushing if you want faster feedback, but nothing enforces it client-side.
 
 Manual/break-glass deploy (only needed if the webhook path itself is down): SSH in and run `bash deploy.sh` directly on the VM — it's the same script the webhook calls, always deploying immediately. All three systemd services are restarted every deploy — restarting only the UI leaves the scheduler daemon (which actually places orders) running the previous code.
 
@@ -312,7 +313,7 @@ journalctl -u investment-research-scheduler -f   # Scheduler logs
 pytest
 ```
 
-The suite is fully self-contained — no test touches the real project database, calls yfinance, or calls the live Trading212 API (an in-memory SQLite fixture and mocked HTTP clients throughout). It runs automatically on every `git push` via the pre-push hook; a failing suite blocks the push and the deploy.
+The suite is fully self-contained — no test touches the real project database, calls yfinance, or calls the live Trading212 API (an in-memory SQLite fixture and mocked HTTP clients throughout). It runs automatically on every `git push` to `main` via GitHub Actions (`.github/workflows/test-and-deploy.yml`), on GitHub's own infrastructure; a failing suite blocks the deploy.
 
 ---
 

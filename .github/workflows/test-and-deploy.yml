@@ -1,13 +1,21 @@
 # Runs the full test suite on GitHub's own infrastructure — independent of
-# whichever machine pushed, and not bypassable the way the local pre-push
-# hook is (`git push --no-verify`, a machine without the hook installed, or
-# any git client that skips it would all still reach GitHub and, until this
-# workflow existed, trigger a deploy regardless of test status via the
-# native webhook alone). Only on genuine success does this workflow make
-# its own signed call to the existing webhook listener — mimicking GitHub's
-# own webhook payload/signature format exactly, so webhook_listener.py
-# needed zero changes: it stays a thin "verify signature, then deploy"
-# component, the test gate lives upstream of it here, not inside it.
+# whichever machine pushed, and not bypassable the way a local pre-push
+# hook would be (`git push --no-verify`, a machine without the hook
+# installed, or any git client that skips it would all still reach GitHub
+# and, before this workflow existed, trigger a deploy regardless of test
+# status via the native webhook alone). Only on genuine success does this
+# workflow make its own signed call to the existing webhook listener --
+# mimicking GitHub's own webhook payload/signature format exactly, so
+# webhook_listener.py needed zero changes: it stays a thin "verify
+# signature, then deploy" component, the test gate lives upstream of it
+# here, not inside it.
+#
+# This repo's own local pre-push hook (which used to run this same test
+# suite before every push) was removed entirely once this workflow made it
+# redundant as a deploy gate -- see CLAUDE.md's "GitHub webhook deploy" for
+# the reasoning. There is no local test-gating step left at all; this
+# workflow is now the sole place the test suite is required to pass before
+# a deploy happens.
 #
 # See CLAUDE.md's "GitHub webhook deploy" for the full design, including
 # why the native webhook and this workflow briefly ran side by side during
