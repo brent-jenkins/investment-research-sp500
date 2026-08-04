@@ -132,3 +132,52 @@ def test_seed_default_admin_is_noop_if_users_already_exist(db_engine):
     auth.create_user("preexisting", "pw12345", "admin")
     init_db()
     assert [u["username"] for u in auth.list_users()] == ["preexisting"]
+
+
+def test_seed_default_admin_survives_a_losing_race(db_engine, monkeypatch):
+    """On a genuine first deploy, investment-research and
+    investment-research-scheduler both call init_db() independently and
+    could both see an empty users table before either commits its INSERT.
+    The COUNT-then-INSERT guard alone can't be raced deterministically in
+    a single-threaded test, so the COUNT read is forced to 0 here (as if
+    this process read it before the other's commit) while a real 'admin'
+    row -- as if the other process already won -- is genuinely present,
+    so the subsequent INSERT hits the real UNIQUE constraint. Confirms
+    that IntegrityError is caught rather than left to crash startup."""
+    from data.database import _seed_default_admin
+
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "$2b$12$doesnotmatterforthisrace")
+    auth.create_user("admin", "whatever", "admin")  # the "other process" already won
+
+    class _ForceZeroCount:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *args, **kwargs):
+            class _Result:
+                def scalar(self_inner):
+                    return 0
+            return _Result()
+
+    # Only the FIRST connect() call (the explicit COUNT check at the top
+    # of _seed_default_admin) gets the forced-zero fake -- engine.begin()
+    # calls connect() again internally for the real INSERT, and that call
+    # must reach the real database for the UNIQUE constraint to actually
+    # fire.
+    _real_connect = db_engine.connect
+    _calls = {"n": 0}
+
+    def _connect_override():
+        _calls["n"] += 1
+        if _calls["n"] == 1:
+            return _ForceZeroCount()
+        return _real_connect()
+
+    monkeypatch.setattr(db_engine, "connect", _connect_override)
+
+    _seed_default_admin(db_engine)  # must not raise IntegrityError
+
+    assert [u["username"] for u in auth.list_users()] == ["admin"]

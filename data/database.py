@@ -585,6 +585,17 @@ def _seed_default_admin(engine) -> None:
     plaintext never having to be known or re-entered. Falls back to a
     freshly generated random password, logged once, for a brand-new
     environment with no prior credential to migrate (e.g. local dev).
+
+    Races the identical check in another process on a genuine first
+    deploy: the `investment-research` and `investment-research-scheduler`
+    systemd services both call init_db() independently on startup, and
+    could both see an empty `users` table if they start close together.
+    `username` is UNIQUE, so the loser's INSERT raises IntegrityError,
+    caught here and treated as "someone else already seeded it" rather
+    than left to crash that service's startup. Only ever possible on the
+    very first deploy after this table is introduced — every later
+    startup finds a non-empty table and returns before either branch
+    below runs.
     """
     with engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
@@ -603,14 +614,21 @@ def _seed_default_admin(engine) -> None:
             generated_password.encode("utf-8"), bcrypt.gensalt()
         ).decode("utf-8")
 
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO users (username, password_hash, role, created_at) "
-                "VALUES (:u, :h, 'admin', :t)"
-            ),
-            {"u": "admin", "h": password_hash, "t": datetime.utcnow()},
-        )
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO users (username, password_hash, role, created_at) "
+                    "VALUES (:u, :h, 'admin', :t)"
+                ),
+                {"u": "admin", "h": password_hash, "t": datetime.utcnow()},
+            )
+    except IntegrityError:
+        # Another process won the race and already inserted 'admin' -- do
+        # NOT log generated_password below; it was never actually stored.
+        return
 
     if generated_password:
         import logging
