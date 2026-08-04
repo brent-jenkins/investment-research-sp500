@@ -18,6 +18,7 @@ scheduler, so this test never touches the real project database, calls
 yfinance, or starts a real APScheduler instance.
 """
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -28,6 +29,18 @@ from streamlit.testing.v1 import AppTest
 # form (see auth.py) -- before at.run(), the same way it already sets
 # st.session_state["page"] to skip straight to the page under test.
 _ADMIN_SESSION = {"id": 1, "username": "test_admin", "role": "admin"}
+
+# Absolute path, not the bare string "main.py" -- AppTest.from_file()
+# resolves a relative path by walking the call stack to find its caller's
+# file (per its own docstring), which is fragile to anything that shifts
+# stack depth between this file and the from_file() call (pytest plugin
+# versions, wrapping, etc.). Confirmed as a REAL failure, not theoretical:
+# this broke in GitHub Actions CI (a different anyio version than the one
+# locally installed, both satisfying requirements.txt's unpinned `>=`
+# constraint) while passing locally every time -- an absolute path sidesteps
+# the whole stack-walking mechanism and cannot be affected by this class of
+# environment drift.
+_MAIN_PY = str(Path(__file__).resolve().parent.parent / "main.py")
 
 
 def _fast_validation_result():
@@ -127,7 +140,7 @@ def app(db_engine, monkeypatch, mocker):
     # patches above are already active by this point.
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
 
-    at = AppTest.from_file("main.py", default_timeout=30)
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
     at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "backtest"
     return at
@@ -208,7 +221,7 @@ def test_backtest_page_calls_run_full_validation_with_live_universe_and_mtm(db_e
     )
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
 
-    at = AppTest.from_file("main.py", default_timeout=30)
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
     at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "backtest"
     at = at.run()
@@ -303,7 +316,7 @@ def instruments_app(db_engine, monkeypatch, mocker):
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
     monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: list(_SAMPLE_WATCHLIST_ENTRIES))
 
-    at = AppTest.from_file("main.py", default_timeout=30)
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
     at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "instruments"
     return at
@@ -450,7 +463,7 @@ def dashboard_app(db_engine, monkeypatch, mocker):
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
     monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: [])
 
-    at = AppTest.from_file("main.py", default_timeout=30)
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
     at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "dashboard"
     return at
@@ -917,7 +930,7 @@ def status_app(db_engine, monkeypatch, mocker):
         lambda config: [{"ticker": "AAPL", "name": "Apple", "exchange": "NYSE"}],
     )
 
-    at = AppTest.from_file("main.py", default_timeout=30)
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
     at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "status"
     return at

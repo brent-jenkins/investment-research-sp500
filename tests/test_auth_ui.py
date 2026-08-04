@@ -5,6 +5,8 @@ same way tests/test_main_ui.py does; see that file's own module docstring
 for why every module-level side effect (scheduler, DB engine) must be
 patched before AppTest.from_file("main.py") is constructed.
 """
+from pathlib import Path
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -12,13 +14,20 @@ import auth
 
 _ADMIN_ONLY_PAGES = ["instruments", "backtest", "status", "users"]
 
+# Absolute path -- see tests/test_main_ui.py's own comment on _MAIN_PY for
+# why a relative "main.py" string is fragile (AppTest.from_file() resolves
+# it by walking the call stack, which shifted in GitHub Actions CI due to a
+# different anyio version than the one installed locally, both satisfying
+# requirements.txt's unpinned `>=` constraint).
+_MAIN_PY = str(Path(__file__).resolve().parent.parent / "main.py")
+
 
 def _build_app(db_engine, monkeypatch, mocker, *, auth_user=None, page=None):
     mocker.patch("data.scheduler.start_scheduler")
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
     monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: [])
 
-    at = AppTest.from_file("main.py", default_timeout=30)
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
     if auth_user is not None:
         at.session_state["auth_user"] = auth_user
     if page is not None:
