@@ -1819,6 +1819,133 @@ def test_exit_cancel_fix_only_considers_a_stop_order_in_placed_status(db_engine,
 
 
 # ---------------------------------------------------------------------------
+# Both stop-loss layers kept permanently (2026-08-04) -- the race between
+# the broker's own standing stop firing and the local hourly check
+# independently detecting the same breach. See CLAUDE.md's "Both stop-loss
+# layers kept permanently" section for the full reasoning (the local check
+# is kept, not removed, specifically because it's the only thing that can
+# act -- without waiting for a human -- if the broker-side stop placement
+# itself silently failed).
+# ---------------------------------------------------------------------------
+
+def test_exit_race_fresh_check_skips_when_broker_stop_already_closed_position(db_engine, v2_mocks, mocker):
+    """The exact race named in the task: the local check independently
+    evaluates STOP_LOSS (bypassing the orphan-cancel block entirely, since
+    that block only runs for a NON-STOP_LOSS exit_reason -- see
+    test_exit_stop_loss_does_not_cancel_the_standing_stop above), but by
+    the time it's about to fire, the broker's OWN standing stop has
+    already closed the position. The final fresh-position re-check must
+    catch this and skip cleanly -- no exit SELL attempt, no FAILED order
+    row, no alert."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bearish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    _mock_price_data(mocker, {"AAPL": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=999999)
+    # The broker's own stop has already fired between the top-of-function
+    # get_positions() snapshot and now -- a fresh, single-ticker read shows
+    # the position genuinely closed.
+    v2_mocks.get_position.return_value = {"ticker": "AAPL_US_EQ", "quantity": 0.0}
+    spy = mocker.patch("brokers.trading212._send_t212_error_email")
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 10,  # guarantees price <= stop_price -- STOP_LOSS fires locally
+        days_ago=1, is_etf=False,
+        stop_order_id="stop-order-race-1", stop_order_status="PLACED",
+    )
+
+    cfg = _config(mapping={"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}},
+                  mocker=mocker, db_engine=db_engine)
+    maybe_exit_positions(cfg)
+
+    v2_mocks.get_position.assert_called_once_with("AAPL_US_EQ")
+    # No redundant SELL against an already-closed position -- a clean,
+    # silent skip, not a doomed attempt.
+    v2_mocks.place_market_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT COUNT(*) FROM invest_orders WHERE direction='SELL'"
+    )).scalar()
+    assert row == 0
+    # And no confusing "sell failed" alert for what is actually the
+    # protection working correctly.
+    spy.assert_not_called()
+
+
+def test_exit_race_sell_rejected_cleanly_when_broker_closes_position_after_fresh_check(db_engine, v2_mocks, mocker):
+    """The narrower residual race the fresh check cannot fully close: the
+    position is still open at the moment of the fresh re-check, but the
+    broker's own stop fires in the brief window between that check and
+    this system's own place_market_order() call. T212 rejects a market
+    SELL for a quantity the account no longer holds -- confirms directly
+    (not just reasoned about) that place_market_order() raising here is
+    caught cleanly by the existing per-position try/except: no crash, no
+    duplicate order, no short position, and every OTHER open position in
+    the same run is still processed."""
+    from brokers.trading212 import maybe_exit_positions
+
+    frame = _bearish_frame()
+    last_price = float(frame["close"].iloc[-1])
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0},
+        {"ticker": "MSFT_US_EQ", "quantity": 10.0},
+    ]
+    _mock_price_data(mocker, {"AAPL": frame, "MSFT": frame})
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    mocker.patch("analysis.crisis.is_crisis_day", return_value=False)
+    mocker.patch("analysis.crisis.is_entry_blocked", return_value=False)
+    mocker.patch("analysis.universe.get_max_holding_days", return_value=999999)
+    # The fresh re-check still shows the position open (the broker's stop
+    # hasn't fired YET at the moment of this read) -- T212 itself is what
+    # rejects the SELL a moment later, simulating the broker's stop
+    # winning the race in the gap between this check and the SELL call.
+    v2_mocks.get_position.return_value = {"ticker": "AAPL_US_EQ", "quantity": 10.0}
+
+    def _order_side_effect(t212_ticker, quantity, extended_hours=False):
+        if t212_ticker == "AAPL_US_EQ":
+            raise _FakeHTTPStatus(400, "insufficient shares")
+        return {"id": "mock-order-msft"}
+
+    v2_mocks.place_market_order.side_effect = _order_side_effect
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+        stop_price=last_price * 10, days_ago=1, is_etf=False,
+        stop_order_id="stop-order-race-2", stop_order_status="PLACED",
+    )
+    _seed_open_position(db_engine, ticker="MSFT", t212_ticker="MSFT_US_EQ",
+                         stop_price=last_price * 10, days_ago=1, is_etf=False)
+
+    cfg = _config(
+        mapping={
+            "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+            "MSFT": {"t212_instrument_id": "MSFT_US_EQ", "currency": "USD", "is_etf": False},
+        },
+        mocker=mocker, db_engine=db_engine,
+    )
+    maybe_exit_positions(cfg)  # must not raise
+
+    rows = db_engine.connect().execute(sa_text(
+        "SELECT ticker, status FROM invest_orders WHERE direction='SELL' ORDER BY ticker"
+    )).fetchall()
+    by_ticker = {r[0]: r[1] for r in rows}
+    # The raced position's SELL attempt is recorded FAILED -- a genuine,
+    # cleanly-handled rejection, not a crash and not a duplicate order.
+    assert by_ticker["AAPL"] == "FAILED"
+    # No short position was created and no second attempt was made this
+    # cycle -- exactly one SELL order row for AAPL.
+    assert sum(1 for r in rows if r[0] == "AAPL") == 1
+    # The OTHER open position in the same run is completely unaffected --
+    # per-position exception isolation holds for this failure mode too.
+    assert by_ticker["MSFT"] == "PLACED"
+
+
+# ---------------------------------------------------------------------------
 # poll_placed_orders() — broker-side stop placement on a genuine BUY fill
 # ---------------------------------------------------------------------------
 
@@ -4133,7 +4260,10 @@ def test_reconcile_disabled_or_missing_creds_is_noop(db_engine, v2_mocks, monkey
     from brokers.trading212 import reconcile_positions_with_broker
 
     summary = reconcile_positions_with_broker(_reconcile_config(enabled=False))
-    assert summary == {"broker_closed_no_sell": [], "unrecognized_position": [], "invalidated_resolutions": 0}
+    assert summary == {
+        "broker_closed_no_sell": [], "unrecognized_position": [],
+        "stop_loss_closed": [], "invalidated_resolutions": 0,
+    }
     v2_mocks.get_positions.assert_not_called()
 
     monkeypatch.delenv("T212_API_KEY", raising=False)
@@ -4184,6 +4314,106 @@ def test_reconcile_broker_closed_no_sell(db_engine, v2_mocks, mocker):
     assert row[2] == "OPEN"
     assert "cash-out acquisition" in row[3]
     mock_alert.assert_called_once()
+
+
+def test_reconcile_stop_loss_closure_labeled_precisely_not_broker_closed_no_sell(db_engine, v2_mocks, mocker):
+    """The core fix (2026-08-04): a locally-believed-open position that's
+    gone from T212's live positions list, with no SELL order of our own
+    on record, but whose BUY row has a broker-side stop recorded PLACED
+    -- and T212's own order history confirms THAT stop reached FILLED --
+    must be recorded precisely as STOP_LOSS, not folded into the generic
+    BROKER_CLOSED_NO_SELL bucket, and must NOT trigger the reconciliation
+    alert (this is expected, healthy behaviour, not a discrepancy needing
+    review). A synthetic FILLED SELL row must also be written so realised
+    P&L and the Dashboard's "Performance by Exit Reason" section reflect
+    the trade correctly -- without it the closure would never produce a
+    pnl row at all, not merely be mislabeled."""
+    from brokers.trading212 import Trading212Client, reconcile_positions_with_broker
+
+    mocker.patch.object(Trading212Client, "_fx_rates", staticmethod(lambda: (1.27, 1.08)))
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL"])
+    _seed_resolutions_from_mapping(db_engine, {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD"}})
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=90.0,
+        days_ago=3, is_etf=False, stop_order_id="stop-order-recon-1", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.return_value = []  # T212 no longer shows it held
+    v2_mocks.get_order_history.return_value = [{
+        "order": {"id": "stop-order-recon-1", "status": "FILLED"},
+        "fill": {"price": 89.5, "quantity": -10.0, "filledAt": "2026-08-04T10:00:00.000Z"},
+    }]
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["stop_loss_closed"] == ["AAPL"]
+    assert summary["broker_closed_no_sell"] == []
+    row = db_engine.connect().execute(sa_text(
+        "SELECT event_type, ticker, status, note FROM position_reconciliations WHERE t212_ticker='AAPL_US_EQ'"
+    )).fetchone()
+    assert row is not None
+    assert row[0] == "STOP_LOSS"
+    assert row[1] == "AAPL"
+    assert row[2] == "ACKNOWLEDGED"
+    assert "confirmed FILLED" in row[3]
+    mock_alert.assert_not_called()  # expected, healthy -- no alert
+
+    sell_row = db_engine.connect().execute(sa_text(
+        "SELECT status, exit_reason, fill_price, filled_quantity, order_id FROM invest_orders "
+        "WHERE t212_ticker='AAPL_US_EQ' AND direction='SELL'"
+    )).fetchone()
+    assert sell_row is not None
+    assert sell_row[0] == "FILLED"
+    assert sell_row[1] == "STOP_LOSS"
+    assert sell_row[2] == 89.5
+    assert sell_row[3] == 10.0
+    assert sell_row[4] == "stop-order-recon-1"
+
+    buy_row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status FROM invest_orders WHERE t212_ticker='AAPL_US_EQ' AND direction='BUY'"
+    )).fetchone()
+    assert buy_row[0] == "FILLED"
+
+    pnl_row = db_engine.connect().execute(sa_text(
+        "SELECT exit_reason FROM pnl WHERE t212_ticker='AAPL_US_EQ'"
+    )).fetchone()
+    assert pnl_row is not None
+    assert pnl_row[0] == "STOP_LOSS"
+
+
+def test_reconcile_stop_order_not_confirmed_filled_falls_through_to_broker_closed_no_sell(db_engine, v2_mocks, mocker):
+    """A standing stop_order_id recorded PLACED locally, but T212's own
+    order history does NOT confirm it reached FILLED (not found in the
+    most recent history page) -- must NOT be guessed as a STOP_LOSS
+    closure. Falls through to the existing, alert-worthy
+    BROKER_CLOSED_NO_SELL handling instead, exactly as before this
+    mechanism existed."""
+    from brokers.trading212 import reconcile_positions_with_broker
+
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL"])
+    _seed_resolutions_from_mapping(db_engine, {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD"}})
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=90.0,
+        days_ago=3, is_etf=False, stop_order_id="stop-order-recon-2", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.return_value = []
+    v2_mocks.get_order_history.return_value = []  # not found -- cannot confirm
+
+    mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
+    summary = reconcile_positions_with_broker(_reconcile_config())
+
+    assert summary["stop_loss_closed"] == []
+    assert summary["broker_closed_no_sell"] == ["AAPL"]
+    row = db_engine.connect().execute(sa_text(
+        "SELECT event_type, status FROM position_reconciliations WHERE t212_ticker='AAPL_US_EQ'"
+    )).fetchone()
+    assert row[0] == "BROKER_CLOSED_NO_SELL"
+    assert row[1] == "OPEN"
+    mock_alert.assert_called_once()
+    sell_count = db_engine.connect().execute(sa_text(
+        "SELECT COUNT(*) FROM invest_orders WHERE t212_ticker='AAPL_US_EQ' AND direction='SELL'"
+    )).scalar()
+    assert sell_count == 0
 
 
 def test_reconcile_broker_closed_skips_when_placed_sell_order_pending(db_engine, v2_mocks, mocker):

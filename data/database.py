@@ -305,12 +305,32 @@ class PositionReconciliation(Base):
         is stopped once this fires (see _has_recent_sell_order()) so the
         position isn't hammered with a fresh doomed sell attempt every
         cycle; flagged here instead for manual review/write-off.
+      STOP_LOSS (2026-08-04) -- a locally-believed-open position closed,
+        and this system's own broker-side stop order (recorded PLACED on
+        the BUY row) is confirmed FILLED via T212's order history --
+        i.e. the broker-side stop fired and closed it, exactly as
+        designed. See brokers\trading212.py:_record_broker_stop_closure().
+        Recorded for the audit trail with status=ACKNOWLEDGED
+        immediately (never OPEN) -- this is expected, healthy behaviour,
+        not a discrepancy needing review, and is deliberately excluded
+        from send_position_reconciliation_alert()'s trigger condition.
+        Unlike every other event_type here, this one also causes a
+        synthetic FILLED SELL row (exit_reason=STOP_LOSS) to be written
+        to invest_orders, so realised P&L and the Dashboard's
+        "Performance by Exit Reason" section reflect the trade
+        correctly -- without it, a broker-stop-fired closure would never
+        appear in the pnl table at all (no SELL was ever placed BY this
+        system to pair against the BUY), not merely be mislabeled.
 
-    status: OPEN (needs manual review) / ACKNOWLEDGED. Nothing in code
-    currently transitions OPEN -> ACKNOWLEDGED automatically -- that is
-    a manual action (e.g. a future Status page control), matching
-    InstrumentResolution's FAILED status, which is the same "flag for a
-    human, never auto-resolve a genuine mismatch" contract.
+    status: OPEN (needs manual review) / ACKNOWLEDGED. For
+    BROKER_CLOSED_NO_SELL/UNRECOGNIZED_POSITION/REPEATED_SELL_REJECTION,
+    nothing in code currently transitions OPEN -> ACKNOWLEDGED
+    automatically -- that is a manual action (e.g. a future Status page
+    control), matching InstrumentResolution's FAILED status, which is
+    the same "flag for a human, never auto-resolve a genuine mismatch"
+    contract. STOP_LOSS is the one exception: it is written already
+    ACKNOWLEDGED, because it is self-explained at the moment it's
+    recorded, not a genuine mismatch awaiting a human decision.
 
     Upserted on (event_type, t212_ticker) while status='OPEN' so a
     recurring discrepancy refreshes its own note/detected_at on every
