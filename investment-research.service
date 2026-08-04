@@ -1,6 +1,6 @@
 [Unit]
 Description=Investment Research Dashboard (Streamlit)
-Documentation=https://github.com/YOUR/investment-research
+Documentation=https://github.com/brent-jenkins/investment-research-sp500
 After=network.target
 StartLimitIntervalSec=120
 StartLimitBurst=5

@@ -1,6 +1,6 @@
 [Unit]
 Description=Investment Research Scheduler Daemon
-Documentation=https://github.com/YOUR/investment-research
+Documentation=https://github.com/brent-jenkins/investment-research-sp500
 After=network.target investment-research.service
 
 [Service]
