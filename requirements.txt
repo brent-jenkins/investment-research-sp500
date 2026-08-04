@@ -25,7 +25,6 @@ matplotlib>=3.8.0  # equity curve chart embedded in the PDF export above
 python-dateutil>=2.9.0
 requests>=2.31.0
 pytz>=2024.1
-fredapi>=0.5.0
 pandas-market-calendars>=4.3.0
 psutil>=5.9.0
 scipy>=1.11.0  # F-test in analysis/volatility.py:_variance_ratio_change_point() (change point detection)
