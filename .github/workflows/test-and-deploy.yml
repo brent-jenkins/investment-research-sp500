@@ -66,13 +66,16 @@ jobs:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
-          # TEMPORARY diagnostic (2026-08-05): safe to print -- reveals
-          # only the secret's LENGTH, never its value, which GitHub masks
-          # in logs regardless. Debugging a real, repeated 401 that
-          # persisted across a secret re-entry -- checking for a
-          # whitespace/truncation artifact before rotating the secret
-          # blind. Remove once resolved.
-          echo "DEBUG: WEBHOOK_SECRET length is ${#WEBHOOK_SECRET} (expected 64)"
+          # Strip any trailing/leading whitespace or newline from the secret
+          # before using it -- confirmed as a real, not hypothetical, need:
+          # a 64-character secret was pasted into the GitHub Actions secret
+          # field but read back as 65 characters (an incidental trailing
+          # newline from copy-paste), producing a signature the listener
+          # correctly rejected as invalid. Rather than rely on re-entering
+          # the secret perfectly a second time, make this robust to the
+          # artifact instead -- xargs collapses/trims all surrounding
+          # whitespace reliably in a single portable command.
+          WEBHOOK_SECRET="$(printf '%s' "$WEBHOOK_SECRET" | xargs)"
           # Minimal payload -- only the two fields webhook_listener.py's
           # should_trigger_deploy()/logging actually read (`ref`, `after`).
           # Signed exactly the way GitHub signs its own webhook deliveries
