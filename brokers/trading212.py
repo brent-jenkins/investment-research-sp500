@@ -616,6 +616,26 @@ class Trading212Client:
         data = self._parse_json(r)
         return data.get("items", []) if isinstance(data, dict) else (data or [])
 
+    def get_orders(self) -> list:
+        """Return every currently active/pending order across the whole
+        account — GET /equity/orders (list, no id) — in ONE call.
+
+        This is the batched read the stop-health check (2026-08-04, see
+        check_stop_health()'s own docstring) is built on: a currently
+        resting order (a standing stop, or any other not-yet-resolved
+        order) appears here; a resolved one (filled/cancelled/rejected/
+        expired) does not — the same disappear-on-resolution behaviour
+        already confirmed for get_order()/get_position() (see this
+        client's module docstring), just for every order at once instead
+        of one id at a time. Confirmed live before being relied on: a
+        16-item response exactly matched this account's 16 real,
+        independently-verified active stop orders, each carrying its own
+        id/status/stopPrice/ticker — no pagination parameter is
+        documented or was needed at this account's real order volume.
+        """
+        r = self._request("GET", "/equity/orders")
+        return self._parse_json(r)
+
     @staticmethod
     def _fx_rates() -> tuple[float, float]:
         """Return (gbpusd, eurusd) — latest close prices from price_data.
@@ -2751,6 +2771,186 @@ def maybe_exit_positions(config: dict) -> None:
                 ticker, t212_ticker, position_exc, exc_info=True,
             )
             continue
+
+
+def check_stop_health(config: dict) -> list[dict]:
+    """For every currently-open position this system believes has an
+    active broker-side stop (invest_orders.stop_order_status == 'PLACED'
+    on its FILLED BUY row), confirm that stop is GENUINELY still active
+    at T212 right now — closing the exact detection gap tonight's
+    incident exposed: all 16 stops silently went REJECTED hours after
+    being placed, and nothing inside this system noticed on its own; it
+    was only caught because a T212 notification happened to be seen
+    externally. See CLAUDE.md's "Broker-side stop orders rejected after
+    market close" section for the incident this exists to catch
+    automatically going forward, and the "Open, deliberately-not-closed
+    gap" paragraph at the end of that section, which named this exact
+    check as the concrete next step.
+
+    Deliberately scoped to stop_order_status == 'PLACED' only — not
+    FAILED (already alerted immediately at placement time, see
+    _place_broker_stop_for_filled_buy()'s own failure path) and not
+    CANCEL_FAILED (already alerted loudly at the moment of that failure,
+    inside maybe_exit_positions()'s own orphan-cancel-fix). This check's
+    unique value is the state those two don't cover: a stop that WAS
+    genuinely placed and believed healthy, but has since silently
+    stopped being active — precisely tonight's shape, not a variant of
+    an already-alerted one.
+
+    API efficiency (2026-08-04 investigation, verified live before this
+    was built, not assumed) — a NAIVE per-position check
+    (`client.get_order(stop_order_id)` once per open position) would add
+    N new T212 calls every single hour, scaling directly with position
+    count, exactly the growth pattern the rate-limit collision earlier
+    tonight already showed is a real risk. Instead this uses T212's own
+    order-LIST endpoint, `client.get_orders()` (GET /equity/orders, no
+    id) — ONE call returns every currently active order across the
+    WHOLE account at once. Confirmed live against this account's real 16
+    standing stops before adopting this approach: the list response
+    contained exactly those 16 orders, each independently matched by id
+    against invest_orders.stop_order_id, 16/16 found. Combined with one
+    fresh client.get_positions() call (needed as genuine, current ground
+    truth for "is this ticker actually still held right now" — the
+    scheduler-maintained t212_positions_snapshot in system_metadata was
+    considered and rejected for this specific purpose: it can be up to
+    ~55 minutes stale relative to this job's own firing time, which
+    would risk a false "missing stop" alert for a position THIS SAME
+    hourly cycle's own maybe_exit_positions() call — which runs
+    immediately before this function — has already correctly closed),
+    total new API load is exactly 2 calls per hourly cycle, REGARDLESS
+    of how many positions are open — O(1), not O(N).
+
+    Auto-remediation was deliberately NOT built — this only ever alerts,
+    it never re-places a missing stop automatically. Reasoning, weighed
+    both ways rather than defaulted:
+      - FOR auto-remediation: the re-placement mechanism is now proven
+        (used to fix tonight's incident directly), every minute
+        unprotected is real risk, and re-placing at the SAME already-
+        decided stop_price is not a new trading decision.
+      - AGAINST (the reasoning that won): the ROOT CAUSE of a missing
+        stop is not yet known at the moment this check runs — tonight's
+        cause was systemic (affected all 16 identically), but a future
+        one-off could have a different, unrelated cause (a T212-side
+        degradation, a stale get_positions() read racing a stop that
+        just fired and closed the position for a legitimate reason,
+        etc.) — blindly re-placing without understanding why risks
+        compounding rather than fixing. Trading212Client.place_stop_
+        order()'s own docstring documents T212's stop endpoint as NOT
+        idempotent in its beta form ("sending the same request multiple
+        times may result in duplicate orders") — a concrete, endpoint-
+        specific reason to be more cautious here than a generic retry
+        would be, not less. This also matches this project's own
+        established pattern elsewhere for a capital-risk-adjacent
+        anomaly whose cause isn't yet understood: REPEATED_SELL_
+        REJECTION gives up auto-retry and flags for manual review rather
+        than hammering the API; CANCEL_FAILED alerts rather than
+        silently retrying cancellation. A loud alert that lets a human
+        decide, informed by the specific ticker/order named, is
+        preferred over a silent self-heal that could mask a recurring
+        underlying bug the same way tonight's incident already
+        demonstrates a silent failure can go unnoticed for hours.
+
+    Returns the list of unhealthy-position dicts found this run (empty
+    if all healthy) — used both by the caller (to decide whether to
+    alert) and directly by tests, rather than only having a side effect.
+    Never raises — a check-the-checker failure must not itself become a
+    new incident; logged and swallowed, matching every other function in
+    this module's "never raises" contract.
+    """
+    t212_cfg = config.get("trading212_invest", {})
+    if not t212_cfg.get("enabled", False):
+        return []
+    if not _broker_stop_enabled(config):
+        return []
+    if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
+        return []
+
+    try:
+        resolved = _load_all_verified_instrument_resolutions()
+        if not resolved:
+            return []
+        reverse_map: dict[str, str] = {t212_id: r["ticker"] for t212_id, r in resolved.items()}
+
+        live = t212_cfg.get("live", False)
+        client = Trading212Client(live=live)
+
+        # Fresh, genuine "is this actually still held right now" ground
+        # truth — see this function's own docstring for why the cached
+        # system_metadata snapshot is not used here.
+        positions = client.get_positions() or []
+        held_t212_tickers = {
+            p.get("ticker", "") for p in positions if float(p.get("quantity", 0) or 0) > 0
+        }
+        if not held_t212_tickers:
+            return []
+
+        context = _load_open_position_context()
+
+        candidates = {
+            t212_ticker: ctx
+            for t212_ticker, ctx in context.items()
+            if t212_ticker in held_t212_tickers
+            and ctx.get("stop_order_status") == "PLACED"
+            and ctx.get("stop_order_id")
+        }
+        if not candidates:
+            return []
+
+        # The one batched call this whole check exists to justify — see
+        # this function's own docstring for the live verification this
+        # approach is based on.
+        orders = client.get_orders() or []
+        active_order_ids = {str(o.get("id")) for o in orders if o.get("id") is not None}
+
+        unhealthy = []
+        for t212_ticker, ctx in candidates.items():
+            stop_order_id = str(ctx["stop_order_id"])
+            if stop_order_id in active_order_ids:
+                continue
+            unhealthy.append({
+                "ticker": ctx.get("ticker") or reverse_map.get(t212_ticker) or t212_ticker,
+                "t212_ticker": t212_ticker,
+                "stop_order_id": stop_order_id,
+                "buy_order_row_id": ctx.get("buy_order_row_id"),
+                "note": (
+                    f"stop_order_id={stop_order_id} is recorded PLACED locally but was NOT "
+                    "found in T212's current live order list — the position is still held "
+                    "with no active broker-side stop protecting it (likely rejected, "
+                    "expired, or cancelled outside this system)."
+                ),
+            })
+
+        if unhealthy:
+            logger.error(
+                "Stop-health check: %d position(s) with a believed-active stop that is "
+                "NOT genuinely active at T212 — %s",
+                len(unhealthy), [u["ticker"] for u in unhealthy],
+            )
+        else:
+            logger.info(
+                "Stop-health check: %d position(s) checked, all have a genuinely active "
+                "broker-side stop.", len(candidates),
+            )
+
+        # Always call the alert, even with an empty list — send_stop_
+        # health_alert() itself decides whether to actually send (via
+        # content-based dedup, not a time cooldown; see that function's
+        # own docstring) and, critically, clears its stored "last
+        # alerted" set on an empty list so a LATER re-occurrence of the
+        # identical ticker is correctly treated as new rather than
+        # compared against a stale pre-resolution record — the exact
+        # same reasoning send_instrument_resolution_failure_alert()
+        # already established this call shape for.
+        try:
+            from output.briefing import send_stop_health_alert  # noqa: PLC0415
+            send_stop_health_alert(unhealthy, config)
+        except Exception as alert_exc:
+            logger.error("Stop-health alert failed to send: %s", alert_exc, exc_info=True)
+
+        return unhealthy
+    except Exception as exc:
+        logger.error("Stop-health check failed — %s", exc, exc_info=True)
+        return []
 
 
 # ---------------------------------------------------------------------------

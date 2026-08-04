@@ -1873,6 +1873,254 @@ def _n_ticker_mapping(n: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# check_stop_health() (2026-08-04) -- catches a broker-side stop that was
+# believed active (invest_orders.stop_order_status = 'PLACED') but has
+# silently stopped being genuinely active at T212 -- the exact shape
+# tonight's incident took (all 16 stops silently rejected hours after
+# placement), only caught because a T212 notification happened to be seen
+# externally. Reuses _seed_open_position_with_broker_stop() and v2_mocks
+# from the cancel-fix section above. Efficiency is verified directly (real
+# call counts), not assumed: the whole point of get_orders() (a single
+# list call) over a naive per-position get_order(id) loop is that total
+# new API load stays fixed at 2 calls/hour (get_positions + get_orders)
+# regardless of how many positions are open.
+# ---------------------------------------------------------------------------
+
+def _stop_health_config(mapping, mocker, db_engine, broker_stop_enabled=True) -> dict:
+    cfg = _config(mapping=mapping, mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["broker_side_stop_enabled"] = broker_stop_enabled
+    cfg["notifications"] = {"email": {"enabled": False}}
+    return cfg
+
+
+def test_stop_health_healthy_stop_produces_no_alert(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import check_stop_health
+
+    mapping = {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}}
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-1", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    v2_mocks.get_orders.return_value = [
+        {"id": "stop-order-health-1", "status": "NEW", "ticker": "AAPL_US_EQ"},
+    ]
+    alert_mock = mocker.patch("output.briefing.send_stop_health_alert")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert unhealthy == []
+    # Still called with the empty list -- this is what clears any
+    # previously-recorded unhealthy set on genuine recovery (see
+    # send_stop_health_alert()'s own docstring for why the caller must
+    # always pass the current list, even when empty).
+    alert_mock.assert_called_once_with([], mocker.ANY)
+
+
+def test_stop_health_missing_stop_triggers_a_correctly_targeted_alert(db_engine, v2_mocks, mocker):
+    """The core proof: a locally-PLACED stop that T212's real order list
+    no longer shows must be flagged, naming the specific ticker and
+    stop_order_id -- not a generic 'something's wrong'."""
+    from brokers.trading212 import check_stop_health
+
+    mapping = {"KLAC": {"t212_instrument_id": "KLAC_US_EQ", "currency": "USD", "is_etf": False}}
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="KLAC", t212_ticker="KLAC_US_EQ", stop_price=150.0,
+        days_ago=1, is_etf=False, stop_order_id="stop-order-health-2", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.return_value = [{"ticker": "KLAC_US_EQ", "quantity": 10.0}]
+    # The stop is simply absent from T212's live order list -- exactly
+    # tonight's real shape (silently rejected, no longer resting).
+    v2_mocks.get_orders.return_value = []
+    alert_mock = mocker.patch("output.briefing.send_stop_health_alert")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert len(unhealthy) == 1
+    assert unhealthy[0]["ticker"] == "KLAC"
+    assert unhealthy[0]["t212_ticker"] == "KLAC_US_EQ"
+    assert unhealthy[0]["stop_order_id"] == "stop-order-health-2"
+    alert_mock.assert_called_once_with(unhealthy, mocker.ANY)
+
+
+def test_stop_health_a_healthy_and_an_unhealthy_position_together_only_flags_the_unhealthy_one(
+    db_engine, v2_mocks, mocker,
+):
+    """Two open positions, only one with a real gap -- proves the check
+    doesn't over-flag a healthy neighbour just because a different
+    ticker's stop went bad."""
+    from brokers.trading212 import check_stop_health
+
+    mapping = {
+        "AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False},
+        "KLAC": {"t212_instrument_id": "KLAC_US_EQ", "currency": "USD", "is_etf": False},
+    }
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-3a", stop_order_status="PLACED",
+    )
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="KLAC", t212_ticker="KLAC_US_EQ", stop_price=150.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-3b", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.return_value = [
+        {"ticker": "AAPL_US_EQ", "quantity": 10.0},
+        {"ticker": "KLAC_US_EQ", "quantity": 10.0},
+    ]
+    # Only AAPL's stop is genuinely still active; KLAC's is missing.
+    v2_mocks.get_orders.return_value = [{"id": "stop-order-health-3a", "status": "NEW"}]
+    mocker.patch("output.briefing.send_stop_health_alert")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert len(unhealthy) == 1
+    assert unhealthy[0]["ticker"] == "KLAC"
+
+
+def test_stop_health_position_already_closed_is_not_flagged(db_engine, v2_mocks, mocker):
+    """A local row still shows stop_order_status='PLACED', but T212 no
+    longer shows the position held at all (closed via some other real
+    path already -- reconciliation's own job, not this check's). Must
+    not be treated as a missing-stop gap."""
+    from brokers.trading212 import check_stop_health
+
+    mapping = {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}}
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-4", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.return_value = []  # nothing genuinely held any more
+    v2_mocks.get_orders.return_value = []
+    mocker.patch("output.briefing.send_stop_health_alert")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert unhealthy == []
+
+
+def test_stop_health_non_placed_local_status_is_not_checked(db_engine, v2_mocks, mocker):
+    """A row with stop_order_status other than 'PLACED' (FAILED,
+    CANCELLED, ALREADY_RESOLVED, CANCEL_FAILED, or never attempted at
+    all) is a different, already-alerted-elsewhere state -- this check's
+    scope is specifically 'believed active, silently isn't', not every
+    non-PLACED status."""
+    from brokers.trading212 import check_stop_health
+
+    mapping = {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}}
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-5", stop_order_status="FAILED",
+    )
+    v2_mocks.get_positions.return_value = [{"ticker": "AAPL_US_EQ", "quantity": 10.0}]
+    v2_mocks.get_orders.return_value = []
+    mocker.patch("output.briefing.send_stop_health_alert")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert unhealthy == []
+
+
+def test_stop_health_disabled_flag_is_a_complete_noop_no_api_calls_at_all(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import check_stop_health
+
+    mapping = {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}}
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-6", stop_order_status="PLACED",
+    )
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine, broker_stop_enabled=False))
+
+    assert unhealthy == []
+    v2_mocks.get_positions.assert_not_called()
+    v2_mocks.get_orders.assert_not_called()
+
+
+def test_stop_health_never_raises_on_a_broker_read_failure(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import check_stop_health
+
+    mapping = {"AAPL": {"t212_instrument_id": "AAPL_US_EQ", "currency": "USD", "is_etf": False}}
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=5, is_etf=False, stop_order_id="stop-order-health-7", stop_order_status="PLACED",
+    )
+    v2_mocks.get_positions.side_effect = RuntimeError("T212 unreachable")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert unhealthy == []  # never raises -- a check-the-checker failure isn't a new incident
+
+
+def test_stop_health_efficiency_exactly_two_calls_regardless_of_position_count(db_engine, v2_mocks, mocker):
+    """The core efficiency proof this task exists to satisfy: real,
+    counted API calls -- not assumed -- stay fixed at exactly ONE
+    get_positions() call and ONE get_orders() call for the whole hourly
+    check, whether 1 or many positions are open. Confirms the naive
+    per-position approach (one get_order(id) call per position) was
+    NOT used -- get_order() must never be called by this check at all."""
+    from brokers.trading212 import check_stop_health
+
+    n = 5
+    mapping = {
+        f"T{i}": {"t212_instrument_id": f"T{i}_US_EQ", "currency": "USD", "is_etf": False}
+        for i in range(n)
+    }
+    for i in range(n):
+        _seed_open_position_with_broker_stop(
+            db_engine, ticker=f"T{i}", t212_ticker=f"T{i}_US_EQ", stop_price=100.0,
+            days_ago=5, is_etf=False, stop_order_id=f"stop-order-eff-{i}", stop_order_status="PLACED",
+        )
+    v2_mocks.get_positions.return_value = [
+        {"ticker": f"T{i}_US_EQ", "quantity": 10.0} for i in range(n)
+    ]
+    v2_mocks.get_orders.return_value = [
+        {"id": f"stop-order-eff-{i}", "status": "NEW"} for i in range(n)
+    ]
+    mocker.patch("output.briefing.send_stop_health_alert")
+
+    unhealthy = check_stop_health(_stop_health_config(mapping, mocker, db_engine))
+
+    assert unhealthy == []
+    assert v2_mocks.get_positions.call_count == 1
+    assert v2_mocks.get_orders.call_count == 1
+    v2_mocks.get_order.assert_not_called()
+
+
+def test_stop_health_check_wired_into_market_hours_check_job(mocker):
+    """Confirms this actually runs from Open Trade Monitor's own hourly
+    job -- folded into the existing cadence, not a new scheduled job --
+    per this task's own explicit instruction, and that it runs AFTER
+    both poll_placed_orders() and maybe_exit_positions() (so a same-cycle
+    fresh stop placement or a same-cycle exit isn't mistaken for a
+    pre-existing gap)."""
+    from data import scheduler as sched
+
+    mocker.patch("data.scheduler._is_nyse_extended_hours_open", return_value=True)
+    mocker.patch("data.scheduler._load_config", return_value={})
+    poll_mock = mocker.patch("brokers.trading212.poll_placed_orders")
+    exit_mock = mocker.patch("brokers.trading212.maybe_exit_positions")
+    health_mock = mocker.patch("brokers.trading212.check_stop_health")
+
+    sched._market_hours_check_job()
+
+    poll_mock.assert_called_once()
+    exit_mock.assert_called_once()
+    health_mock.assert_called_once()
+
+
+def test_stop_health_check_failure_never_blocks_the_rest_of_the_job(mocker):
+    from data import scheduler as sched
+
+    mocker.patch("data.scheduler._is_nyse_extended_hours_open", return_value=True)
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.maybe_exit_positions")
+    mocker.patch("brokers.trading212.check_stop_health", side_effect=RuntimeError("boom"))
+
+    sched._market_hours_check_job()  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # 30-day re-entry cooldown, live side (2026-08-03) -- _load_open_order_
 # tickers() is live's own half of the shared analysis.decision.
 # REENTRY_COOLDOWN_DAYS boundary; see tests/test_decision.py's pure

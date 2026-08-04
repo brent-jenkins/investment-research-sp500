@@ -881,6 +881,23 @@ def _market_hours_check_job() -> None:
     except Exception as exc:
         logger.error("Exit check failed: %s", exc, exc_info=True)
 
+    try:
+        # Stop-health check (2026-08-04) — runs LAST in this job,
+        # deliberately after both calls above: poll_placed_orders() may
+        # have just placed a fresh stop for a newly-FILLED BUY this same
+        # cycle, and maybe_exit_positions() may have just closed a
+        # position this same cycle (cancelling its stop as part of that)
+        # — checking after both avoids flagging either same-cycle
+        # transition as a false "missing stop". See
+        # brokers.trading212.check_stop_health()'s own docstring for the
+        # incident this closes (tonight's silent stop-rejection, only
+        # caught because a T212 notification happened to be seen
+        # externally) and the API-efficiency/auto-remediation reasoning.
+        from brokers.trading212 import check_stop_health  # noqa: PLC0415
+        check_stop_health(config)
+    except Exception as exc:
+        logger.error("Stop-health check failed: %s", exc, exc_info=True)
+
 
 def _account_state_job() -> None:
     """Hourly, every single day, unconditionally — no NYSE-hours gate at

@@ -168,6 +168,7 @@ def test_place_market_order_empty_dict_result_has_no_order_id(monkeypatch, mocke
         ("get_account_summary", (), "/equity/account/summary"),
         ("get_positions", (), "/equity/portfolio"),
         ("get_order", ("order-1",), "/equity/orders/order-1"),
+        ("get_orders", (), "/equity/orders"),
     ],
 )
 def test_read_endpoints_still_raise_on_malformed_body(monkeypatch, mocker, method_name, args, path):
@@ -211,6 +212,27 @@ def test_get_order_history_parses_normal_response_shape(monkeypatch, mocker):
         return_value=_FakeResponse(json_data={"items": [{"order": {"id": "1"}}]}),
     )
     assert client.get_order_history() == [{"order": {"id": "1"}}]
+
+
+def test_get_orders_hits_the_list_endpoint_and_returns_the_real_list(monkeypatch, mocker):
+    """get_orders() (2026-08-04, the stop-health check's own batched
+    read -- see check_stop_health()'s docstring) must call the plain
+    GET /equity/orders list endpoint (no id in the path) and return
+    whatever list T212 sends back, unmodified."""
+    client = _client(monkeypatch)
+    req = mocker.patch(
+        "brokers.trading212.requests.request",
+        return_value=_FakeResponse(json_data=[{"id": "1", "status": "NEW", "type": "STOP"}]),
+    )
+
+    result = client.get_orders()
+
+    assert result == [{"id": "1", "status": "NEW", "type": "STOP"}]
+    called_args, called_kwargs = req.call_args
+    method = called_args[0] if called_args else called_kwargs.get("method")
+    url = called_args[1] if len(called_args) > 1 else called_kwargs.get("url")
+    assert method == "GET"
+    assert url.rstrip("/").endswith("/equity/orders")
 
 
 # ---------------------------------------------------------------------------
