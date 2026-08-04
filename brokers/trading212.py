@@ -482,8 +482,25 @@ class Trading212Client:
         _instruments_cache[self.base_url] = (datetime.utcnow(), instruments)
         return instruments
 
-    def place_market_order(self, ticker: str, quantity: float) -> dict:
+    def place_market_order(self, ticker: str, quantity: float, extended_hours: bool = False) -> dict:
         """Place a market order.  Positive quantity = buy, negative = sell.
+
+        extended_hours (2026-08-04, see CLAUDE.md's "extendedHours for
+        sell orders" investigation) — confirmed live to be a real,
+        recognized field on this endpoint specifically (omitting it
+        defaults to false, proven by an explicit false and a silent
+        omission producing the identical downstream validation outcome).
+        Deliberately opt-in and defaulted False, and only ever added to
+        the payload when True — every existing caller (every BUY, and
+        every non-CRISIS_EXIT SELL) sends the exact same two-field
+        payload as before this parameter existed. Only maybe_exit_
+        positions()'s CRISIS_EXIT branch passes True: T212's own
+        documented extended-hours execution risk (lower liquidity, wider
+        spreads, slower/uncertain fills) is worth accepting there
+        specifically, in exchange for not waiting for the next regular
+        session during a genuine, acute market-wide shock — a trade-off
+        that does not hold for a routine SIGNAL_OFF/MAX_HOLDING exit,
+        which stays regular-hours-only, unchanged.
 
         Raises RuntimeError if self.live is True — live trading is gated
         behind an explicit opt-in that must be set in the constructor.
@@ -497,6 +514,8 @@ class Trading212Client:
         if quantity == 0:
             raise ValueError("quantity must be non-zero")
         payload = {"ticker": ticker, "quantity": quantity}
+        if extended_hours:
+            payload["extendedHours"] = True
         r = self._request("POST", "/equity/orders/market", json=payload)
         # allow_empty=True -- the order was already accepted (HTTP status
         # confirmed by _request() above) by the time we're parsing the
@@ -2708,7 +2727,15 @@ def maybe_exit_positions(config: dict) -> None:
 
             status, order_id, error_msg = "FAILED", None, None
             try:
-                response = client.place_market_order(t212_ticker, -close_qty)
+                # extended_hours=True ONLY for CRISIS_EXIT (2026-08-04) —
+                # see place_market_order()'s own docstring and CLAUDE.md's
+                # "extendedHours for sell orders" investigation for the
+                # full reasoning. Every other exit_reason (STOP_LOSS,
+                # SIGNAL_OFF, MAX_HOLDING) keeps the current, unchanged
+                # regular-hours-only behaviour.
+                response = client.place_market_order(
+                    t212_ticker, -close_qty, extended_hours=(exit_reason == "CRISIS_EXIT"),
+                )
                 order_id = str(response.get("id", ""))
                 status = "PLACED"
                 logger.info("SELL %s qty=%.4f id=%s", t212_ticker, close_qty, order_id)

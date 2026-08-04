@@ -186,7 +186,7 @@ class _ReplayHarness:
             for t212_ticker, pos in self.positions.items()
         ]
 
-    def place_market_order(self, t212_ticker: str, quantity: float) -> dict:
+    def place_market_order(self, t212_ticker: str, quantity: float, extended_hours: bool = False) -> dict:
         price = self.current_prices[t212_ticker]
         if quantity > 0:  # BUY
             cost = quantity * price
