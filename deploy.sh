@@ -1,77 +1,92 @@
 #!/usr/bin/env bash
-# deploy.sh — Run from Git Bash on Windows to push code and restart the VM.
+# deploy.sh — the ONE canonical implementation of "deploy this app". Every
+# deploy path in this repo ends up calling this same script, in one of two
+# modes, rather than each path hand-rolling its own copy of the git-pull /
+# pip-install / systemd-restart sequence:
 #
-# Prerequisites:
-#   - SSH key at ssh-keys/deploy_key (relative to project root)
-#   - Git remote 'origin' pointing to GitHub
+#   1. Local/dev mode (`bash deploy.sh`, from Git Bash on Windows or any
+#      POSIX shell) — for a human running a manual deploy. Prompts on a
+#      blackout window, pushes to GitHub, then SSHes to the VM and invokes
+#      THIS SAME SCRIPT there in server-side mode (see below). deploy.ps1
+#      (PowerShell) does the equivalent for Windows users who prefer it,
+#      and also just delegates to server-side mode over SSH — neither
+#      wrapper reimplements the deploy steps themselves.
+#   2. Server-side mode (`bash deploy.sh --server-side`) — runs ON the VM,
+#      either invoked remotely by mode 1 above, or invoked locally by
+#      webhook_listener.py in response to a verified GitHub push webhook
+#      (see "GitHub webhook deploy" in CLAUDE.md). Does the actual git
+#      pull / pip install / systemd restart / verify sequence, via the
+#      single deploy_steps() function below — nowhere else in the repo
+#      duplicates these steps.
+#
+# This replaced an earlier design (pre-2026-08-05) where deploy.sh, deploy.ps1,
+# AND the git pre-push hook each carried their own independent copy of the
+# same remote command chain — three hand-maintained implementations of
+# "deploy this" that kept drifting apart (see CLAUDE.md's "Deploy pipeline
+# systemd parity audit" and the migration to a GitHub webhook that replaced
+# the pre-push hook's SSH deploy entirely). deploy_steps() below is now the
+# only place any of that logic lives.
 #
 # Usage:
-#   bash deploy.sh
+#   bash deploy.sh                  # local/dev mode — push + remote deploy
+#   bash deploy.sh --server-side    # server-side mode — run the deploy
+#                                    # steps directly, here, right now
 #
-# Override the server IP at runtime if needed: VM_IP=x.x.x.x bash deploy.sh
+# Override the server IP / app dir / service name at runtime if needed:
+#   VM_IP=x.x.x.x APP_DIR=/root/other SERVICE=other-name bash deploy.sh
 VM_IP="${VM_IP:-203.0.113.10}"
-APP_DIR="/root/investment-research"
-SERVICE="investment-research"
-SSH_KEY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ssh-keys/deploy_key"
+APP_DIR="${APP_DIR:-/root/investment-research}"
+SERVICE="${SERVICE:-investment-research}"
+SSH_KEY="${SSH_KEY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ssh-keys/deploy_key}"
+# Overridable so tests can point deploy_steps() at a scratch directory
+# instead of the real /etc/systemd/system -- defaults to the real path in
+# every actual deploy (local, remote, and server-side/webhook).
+SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 
 set -euo pipefail
+
+SERVER_SIDE=0
+if [ "${1:-}" = "--server-side" ]; then
+  SERVER_SIDE=1
+fi
 
 # --- Deployment blackout window check --------------------------------------
 # Scheduled jobs (data pull + analysis + order placement) run at fixed UTC
 # times — see "Deployment timing" in CLAUDE.md. Deploying inside one of these
 # windows risks the job executing against half-updated code or config
 # (partially applied git pull, service mid-restart) and can place broker
-# orders on that transitional state. Warn and require explicit confirmation
-# rather than blocking outright, since some deploys (e.g. urgent hotfixes)
-# legitimately need to go out regardless.
+# orders on that transitional state.
 #
 # Re-verified against data/scheduler.py:start_scheduler()'s actual, current
-# CronTrigger registrations 2026-08-04 -- not assumed from an old comment
-# (the previous "re-verified 2026-08-02" pass had itself already gone stale
-# twice over by this date: stock_order_submission moved 13:30 -> 14:30 UTC
-# the same day it was last checked, and the Monday-only pre-market job was
-# removed entirely 2026-08-03 -- see CLAUDE.md's "Monday Pre-Market removed
-# entirely" and "Stock submission delayed past NYSE open" sections). This is
-# the same class of drift this project has hit more than once tonight: a
-# hand-maintained snapshot silently going wrong after the thing it tracked
-# changed underneath it. Rather than re-encode a fresh snapshot and hope it
-# stays current, `tests/test_deploy_blackout_windows.py::
-# test_blackout_windows_match_real_scheduler_registrations` starts the REAL
-# scheduler (data/scheduler.py:start_scheduler(), the exact same function
-# that registers every job this actually runs) and cross-checks its live
-# trigger fields against the WINDOW_LO/WINDOW_HI values below by name --
-# any future scheduler change that isn't mirrored here fails that test, not
-# silently drifts. Update the values below (and their PowerShell twins in
-# deploy.ps1) together with that test whenever a job's schedule changes.
-#
-# A genuinely new finding from this pass, not present in the previous
-# design at all: market_hours_check (CronTrigger(minute=0), no hour/day
-# filter) and account_state_refresh (CronTrigger(minute=5), no hour/day
-# filter) both fire EVERY HOUR, every day, unconditionally (split from the
-# old single hourly _trade_alert_job() 2026-08-03 -- see CLAUDE.md's
-# "Splitting the hourly trade-alert job") -- neither was covered by any
-# window before. account_state_refresh in particular has no internal gate
-# at all (unlike every other job here, which no-ops on a non-trading
-# day/closed session) -- it does real work (position reconciliation, a
-# T212 account snapshot fetch) on every single firing, so its own window
-# below is deliberately NOT weekday-restricted, unlike the once-daily
-# windows. Given both recur hourly, a wide buffer (matching the ~30-60min
-# buffers used for the once-daily jobs below) would make this warning fire
-# for roughly half of every day -- deliberately tight instead (+/-5/10min
-# around the two fire minutes), reflecting that the actual at-risk period
-# is however long this script's own git-pull-plus-restart sequence takes
-# (observed well under two minutes end to end), not a generous margin
-# around a rare, high-stakes event the way the once-daily windows are.
-#
-# The remaining three windows below were already correctly weekday-gated
-# (a real, independent bug found and fixed 2026-08-02, unrelated to this
-# pass) and their UTC bounds are unchanged from that fix except where noted
-# -- only stale window content and the missing hourly coverage needed
-# correcting this time.
-now_hm="$(date -u +%H%M)"
-now_min="$(date -u +%M)"
-now_dow="$(date -u +%u)"  # ISO day of week: 1=Monday ... 7=Sunday
-blackout_label=""
+# CronTrigger registrations 2026-08-04 — see
+# tests/test_deploy_blackout_windows.py, which starts the REAL scheduler and
+# cross-checks its live trigger fields against the WINDOW_LO/WINDOW_HI
+# values below by name, so a future scheduler change that isn't mirrored
+# here fails that test rather than silently drifting. Update the values
+# below (and their PowerShell twins in deploy.ps1) together with that test
+# whenever a job's schedule changes.
+STOCK_SUBMISSION_WINDOW_LO=1415
+STOCK_SUBMISSION_WINDOW_HI=1445
+
+EOD_WINDOW_LO=2100
+EOD_WINDOW_HI=2200
+
+WEEKLY_SUMMARY_WINDOW_LO=0745
+WEEKLY_SUMMARY_WINDOW_HI=0915
+
+# market_hours_check (:00) / account_state_refresh (:05) — expressed as
+# minute-of-hour, wrapping across the hour boundary (>= LO or <= HI).
+HOURLY_WINDOW_LO=55
+HOURLY_WINDOW_HI=10
+
+# Test-only overrides so this logic can be driven deterministically from
+# pytest without depending on wall-clock time or sleeping for real minutes
+# (see tests/test_deploy_server_side_blackout.py). Never set these in real
+# operation — if unset, the real clock (`date -u`) is used, exactly as
+# before this override mechanism existed.
+_now_hm() { if [ -n "${DEPLOY_TEST_NOW_HM:-}" ]; then echo "$DEPLOY_TEST_NOW_HM"; else date -u +%H%M; fi; }
+_now_min() { if [ -n "${DEPLOY_TEST_NOW_MIN:-}" ]; then echo "$DEPLOY_TEST_NOW_MIN"; else date -u +%M; fi; }
+_now_dow() { if [ -n "${DEPLOY_TEST_NOW_DOW:-}" ]; then echo "$DEPLOY_TEST_NOW_DOW"; else date -u +%u; fi; }  # ISO: 1=Mon...7=Sun
 
 in_range() {
   # in_range VALUE START END -> 0 if START <= VALUE <= END
@@ -79,56 +94,123 @@ in_range() {
 }
 
 is_weekday() {
-  # Mon-Fri only -- an approximation of "NYSE is open" (every window below
-  # except the hourly one and Sunday's guards a job that's a genuine no-op
-  # outside NYSE trading days) -- bash has no market-calendar library, so
-  # this can't distinguish a weekday NYSE holiday (e.g. Thanksgiving) from
-  # a genuine trading day; see CLAUDE.md's "Market-calendar-aware
-  # scheduling" section for the real, Python-side NYSE check this
-  # approximates. A false-positive warning on a market holiday is a minor
-  # inconvenience (just confirm and proceed); a missed warning on a
-  # genuine trading day is the risk actually worth guarding against, so
-  # this approximation errs toward the safer side.
-  [ "$now_dow" -ge 1 ] && [ "$now_dow" -le 5 ]
+  local dow; dow="$(_now_dow)"
+  [ "$dow" -ge 1 ] && [ "$dow" -le 5 ]
 }
 
-# stock_order_submission: CronTrigger(hour=14, minute=30) -- moved from
-# 13:30 2026-08-02 (see CLAUDE.md's "Stock submission delayed past NYSE
-# open" section). WINDOW_LO/HI named for the drift-detection test.
-STOCK_SUBMISSION_WINDOW_LO=1415
-STOCK_SUBMISSION_WINDOW_HI=1445
+# Sets the global `blackout_label` var (empty string if no window is
+# active). Re-invokes the clock (or its test override) each call, so a
+# caller polling this in a loop genuinely rechecks, not just once.
+compute_blackout_label() {
+  local now_hm now_min now_dow
+  now_hm="$(_now_hm)"; now_min="$(_now_min)"; now_dow="$(_now_dow)"
+  blackout_label=""
+  if is_weekday && in_range "$now_hm" "$STOCK_SUBMISSION_WINDOW_LO" "$STOCK_SUBMISSION_WINDOW_HI"; then
+    blackout_label="Stock order submission job runs at 14:30 UTC weekdays"
+  elif is_weekday && in_range "$now_hm" "$EOD_WINDOW_LO" "$EOD_WINDOW_HI"; then
+    blackout_label="Membership refresh (21:15 UTC) and the EOD job (21:30 UTC) run in this window on weekdays — EOD is the one that places T212 orders"
+  elif [ "$now_dow" = "7" ] && in_range "$now_hm" "$WEEKLY_SUMMARY_WINDOW_LO" "$WEEKLY_SUMMARY_WINDOW_HI"; then
+    blackout_label="Sunday weekly summary job runs at 09:00 Europe/London (08:00-09:00 UTC depending on BST/GMT)"
+  elif [ "$now_min" -ge "$HOURLY_WINDOW_LO" ] || [ "$now_min" -le "$HOURLY_WINDOW_HI" ]; then
+    blackout_label="market_hours_check (:00) / account_state_refresh (:05) run every hour, every day — both make real T212 API calls (position poll/exit-check, account reconciliation/snapshot)"
+  fi
+}
+# --- End blackout window check definitions ----------------------------------
 
-# membership_refresh (21:15) + scheduled_eod (21:30, config.yaml
-# scheduler.runs.eod) -- both still exactly where the 2026-08-02 pass left
-# them; window bounds unchanged.
-EOD_WINDOW_LO=2100
-EOD_WINDOW_HI=2200
+# --- The one real deploy sequence -------------------------------------------
+# Runs directly on the VM. Called either by this script's own server-side
+# mode (see bottom of file) or, indirectly, by webhook_listener.py invoking
+# `bash deploy.sh --server-side`. No other file in this repo should contain
+# any of these steps.
+deploy_steps() {
+  cd "$APP_DIR"
 
-# weekly_summary: Sunday 09:00 Europe/London = 08:00 UTC (BST) or 09:00 UTC
-# (GMT) -- unchanged from the 2026-08-02 pass; still correctly covers both.
-WEEKLY_SUMMARY_WINDOW_LO=0745
-WEEKLY_SUMMARY_WINDOW_HI=0915
+  echo "  Pulling latest code..."
+  # Discard any local edits to the service templates — the real installed
+  # files live in /etc/systemd/system/, not in the repo directory.
+  (git checkout -- investment-research.service investment-research-scheduler.service 2>/dev/null || true)
+  git pull origin main
 
-# market_hours_check (:00) / account_state_refresh (:05) -- genuinely new
-# coverage this pass, see the comment block above. Expressed as
-# minute-of-hour, wrapping across the hour boundary (>= LO or <= HI).
-HOURLY_WINDOW_LO=55
-HOURLY_WINDOW_HI=10
+  echo "  Installing any new Python packages..."
+  python3.11 -m pip install -r requirements.txt --quiet
+  # TA-Lib (Linux) is already installed; re-running is a no-op
+  (python3.11 -m pip install TA-Lib --quiet 2>/dev/null || true)
 
-if is_weekday && in_range "$now_hm" "$STOCK_SUBMISSION_WINDOW_LO" "$STOCK_SUBMISSION_WINDOW_HI"; then
-  blackout_label="Stock order submission job runs at 14:30 UTC weekdays"
-elif is_weekday && in_range "$now_hm" "$EOD_WINDOW_LO" "$EOD_WINDOW_HI"; then
-  blackout_label="Membership refresh (21:15 UTC) and the EOD job (21:30 UTC) run in this window on weekdays — EOD is the one that places T212 orders"
-elif [ "$now_dow" = "7" ] && in_range "$now_hm" "$WEEKLY_SUMMARY_WINDOW_LO" "$WEEKLY_SUMMARY_WINDOW_HI"; then
-  blackout_label="Sunday weekly summary job runs at 09:00 Europe/London (08:00-09:00 UTC depending on BST/GMT)"
-elif [ "$now_min" -ge "$HOURLY_WINDOW_LO" ] || [ "$now_min" -le "$HOURLY_WINDOW_HI" ]; then
-  blackout_label="market_hours_check (:00) / account_state_refresh (:05) run every hour, every day — both make real T212 API calls (position poll/exit-check, account reconciliation/snapshot)"
+  echo "  Updating service files..."
+  cp "${APP_DIR}/investment-research.service" "${SYSTEMD_DIR}/${SERVICE}.service"
+  cp "${APP_DIR}/investment-research-scheduler.service" "${SYSTEMD_DIR}/${SERVICE}-scheduler.service"
+  if [ -f "${APP_DIR}/investment-research-webhook.service" ]; then
+    cp "${APP_DIR}/investment-research-webhook.service" "${SYSTEMD_DIR}/${SERVICE}-webhook.service"
+  fi
+  # Ensure the secrets symlinks exist (non-fatal if secrets.conf not yet created)
+  mkdir -p "${SYSTEMD_DIR}/${SERVICE}-scheduler.service.d"
+  (ln -sf \
+      "${SYSTEMD_DIR}/${SERVICE}.service.d/secrets.conf" \
+      "${SYSTEMD_DIR}/${SERVICE}-scheduler.service.d/secrets.conf" \
+      2>/dev/null || true)
+  if [ -f "${APP_DIR}/investment-research-webhook.service" ]; then
+    mkdir -p "${SYSTEMD_DIR}/${SERVICE}-webhook.service.d"
+    (ln -sf \
+        "${SYSTEMD_DIR}/${SERVICE}.service.d/secrets.conf" \
+        "${SYSTEMD_DIR}/${SERVICE}-webhook.service.d/secrets.conf" \
+        2>/dev/null || true)
+  fi
+  systemctl daemon-reload
+
+  echo "  Restarting services..."
+  systemctl restart "${SERVICE}"
+  (systemctl enable "${SERVICE}-scheduler" 2>/dev/null || true)
+  systemctl restart "${SERVICE}-scheduler"
+  if [ -f "${SYSTEMD_DIR}/${SERVICE}-webhook.service" ]; then
+    (systemctl enable "${SERVICE}-webhook" 2>/dev/null || true)
+    systemctl restart "${SERVICE}-webhook"
+  fi
+
+  echo "  Service status:"
+  systemctl status "${SERVICE}" --no-pager -l
+  systemctl status "${SERVICE}-scheduler" --no-pager -l
+
+  echo "  Verifying deploy..."
+  bash "${APP_DIR}/verify_deploy.sh"
+}
+# --- End deploy sequence -----------------------------------------------------
+
+if [ "$SERVER_SIDE" = "1" ]; then
+  # Invoked either over SSH by this same script's local/dev mode (a human
+  # already confirmed past any blackout warning interactively — see below),
+  # or directly by webhook_listener.py with no human present at all. In the
+  # latter case there is nobody to prompt, so instead of blocking or
+  # silently ignoring the blackout window, defer: poll until the window
+  # clears, up to a bounded cap, then proceed regardless so a real push
+  # is never lost or silently dropped forever. See CLAUDE.md's "GitHub
+  # webhook deploy — blackout window handling" for the reasoning.
+  if [ "${DEPLOY_SKIP_BLACKOUT_CHECK:-0}" != "1" ]; then
+    MAX_WAIT_SECONDS="${DEPLOY_MAX_BLACKOUT_WAIT_SECONDS:-1800}"
+    POLL_INTERVAL_SECONDS="${DEPLOY_BLACKOUT_POLL_INTERVAL_SECONDS:-60}"
+    waited=0
+    compute_blackout_label
+    while [ -n "$blackout_label" ] && [ "$waited" -lt "$MAX_WAIT_SECONDS" ]; do
+      echo "[$(date -u +%FT%TZ)] Deploy deferred — ${blackout_label}. Rechecking in ${POLL_INTERVAL_SECONDS}s (waited ${waited}s of ${MAX_WAIT_SECONDS}s cap)."
+      sleep "$POLL_INTERVAL_SECONDS"
+      waited=$((waited + POLL_INTERVAL_SECONDS))
+      compute_blackout_label
+    done
+    if [ -n "$blackout_label" ]; then
+      echo "[$(date -u +%FT%TZ)] Blackout window still active after the ${MAX_WAIT_SECONDS}s cap — proceeding anyway (forward-progress guarantee: a push must never be silently lost)."
+    fi
+  fi
+  deploy_steps
+  echo ""
+  echo "[$(date -u +%FT%TZ)] Server-side deploy complete."
+  exit 0
 fi
 
+# --- Local/dev mode: interactive blackout prompt, push, then delegate ------
+compute_blackout_label
 if [ -n "$blackout_label" ]; then
   echo ""
   echo "⚠️  WARNING: ${blackout_label} — deploying now risks order logic running on transitional state."
-  echo "    Note: deploy restarts BOTH investment-research and investment-research-scheduler."
+  echo "    Note: deploy restarts investment-research, investment-research-scheduler, and investment-research-webhook."
   read -r -p "Continue anyway? (y/N): " confirm
   case "$confirm" in
     y|Y) ;;
@@ -141,51 +223,16 @@ fi
 # --- End blackout window check ----------------------------------------------
 
 echo ""
-echo "=== [1/3] Pushing latest code to GitHub ==="
+echo "=== [1/2] Pushing latest code to GitHub ==="
 git push origin main
 
 echo ""
-echo "=== [2/3] Pulling code on VM ($VM_IP) ==="
-ssh -i "$SSH_KEY" "root@${VM_IP}" bash -s << REMOTE
-set -e
-cd ${APP_DIR}
-
-echo "  Pulling latest code..."
-# Discard any local edits to the service templates — the real installed files
-# live in /etc/systemd/system/, not in the repo directory.
-git checkout -- investment-research.service investment-research-scheduler.service 2>/dev/null || true
-git pull origin main
-
-echo "  Installing any new Python packages..."
-python3.11 -m pip install -r requirements.txt --quiet
-# TA-Lib (Linux) is already installed; re-running is a no-op
-python3.11 -m pip install TA-Lib --quiet 2>/dev/null || true
-
-echo "  Updating service files..."
-cp ${APP_DIR}/investment-research.service /etc/systemd/system/${SERVICE}.service
-cp ${APP_DIR}/investment-research-scheduler.service /etc/systemd/system/${SERVICE}-scheduler.service
-# Ensure the secrets symlink exists (non-fatal if secrets.conf not yet created)
-mkdir -p /etc/systemd/system/${SERVICE}-scheduler.service.d
-ln -sf \
-    /etc/systemd/system/${SERVICE}.service.d/secrets.conf \
-    /etc/systemd/system/${SERVICE}-scheduler.service.d/secrets.conf \
-    2>/dev/null || true
-systemctl daemon-reload
-
-echo "  Restarting services..."
-systemctl restart ${SERVICE}
-systemctl enable ${SERVICE}-scheduler 2>/dev/null || true
-systemctl restart ${SERVICE}-scheduler
-
-echo "  Service status:"
-systemctl status ${SERVICE} --no-pager -l
-systemctl status ${SERVICE}-scheduler --no-pager -l
-
-echo "  Verifying deploy..."
-bash ${APP_DIR}/verify_deploy.sh
-REMOTE
+echo "=== [2/2] Deploying on VM ($VM_IP) ==="
+# A human already confirmed past the blackout warning above (if any) — skip
+# the redundant non-interactive re-check server-side.
+ssh -i "$SSH_KEY" "root@${VM_IP}" "cd ${APP_DIR} && DEPLOY_SKIP_BLACKOUT_CHECK=1 bash deploy.sh --server-side"
 
 echo ""
-echo "=== [3/3] Done ==="
+echo "=== Done ==="
 echo "    Dashboard: https://$(ssh -i "$SSH_KEY" root@${VM_IP} 'grep -oP "(?<=^)[^ {]+" /etc/caddy/Caddyfile | head -1' 2>/dev/null || echo '<your-domain>')"
 echo ""

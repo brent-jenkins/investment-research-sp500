@@ -1,0 +1,42 @@
+[Unit]
+Description=Investment Research GitHub Webhook Deploy Listener
+Documentation=https://github.com/YOUR/investment-research
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/investment-research
+
+ExecStart=/usr/bin/python3.11 /root/investment-research/webhook_listener.py
+
+# Restart policy: always restart, with a 10-second backoff
+Restart=always
+RestartSec=10
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/root
+# Secrets — set the real value in
+# /etc/systemd/system/investment-research-webhook.service.d/secrets.conf
+# (symlinked from investment-research.service.d/secrets.conf by deploy.sh,
+# same pattern as the scheduler service) or override directly, then:
+# systemctl daemon-reload && systemctl restart investment-research-webhook
+#
+# A genuinely random secret shared with GitHub's webhook config — the
+# listener refuses to start without it. Generate with:
+#   openssl rand -hex 32
+Environment=GITHUB_WEBHOOK_SECRET=
+# Local-only port; Caddy reverse-proxies /webhook/deploy to it over HTTPS
+# (see Caddyfile) — this service is never exposed directly.
+Environment=WEBHOOK_LISTEN_PORT=8600
+
+# Logging: send stdout/stderr to the systemd journal
+# View with: journalctl -u investment-research-webhook -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=investment-research-webhook
+
+[Install]
+WantedBy=multi-user.target

@@ -20,6 +20,15 @@
 # script checks the real, current state directly instead of trusting any
 # upstream command's own exit code as a proxy for it.
 #
+# Extended 2026-08-05 for the GitHub webhook deploy migration: the webhook
+# listener (investment-research-webhook.service) is now one of the things
+# every deploy installs and restarts (deploy.sh's deploy_steps()), so it
+# gets the same real-state checks below as the two pre-existing services —
+# same reasoning, same "don't just trust the command chain" discipline.
+# Checked only if investment-research-webhook.service exists in APP_DIR, so
+# this script still passes cleanly during the staged rollout window before
+# the webhook service is actually installed on the VM.
+#
 # Usage: bash verify_deploy.sh [APP_DIR] [SERVICE]
 #   Defaults match every existing deploy path's own values.
 # Exit 0 if everything checks out, 1 otherwise — every individual check
@@ -57,6 +66,14 @@ check "installed investment-research.service matches the repo checkout" \
 
 check "installed investment-research-scheduler.service matches the repo checkout" \
     cmp -s "${APP_DIR}/investment-research-scheduler.service" "/etc/systemd/system/${SERVICE}-scheduler.service"
+
+if [ -f "${APP_DIR}/investment-research-webhook.service" ]; then
+    check "investment-research-webhook service is active" \
+        systemctl is-active --quiet "${SERVICE}-webhook"
+
+    check "installed investment-research-webhook.service matches the repo checkout" \
+        cmp -s "${APP_DIR}/investment-research-webhook.service" "/etc/systemd/system/${SERVICE}-webhook.service"
+fi
 
 check "server's git HEAD matches origin/main (the pull genuinely landed the latest commit)" \
     bash -c "cd '${APP_DIR}' && [ \"\$(git rev-parse HEAD)\" = \"\$(git rev-parse origin/main)\" ]"

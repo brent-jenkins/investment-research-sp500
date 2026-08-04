@@ -163,13 +163,24 @@ cp "$APP_DIR/investment-research.service" /etc/systemd/system/
 # Standalone scheduler daemon (fires jobs even when nobody visits the dashboard)
 cp "$APP_DIR/investment-research-scheduler.service" /etc/systemd/system/
 
-# Symlink the secrets drop-in so both services share the same credentials file.
-# Users only need to create one drop-in (investment-research.service.d/secrets.conf)
-# and the scheduler daemon automatically inherits the same env vars.
+# GitHub webhook deploy listener (verifies a signed push webhook, then runs
+# `bash deploy.sh --server-side` — see CLAUDE.md's "GitHub webhook deploy")
+cp "$APP_DIR/investment-research-webhook.service" /etc/systemd/system/
+
+# Symlink the secrets drop-in so all three services share the same credentials
+# file. Users only need to create one drop-in
+# (investment-research.service.d/secrets.conf) and the scheduler daemon and
+# webhook listener automatically inherit the same env vars.
 mkdir -p /etc/systemd/system/investment-research-scheduler.service.d
 ln -sf \
     /etc/systemd/system/investment-research.service.d/secrets.conf \
     /etc/systemd/system/investment-research-scheduler.service.d/secrets.conf \
+    2>/dev/null || true   # non-fatal if secrets.conf doesn't exist yet
+
+mkdir -p /etc/systemd/system/investment-research-webhook.service.d
+ln -sf \
+    /etc/systemd/system/investment-research.service.d/secrets.conf \
+    /etc/systemd/system/investment-research-webhook.service.d/secrets.conf \
     2>/dev/null || true   # non-fatal if secrets.conf doesn't exist yet
 
 systemctl daemon-reload
@@ -181,6 +192,22 @@ echo "    investment-research service enabled and started."
 systemctl enable investment-research-scheduler
 systemctl start investment-research-scheduler
 echo "    investment-research-scheduler service enabled and started."
+
+systemctl enable investment-research-webhook
+systemctl start investment-research-webhook
+echo "    investment-research-webhook service enabled and started."
+echo ""
+echo "  *** ACTION REQUIRED — set GITHUB_WEBHOOK_SECRET: ***"
+echo ""
+echo "    Generate a random secret (openssl rand -hex 32), add it as"
+echo "    GITHUB_WEBHOOK_SECRET=<secret> to the systemd secrets drop-in"
+echo "    (/etc/systemd/system/investment-research.service.d/secrets.conf),"
+echo "    run 'systemctl daemon-reload && systemctl restart"
+echo "    investment-research-webhook', then configure a webhook in the"
+echo "    GitHub repo (Settings -> Webhooks -> Add webhook) pointing at"
+echo "    https://$DOMAIN/webhook/deploy with the SAME secret, content type"
+echo "    application/json, and the 'push' event only."
+echo ""
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 

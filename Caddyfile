@@ -14,12 +14,25 @@
 
 YOUR.DOMAIN.COM {
 
+    # ── GitHub webhook deploy listener ──────────────────────────────────────
+    # webhook_listener.py (investment-research-webhook.service) listens on
+    # loopback only — this is the sole way it's reachable from the internet.
+    # The listener itself verifies GitHub's HMAC signature before acting on
+    # anything; Caddy does no auth here, same division of responsibility as
+    # the Streamlit proxy below (access control lives in the proxied service,
+    # not in Caddy). Must be matched before the catch-all Streamlit proxy.
+    handle /webhook/* {
+        reverse_proxy localhost:8600
+    }
+
     # ── Streamlit reverse proxy ───────────────────────────────────────────
     # flush_interval -1 disables response buffering, which is required for
     # Streamlit's Server-Sent Events (live progress bars, reruns).
     # Caddy handles WebSocket upgrades automatically.
-    reverse_proxy localhost:8501 {
-        flush_interval -1
+    handle {
+        reverse_proxy localhost:8501 {
+            flush_interval -1
+        }
     }
 
     # ── TLS ───────────────────────────────────────────────────────────────

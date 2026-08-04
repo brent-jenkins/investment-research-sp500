@@ -273,24 +273,26 @@ Environment=T212_API_SECRET=your_t212_secret
 ```
 
 ```bash
-systemctl daemon-reload && systemctl restart investment-research && systemctl restart investment-research-scheduler
+systemctl daemon-reload && systemctl restart investment-research investment-research-scheduler investment-research-webhook
 ```
 
-The scheduler daemon inherits the same credentials automatically — `setup.sh` and both deploy scripts symlink `investment-research-scheduler.service.d/secrets.conf` to the same file.
+The scheduler and webhook-listener services inherit the same credentials automatically — `setup.sh` and `deploy.sh` symlink their `.service.d/secrets.conf` to the same file as the main service.
 
 ### Deploying updates
 
+Deploys are triggered by a GitHub webhook, not by pushing directly from a developer machine — see CLAUDE.md's "Deployment" section for the full design. Once the webhook is configured on GitHub (one-time, manual — see CLAUDE.md), `git push origin main` is enough:
+
 ```bash
-bash setup-hooks.sh   # install the pre-push deploy hook, once
-git push origin main   # runs the full test suite, then deploys automatically
+bash setup-hooks.sh   # install the pre-push test-gate hook, once
+git push origin main   # runs the full test suite locally, then GitHub's webhook deploys automatically
 ```
 
-Manual deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored). Both restart **both** systemd services — restarting only the UI leaves the scheduler daemon (which actually places orders) running the previous code.
+Manual/local deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored) — pushes, then delegates to the same `bash deploy.sh --server-side` the webhook itself calls. All three systemd services are restarted every deploy — restarting only the UI leaves the scheduler daemon (which actually places orders) running the previous code.
 
 ```bash
-# Verify both services picked up the same deploy:
-ps aux | grep -E "streamlit|scheduler_daemon" | grep -v grep
-systemctl status investment-research investment-research-scheduler
+# Verify all three services picked up the same deploy:
+ps aux | grep -E "streamlit|scheduler_daemon|webhook_listener" | grep -v grep
+systemctl status investment-research investment-research-scheduler investment-research-webhook
 ```
 
 ### Useful server commands
