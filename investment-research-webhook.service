@@ -15,6 +15,26 @@ ExecStart=/usr/bin/python3.11 /root/investment-research/webhook_listener.py
 Restart=always
 RestartSec=10
 
+# KillMode=process (NOT the systemd default of control-group) -- required,
+# not cosmetic. deploy_steps() (deploy.sh) restarts THIS service as its own
+# last restart step, and webhook_listener.py's trigger_deploy() spawns
+# deploy.sh as a direct child process of this unit. With the default
+# control-group KillMode, "systemctl restart investment-research-webhook"
+# sends the kill signal to the ENTIRE cgroup -- including the still-running
+# deploy.sh process that issued the restart command -- silently truncating
+# the deploy before it reaches its `systemctl status` output and, critically,
+# before verify_deploy.sh ever runs. Confirmed as a real failure, not a
+# theoretical one: the first genuine GitHub-triggered deploy through this
+# service was cut short at exactly this point (see CLAUDE.md's "GitHub
+# webhook deploy" for the incident). KillMode=process targets only this
+# unit's own tracked main PID on stop/restart, leaving deploy.sh (now
+# reparented, not killed) free to run to completion. Trade-off, accepted
+# deliberately: if the listener process crashes uncleanly, KillMode=process
+# means any lingering child of it is NOT auto-reaped by systemd the way the
+# default would -- acceptable here since the listener's only child is ever
+# a single deploy.sh invocation, not general-purpose forking.
+KillMode=process
+
 # Environment
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=/root

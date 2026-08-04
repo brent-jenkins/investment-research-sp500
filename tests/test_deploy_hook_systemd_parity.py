@@ -167,6 +167,36 @@ def test_pre_push_hook_contains_no_deploy_logic():
     )
 
 
+def test_webhook_service_uses_kill_mode_process():
+    """Regression guard for a real incident hit during the webhook
+    migration's own staged rollout (2026-08-05): deploy_steps() restarts
+    investment-research-webhook as its own last restart step, and
+    webhook_listener.py's trigger_deploy() spawns `bash deploy.sh
+    --server-side` as a direct child process of that same systemd unit.
+    With systemd's default KillMode=control-group, "systemctl restart
+    investment-research-webhook" kills the ENTIRE cgroup on stop --
+    including the still-running deploy.sh process that issued the restart
+    command -- silently truncating the deploy before it reaches
+    `systemctl status` or verify_deploy.sh. This was not theoretical: the
+    first genuine GitHub-triggered deploy through this service was cut
+    short at exactly this point (confirmed via journalctl -- the deploy
+    process's log output stopped mid-"Restarting services..." with no
+    "Server-side deploy complete" ever printed, even though the underlying
+    git pull/service restarts had genuinely succeeded). KillMode=process
+    targets only the unit's own tracked main PID on stop/restart, leaving
+    deploy.sh (reparented, not killed) free to finish. See the unit file's
+    own comment for the accepted trade-off this introduces."""
+    text = (Path(__file__).resolve().parent.parent / "investment-research-webhook.service").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(r"^KillMode=process\s*$", text, re.MULTILINE), (
+        "investment-research-webhook.service must set KillMode=process -- without it, "
+        "the service restarting itself (the last step of every deploy_steps() run) kills "
+        "the still-running deploy.sh process before it can finish, silently skipping "
+        "verify_deploy.sh. See this test's own docstring for the real incident this guards."
+    )
+
+
 def test_hooks_dir_resolved_via_git_common_dir_not_git_dir():
     """Regression guard for a related bug found in the same pass (2026-08-04):
     setup-hooks.sh used to compute HOOKS_DIR from `git rev-parse --git-dir`,
