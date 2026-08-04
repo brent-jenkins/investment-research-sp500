@@ -9,7 +9,7 @@ git-pull/pip-install/systemd-restart command chain, and deploy.sh's copy —
 which kept drifting apart (see CLAUDE.md's "Deploy pipeline systemd parity
 audit"). This listener removes the duplication structurally: it does exactly
 one thing — verify the request is genuinely from GitHub, then invoke
-`bash deploy.sh --server-side` — and contains no deploy logic of its own.
+`bash deploy.sh` — and contains no deploy logic of its own.
 deploy.sh's deploy_steps() function is the only place the actual deploy
 steps live.
 
@@ -77,11 +77,11 @@ def should_trigger_deploy(event_type: str, payload: dict) -> bool:
 
 
 def trigger_deploy(deploy_script: Path = DEPLOY_SCRIPT) -> subprocess.Popen:
-    """Spawns `bash deploy.sh --server-side` in the background and returns
-    immediately — GitHub expects a webhook response within ~10s, and a full
-    deploy (pip install, service restarts, verification) can take longer
-    than that. Output is inherited from this process's own stdout/stderr,
-    which systemd sends to the journal (StandardOutput=journal in
+    """Spawns `bash deploy.sh` in the background and returns immediately —
+    GitHub expects a webhook response within ~10s, and a full deploy (pip
+    install, service restarts, verification) can take longer than that.
+    Output is inherited from this process's own stdout/stderr, which
+    systemd sends to the journal (StandardOutput=journal in
     investment-research-webhook.service) — `journalctl -u
     investment-research-webhook -f` shows deploy progress live, the same
     way every other job's logs already work in this project.
@@ -89,8 +89,8 @@ def trigger_deploy(deploy_script: Path = DEPLOY_SCRIPT) -> subprocess.Popen:
     No reimplementation of any deploy step here — this is the ONLY thing
     this listener does in response to a verified push.
     """
-    logger.info("Triggering deploy: bash %s --server-side", deploy_script)
-    return subprocess.Popen(["bash", str(deploy_script), "--server-side"], cwd=str(APP_DIR))
+    logger.info("Triggering deploy: bash %s", deploy_script)
+    return subprocess.Popen(["bash", str(deploy_script)], cwd=str(APP_DIR))
 
 
 class WebhookHandler(BaseHTTPRequestHandler):

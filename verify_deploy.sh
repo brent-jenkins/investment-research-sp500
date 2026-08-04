@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # verify_deploy.sh — Post-deploy verification, run on the VM at the end of
-# every deploy path (deploy.sh, deploy.ps1, and the pre-push hook's
-# background deploy) so all three confirm the SAME real, current state
-# rather than each trusting its own command chain's exit code alone.
+# deploy.sh's own deploy_steps() (called by both the GitHub webhook listener
+# and a manual break-glass SSH run — the same real, current state gets
+# checked either way) rather than trusting the command chain's exit code
+# alone.
 #
-# Why this exists (2026-08-04): two separate, independently-discovered gaps
+# Why this exists (2026-08-04, when this ran across three separate deploy
+# paths — deploy.sh, deploy.ps1, and the pre-push hook's own background
+# deploy — all three since consolidated into deploy.sh alone, see CLAUDE.md's
+# "GitHub webhook deploy"): two separate, independently-discovered gaps
 # in the SAME category — the automated pre-push-hook deploy not copying
 # updated .service files into /etc/systemd/system/ (found via the FRED
 # credential cleanup), and that same path not running `systemctl

@@ -1,8 +1,7 @@
 """Drift-detection guard for deploy.sh's deployment blackout windows
 (2026-08-04).
 
-`deploy.sh` (and its gitignored, local-only PowerShell twin, deploy.ps1)
-warn before a deploy if it lands close to a real, scheduled, order-touching
+`deploy.sh` warns before a deploy if it lands close to a real, scheduled, order-touching
 job — see deploy.sh's own "Deployment blackout window check" comment for
 the full rationale. Those windows are a hand-maintained bash/PowerShell
 snapshot of data/scheduler.py:start_scheduler()'s real CronTrigger
@@ -39,12 +38,9 @@ being guarded).
 import re
 from pathlib import Path
 
-import pytest
-
 import data.scheduler as scheduler
 
 _DEPLOY_SH = Path(__file__).resolve().parent.parent / "deploy.sh"
-_DEPLOY_PS1 = Path(__file__).resolve().parent.parent / "deploy.ps1"
 
 
 def _parse_window(text: str, name: str) -> tuple[int, int]:
@@ -229,44 +225,3 @@ def test_deploy_sh_hourly_window_bounds_are_a_genuine_wrap():
         f"HOURLY_WINDOW_LO ({lo}) must be greater than HOURLY_WINDOW_HI ({hi}) "
         "for deploy.sh's wrapping in_range check to work as intended."
     )
-
-
-def test_deploy_ps1_windows_match_deploy_sh_if_present():
-    """deploy.ps1 is gitignored (local-only, contains an SSH key path) --
-    it does not exist in a fresh clone or a git worktree, so this check
-    skips gracefully rather than failing when it's simply absent. When it
-    IS present (this developer's own machine, right now), its window
-    bounds must match deploy.sh's exactly -- deploy.ps1 is not covered by
-    the main scheduler-registration test above (parsing PowerShell from
-    Python is not worth the complexity for a single local file), so this
-    is the only guard against deploy.sh and deploy.ps1 silently drifting
-    apart from each other after one is updated and the other isn't."""
-    if not _DEPLOY_PS1.exists():
-        pytest.skip("deploy.ps1 is gitignored/local-only and not present in this checkout")
-
-    sh_text = _DEPLOY_SH.read_text(encoding="utf-8")
-    ps1_text = _DEPLOY_PS1.read_text(encoding="utf-8")
-
-    sh_windows = {
-        name: _parse_window(sh_text, name)
-        for name in ("STOCK_SUBMISSION_WINDOW", "EOD_WINDOW", "WEEKLY_SUMMARY_WINDOW", "HOURLY_WINDOW")
-    }
-
-    def _parse_ps1_window(name: str) -> tuple[int, int]:
-        lo = re.search(rf"\${name}Lo\s*=\s*(\d+)", ps1_text)
-        hi = re.search(rf"\${name}Hi\s*=\s*(\d+)", ps1_text)
-        assert lo, f"${name}Lo not found in deploy.ps1"
-        assert hi, f"${name}Hi not found in deploy.ps1"
-        return int(lo.group(1)), int(hi.group(1))
-
-    ps1_name_map = {
-        "STOCK_SUBMISSION_WINDOW": "StockSubmissionWindow",
-        "EOD_WINDOW": "EodWindow",
-        "WEEKLY_SUMMARY_WINDOW": "WeeklySummaryWindow",
-        "HOURLY_WINDOW": "HourlyWindow",
-    }
-    for sh_name, ps1_name in ps1_name_map.items():
-        assert _parse_ps1_window(ps1_name) == sh_windows[sh_name], (
-            f"deploy.ps1's {ps1_name} bounds don't match deploy.sh's {sh_name} bounds "
-            "-- the two scripts have drifted apart."
-        )

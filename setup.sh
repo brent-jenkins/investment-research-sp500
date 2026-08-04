@@ -164,7 +164,7 @@ cp "$APP_DIR/investment-research.service" /etc/systemd/system/
 cp "$APP_DIR/investment-research-scheduler.service" /etc/systemd/system/
 
 # GitHub webhook deploy listener (verifies a signed push webhook, then runs
-# `bash deploy.sh --server-side` — see CLAUDE.md's "GitHub webhook deploy")
+# `bash deploy.sh` — see CLAUDE.md's "GitHub webhook deploy")
 cp "$APP_DIR/investment-research-webhook.service" /etc/systemd/system/
 
 # Symlink the secrets drop-in so all three services share the same credentials

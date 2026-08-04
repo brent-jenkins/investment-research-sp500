@@ -287,7 +287,7 @@ bash setup-hooks.sh   # install the pre-push test-gate hook, once
 git push origin main   # runs the full test suite locally, then GitHub's webhook deploys automatically
 ```
 
-Manual/local deploy: `bash deploy.sh` (Git Bash) or `.\deploy.ps1` (PowerShell, gitignored) — pushes, then delegates to the same `bash deploy.sh --server-side` the webhook itself calls. All three systemd services are restarted every deploy — restarting only the UI leaves the scheduler daemon (which actually places orders) running the previous code.
+Manual/break-glass deploy (only needed if the webhook path itself is down): SSH in and run `bash deploy.sh` directly on the VM — it's the same script the webhook calls, always deploying immediately. All three systemd services are restarted every deploy — restarting only the UI leaves the scheduler daemon (which actually places orders) running the previous code.
 
 ```bash
 # Verify all three services picked up the same deploy:

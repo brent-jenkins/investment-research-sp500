@@ -1,7 +1,8 @@
-"""Tests for deploy.sh's `--server-side` mode -- specifically the
-non-interactive blackout-window handling used when the GitHub webhook
-listener (webhook_listener.py) triggers a deploy with no human present to
-answer the interactive y/N prompt local/dev mode uses.
+"""Tests for deploy.sh's non-interactive blackout-window handling -- used
+whenever the GitHub webhook listener (webhook_listener.py) triggers a
+deploy with no human present to answer a prompt (deploy.sh has run this
+way unconditionally since its former interactive "local/dev mode" was
+removed 2026-08-05 -- see deploy.sh's own header comment).
 
 The decision (see CLAUDE.md's "GitHub webhook deploy — blackout window
 handling"): defer by polling until the window clears, up to a bounded cap,
@@ -97,7 +98,7 @@ def _run_server_side(scratch, extra_env, timeout=30):
 
     start = time.monotonic()
     result = subprocess.run(
-        ["bash", str(_DEPLOY_SH), "--server-side"],
+        ["bash", str(_DEPLOY_SH)],
         cwd=str(scratch["app_dir"]),
         env=env,
         capture_output=True,
@@ -145,9 +146,11 @@ def test_blackout_active_defers_then_proceeds_after_cap(deploy_scratch):
 
 
 def test_skip_blackout_check_env_var_bypasses_deferral_entirely(deploy_scratch):
-    """Local/dev mode sets DEPLOY_SKIP_BLACKOUT_CHECK=1 when delegating to
-    server-side mode over SSH, because a human already confirmed past the
-    interactive warning -- server-side mode must not re-defer in that case.
+    """DEPLOY_SKIP_BLACKOUT_CHECK=1 remains available as a deliberate manual
+    override (e.g. a genuinely urgent break-glass deploy run directly over
+    SSH) -- nothing sets it automatically any more since deploy.sh's former
+    interactive local/dev mode was removed, but the override itself must
+    still work when a human deliberately sets it.
 
     The cap here is deliberately much larger than a real "skipped" run's
     process-spawn overhead (git/bash/python3.11 subprocesses on Windows

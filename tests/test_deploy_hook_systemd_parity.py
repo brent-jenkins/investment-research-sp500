@@ -10,8 +10,13 @@ generated command chain stayed in systemd-parity with deploy.sh's; that
 whole category of drift is now impossible by construction, not just
 checked-for, because the hook no longer performs any deploy steps at all —
 deploys are triggered by a GitHub webhook (webhook_listener.py) invoking
-`bash deploy.sh --server-side`, the single place deploy_steps() lives (see
-deploy.sh's own module docstring-equivalent header comment).
+`bash deploy.sh`, the single place deploy_steps() lives (see deploy.sh's own
+module docstring-equivalent header comment). deploy.sh's own former
+"local/dev mode" (and its PowerShell twin, deploy.ps1) — which pushed from
+a developer's machine and then delegated over SSH — was removed 2026-08-05
+once the webhook made it redundant for routine deploys; deploy.sh now
+always runs the deploy directly, whether invoked by the webhook listener or
+manually over SSH as a break-glass fallback.
 
 This file now guards the two things that could silently reintroduce the
 old duplication:
@@ -129,24 +134,37 @@ def test_deploy_sh_itself_contains_every_required_step():
     )
 
 
-def test_deploy_sh_server_side_mode_exists():
-    """The webhook listener (and deploy.sh/deploy.ps1's own local mode)
-    depend on `bash deploy.sh --server-side` running deploy_steps() directly
-    with no push/ssh involved -- if this flag handling is ever removed or
-    renamed, the whole webhook deploy path silently breaks."""
+def test_deploy_sh_runs_deploy_steps_unconditionally():
+    """The webhook listener depends on `bash deploy.sh` running
+    deploy_steps() directly, every time it's invoked -- no flag, no mode
+    switch, no push/ssh involved. deploy.sh used to require a --server-side
+    flag to reach this behavior (there was also a "local/dev mode" that
+    pushed and delegated over SSH instead); that flag and mode were removed
+    2026-08-05 once the webhook made the local/dev path redundant for
+    routine deploys -- deploy.sh now always deploys directly. If
+    deploy_steps() is ever made conditional again, the whole webhook deploy
+    path silently breaks."""
     text = _DEPLOY_SH.read_text(encoding="utf-8")
-    assert '"${1:-}" = "--server-side"' in text or "'${1:-}' = '--server-side'" in text, (
-        "deploy.sh no longer appears to handle a --server-side flag -- "
-        "webhook_listener.py calls `bash deploy.sh --server-side` directly "
-        "and depends on this."
-    )
     assert "deploy_steps" in text, "deploy.sh no longer defines deploy_steps() -- has it been restructured?"
+    assert "--server-side" not in text, (
+        "deploy.sh still references --server-side -- this flag/mode was deliberately removed "
+        "2026-08-05 (see the file's own header comment); a bare `bash deploy.sh` must always "
+        "deploy directly, unconditionally, for the webhook listener to keep working."
+    )
+    # deploy_steps() must be called unconditionally near the end of the file,
+    # not gated behind an if-block -- a loose but effective check that it
+    # isn't hidden behind some reintroduced mode switch.
+    assert re.search(r"^deploy_steps$", text, re.MULTILINE), (
+        "deploy.sh must call deploy_steps() as a bare, unconditional statement -- "
+        "if it's only ever called inside a conditional block, the webhook listener's "
+        "plain `bash deploy.sh` invocation may not actually run it."
+    )
 
 
 def test_pre_push_hook_contains_no_deploy_logic():
     """The decisive regression guard: the pre-push hook must be a pure
     test-gate now, with zero deploy steps of its own. Deploys are triggered
-    by the GitHub webhook (webhook_listener.py -> deploy.sh --server-side)
+    by the GitHub webhook (webhook_listener.py -> deploy.sh)
     once a push lands on GitHub -- the hook runs strictly before that push
     even happens and has no business knowing how to deploy anything.
     Reintroducing any of these patterns here recreates the exact
@@ -157,7 +175,7 @@ def test_pre_push_hook_contains_no_deploy_logic():
     assert not found, (
         f"The pre-push hook template contains deploy-shaped logic it should not: {found}. "
         "Deploys are triggered by the GitHub webhook, not this hook -- see "
-        "webhook_listener.py and deploy.sh's --server-side mode. If the hook is "
+        "webhook_listener.py and deploy.sh. If the hook is "
         "growing a deploy step again, that's the exact duplication this migration "
         "removed; don't reintroduce it here."
     )
@@ -171,8 +189,8 @@ def test_webhook_service_uses_kill_mode_process():
     """Regression guard for a real incident hit during the webhook
     migration's own staged rollout (2026-08-05): deploy_steps() restarts
     investment-research-webhook as its own last restart step, and
-    webhook_listener.py's trigger_deploy() spawns `bash deploy.sh
-    --server-side` as a direct child process of that same systemd unit.
+    webhook_listener.py's trigger_deploy() spawns `bash deploy.sh` as a
+    direct child process of that same systemd unit.
     With systemd's default KillMode=control-group, "systemctl restart
     investment-research-webhook" kills the ENTIRE cgroup on stop --
     including the still-running deploy.sh process that issued the restart
