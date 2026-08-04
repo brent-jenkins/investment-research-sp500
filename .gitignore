@@ -51,8 +51,9 @@ get-pip.py
 # SSH private keys
 ssh-keys/
 
-# PowerShell deploy script — contains server IP and key path
-deploy.ps1
+# Runtime lock directory created by deploy.sh on the server (mutual
+# exclusion between overlapping deploy triggers) — never meant to be committed.
+.deploy.lock.d
 
 # OS
 .DS_Store

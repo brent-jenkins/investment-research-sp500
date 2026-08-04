@@ -177,6 +177,68 @@ def test_skip_blackout_check_env_var_bypasses_deferral_entirely(deploy_scratch):
     )
 
 
+def test_concurrent_invocations_serialize_rather_than_race(deploy_scratch):
+    """Two overlapping deploy triggers (e.g. GitHub's native webhook and a
+    GitHub Actions-triggered call for the same push, both live during the
+    Actions-migration staged rollout -- see CLAUDE.md's "GitHub webhook
+    deploy") must not run deploy_steps() concurrently: racing `systemctl
+    restart` calls for the same unit, or a `daemon-reload` overlapping a
+    restart, is not something to rely on being harmless. deploy.sh takes an
+    flock on ${APP_DIR}/.deploy.lock for its entire run (blackout wait
+    included) so a second invocation waits for the first to finish rather
+    than interleaving with it.
+
+    Proven here by making the stub `systemctl` artificially slow (so a
+    single deploy_steps() run takes measurable wall-clock time) and
+    launching two `bash deploy.sh` processes back-to-back with no
+    coordination between them -- if they raced, total elapsed time would be
+    close to one run's duration; serialized, it must be close to two."""
+    scratch = deploy_scratch
+    slow_systemctl = scratch["stub_bin"] / "systemctl"
+    slow_systemctl.write_text("#!/usr/bin/env bash\nsleep 1\nexit 0\n", encoding="utf-8")
+    slow_systemctl.chmod(0o755)
+
+    import os
+
+    env = dict(os.environ)
+    env["PATH"] = str(scratch["stub_bin"]) + os.pathsep + env.get("PATH", "")
+    env["APP_DIR"] = str(scratch["app_dir"])
+    env["SERVICE"] = "test-investment-research"
+    env["SYSTEMD_DIR"] = str(scratch["systemd_dir"])
+    env["DEPLOY_TEST_MARKER_FILE"] = str(scratch["marker_file"])
+    # Outside any blackout window so neither run waits on that -- isolates
+    # this test to the locking behavior specifically.
+    env["DEPLOY_TEST_NOW_HM"] = "1230"
+    env["DEPLOY_TEST_NOW_MIN"] = "30"
+    env["DEPLOY_TEST_NOW_DOW"] = "3"
+
+    start = time.monotonic()
+    proc_a = subprocess.Popen(
+        ["bash", str(_DEPLOY_SH)], cwd=str(scratch["app_dir"]), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    proc_b = subprocess.Popen(
+        ["bash", str(_DEPLOY_SH)], cwd=str(scratch["app_dir"]), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out_a, _ = proc_a.communicate(timeout=30)
+    out_b, _ = proc_b.communicate(timeout=30)
+    elapsed = time.monotonic() - start
+
+    assert proc_a.returncode == 0, out_a
+    assert proc_b.returncode == 0, out_b
+    # Each run's deploy_steps() makes 4 systemctl calls (restart main,
+    # restart scheduler, restart webhook [skipped here, no webhook.service
+    # present in the fixture], daemon-reload) -- concretely: daemon-reload +
+    # restart + restart = 3 slow calls/run at 1s each = ~3s/run serialized,
+    # ~6s for both if truly serialized vs. ~3s if they raced in parallel.
+    assert elapsed >= 5, (
+        f"two concurrent deploys finished in {elapsed:.1f}s -- expected them to "
+        f"serialize (~6s) rather than race in parallel (~3s); the lock may not be "
+        f"held for the whole run"
+    )
+
+
 def test_blackout_clears_partway_through_the_wait(deploy_scratch, monkeypatch):
     """The defer loop must recheck (not just wait out a fixed sleep) -- to
     prove that without waiting for real wall-clock minutes to pass, this

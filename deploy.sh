@@ -43,6 +43,52 @@ SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 
 set -euo pipefail
 
+# --- Concurrency guard -------------------------------------------------------
+# There are now two independent ways a deploy can be triggered for the same
+# push (GitHub's own native webhook, and -- once added -- a GitHub Actions
+# workflow calling the same listener endpoint after tests pass), plus the
+# manual break-glass SSH path. deploy_steps() has no other mutual exclusion,
+# so two overlapping runs could otherwise both `git pull`/copy service files/
+# restart services concurrently -- individually idempotent-ish, but racing
+# `systemctl daemon-reload` against a restart, or two `systemctl restart`
+# calls for the same unit overlapping, is not something to rely on being
+# harmless. A lock ensures a second trigger waits for the first to finish
+# (not silently dropped -- it still runs afterward, which is normally just a
+# fast no-op since the first run already pulled the same commit) rather than
+# running in parallel with it. Held for the whole script (blackout wait
+# included), not just deploy_steps(), so a second trigger doesn't
+# independently poll/defer through its own blackout wait in parallel with
+# the first.
+#
+# mkdir-based, not flock: `mkdir` succeeding-or-failing atomically as a
+# mutex is a portable shell idiom that works identically on the real Ubuntu
+# server AND in Git Bash on Windows (where this suite's own tests run --
+# see CLAUDE.md's "runs identically on Windows and Ubuntu" requirement).
+# `flock` was tried first and does not exist in Git Bash at all -- confirmed
+# directly (tests failed with "flock: command not found"), not assumed.
+LOCK_DIR="${DEPLOY_LOCK_DIR:-${APP_DIR}/.deploy.lock.d}"
+LOCK_WAIT_INTERVAL_SECONDS="${DEPLOY_LOCK_WAIT_INTERVAL_SECONDS:-1}"
+# Bounded, same "never wait forever" philosophy as the blackout defer loop
+# below -- if a prior run crashed without cleaning up its lock directory,
+# this breaks it rather than hanging every future deploy indefinitely.
+LOCK_MAX_WAIT_SECONDS="${DEPLOY_LOCK_MAX_WAIT_SECONDS:-600}"
+
+_release_deploy_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+trap _release_deploy_lock EXIT
+
+lock_waited=0
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+  if [ "$lock_waited" -ge "$LOCK_MAX_WAIT_SECONDS" ]; then
+    echo "[$(date -u +%FT%TZ)] Deploy lock still held after ${LOCK_MAX_WAIT_SECONDS}s -- assuming it's stale (a crashed prior run) and breaking it."
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    mkdir "$LOCK_DIR" 2>/dev/null || true
+    break
+  fi
+  sleep "$LOCK_WAIT_INTERVAL_SECONDS"
+  lock_waited=$((lock_waited + LOCK_WAIT_INTERVAL_SECONDS))
+done
+# --- End concurrency guard ----------------------------------------------------
+
 # --- Deployment blackout window check --------------------------------------
 # Scheduled jobs (data pull + analysis + order placement) run at fixed UTC
 # times — see "Deployment timing" in CLAUDE.md. Deploying inside one of these
