@@ -930,29 +930,34 @@ def test_is_nyse_extended_hours_open_false_on_real_market_holiday():
 
 def test_market_hours_check_job_skips_when_nyse_genuinely_closed(monkeypatch, mocker):
     """A real, independently-verified NYSE-closed moment (Saturday) --
-    poll/exit must not be attempted at all."""
+    poll/retry/exit must not be attempted at all."""
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_retry = mocker.patch("brokers.trading212.retry_missing_broker_stops")
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
 
     scheduler._market_hours_check_job()
 
     mock_poll.assert_not_called()
+    mock_retry.assert_not_called()
     mock_exit.assert_not_called()
 
 
 def test_market_hours_check_job_runs_when_nyse_genuinely_open(monkeypatch, mocker):
     """A real, independently-verified NYSE-open moment (mid-session on an
-    ordinary Tuesday) -- poll and exit check must both run."""
+    ordinary Tuesday) -- poll, the missing-stop retry, and the exit check
+    must all run."""
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_retry = mocker.patch("brokers.trading212.retry_missing_broker_stops")
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
 
     scheduler._market_hours_check_job()
 
     mock_poll.assert_called_once()
+    mock_retry.assert_called_once()
     mock_exit.assert_called_once()
 
 
@@ -960,9 +965,25 @@ def test_market_hours_check_job_failure_does_not_raise(monkeypatch, mocker):
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("brokers.trading212.poll_placed_orders", side_effect=RuntimeError("boom"))
+    mocker.patch("brokers.trading212.retry_missing_broker_stops", side_effect=RuntimeError("boom"))
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions", side_effect=RuntimeError("boom"))
 
     scheduler._market_hours_check_job()  # must not raise
+
+
+def test_market_hours_check_job_retry_failure_does_not_block_the_exit_check(monkeypatch, mocker):
+    """Per-step exception isolation, same contract as every other call in
+    this job: a failure in the missing-stop retry pass specifically must
+    not prevent the exit check from still running."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.retry_missing_broker_stops", side_effect=RuntimeError("boom"))
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+
+    scheduler._market_hours_check_job()  # must not raise
+
+    mock_exit.assert_called_once()
 
 
 def test_market_hours_check_job_runs_during_overnight_session_previously_skipped(monkeypatch, mocker):
@@ -971,17 +992,18 @@ def test_market_hours_check_job_runs_during_overnight_session_previously_skipped
     test_is_nyse_open_now_false_before_session_open (above) confirms is
     CLOSED under the old regular-hours-only gate this job used to use.
     Under the new extended-hours gate, that identical moment is now
-    genuinely inside the overnight session, and poll/exit must both run."""
+    genuinely inside the overnight session, and poll/retry/exit must all
+    run."""
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=7, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_retry = mocker.patch("brokers.trading212.retry_missing_broker_stops")
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
 
     scheduler._market_hours_check_job()
 
     mock_poll.assert_called_once()
-    mock_exit.assert_called_once()
-
+    mock_retry.assert_called_once()
     mock_exit.assert_called_once()
 
 
