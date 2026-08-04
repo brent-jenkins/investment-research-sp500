@@ -25,56 +25,104 @@ set -euo pipefail
 # rather than blocking outright, since some deploys (e.g. urgent hotfixes)
 # legitimately need to go out regardless.
 #
-# Re-verified against data/scheduler.py:start_scheduler()'s actual
-# CronTrigger registrations 2026-08-02 (not assumed from an old comment) --
-# the 07:00 and 13:30 windows previously named jobs removed 2026-07-31
-# ("pre-market analysis" / "US open analysis" -- see CLAUDE.md's
-# "Pre-market/US-open scheduled runs removed"). Both time slots are still
-# genuinely real order-placing windows today, just for different, newer
-# jobs (etf_order_submission / stock_order_submission, added the same day
-# under "Exchange-aware order submission") -- the risk these windows guard
-# against never went away, only the job names changed. The Sunday window
-# was also stale for a second, independent reason: weekly_summary now
-# fires at 09:00 *Europe/London* (data/scheduler.py, "genuinely UK local
-# time"), not a fixed 10:00 UTC -- that's 08:00 UTC in BST (late Mar-late
-# Oct) or 09:00 UTC in GMT. Rather than compute DST at runtime in bash
-# (this environment's tzdata for Europe/London was found to not apply BST
-# correctly when checked directly, so a bash `TZ=` conversion can't be
-# trusted here), the window is simply widened to statically cover both
-# possible UTC times with a buffer -- a slightly wider "are you sure?"
-# net twice a year around the DST boundary, never a missed one.
+# Re-verified against data/scheduler.py:start_scheduler()'s actual, current
+# CronTrigger registrations 2026-08-04 -- not assumed from an old comment
+# (the previous "re-verified 2026-08-02" pass had itself already gone stale
+# twice over by this date: stock_order_submission moved 13:30 -> 14:30 UTC
+# the same day it was last checked, and the Monday-only pre-market job was
+# removed entirely 2026-08-03 -- see CLAUDE.md's "Monday Pre-Market removed
+# entirely" and "Stock submission delayed past NYSE open" sections). This is
+# the same class of drift this project has hit more than once tonight: a
+# hand-maintained snapshot silently going wrong after the thing it tracked
+# changed underneath it. Rather than re-encode a fresh snapshot and hope it
+# stays current, `tests/test_deploy_blackout_windows.py::
+# test_blackout_windows_match_real_scheduler_registrations` starts the REAL
+# scheduler (data/scheduler.py:start_scheduler(), the exact same function
+# that registers every job this actually runs) and cross-checks its live
+# trigger fields against the WINDOW_LO/WINDOW_HI values below by name --
+# any future scheduler change that isn't mirrored here fails that test, not
+# silently drifts. Update the values below (and their PowerShell twins in
+# deploy.ps1) together with that test whenever a job's schedule changes.
 #
-# A second, independent bug found while re-verifying (not present before
-# either, not something this fix introduced): none of the three weekday
-# windows below ever checked day-of-week at all, so they fired on
-# Saturday/Sunday too -- every job they guard (etf_order_submission,
-# stock_order_submission, membership_refresh, scheduled_eod) is Mon-Fri
-# only, so a weekend "are you sure?" prompt for any of them was always a
-# false positive. Confirmed directly by dry-running the range logic
-# against injected times/weekdays before trusting this fix, not assumed.
+# A genuinely new finding from this pass, not present in the previous
+# design at all: market_hours_check (CronTrigger(minute=0), no hour/day
+# filter) and account_state_refresh (CronTrigger(minute=5), no hour/day
+# filter) both fire EVERY HOUR, every day, unconditionally (split from the
+# old single hourly _trade_alert_job() 2026-08-03 -- see CLAUDE.md's
+# "Splitting the hourly trade-alert job") -- neither was covered by any
+# window before. account_state_refresh in particular has no internal gate
+# at all (unlike every other job here, which no-ops on a non-trading
+# day/closed session) -- it does real work (position reconciliation, a
+# T212 account snapshot fetch) on every single firing, so its own window
+# below is deliberately NOT weekday-restricted, unlike the once-daily
+# windows. Given both recur hourly, a wide buffer (matching the ~30-60min
+# buffers used for the once-daily jobs below) would make this warning fire
+# for roughly half of every day -- deliberately tight instead (+/-5/10min
+# around the two fire minutes), reflecting that the actual at-risk period
+# is however long this script's own git-pull-plus-restart sequence takes
+# (observed well under two minutes end to end), not a generous margin
+# around a rare, high-stakes event the way the once-daily windows are.
+#
+# The remaining three windows below were already correctly weekday-gated
+# (a real, independent bug found and fixed 2026-08-02, unrelated to this
+# pass) and their UTC bounds are unchanged from that fix except where noted
+# -- only stale window content and the missing hourly coverage needed
+# correcting this time.
 now_hm="$(date -u +%H%M)"
+now_min="$(date -u +%M)"
 now_dow="$(date -u +%u)"  # ISO day of week: 1=Monday ... 7=Sunday
 blackout_label=""
 
 in_range() {
-  # in_range HHMM START END -> 0 if START <= HHMM <= END
+  # in_range VALUE START END -> 0 if START <= VALUE <= END
   [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
 }
 
 is_weekday() {
-  # Mon-Fri only -- every job these three windows guard is Mon-Fri; only
-  # the Sunday weekly-summary window (below) should ever match a weekend.
+  # Mon-Fri only -- an approximation of "NYSE is open" (every window below
+  # except the hourly one and Sunday's guards a job that's a genuine no-op
+  # outside NYSE trading days) -- bash has no market-calendar library, so
+  # this can't distinguish a weekday NYSE holiday (e.g. Thanksgiving) from
+  # a genuine trading day; see CLAUDE.md's "Market-calendar-aware
+  # scheduling" section for the real, Python-side NYSE check this
+  # approximates. A false-positive warning on a market holiday is a minor
+  # inconvenience (just confirm and proceed); a missed warning on a
+  # genuine trading day is the risk actually worth guarding against, so
+  # this approximation errs toward the safer side.
   [ "$now_dow" -ge 1 ] && [ "$now_dow" -le 5 ]
 }
 
-if is_weekday && in_range "$now_hm" 0645 0715; then
-  blackout_label="Monday pre-market job runs at 07:00 UTC on Mondays (cancels stale weekend orders, then re-runs order logic) -- the ETF order submission job that used to also run in this window was removed 2026-08-02 alongside the rest of the ETF sleeve, see CLAUDE.md's \"ETF sleeve removed from live trading\""
-elif is_weekday && in_range "$now_hm" 1315 1400; then
-  blackout_label="Stock order submission job runs at 13:30 UTC weekdays"
-elif is_weekday && in_range "$now_hm" 2100 2200; then
+# stock_order_submission: CronTrigger(hour=14, minute=30) -- moved from
+# 13:30 2026-08-02 (see CLAUDE.md's "Stock submission delayed past NYSE
+# open" section). WINDOW_LO/HI named for the drift-detection test.
+STOCK_SUBMISSION_WINDOW_LO=1415
+STOCK_SUBMISSION_WINDOW_HI=1445
+
+# membership_refresh (21:15) + scheduled_eod (21:30, config.yaml
+# scheduler.runs.eod) -- both still exactly where the 2026-08-02 pass left
+# them; window bounds unchanged.
+EOD_WINDOW_LO=2100
+EOD_WINDOW_HI=2200
+
+# weekly_summary: Sunday 09:00 Europe/London = 08:00 UTC (BST) or 09:00 UTC
+# (GMT) -- unchanged from the 2026-08-02 pass; still correctly covers both.
+WEEKLY_SUMMARY_WINDOW_LO=0745
+WEEKLY_SUMMARY_WINDOW_HI=0915
+
+# market_hours_check (:00) / account_state_refresh (:05) -- genuinely new
+# coverage this pass, see the comment block above. Expressed as
+# minute-of-hour, wrapping across the hour boundary (>= LO or <= HI).
+HOURLY_WINDOW_LO=55
+HOURLY_WINDOW_HI=10
+
+if is_weekday && in_range "$now_hm" "$STOCK_SUBMISSION_WINDOW_LO" "$STOCK_SUBMISSION_WINDOW_HI"; then
+  blackout_label="Stock order submission job runs at 14:30 UTC weekdays"
+elif is_weekday && in_range "$now_hm" "$EOD_WINDOW_LO" "$EOD_WINDOW_HI"; then
   blackout_label="Membership refresh (21:15 UTC) and the EOD job (21:30 UTC) run in this window on weekdays — EOD is the one that places T212 orders"
-elif [ "$now_dow" = "7" ] && in_range "$now_hm" 0745 0915; then
+elif [ "$now_dow" = "7" ] && in_range "$now_hm" "$WEEKLY_SUMMARY_WINDOW_LO" "$WEEKLY_SUMMARY_WINDOW_HI"; then
   blackout_label="Sunday weekly summary job runs at 09:00 Europe/London (08:00-09:00 UTC depending on BST/GMT)"
+elif [ "$now_min" -ge "$HOURLY_WINDOW_LO" ] || [ "$now_min" -le "$HOURLY_WINDOW_HI" ]; then
+  blackout_label="market_hours_check (:00) / account_state_refresh (:05) run every hour, every day — both make real T212 API calls (position poll/exit-check, account reconciliation/snapshot)"
 fi
 
 if [ -n "$blackout_label" ]; then
