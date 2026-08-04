@@ -24,6 +24,7 @@ reportlab>=4.0.0  # Due diligence report PDF export — analysis/dd_report.py:ge
 matplotlib>=3.8.0  # equity curve chart embedded in the PDF export above
 python-dateutil>=2.9.0
 requests>=2.31.0
+bcrypt>=4.1.0  # per-user account password hashing — auth.py
 pytz>=2024.1
 pandas-market-calendars>=4.3.0
 psutil>=5.9.0

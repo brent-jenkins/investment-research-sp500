@@ -110,8 +110,9 @@ headless = true
 port = 8501
 address = "127.0.0.1"
 enableCORS = false
-# XSRF protection can interfere with Caddy's reverse proxy; disable here
-# and rely on Caddy's TLS + basicauth for security.
+# XSRF protection can interfere with Caddy's reverse proxy; disable here.
+# Access control is enforced by the app's own per-user login (auth.py),
+# not by Caddy — see the ADMIN_PASSWORD_HASH note below.
 enableXsrfProtection = false
 
 [browser]
@@ -135,17 +136,21 @@ cp "$APP_DIR/Caddyfile" /etc/caddy/Caddyfile
 sed -i "s/YOUR\.DOMAIN\.COM/$DOMAIN/g" /etc/caddy/Caddyfile
 echo "    /etc/caddy/Caddyfile written."
 echo ""
-echo "  *** ACTION REQUIRED — set your dashboard password: ***"
+echo "  *** ACTION REQUIRED — set your first admin account: ***"
 echo ""
-echo "    1. Generate a bcrypt hash:"
-echo "         caddy hash-password"
-echo "       (enter your chosen password at the prompt)"
+echo "    Login is handled by the app itself (per-user accounts, see"
+echo "    CLAUDE.md's 'Authentication' section), not by Caddy. On first"
+echo "    startup with an empty users table, an 'admin' account is"
+echo "    created automatically:"
 echo ""
-echo "    2. Edit /etc/caddy/Caddyfile and replace:"
-echo "         REPLACE_WITH_HASH  →  the hash output from step 1"
-echo "         admin              →  your chosen username (if desired)"
-echo ""
-echo "    3. Reload Caddy:  systemctl reload caddy"
+echo "      - If ADMIN_PASSWORD_HASH is set in the systemd secrets"
+echo "        drop-in (a bcrypt hash — generate one with"
+echo "        'caddy hash-password' or 'python3 -c \"import bcrypt;"
+echo "        print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt())."
+echo "        decode())\"'), that becomes the admin password."
+echo "      - Otherwise a random password is generated and logged ONCE"
+echo "        — check the investment-research service log after first"
+echo "        startup and change it immediately via the Users page."
 echo ""
 
 # ── 7. Systemd services ───────────────────────────────────────────────────────

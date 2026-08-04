@@ -23,6 +23,12 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
+# Every AppTest.from_file("main.py") construction below must set an
+# authenticated session -- main.py now gates all content behind a login
+# form (see auth.py) -- before at.run(), the same way it already sets
+# st.session_state["page"] to skip straight to the page under test.
+_ADMIN_SESSION = {"id": 1, "username": "test_admin", "role": "admin"}
+
 
 def _fast_validation_result():
     """A small, fast, deterministic run_full_validation() result -- same
@@ -122,6 +128,7 @@ def app(db_engine, monkeypatch, mocker):
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
 
     at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "backtest"
     return at
 
@@ -202,6 +209,7 @@ def test_backtest_page_calls_run_full_validation_with_live_universe_and_mtm(db_e
     monkeypatch.setattr("main.get_engine", lambda: db_engine)
 
     at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "backtest"
     at = at.run()
     at.button(key="run_full_validation").click().run()
@@ -296,6 +304,7 @@ def instruments_app(db_engine, monkeypatch, mocker):
     monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: list(_SAMPLE_WATCHLIST_ENTRIES))
 
     at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "instruments"
     return at
 
@@ -442,6 +451,7 @@ def dashboard_app(db_engine, monkeypatch, mocker):
     monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: [])
 
     at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "dashboard"
     return at
 
@@ -805,7 +815,7 @@ def test_dashboard_navigation_no_longer_offers_performance(dashboard_app):
     nav_radio = next(r for r in at.radio if "Dashboard" in r.options)
     nav_options = list(nav_radio.options)
     assert "Performance" not in nav_options
-    assert set(nav_options) == {"Dashboard", "Instruments", "Backtest", "Status"}
+    assert set(nav_options) == {"Dashboard", "Instruments", "Backtest", "Status", "Users"}
 
 
 # ---------------------------------------------------------------------------
@@ -908,6 +918,7 @@ def status_app(db_engine, monkeypatch, mocker):
     )
 
     at = AppTest.from_file("main.py", default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
     at.session_state["page"] = "status"
     return at
 
