@@ -113,7 +113,7 @@ def _push_payload(ref="refs/heads/main"):
 def test_missing_signature_header_is_rejected_and_does_not_deploy(server):
     port, calls = server
     body = _push_payload()
-    status, _ = _post(port, "/webhook", body, {
+    status, _ = _post(port, "/webhook/deploy", body, {
         "X-GitHub-Event": "push",
         "Content-Type": "application/json",
         "Content-Length": str(len(body)),
@@ -125,7 +125,7 @@ def test_missing_signature_header_is_rejected_and_does_not_deploy(server):
 def test_invalid_signature_is_rejected_and_does_not_deploy(server):
     port, calls = server
     body = _push_payload()
-    status, _ = _post(port, "/webhook", body, {
+    status, _ = _post(port, "/webhook/deploy", body, {
         "X-GitHub-Event": "push",
         "X-Hub-Signature-256": "sha256=" + "0" * 64,
         "Content-Type": "application/json",
@@ -138,7 +138,7 @@ def test_invalid_signature_is_rejected_and_does_not_deploy(server):
 def test_valid_signed_ping_does_not_deploy(server):
     port, calls = server
     body = b"{}"
-    status, resp_body = _post(port, "/webhook", body, {
+    status, resp_body = _post(port, "/webhook/deploy", body, {
         "X-GitHub-Event": "ping",
         "X-Hub-Signature-256": _sign(body),
         "Content-Length": str(len(body)),
@@ -151,7 +151,7 @@ def test_valid_signed_ping_does_not_deploy(server):
 def test_valid_signed_push_to_other_branch_does_not_deploy(server):
     port, calls = server
     body = _push_payload(ref="refs/heads/some-feature")
-    status, _ = _post(port, "/webhook", body, {
+    status, _ = _post(port, "/webhook/deploy", body, {
         "X-GitHub-Event": "push",
         "X-Hub-Signature-256": _sign(body),
         "Content-Length": str(len(body)),
@@ -163,7 +163,7 @@ def test_valid_signed_push_to_other_branch_does_not_deploy(server):
 def test_valid_signed_push_to_main_triggers_deploy(server):
     port, calls = server
     body = _push_payload(ref="refs/heads/main")
-    status, resp_body = _post(port, "/webhook", body, {
+    status, resp_body = _post(port, "/webhook/deploy", body, {
         "X-GitHub-Event": "push",
         "X-Hub-Signature-256": _sign(body),
         "Content-Length": str(len(body)),

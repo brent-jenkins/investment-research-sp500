@@ -114,7 +114,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._send(404, "not found")
 
     def do_POST(self):
-        if self.path != "/webhook":
+        if self.path != "/webhook/deploy":
             self._send(404, "not found")
             return
 
@@ -162,7 +162,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 def run_server(port: int, secret: str) -> None:
     server = ThreadingHTTPServer(("127.0.0.1", port), WebhookHandler)
     server.webhook_secret = secret  # type: ignore[attr-defined]
-    logger.info("Webhook listener running on 127.0.0.1:%s (POST /webhook, GET /health)", port)
+    logger.info("Webhook listener running on 127.0.0.1:%s (POST /webhook/deploy, GET /health)", port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
