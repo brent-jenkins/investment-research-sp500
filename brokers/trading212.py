@@ -2179,6 +2179,16 @@ def poll_placed_orders(config: dict) -> int:
     at that BUY's own already-computed stop_price, sized to the row's REAL
     filled quantity (effective_qty — correctly handles a partial fill with
     no extra tracking). See _place_broker_stop_for_filled_buy() below.
+
+    This placement is a single, in-process step with no retry queue of
+    its own — if this function's own process dies between committing the
+    FILLED status update below and that placement call actually running,
+    the row is left permanently FILLED with stop_order_status still NULL,
+    and this function's own query (status='PLACED' only) will never
+    select it again. retry_missing_broker_stops() (below) is the
+    separate, sibling mechanism that catches exactly that gap — called
+    independently from the same scheduler job, not from inside this
+    function.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -2439,6 +2449,128 @@ def _place_broker_stop_for_filled_buy(
                 f"gap for this specific position."
             ),
         )
+
+
+def retry_missing_broker_stops(config: dict) -> int:
+    """Catches a FILLED BUY row whose broker-side stop-placement attempt
+    was never even made — `stop_order_status IS NULL`, not FAILED/
+    PLACED/CANCELLED/etc. (2026-08-04, closing the "buy-then-stop
+    sequencing" open item — see CLAUDE.md).
+
+    Why this exists — a genuine, confirmed gap, not a theoretical one.
+    `poll_placed_orders()` places the stop inline, in the SAME function
+    call, immediately after committing the BUY row's own DB transition
+    to FILLED — there is no separate queue or retry path for that one
+    step. If the process crashes or restarts (a deploy, an OOM kill, a
+    host reboot) in the narrow window between that DB commit and the
+    `_place_broker_stop_for_filled_buy()` call actually running, the BUY
+    row is left permanently marked FILLED with `stop_order_status` still
+    NULL — and nothing else in this system would ever notice or retry
+    it: `poll_placed_orders()`'s own query only ever selects
+    `status='PLACED'` rows (this row no longer matches, having already
+    transitioned past that), and `check_stop_health()` is deliberately
+    scoped to `stop_order_status == 'PLACED'` only (see that function's
+    own docstring) — a never-attempted placement is a materially
+    different state from "was placed, now silently missing", and was
+    never covered by either mechanism. Confirmed directly (not just
+    reasoned about): `tests/test_execution.py::
+    test_stop_health_non_placed_local_status_is_not_checked` explicitly
+    asserts a NULL `stop_order_status` is out of `check_stop_health()`'s
+    scope, and its own docstring's claim that every non-PLACED state is
+    "already-alerted-elsewhere" does not actually hold for NULL — FAILED
+    is alerted at placement time, CANCELLED/CANCEL_FAILED are alerted in
+    `maybe_exit_positions()`'s orphan-cancel-fix, but a placement that
+    never ran at all triggers neither.
+
+    Reuses `_locally_believed_open_positions()` (the same "what does
+    this system's own order history say is still open" query
+    `reconcile_positions_with_broker()` is built on) rather than a new,
+    parallel query — filtered here to `stop_order_status IS NULL` with a
+    real `stop_price` present. Re-checks the position is still genuinely
+    held (a fresh, single-ticker `client.get_position()` call) before
+    attempting placement — the position could have closed through some
+    other path since the BUY filled, and this must not attempt a stop
+    against a position that no longer exists (the same defensive
+    pattern `maybe_exit_positions()`'s own fresh-position re-check uses;
+    see CLAUDE.md's "Both stop-loss layers kept permanently" section).
+
+    Unlike `check_stop_health()`'s own deliberate alert-only design,
+    this DOES retry automatically — a materially different decision,
+    not an inconsistency. `check_stop_health()`'s reasoning against
+    auto-remediation turns entirely on not knowing whether a "missing"
+    PLACED stop might actually still be resting at T212 under some
+    other view, where blind re-placement risks a genuine duplicate
+    against the endpoint's own documented non-idempotency. A NULL
+    `stop_order_status` has no such ambiguity — it unambiguously means
+    `place_stop_order()` was never called for this position at all, so
+    there is nothing to duplicate; this is the FIRST attempt, not a
+    retry of an uncertain one. `_place_broker_stop_for_filled_buy()`
+    itself still only ever makes one single, non-retried placement
+    attempt per call, exactly as it always has.
+
+    Returns the count of stop-placement attempts made this call (success
+    or failure are both terminal here — a failure is recorded/alerted by
+    `_place_broker_stop_for_filled_buy()`'s own except path exactly as
+    for the primary placement path). Never raises — matches this
+    module's "never block the safety-critical path" contract.
+    """
+    if not _broker_stop_enabled(config):
+        return 0
+    if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
+        return 0
+
+    try:
+        believed_open = _locally_believed_open_positions()
+    except Exception as exc:
+        logger.warning("retry_missing_broker_stops: could not read open positions: %s", exc)
+        return 0
+
+    candidates = {
+        t212_ticker: info for t212_ticker, info in believed_open.items()
+        if info.get("stop_order_status") is None and info.get("stop_price")
+    }
+    if not candidates:
+        return 0
+
+    t212_cfg = config.get("trading212_invest", {})
+    live = t212_cfg.get("live", False)
+    try:
+        client = Trading212Client(live=live)
+    except Exception as exc:
+        logger.warning("retry_missing_broker_stops: cannot connect: %s", exc)
+        return 0
+
+    attempted = 0
+    for t212_ticker, info in candidates.items():
+        try:
+            fresh_position = client.get_position(t212_ticker)
+            fresh_qty = float((fresh_position or {}).get("quantity", 0) or 0)
+        except Exception as exc:
+            logger.warning(
+                "retry_missing_broker_stops: could not verify %s (%s) still held — %s",
+                info.get("ticker"), t212_ticker, exc,
+            )
+            continue
+        if fresh_qty <= 0:
+            logger.info(
+                "retry_missing_broker_stops: %s (%s) no longer genuinely held — skipping; "
+                "reconcile_positions_with_broker() will handle its closure.",
+                info.get("ticker"), t212_ticker,
+            )
+            continue
+
+        logger.warning(
+            "retry_missing_broker_stops: %s (%s) is a FILLED BUY with NO broker-side stop "
+            "ever attempted (stop_order_status was NULL) — placing it now.",
+            info.get("ticker"), t212_ticker,
+        )
+        _place_broker_stop_for_filled_buy(
+            client, config, buy_row_id=info["buy_id"], ticker=info.get("ticker"),
+            t212_ticker=t212_ticker, quantity=fresh_qty, stop_price=info["stop_price"],
+        )
+        attempted += 1
+
+    return attempted
 
 
 # ---------------------------------------------------------------------------

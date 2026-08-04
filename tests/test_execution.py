@@ -2145,6 +2145,172 @@ def test_poll_does_not_attempt_stop_placement_when_row_has_no_stop_price(db_engi
     v2_mocks.place_stop_order.assert_not_called()
 
 
+def test_poll_does_not_place_a_stop_when_buy_resolves_to_cancelled(db_engine, v2_mocks, mocker):
+    """A BUY that never actually fills -- resolves to CANCELLED instead --
+    must never trigger a stop-placement attempt. True by construction
+    (the placement condition explicitly requires new_status == 'FILLED'),
+    confirmed here with a real test rather than assumed from the logic's
+    shape."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-cancelled", quantity=10.0, stop_price=140.0)
+
+    v2_mocks.get_order.return_value = {"status": "CANCELLED"}
+
+    updated = poll_placed_orders(_poll_config())
+    assert updated == 1  # the CANCELLED status itself is still recorded
+
+    v2_mocks.place_stop_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status, stop_order_id, stop_order_status FROM invest_orders WHERE order_id='buy-order-cancelled'"
+    )).fetchone()
+    assert row[0] == "CANCELLED"
+    assert row[1] is None
+    assert row[2] is None
+
+
+def test_poll_does_not_place_a_stop_when_buy_resolves_to_rejected(db_engine, v2_mocks, mocker):
+    """Same guarantee as the CANCELLED case above, for a BUY T212 rejects
+    outright (e.g. no real market to fill into) -- must never trigger a
+    stop-placement attempt."""
+    from brokers.trading212 import poll_placed_orders
+
+    _mock_fx_conversion(mocker)
+    _seed_placed_buy_order(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
+                            order_id="buy-order-rejected", quantity=10.0, stop_price=140.0)
+
+    v2_mocks.get_order.return_value = {"status": "REJECTED"}
+
+    updated = poll_placed_orders(_poll_config())
+    assert updated == 1  # the REJECTED status itself is still recorded
+
+    v2_mocks.place_stop_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT status, stop_order_id, stop_order_status FROM invest_orders WHERE order_id='buy-order-rejected'"
+    )).fetchone()
+    assert row[0] == "REJECTED"
+    assert row[1] is None
+    assert row[2] is None
+
+
+# ---------------------------------------------------------------------------
+# retry_missing_broker_stops() (2026-08-04) -- catches a FILLED BUY whose
+# stop-placement attempt never even ran (e.g. a crash/restart between
+# poll_placed_orders()'s own DB commit and its stop-placement call). See
+# CLAUDE.md's "buy-then-stop sequencing" section for the full gap this
+# closes -- poll_placed_orders() itself can never retry this, since its
+# own query only ever selects status='PLACED' rows, and this row has
+# already moved past that.
+# ---------------------------------------------------------------------------
+
+def _retry_config(enabled=True, enabled_stop=True) -> dict:
+    return {
+        "trading212_invest": {
+            "enabled": enabled, "live": False,
+            "broker_side_stop_enabled": enabled_stop,
+        },
+        "notifications": {"email": {"enabled": False}},
+    }
+
+
+def test_retry_missing_broker_stops_places_stop_for_a_never_attempted_filled_buy(db_engine, v2_mocks, mocker):
+    """The core proof: a FILLED BUY row with stop_order_status genuinely
+    NULL (never attempted -- simulating the crash/restart window between
+    poll_placed_orders()'s DB commit and its own stop-placement call)
+    must have its stop placed on the next retry pass, sized to a FRESH
+    live quantity read (not the possibly-stale filled_quantity column)."""
+    from brokers.trading212 import retry_missing_broker_stops
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=1, is_etf=False, stop_order_id=None, stop_order_status=None,
+    )
+    v2_mocks.get_position.return_value = {"ticker": "AAPL_US_EQ", "quantity": 10.0}
+    v2_mocks.place_stop_order.return_value = {"id": "stop-order-retry-1"}
+
+    attempted = retry_missing_broker_stops(_retry_config())
+    assert attempted == 1
+
+    v2_mocks.place_stop_order.assert_called_once_with("AAPL_US_EQ", -10.0, 140.0)
+    row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_id, stop_order_status FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert row[0] == "stop-order-retry-1"
+    assert row[1] == "PLACED"
+
+
+def test_retry_missing_broker_stops_skips_a_position_no_longer_held(db_engine, v2_mocks, mocker):
+    """A never-attempted stop for a position that has since closed through
+    some other path must not attempt a placement against a position that
+    no longer exists -- skip silently; reconcile_positions_with_broker()
+    is responsible for correctly labelling that closure."""
+    from brokers.trading212 import retry_missing_broker_stops
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=1, is_etf=False, stop_order_id=None, stop_order_status=None,
+    )
+    v2_mocks.get_position.return_value = {"ticker": "AAPL_US_EQ", "quantity": 0.0}
+
+    attempted = retry_missing_broker_stops(_retry_config())
+    assert attempted == 0
+
+    v2_mocks.place_stop_order.assert_not_called()
+    row = db_engine.connect().execute(sa_text(
+        "SELECT stop_order_status FROM invest_orders WHERE direction='BUY'"
+    )).fetchone()
+    assert row[0] is None  # left untouched, not falsely marked
+
+
+def test_retry_missing_broker_stops_does_not_touch_a_row_already_attempted(db_engine, v2_mocks, mocker):
+    """A row with ANY non-NULL stop_order_status (PLACED, FAILED, ...) has
+    already had a genuine attempt made -- and, for FAILED specifically,
+    already been alerted at the time of that failure. This retry pass
+    must only ever act on a row that was never attempted at all, not
+    re-attempt an already-attempted-and-failed one automatically."""
+    from brokers.trading212 import retry_missing_broker_stops
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=1, is_etf=False, stop_order_id="stop-order-existing", stop_order_status="PLACED",
+    )
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="MSFT", t212_ticker="MSFT_US_EQ", stop_price=200.0,
+        days_ago=1, is_etf=False, stop_order_id=None, stop_order_status="FAILED",
+    )
+
+    attempted = retry_missing_broker_stops(_retry_config())
+    assert attempted == 0
+
+    v2_mocks.get_position.assert_not_called()
+    v2_mocks.place_stop_order.assert_not_called()
+
+
+def test_retry_missing_broker_stops_is_a_noop_when_flag_disabled(db_engine, v2_mocks, mocker):
+    from brokers.trading212 import retry_missing_broker_stops
+
+    _seed_open_position_with_broker_stop(
+        db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ", stop_price=140.0,
+        days_ago=1, is_etf=False, stop_order_id=None, stop_order_status=None,
+    )
+
+    attempted = retry_missing_broker_stops(_retry_config(enabled_stop=False))
+    assert attempted == 0
+    v2_mocks.place_stop_order.assert_not_called()
+
+
+def test_retry_missing_broker_stops_disabled_or_missing_creds_is_noop(db_engine, v2_mocks, monkeypatch):
+    from brokers.trading212 import retry_missing_broker_stops
+
+    assert retry_missing_broker_stops(_retry_config(enabled=True, enabled_stop=False)) == 0
+
+    monkeypatch.delenv("T212_API_KEY", raising=False)
+    assert retry_missing_broker_stops(_retry_config()) == 0
+    v2_mocks.get_positions.assert_not_called()
+
+
 def _n_ticker_mapping(n: int) -> dict:
     return {
         f"T{i}": {"t212_instrument_id": f"T{i}_EQ", "currency": "USD", "is_etf": True}

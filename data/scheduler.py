@@ -876,6 +876,27 @@ def _market_hours_check_job() -> None:
         logger.warning("T212 order poll failed: %s", _poll_exc)
 
     try:
+        # Missing-stop retry (2026-08-04) — a separate, sibling step from
+        # poll_placed_orders() above, not folded into it: catches a FILLED
+        # BUY row whose broker-side stop-placement attempt never even ran
+        # (e.g. this same process crashing/restarting between that
+        # function's own DB-commit and its stop-placement call — see
+        # brokers.trading212.retry_missing_broker_stops()'s own docstring
+        # for the full "buy-then-stop sequencing" gap this closes). Run
+        # right after the poll, before the exit check, so a stop placed
+        # here is already active by the time maybe_exit_positions() and
+        # check_stop_health() run later in this same cycle.
+        from brokers.trading212 import retry_missing_broker_stops  # noqa: PLC0415
+        _n_retried = retry_missing_broker_stops(config)
+        if _n_retried:
+            logger.warning(
+                "Missing-stop retry: %d FILLED BUY position(s) had no broker-side "
+                "stop ever attempted — placement retried this cycle.", _n_retried,
+            )
+    except Exception as exc:
+        logger.error("Missing-stop retry failed: %s", exc, exc_info=True)
+
+    try:
         from brokers.trading212 import maybe_exit_positions  # noqa: PLC0415
         maybe_exit_positions(config)
     except Exception as exc:
@@ -883,12 +904,13 @@ def _market_hours_check_job() -> None:
 
     try:
         # Stop-health check (2026-08-04) — runs LAST in this job,
-        # deliberately after both calls above: poll_placed_orders() may
+        # deliberately after every call above: poll_placed_orders() may
         # have just placed a fresh stop for a newly-FILLED BUY this same
-        # cycle, and maybe_exit_positions() may have just closed a
-        # position this same cycle (cancelling its stop as part of that)
-        # — checking after both avoids flagging either same-cycle
-        # transition as a false "missing stop". See
+        # cycle, retry_missing_broker_stops() may have just placed one for
+        # an earlier cycle's missed attempt, and maybe_exit_positions()
+        # may have just closed a position this same cycle (cancelling its
+        # stop as part of that) — checking after all three avoids flagging
+        # any same-cycle transition as a false "missing stop". See
         # brokers.trading212.check_stop_health()'s own docstring for the
         # incident this closes (tonight's silent stop-rejection, only
         # caught because a T212 notification happened to be seen
