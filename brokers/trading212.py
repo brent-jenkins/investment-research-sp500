@@ -2722,7 +2722,53 @@ def maybe_exit_positions(config: dict) -> None:
             if skip_this_position:
                 continue
 
-            close_qty = abs(current_qty)
+            # Final fresh-position re-check (2026-08-04, see CLAUDE.md's
+            # "Both stop-loss layers kept permanently" section) — closes
+            # the race between fetching client.get_positions() once at the
+            # top of this function and firing THIS position's exit SELL:
+            # the broker's own standing stop can close the position
+            # anywhere in that window (this loop processes every open
+            # position, with a 0.5s pause between sells, so the gap is
+            # real, not theoretical). Unlike the orphan-cancel-fix above —
+            # which only re-checks on a cancel-404 and only runs for a
+            # NON-STOP_LOSS exit with a recorded standing stop — this
+            # covers every exit_reason uniformly, including the one case
+            # that block deliberately skips: exit_reason == "STOP_LOSS"
+            # itself, where the standing broker-side stop and this local
+            # check are the SAME protection racing to fire first.
+            #
+            # Confirmed directly (not just reasoned about) that losing
+            # this race was already harmless before this check existed —
+            # T212 rejects a market SELL for a quantity the account
+            # doesn't hold, place_market_order() raises, and the existing
+            # per-position try/except below catches it cleanly with no
+            # duplicate order and no short position (see
+            # tests/test_execution.py::test_exit_race_sell_rejected_cleanly_
+            # when_broker_closes_position_after_fresh_check). This check
+            # exists to make the race SILENT and correct rather than
+            # merely harmless — without it, a lost race still produced a
+            # spurious FAILED order row and a "Sell order failed" alert
+            # email that read as a genuine problem for what was actually
+            # the protection working as designed (see
+            # tests/test_execution.py::test_exit_race_fresh_check_skips_
+            # when_broker_stop_already_closed_position for the case this
+            # check itself closes).
+            try:
+                fresh_position = client.get_position(t212_ticker)
+                fresh_qty = float((fresh_position or {}).get("quantity", 0) or 0)
+            except Exception:
+                # A read/parse failure here must not block a real, needed
+                # exit — fall back to the original snapshot's quantity and
+                # proceed exactly as before this check existed.
+                fresh_qty = current_qty
+            if fresh_qty <= 0:
+                logger.info(
+                    "%s (%s) already closed (likely the broker-side stop fired first) — "
+                    "skipping redundant %s exit SELL.", ticker, t212_ticker, exit_reason,
+                )
+                continue
+
+            close_qty = abs(fresh_qty)
             logger.info("Exiting %s (%s) — %s, qty=%.4f", ticker, t212_ticker, exit_reason, close_qty)
 
             status, order_id, error_msg = "FAILED", None, None
@@ -3015,12 +3061,19 @@ def check_stop_health(config: dict) -> list[dict]:
 
 def _locally_believed_open_positions() -> dict[str, dict]:
     """{t212_ticker: {"ticker": ..., "buy_id": ..., "entry_price": ...,
-    "quantity": ..., "buy_filled_at": ...}} for every t212_ticker whose
-    latest FILLED BUY has no later FILLED SELL — i.e. what THIS system's
-    own order history implies is still an open position, independent of
-    what T212 currently shows. buy_filled_at is the anchor
-    _most_recent_sell_order_since() uses to find any SELL attempt (of any
-    status, not just FILLED) tied to the current holding.
+    "quantity": ..., "buy_filled_at": ..., "stop_order_id": ...,
+    "stop_order_status": ..., "stop_price": ...}} for every t212_ticker
+    whose latest FILLED BUY has no later FILLED SELL — i.e. what THIS
+    system's own order history implies is still an open position,
+    independent of what T212 currently shows. buy_filled_at is the
+    anchor _most_recent_sell_order_since() uses to find any SELL attempt
+    (of any status, not just FILLED) tied to the current holding.
+
+    stop_order_id/stop_order_status/stop_price (2026-08-04) let
+    reconcile_positions_with_broker() recognize a closure this system's
+    OWN broker-side stop can explain, rather than folding every
+    unexplained-looking closure into the generic BROKER_CLOSED_NO_SELL
+    bucket — see that function's own docstring.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -3030,7 +3083,8 @@ def _locally_believed_open_positions() -> dict[str, dict]:
             rows = conn.execute(sa_text("""
                 SELECT io.t212_ticker, io.ticker, io.id AS buy_id,
                        io.fill_price AS entry_price, io.filled_quantity AS quantity,
-                       io.filled_at AS buy_filled_at
+                       io.filled_at AS buy_filled_at, io.stop_order_id,
+                       io.stop_order_status, io.stop_price
                 FROM invest_orders io
                 WHERE io.direction = 'BUY' AND io.status = 'FILLED'
                 AND io.id = (
@@ -3158,6 +3212,139 @@ def invalidate_stale_instrument_resolutions(
         return 0
 
 
+def _record_broker_stop_closure(
+    client: "Trading212Client", config: dict, *, info: dict, t212_ticker: str, currency: str,
+) -> bool:
+    """A locally-believed-open position is gone from T212's live positions
+    list and this system never placed a SELL for it — but its BUY row has
+    a broker-side stop recorded as PLACED. Check whether THAT specific
+    stop order is what closed it, via T212's own order-history endpoint
+    (_historical_fill(), the same lookup poll_placed_orders() already
+    uses for its own placed orders — reused here for a stop order id
+    instead, a generic order id lookup either way).
+
+    On a confirmed FILLED match: synthesizes the missing FILLED SELL row
+    in invest_orders (exit_reason=STOP_LOSS, order_id=the stop's own
+    order id) so _reconstruct_pnl() can pair it — without this, a
+    broker-stop-fired closure would never produce a pnl row at all (no
+    SELL was ever placed BY this system for it to pair against), not
+    merely be mislabeled, and "Performance by Exit Reason" would simply
+    never show the trade. Marks the BUY row's stop_order_status FILLED
+    (was PLACED) and records a STOP_LOSS reconciliation event,
+    immediately ACKNOWLEDGED — this is expected, healthy behaviour (the
+    protection working as designed), not a discrepancy needing manual
+    review the way BROKER_CLOSED_NO_SELL is; the caller must not feed it
+    into send_position_reconciliation_alert()'s trigger condition.
+
+    Returns True if the closure was explained and recorded this way;
+    False if the standing stop was not confirmed FILLED (or there wasn't
+    enough fill detail to record a usable pnl row), in which case the
+    caller falls through to the existing BROKER_CLOSED_NO_SELL handling.
+    Never raises — matches this module's "never block the safety-critical
+    path" contract.
+    """
+    stop_order_id = info.get("stop_order_id")
+    if not stop_order_id or info.get("stop_order_status") != "PLACED":
+        return False
+
+    try:
+        hist = _historical_fill(client, stop_order_id)
+    except Exception as exc:
+        logger.warning(
+            "_record_broker_stop_closure: history lookup failed for stop %s (%s): %s",
+            stop_order_id, t212_ticker, exc,
+        )
+        return False
+    if not hist or (hist.get("status") or "").upper() != "FILLED":
+        return False
+
+    fill_price = hist.get("fillPrice") or info.get("stop_price")
+    filled_qty = hist.get("filledQuantity") or info.get("quantity")
+    filled_at  = hist.get("filledAt") or datetime.utcnow().isoformat()
+    if not fill_price or not filled_qty:
+        # Not enough to record a usable pnl row — fall through rather than
+        # write a synthetic SELL that would corrupt _reconstruct_pnl().
+        logger.warning(
+            "_record_broker_stop_closure: stop %s (%s) confirmed FILLED but fill "
+            "price/quantity unavailable — falling through to BROKER_CLOSED_NO_SELL.",
+            stop_order_id, t212_ticker,
+        )
+        return False
+
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        now_iso = datetime.utcnow().isoformat()
+        with get_engine().begin() as conn:
+            conn.execute(sa_text("""
+                INSERT INTO invest_orders (
+                    order_id, ticker, t212_ticker, direction, quantity,
+                    fill_price, filled_quantity, status, is_etf,
+                    account_type, currency_code, exit_reason,
+                    placed_at, filled_at, created_at
+                ) VALUES (
+                    :order_id, :ticker, :t212_ticker, 'SELL', :quantity,
+                    :fill_price, :filled_qty, 'FILLED', 0,
+                    :account_type, :currency_code, 'STOP_LOSS',
+                    :filled_at, :filled_at, :now
+                )
+            """), {
+                "order_id": stop_order_id, "ticker": info["ticker"], "t212_ticker": t212_ticker,
+                "quantity": filled_qty, "fill_price": fill_price, "filled_qty": filled_qty,
+                "account_type": "LIVE" if config.get("trading212_invest", {}).get("live") else "DEMO",
+                "currency_code": currency, "filled_at": filled_at, "now": now_iso,
+            })
+    except Exception as exc:
+        logger.warning(
+            "_record_broker_stop_closure: could not write synthetic SELL row for %s (%s): %s",
+            info["ticker"], t212_ticker, exc,
+        )
+        return False
+
+    _update_stop_order_status(
+        info["buy_id"], "FILLED",
+        note="Confirmed fired via reconcile_positions_with_broker() — closed the position.",
+    )
+
+    _record_reconciliation_event(
+        event_type="STOP_LOSS", t212_ticker=t212_ticker, ticker=info["ticker"],
+        quantity=filled_qty, estimated_value_gbp=None,
+        note=(
+            f"{info['ticker']} ({t212_ticker}): closed by this system's own broker-side "
+            f"stop order (order_id={stop_order_id}), confirmed FILLED via T212's order "
+            "history. Expected, healthy behaviour — recorded for the audit trail, not a "
+            "discrepancy needing review. A matching FILLED SELL row (exit_reason=STOP_LOSS) "
+            "was synthesized in invest_orders so realised P&L and Performance-by-Exit-Reason "
+            "reflect this correctly."
+        ),
+    )
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        with get_engine().begin() as conn:
+            conn.execute(sa_text("""
+                UPDATE position_reconciliations
+                SET status = 'ACKNOWLEDGED', resolved_at = :now
+                WHERE event_type = 'STOP_LOSS' AND t212_ticker = :t212_ticker
+            """), {"now": datetime.utcnow().isoformat(), "t212_ticker": t212_ticker})
+    except Exception as exc:
+        logger.warning(
+            "_record_broker_stop_closure: could not mark STOP_LOSS event ACKNOWLEDGED for %s: %s",
+            t212_ticker, exc,
+        )
+
+    try:
+        _reconstruct_pnl(config)
+    except Exception as exc:
+        logger.warning("_record_broker_stop_closure: pnl reconstruction failed: %s", exc)
+
+    logger.info(
+        "Position reconciliation: STOP_LOSS closure confirmed for %s (%s) via broker-side "
+        "stop order_id=%s.", info["ticker"], t212_ticker, stop_order_id,
+    )
+    return True
+
+
 def reconcile_positions_with_broker(config: dict) -> dict:
     """Compare what this system's own order history implies is open
     against T212's real, live positions — flag (never guess) anything
@@ -3166,12 +3353,24 @@ def reconcile_positions_with_broker(config: dict) -> dict:
     (see invalidate_stale_instrument_resolutions()), reusing the same
     live positions read rather than a second T212 API call.
 
+    A closure explained by this system's OWN broker-side stop order
+    (confirmed FILLED via T212's order history) is recorded precisely as
+    STOP_LOSS (see _record_broker_stop_closure()), not folded into the
+    generic BROKER_CLOSED_NO_SELL bucket — expected now that both the
+    broker-side stop and the local hourly check run permanently, and in
+    practice the broker's continuous monitoring will often close a
+    position before the local check ever gets a chance to (2026-08-04,
+    see CLAUDE.md's "Both stop-loss layers kept permanently" section).
+
     Never raises — matches this module's "never block the safety-critical
     path" contract; a reconciliation-check failure must not prevent
     maybe_exit_positions()/poll_placed_orders() (its usual neighbours in
     the hourly job) from running. Returns a summary dict for logging/tests.
     """
-    summary = {"broker_closed_no_sell": [], "unrecognized_position": [], "invalidated_resolutions": 0}
+    summary = {
+        "broker_closed_no_sell": [], "unrecognized_position": [],
+        "stop_loss_closed": [], "invalidated_resolutions": 0,
+    }
 
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -3226,6 +3425,22 @@ def reconcile_positions_with_broker(config: dict) -> dict:
                 "poll_placed_orders(), not a broker-side closure. Skipping.",
                 info["ticker"], t212_ticker, recent_sell["order_id"],
             )
+            continue
+
+        # STOP_LOSS — before assuming "no explanation" or "our own SELL
+        # attempt failed", check whether THIS system's own broker-side
+        # stop order can explain the closure (2026-08-04, see
+        # _record_broker_stop_closure()'s own docstring). Checked ahead
+        # of the recent_sell branches below on purpose: a broker-side
+        # stop firing produces no invest_orders SELL row of its own, so
+        # it would otherwise always fall into one of those two generic
+        # buckets — including the case where this system's OWN exit
+        # SELL attempt failed for the same position around the same
+        # time the standing stop fired (the exact race this system's
+        # dual-layer design expects to happen from time to time).
+        currency = resolved.get(t212_ticker, {}).get("currency") or "USD"
+        if _record_broker_stop_closure(client, config, info=info, t212_ticker=t212_ticker, currency=currency):
+            summary["stop_loss_closed"].append(info["ticker"])
             continue
 
         if recent_sell:
