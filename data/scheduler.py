@@ -18,7 +18,12 @@ Run schedule (UTC unless noted):
                        _account_state_job() and CLAUDE.md's "Splitting the
                        hourly trade-alert job" section):
                          - market_hours_check — order-status poll + exit
-                           check, real work only when _is_nyse_open_now()
+                           check, real work only when
+                           _is_nyse_extended_hours_open() (2026-08-04 —
+                           widened from the regular-hours-only
+                           _is_nyse_open_now() to also cover T212's
+                           pre-market/after-hours/overnight sessions; see
+                           "extend Open Trade Monitor..." below)
                          - account_state_refresh — position reconciliation +
                            account snapshot, unconditional every firing
   09:00  Weekly summary (Sunday, *Europe/London* — not UTC) — send the weekly
@@ -48,6 +53,26 @@ already evaluating against unchanged, stale price data either way; the
 practical outcome — no meaningful exit decision happens at those hours —
 is identical, only the mechanism changed from "an inert call" to "a
 skipped call".)
+
+(Second correction, 2026-08-04: the 2026-08-03 correction above described
+the regular-hours-only mechanism as it stood that day; it no longer holds
+as stated. Both 07:00 UTC and 13:00 UTC now fall WITHIN an extended
+session year-round — verified directly, not assumed, across both DST
+seasons: 07:00 UTC sits inside the overnight session in both summer and
+winter, and 13:00 UTC sits inside pre-market in both (pre-market starts
+at 04:00 ET, which is 08:00 UTC in summer/EDT and 09:00 UTC in
+winter/EST — either way still before 13:00 UTC, and well before regular
+open at 13:30 UTC/14:30 UTC respectively). So once market_hours_check_job()
+moved onto the wider check, BOTH hours now trigger a real exit-check call,
+not a skipped one, consistently across the year. This is expected, not a
+regression: paired with the separate live-pricing fix (see "live pricing
+for the exit check"), an exit decision at either hour can now genuinely
+differ, since the price it evaluates against can genuinely have moved in
+the corresponding extended session, which is the whole point of both
+changes together. None of this affects the original 2026-07-31 redundancy
+finding about the removed pre-market/US-open jobs themselves, which never
+gained live pricing or extended-hours recognition and were removed on
+their own, independent merits.)
 
 The Monday-only 07:00 UTC "Monday Pre-Market" job (stale weekend BUY order
 cancellation + an order-logic re-run) was removed entirely 2026-08-03 for
@@ -270,6 +295,96 @@ def _is_nyse_open_now(now_utc: datetime) -> bool:
         return bool(market_open <= now_utc <= market_close)
     except Exception as exc:
         logger.warning("NYSE live-session check failed: %s — assuming open.", exc)
+        return True
+
+
+def _is_nyse_extended_hours_open(now_utc: datetime) -> bool:
+    """True if now_utc falls within any of T212's real, documented
+    extended-hours sessions for NYSE-listed US equities (2026-08-04):
+    pre-market (04:00–09:30 ET), regular hours (09:30–16:00 ET),
+    after-hours (16:00–20:00 ET), or overnight (20:00–04:00 ET, via Blue
+    Ocean Technologies ATS — T212's own docs restrict this session to the
+    most liquid securities only, a distinction this function does not
+    attempt to model per-ticker; it answers "is SOME extended session
+    live right now", not "is this specific ticker eligible for it").
+
+    A deliberately SEPARATE function from _is_nyse_open_now() above — NOT
+    a modification of it. _is_nyse_open_now() is also the gate
+    _stock_order_submission_job() uses, and that job must stay
+    regular-hours-only: submitting a brand-new entry into T212's own
+    documented thinner extended-hours liquidity ("orders may be delayed
+    or not executed at all") is a separate risk decision this task does
+    not make. Only _market_hours_check_job() (Open Trade Monitor — order-
+    status poll + exit check) calls this function; confirmed directly by
+    checking every call site of _is_nyse_open_now() before writing this,
+    not assumed.
+
+    Mechanism, in two tiers:
+
+    1. Pre-market + regular + after-hours are read directly from
+       pandas_market_calendars' own `pre`/`post` schedule columns
+       (market_times="all") — confirmed live these three sessions are
+       genuinely contiguous (pre <= t <= post covers exactly and only
+       04:00–20:00 ET, spanning all three at once), and — like the
+       regular-session boundaries _is_nyse_open_now() already uses —
+       genuinely DST-aware (checked directly: `pre` reads 08:00 UTC in
+       August/EDT and 09:00 UTC in November/EST for the identical 04:00
+       ET wall-clock time), never a hand-maintained UTC offset.
+    2. Overnight has no equivalent in pandas_market_calendars (Blue Ocean
+       ATS is an alternative trading system, not an exchange calendar the
+       library tracks) — built instead from T212's own documented, fixed
+       20:00–04:00 ET window, but still anchored to pandas_market_
+       calendars' own `post`/`pre` timestamps rather than a hardcoded UTC
+       offset, so it stays correctly DST-aware the same way tier 1 does.
+       Recognized ONLY between two CALENDAR-ADJACENT trading days (row
+       N's date + 1 day == row N+1's date) — confirmed directly against
+       real data that this single adjacency rule correctly excludes both
+       a genuine weekend (2026-08-07 Fri → 2026-08-10 Mon, not adjacent)
+       and a holiday (2026-11-25 Wed → 2026-11-27 Fri around Thanksgiving,
+       not adjacent) with no separate weekend/holiday special-casing
+       needed. This is a deliberately conservative reading of "24/5" (not
+       "24/7") given the real Blue Ocean ATS session's exact holiday-
+       bridging behavior isn't independently confirmed one way or the
+       other — stated here as an assumption this function makes, not a
+       verified fact, matching the standing project convention of naming
+       an unverified assumption explicitly rather than presenting it as
+       confirmed.
+
+    Fails OPEN (returns True) on any calendar-lookup error — the same
+    convention _is_nyse_open_now() already uses, and for the identical
+    reason: a transient lookup failure must never silently suppress a
+    safety-critical exit-check job for up to an hour.
+    """
+    try:
+        cal = mcal.get_calendar("NYSE")
+        today = now_utc.date()
+        sched = cal.schedule(
+            start_date=(today - timedelta(days=5)).isoformat(),
+            end_date=(today + timedelta(days=5)).isoformat(),
+            market_times="all",
+        )
+        if sched.empty:
+            return False
+
+        # Tier 1 — pre-market/regular/after-hours: one contiguous window
+        # per trading day.
+        for _, row in sched.iterrows():
+            if row["pre"] <= now_utc <= row["post"]:
+                return True
+
+        # Tier 2 — overnight: bridges row i's `post` to row i+1's `pre`,
+        # only when the two trading days are genuinely calendar-adjacent.
+        dates = [ts.date() for ts in sched.index]
+        for i in range(len(sched) - 1):
+            if dates[i + 1] == dates[i] + timedelta(days=1):
+                this_post = sched.iloc[i]["post"]
+                next_pre = sched.iloc[i + 1]["pre"]
+                if this_post <= now_utc <= next_pre:
+                    return True
+
+        return False
+    except Exception as exc:
+        logger.warning("NYSE extended-hours session check failed: %s — assuming open.", exc)
         return True
 
 
@@ -675,8 +790,36 @@ def _eod_job() -> None:
 def _market_hours_check_job() -> None:
     """Hourly, every single day (no cron-level day-of-week or hour-of-day
     filter at all — see start_scheduler()'s own registration comment)
-    — T212 order-status poll and exit check, gated internally on
-    _is_nyse_open_now() rather than a fixed UTC hour range.
+    — T212 order-status poll and exit check ("Open Trade Monitor" on the
+    Status page), gated internally on _is_nyse_extended_hours_open()
+    (2026-08-04 — extended from the regular-hours-only
+    _is_nyse_open_now(), see that function's own docstring and CLAUDE.md's
+    "extend Open Trade Monitor to T212's extended-hours sessions" section)
+    rather than a fixed UTC hour range.
+
+    Why the wider window, specifically for THIS job and not
+    _stock_order_submission_job() below (which deliberately keeps using
+    the narrower _is_nyse_open_now()): T212 genuinely executes real
+    trades — not just indicative quotes — across pre-market, after-hours,
+    and (for the most liquid names, via Blue Ocean ATS) overnight
+    sessions, so a position's real price can move meaningfully outside
+    the old regular-13:30–20:00-UTC-only window this job used to check.
+    The exit check (`maybe_exit_positions()`) — stop-loss/signal-off/
+    crisis-exit/max-holding — is this system's own, continuously-running
+    responsibility for an already-open position (as opposed to placing a
+    brand-new entry, which _stock_order_submission_job() deliberately
+    does NOT extend into T212's thinner extended-hours liquidity), so it
+    should have the chance to see and react to that movement rather than
+    only ever checking once regular hours reopen. This widens WHEN the
+    job is allowed to fire; it does not, by itself, change WHAT price the
+    exit check evaluates once it runs — that is the separate, complementary
+    live-pricing fix (see CLAUDE.md's "live pricing for the exit check"
+    section), which replaces the exit check's own once-daily stale close
+    with a genuinely live read. The two are independent, cumulative fixes
+    to the same underlying gap (see the CLAUDE.md sections for both): this
+    one alone still leaves the exit check evaluating whatever price source
+    is wired in at the time; that one alone still can't be checked outside
+    whatever window this job fires in.
 
     Replaces the old, single _trade_alert_job() (2026-08-03 — see
     CLAUDE.md's "Splitting the hourly trade-alert job" section for the
@@ -684,41 +827,44 @@ def _market_hours_check_job() -> None:
     NYSE-hours-gated job (order polling + exit checks) and the
     unconditional _account_state_job() below (reconciliation + account
     snapshot) because those four responsibilities do not share one
-    correct time window — the two gated here both have a direct,
-    evidenced dependency on NYSE actually being open:
+    correct time window:
 
-      - The exit check (`brokers.trading212.maybe_exit_positions()`) —
-        stop-loss/signal-off/crisis-exit/max-holding decisions all
-        depend on live, moving price data. Price data is completely
-        static outside NYSE hours (no new EOD pull happens until 21:30
-        UTC, and nothing moves in the stored data between one day's
-        close and the next day's pull) — checking against unchanged
-        data produces the identical answer every time, pure no-op
-        overhead.
+      - The exit check — see above.
       - T212 order-status polling (`poll_placed_orders()`) — confirmed
         directly (2026-08-03, see CLAUDE.md's "Tracing the '60+ hour
         fill-lag' claim's real origin" section) that T212 does not fill
-        market orders outside NYSE trading hours at all, and every real
-        fill on this account has resolved within single-digit seconds
-        during its own session — polling outside NYSE hours has no
-        real informational value under normal conditions. (A genuinely
-        rare, anomalous resolution outside normal fill mechanics can't
-        be fully ruled out from the evidence gathered — that residual,
-        low-severity risk is accepted explicitly, not overlooked; see
-        the same CLAUDE.md section.)
+        THIS system's own market orders outside their own regular-hours
+        submission window at all — none of this system's orders ever set
+        the extendedHours flag T212's API supports, so, unlike a genuine
+        24/5-flagged order, they only ever fill during the regular
+        session regardless of when they were placed — and every real fill
+        on this account has resolved within single-digit seconds during
+        its own session. Extending THIS specific check's own window
+        alongside the exit check's (since both live in the one job, gated
+        by the one shared condition) gains it no new informational value
+        of its own — it is along for the ride on the exit check's real
+        need, not a change made for polling's own sake — but doing so is
+        harmless: polling more often against orders that were never going
+        to have moved produces the identical answer, the same "no-op
+        overhead, not a bug" shape this job's staleness reasoning already
+        accepted for a narrower window. (A genuinely rare, anomalous
+        resolution outside normal fill mechanics can't be fully ruled out
+        from the evidence gathered — that residual, low-severity risk is
+        accepted explicitly, not overlooked; see the same CLAUDE.md
+        section.)
 
     Fires every hour regardless of NYSE state — the gate is evaluated
-    fresh on every real firing via _is_nyse_open_now(), not approximated
-    with a hardcoded UTC window, so it stays correct across the US/UK
-    DST-transition mismatch automatically with no schedule to
-    hand-maintain.
+    fresh on every real firing via _is_nyse_extended_hours_open(), not
+    approximated with a hardcoded UTC window, so it stays correct across
+    both the US/UK DST-transition mismatch and the seasonal ET offset
+    automatically, with no schedule to hand-maintain.
     """
     now_utc = datetime.now(timezone.utc)
-    if not _is_nyse_open_now(now_utc):
-        logger.debug("Market-hours check skipped — NYSE not in session.")
+    if not _is_nyse_extended_hours_open(now_utc):
+        logger.debug("Market-hours check skipped — outside every NYSE extended-hours session.")
         return
 
-    logger.info("Market-hours check starting (NYSE in session)…")
+    logger.info("Market-hours check starting (an NYSE extended-hours session is live)…")
     config = _load_config()
 
     try:
@@ -915,33 +1061,41 @@ def _stock_order_submission_job() -> None:
     day_of_week="mon-fri" and had NO internal calendar/session check of
     its own at all, unlike every other job touched the same day
     (scheduled_eod/membership_refresh: _is_scheduled_trading_day();
-    market_hours_check: _is_nyse_open_now()). A plain weekday filter has
-    no concept of a US market holiday — on a Monday that also happens to
-    be a genuine NYSE closure (a federal holiday), this job would still
-    have fired at 14:30 UTC believing it was a normal trading day, and
-    attempted to submit real orders with the market closed. Confirmed
-    directly by reading the actual registration before assuming either
-    way — the registration's own prior comment explicitly stated this gap
-    was deliberately left out of scope when submission timing was last
-    changed (2026-08-02), and was never revisited until now.
+    market_hours_check: _is_nyse_open_now(), at the time). A plain
+    weekday filter has no concept of a US market holiday — on a Monday
+    that also happens to be a genuine NYSE closure (a federal holiday),
+    this job would still have fired at 14:30 UTC believing it was a
+    normal trading day, and attempted to submit real orders with the
+    market closed. Confirmed directly by reading the actual registration
+    before assuming either way — the registration's own prior comment
+    explicitly stated this gap was deliberately left out of scope when
+    submission timing was last changed (2026-08-02), and was never
+    revisited until now.
 
-    Uses _is_nyse_open_now() specifically — the STRICTER, live-session
-    check ("is the market genuinely in session right now"), not
-    _is_scheduled_trading_day()'s day-level check ("is today a trading
-    day at all") — reusing the exact, already-proven mechanism built for
-    market_hours_check_job() rather than a separate, weaker check for
-    this exact purpose. This is also the correct check for what
-    submission timing actually cares about: 14:30 UTC is chosen
+    Uses _is_nyse_open_now() specifically — the STRICTER, regular-hours-
+    only, live-session check ("is the market genuinely in its REGULAR
+    session right now"), not _is_scheduled_trading_day()'s day-level
+    check ("is today a trading day at all") — originally built for, and
+    shared with, market_hours_check_job() (2026-08-03). That sibling job
+    has since moved to the wider _is_nyse_extended_hours_open()
+    (2026-08-04 — see CLAUDE.md's "extend Open Trade Monitor to T212's
+    extended-hours sessions" section); THIS job deliberately did not move
+    with it and still uses the original, narrower check — submitting a
+    brand-new entry into T212's own documented thinner extended-hours
+    liquidity ("orders may be delayed or not executed at all") is a
+    separate risk decision that change explicitly declined to make by
+    default, so regular-hours-only remains correct here even though the
+    exit check's own window widened. This is also the correct check for
+    what submission timing actually cares about: 14:30 UTC is chosen
     specifically to land 60 minutes into NYSE's live regular session (see
-    below), so the question genuinely is "is the market open right now",
-    not merely "is today a trading day" — the same distinction that makes
-    _is_nyse_open_now() correct for the hourly market_hours_check job
-    applies identically here. A holiday (schedule.empty for today) and an
+    below), so the question genuinely is "is the REGULAR market open
+    right now", not merely "is today a trading day" and not "is any
+    extended session live". A holiday (schedule.empty for today) and an
     ordinary Saturday/Sunday are both covered by this SAME check, with no
     separate weekday logic needed at all — NYSE's own real calendar is
     never in session on a Saturday or Sunday, so _is_nyse_open_now()
-    naturally returns False then regardless of day-of-week, exactly the
-    same way it already does for market_hours_check_job() every weekend.
+    naturally returns False then regardless of day-of-week, the same way
+    every NYSE-calendar-derived check in this module does.
 
     Moved from 13:30 UTC (right at the open) 2026-08-02 — the opening hour
     is the most volatile window of the trading day (overnight orders and

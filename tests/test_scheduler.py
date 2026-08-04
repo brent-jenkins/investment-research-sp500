@@ -559,6 +559,27 @@ def test_stock_order_submission_job_runs_when_nyse_genuinely_open(monkeypatch, m
     mock_submit.assert_called_once_with({"k": "v"})
 
 
+def test_stock_order_submission_job_still_skips_during_extended_hours_session(monkeypatch, mocker):
+    """Confirms this job's own behaviour is genuinely unaffected by the
+    2026-08-04 extended-hours change (see CLAUDE.md's "extend Open Trade
+    Monitor to T212's extended-hours sessions" section) — not merely "the
+    code wasn't touched," but empirically: frozen to 2026-08-04 07:00 UTC,
+    the exact moment test_is_nyse_extended_hours_open_true_during_overnight
+    confirms is genuinely OPEN under the new wider check (and therefore
+    now genuinely runs market_hours_check_job(), see the sibling test
+    above) — this job must still decline, since it deliberately kept using
+    the narrower, regular-hours-only _is_nyse_open_now() (confirmed False
+    at this exact moment by test_is_nyse_open_now_false_before_session_open)."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=7, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={"k": "v"})
+    mock_submit = mocker.patch("brokers.trading212.submit_pending_stock_orders", return_value=1)
+    mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._stock_order_submission_job()
+
+    mock_submit.assert_not_called()
+
+
 def test_stock_order_submission_registered_daily_no_day_of_week_filter(monkeypatch):
     """Confirms the registration itself, not just the job's own internal
     behaviour — the load-bearing part of the "fires unconditionally,
@@ -848,8 +869,58 @@ def test_is_nyse_open_now_false_on_real_weekend():
 
 
 # ---------------------------------------------------------------------------
+# _is_nyse_extended_hours_open() (2026-08-04) -- real, unmocked
+# pandas_market_calendars NYSE data, same discipline as _is_nyse_open_now()'s
+# own tests above. Every value below was independently verified directly
+# (not assumed) before being written into a test -- see the function's own
+# docstring for the pre/regular/after-hours/overnight boundary reasoning.
+# The overnight case deliberately reuses 2026-08-04 07:00 UTC, the EXACT
+# moment test_is_nyse_open_now_false_before_session_open above proves is
+# CLOSED under the regular-hours-only check -- the sharpest possible
+# contrast, on the identical timestamp, for the identical function's wider
+# sibling.
+# ---------------------------------------------------------------------------
+
+def test_is_nyse_extended_hours_open_true_during_pre_market():
+    now = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)  # 05:00 EDT -- inside 04:00-09:30 ET pre-market
+    assert scheduler._is_nyse_extended_hours_open(now) is True
+
+
+def test_is_nyse_extended_hours_open_true_during_regular_session():
+    now = datetime(2026, 8, 4, 15, 0, tzinfo=timezone.utc)  # same moment as the regular-session _is_nyse_open_now() test
+    assert scheduler._is_nyse_extended_hours_open(now) is True
+
+
+def test_is_nyse_extended_hours_open_true_during_after_hours():
+    now = datetime(2026, 8, 4, 21, 0, tzinfo=timezone.utc)  # 17:00 EDT -- inside 16:00-20:00 ET after-hours
+    assert scheduler._is_nyse_extended_hours_open(now) is True
+
+
+def test_is_nyse_extended_hours_open_true_during_overnight():
+    """The decisive contrast case: identical timestamp to
+    test_is_nyse_open_now_false_before_session_open above (2026-08-04
+    07:00 UTC, confirmed closed under the regular-hours-only check) --
+    genuinely open under this wider one, since 07:00 UTC falls inside the
+    prior trading day's overnight session (Blue Ocean ATS, 20:00-04:00 ET)."""
+    now = datetime(2026, 8, 4, 7, 0, tzinfo=timezone.utc)
+    assert scheduler._is_nyse_open_now(now) is False  # reconfirmed: still closed under the regular-hours check
+    assert scheduler._is_nyse_extended_hours_open(now) is True  # but open under the extended-hours one
+
+
+def test_is_nyse_extended_hours_open_false_on_real_weekend():
+    now = datetime(2026, 8, 8, 15, 0, tzinfo=timezone.utc)  # a genuine Saturday, comfortably mid-weekend
+    assert scheduler._is_nyse_extended_hours_open(now) is False
+
+
+def test_is_nyse_extended_hours_open_false_on_real_market_holiday():
+    now = datetime(2026, 11, 26, 15, 0, tzinfo=timezone.utc)  # Thanksgiving -- genuinely closed all day
+    assert scheduler._is_nyse_extended_hours_open(now) is False
+
+
+# ---------------------------------------------------------------------------
 # _market_hours_check_job() -- order poll + exit check, internally gated on
-# a genuine, live _is_nyse_open_now() check (2026-08-03 split, replacing the
+# _is_nyse_extended_hours_open() (2026-08-04 -- widened from the
+# regular-hours-only _is_nyse_open_now(), 2026-08-03 split, replacing the
 # old single _trade_alert_job()). Reuses _frozen_date_at() (already used
 # throughout this file for the calendar-gating tests below) to drive the
 # job's internal datetime.now(timezone.utc) call to a specific, real
@@ -892,6 +963,24 @@ def test_market_hours_check_job_failure_does_not_raise(monkeypatch, mocker):
     mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions", side_effect=RuntimeError("boom"))
 
     scheduler._market_hours_check_job()  # must not raise
+
+
+def test_market_hours_check_job_runs_during_overnight_session_previously_skipped(monkeypatch, mocker):
+    """The actual behavioural change this task ships (2026-08-04): frozen
+    to 2026-08-04 07:00 UTC -- the exact moment
+    test_is_nyse_open_now_false_before_session_open (above) confirms is
+    CLOSED under the old regular-hours-only gate this job used to use.
+    Under the new extended-hours gate, that identical moment is now
+    genuinely inside the overnight session, and poll/exit must both run."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=7, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mock_poll = mocker.patch("brokers.trading212.poll_placed_orders")
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+
+    scheduler._market_hours_check_job()
+
+    mock_poll.assert_called_once()
+    mock_exit.assert_called_once()
 
     mock_exit.assert_called_once()
 
