@@ -73,18 +73,24 @@ LOCK_WAIT_INTERVAL_SECONDS="${DEPLOY_LOCK_WAIT_INTERVAL_SECONDS:-1}"
 # this breaks it rather than hanging every future deploy indefinitely.
 #
 # MUST be comfortably longer than the blackout defer loop's own
-# DEPLOY_MAX_BLACKOUT_WAIT_SECONDS cap (1800s default) plus real
+# DEPLOY_MAX_BLACKOUT_WAIT_SECONDS cap (6000s default, see below) plus real
 # deploy_steps() runtime -- a legitimate first holder can hold this lock
 # for up to that entire duration. Confirmed as a REAL bug, not
-# theoretical: an earlier default of 600s here (shorter than the 1800s
-# blackout cap) meant a second, still-legitimately-waiting process would
-# hit ITS OWN 600s patience limit before the first process's 1800s
-# blackout wait finished, wrongly conclude the lock was stale, forcibly
-# break it, and start running concurrently with the still-very-much-alive
-# first process -- observed live in production as five separate deploy.sh
-# processes all running at once, each having stolen the lock from the
-# last, every one independently polling its own blackout-defer loop.
-LOCK_MAX_WAIT_SECONDS="${DEPLOY_LOCK_MAX_WAIT_SECONDS:-3600}"
+# theoretical: an earlier default of 600s here (shorter than the
+# then-1800s blackout cap) meant a second, still-legitimately-waiting
+# process would hit ITS OWN 600s patience limit before the first
+# process's blackout wait finished, wrongly conclude the lock was stale,
+# forcibly break it, and start running concurrently with the
+# still-very-much-alive first process -- observed live in production as
+# five separate deploy.sh processes all running at once, each having
+# stolen the lock from the last, every one independently polling its own
+# blackout-defer loop. Raised again 2026-08-05, in step with
+# DEPLOY_MAX_BLACKOUT_WAIT_SECONDS below, to preserve this same ordering
+# after that cap itself was raised -- see that constant's own comment for
+# why. tests/test_deploy_server_side_blackout.py's
+# test_lock_max_wait_default_exceeds_blackout_max_wait_default statically
+# guards the ordering so the two can't silently drift apart again.
+LOCK_MAX_WAIT_SECONDS="${DEPLOY_LOCK_MAX_WAIT_SECONDS:-7200}"
 
 _release_deploy_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
 trap _release_deploy_lock EXIT
@@ -244,7 +250,49 @@ deploy_steps() {
 # available for a deliberate manual override (e.g. a genuinely urgent
 # break-glass deploy) but nothing sets it automatically any more.
 if [ "${DEPLOY_SKIP_BLACKOUT_CHECK:-0}" != "1" ]; then
-  MAX_WAIT_SECONDS="${DEPLOY_MAX_BLACKOUT_WAIT_SECONDS:-1800}"
+  # MUST be comfortably longer than the WIDEST single blackout window
+  # below -- otherwise a deploy that starts deferring near the *start* of
+  # a window hits this cap and forces through while genuinely still
+  # inside that same window, defeating the whole "wait for the window to
+  # clear" point of deferring at all. That widest window is
+  # WEEKLY_SUMMARY_WINDOW (0745-0915, 90 minutes / 5400s -- wider than
+  # EOD's own 60-minute window; it's sized for Europe/London BST/GMT
+  # ambiguity, not job runtime, but the cap still has to cover it).
+  #
+  # Confirmed as a REAL bug, not theoretical (2026-08-05): the old 1800s
+  # default was shorter than EVERY window here except the tiny hourly
+  # one. A deploy that began deferring at 21:23 UTC hit that 1800s cap at
+  # 21:53 UTC and force-restarted investment-research-scheduler -- while
+  # that night's 21:30 UTC EOD job was still genuinely mid-run (data pull
+  # alone for the current 506-ticker live universe measured at ~23
+  # minutes end to end that same week, 21:30:10-21:53:08 on a clean
+  # uninterrupted run, 2026-08-03 -- plus further time for the
+  # decide/candidate-queuing pipeline and the T212 snapshot afterward,
+  # itself already close to the EOD window's own 60-minute width). The
+  # restart killed the in-flight job before it reached
+  # pull_incremental()'s own last_full_refresh stamp, silently leaving
+  # price_data mixed-freshness (most tickers current, a handful still on
+  # the prior close) and last_full_refresh never updated -- the Status
+  # page kept showing EOD as OVERDUE even after the startup missed-EOD
+  # catch-up gate (_check_missed_eod_run()) had already run a real
+  # candidate-queuing pass against that incomplete data. This was a fresh
+  # regression, not a longstanding gap: the EOD live universe grew from
+  # ~112 tickers to the full 506-ticker S&P 500 set on 2026-08-02 (see
+  # CLAUDE.md's "V2 stock universe broadening"), which is what pushed
+  # EOD's real runtime close enough to the EOD window's own width for
+  # this to bite for the first time -- the 1800s cap was never
+  # re-checked against ANY window's width, EOD's or the wider
+  # weekly-summary one.
+  #
+  # 6000s (100 minutes) is WEEKLY_SUMMARY_WINDOW's own 5400s width plus a
+  # 10-minute margin -- comfortably enough that a deploy deferring from
+  # the very start of ANY window here will see that window clear
+  # naturally before ever reaching this cap, for as long as the window
+  # widths in this file stay what they are today.
+  # tests/test_deploy_server_side_blackout.py's
+  # test_blackout_max_wait_default_covers_widest_window statically guards
+  # this against the same drift.
+  MAX_WAIT_SECONDS="${DEPLOY_MAX_BLACKOUT_WAIT_SECONDS:-6000}"
   POLL_INTERVAL_SECONDS="${DEPLOY_BLACKOUT_POLL_INTERVAL_SECONDS:-60}"
   waited=0
   compute_blackout_label

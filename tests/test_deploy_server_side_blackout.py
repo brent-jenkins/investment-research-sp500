@@ -271,6 +271,57 @@ def test_lock_max_wait_default_exceeds_blackout_max_wait_default():
     )
 
 
+def _window_width_minutes(lo_hhmm, hi_hhmm):
+    """Convert two HHMM-format bounds (e.g. 745, 915) to a width in minutes."""
+    def _to_minutes(v):
+        return (v // 100) * 60 + (v % 100)
+    return _to_minutes(hi_hhmm) - _to_minutes(lo_hhmm)
+
+
+def test_blackout_max_wait_default_covers_widest_window():
+    """Static regression guard for a real bug found live in production
+    (2026-08-05): DEPLOY_MAX_BLACKOUT_WAIT_SECONDS's default (1800s) was
+    shorter than every blackout window in this file except the tiny hourly
+    one -- notably half of EOD_WINDOW's own 3600s width and barely a third
+    of WEEKLY_SUMMARY_WINDOW's 5400s width. A deploy that starts deferring
+    near the *start* of a window therefore hit this cap and forced through
+    while genuinely still inside that same window, defeating the entire
+    point of deferring. Confirmed live: a deploy that began deferring at
+    21:23 UTC hit the old 1800s cap at 21:53 UTC and force-restarted
+    investment-research-scheduler mid-EOD-run (the 21:30 UTC job for the
+    506-ticker live universe was still ~5 minutes from completing its price
+    pull alone), leaving price_data mixed-freshness and last_full_refresh
+    never updated. The cap must always be comfortably longer than the
+    widest window it might have to fully outlast, derived here from the
+    real LO/HI constants in deploy.sh (not a hardcoded number), so a future
+    change to any window's width that isn't matched by this cap fails this
+    test rather than silently reintroducing the same race."""
+    text = _DEPLOY_SH.read_text(encoding="utf-8")
+
+    def _bound(name):
+        m = re.search(rf'{name}=(\d+)', text)
+        assert m, f"could not find {name} in deploy.sh"
+        return int(m.group(1))
+
+    windows_minutes = [
+        _window_width_minutes(_bound("STOCK_SUBMISSION_WINDOW_LO"), _bound("STOCK_SUBMISSION_WINDOW_HI")),
+        _window_width_minutes(_bound("EOD_WINDOW_LO"), _bound("EOD_WINDOW_HI")),
+        _window_width_minutes(_bound("WEEKLY_SUMMARY_WINDOW_LO"), _bound("WEEKLY_SUMMARY_WINDOW_HI")),
+    ]
+    widest_window_seconds = max(windows_minutes) * 60
+
+    blackout_match = re.search(r'DEPLOY_MAX_BLACKOUT_WAIT_SECONDS:-(\d+)\}', text)
+    assert blackout_match, "could not find DEPLOY_MAX_BLACKOUT_WAIT_SECONDS's default in deploy.sh"
+    blackout_default = int(blackout_match.group(1))
+
+    assert blackout_default > widest_window_seconds, (
+        f"DEPLOY_MAX_BLACKOUT_WAIT_SECONDS's default ({blackout_default}s) must be greater than "
+        f"the widest blackout window's own width ({widest_window_seconds}s) -- otherwise a deploy "
+        f"deferring from the start of that window forces through while still genuinely inside it. "
+        f"See this test's own docstring for the real incident this guards against."
+    )
+
+
 def test_lock_waiter_does_not_steal_a_lock_still_legitimately_held(deploy_scratch):
     """Dynamic proof of the fix above, not just the static ratio: process A
     acquires the lock and holds it through a real (scaled-down) blackout
