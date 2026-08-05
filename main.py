@@ -44,7 +44,7 @@ import auth
 from analysis.backtest import compute_metrics, equity_curve_gbp
 from analysis.universe import MEMBERSHIP_STALE_HOURS, is_membership_refresh_stale
 from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
-from data.ingestion import get_all_watchlist_entries
+from data.ingestion import _yf_symbol, get_all_watchlist_entries
 from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
@@ -831,7 +831,7 @@ def _render_instruments_page(config: dict) -> None:
                 "T212 Instrument": resolutions_by_ticker.get(e["ticker"], {}).get("t212_instrument_id") or "—",
                 "Currency": resolutions_by_ticker.get(e["ticker"], {}).get("currency") or "—",
                 "Note": resolutions_by_ticker.get(e["ticker"], {}).get("note") or "—",
-                "Yahoo Finance": f"https://finance.yahoo.com/quote/{_url_quote(e['ticker'], safe='')}",
+                "Yahoo Finance": f"https://finance.yahoo.com/quote/{_url_quote(_yf_symbol(e['ticker']), safe='')}",
             }
             for e in entries
         ),
