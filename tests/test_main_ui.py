@@ -343,6 +343,43 @@ def test_instruments_page_shows_every_tracked_ticker_from_the_live_pool(instrume
     assert "%5EGSPC" in df.loc[df["Ticker"] == "^GSPC", "Yahoo Finance"].iloc[0]
 
 
+def test_instruments_page_converts_dot_notation_tickers_to_yahoo_hyphen_form(db_engine, monkeypatch, mocker):
+    """BRK.B and BF.B are real S&P 500 dot share-class tickers -- Yahoo
+    Finance's own URLs only resolve the hyphen form (BRK-B, BF-B), the
+    identical conversion data/ingestion.py:_yf_symbol() already applies to
+    outgoing yfinance calls (see its docstring, and commit d1a067a). This
+    page's link construction must reuse that same shared function rather
+    than assume the raw dot-notation ticker is directly usable in a Yahoo
+    Finance URL -- it wasn't, until this test/fix.
+
+    The Ticker column itself keeps the dot form (matches
+    universe_membership / DB storage) -- only the outgoing Yahoo Finance
+    link is converted, same scoping _yf_symbol() itself documents."""
+    mocker.patch("data.scheduler.start_scheduler")
+    monkeypatch.setattr("main.get_engine", lambda: db_engine)
+    monkeypatch.setattr(
+        "data.ingestion.get_all_watchlist_entries",
+        lambda config: [
+            {"ticker": "BRK.B", "name": "BRK.B", "exchange": "NYSE"},
+            {"ticker": "BF.B", "name": "BF.B", "exchange": "NYSE"},
+            {"ticker": "AAPL", "name": "AAPL", "exchange": "NYSE"},
+        ],
+    )
+
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
+    at.session_state["page"] = "instruments"
+    at = at.run()
+
+    assert not at.exception
+    df = at.dataframe[0].value
+    assert set(df["Ticker"]) == {"BRK.B", "BF.B", "AAPL"}
+    assert "finance.yahoo.com/quote/BRK-B" in df.loc[df["Ticker"] == "BRK.B", "Yahoo Finance"].iloc[0]
+    assert "finance.yahoo.com/quote/BF-B" in df.loc[df["Ticker"] == "BF.B", "Yahoo Finance"].iloc[0]
+    # Dot-free tickers are unaffected by the conversion.
+    assert "finance.yahoo.com/quote/AAPL" in df.loc[df["Ticker"] == "AAPL", "Yahoo Finance"].iloc[0]
+
+
 def test_instruments_page_search_filters_by_ticker_or_name(instruments_app):
     at = instruments_app.run()
     at.text_input[0].set_value("MSFT").run()
