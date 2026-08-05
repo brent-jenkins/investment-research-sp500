@@ -1,0 +1,81 @@
+{
+  "measure": "indep_gap_60d = p_real/p_ind - 1 (formula quoted verbatim from research/concentration_risk_2026-08-05/analyze_concentration.py)",
+  "convention": "reset_at_boundary test-period trade lists; NOT comparable in absolute level to the original continuous-walk 1.067 figure",
+  "primary_window_len": 60,
+  "min_obs": 35,
+  "arms": {
+    "raw": {
+      "n_trades": 1270,
+      "days": 1654,
+      "days_n_open_ge2": 1643,
+      "mean_n_open": 12.228536880290205,
+      "indep_gap_60d": {
+        "n": 1607,
+        "mean": 0.8985666772069499,
+        "median": 0.8837292861595398,
+        "p75": 1.1569958196586845,
+        "p95": 1.4186076732902226,
+        "max": 1.6502840953848765
+      },
+      "dr_60d": {
+        "n": 1607,
+        "mean": 1.5431044877460949,
+        "median": 1.5535680844830675,
+        "p75": 1.6910509960431546,
+        "p95": 1.9366655193837725,
+        "max": 2.171905407614114
+      },
+      "avg_corr_60d": {
+        "n": 1607,
+        "mean": 0.38429029721050406,
+        "median": 0.33565405494249045,
+        "p75": 0.47833579575072893,
+        "p95": 0.7049549073521201,
+        "max": 0.8406433346855445
+      }
+    },
+    "risk_adjusted": {
+      "n_trades": 1186,
+      "days": 1654,
+      "days_n_open_ge2": 1643,
+      "mean_n_open": 11.471584038694076,
+      "indep_gap_60d": {
+        "n": 1607,
+        "mean": 0.8557791926542503,
+        "median": 0.8491088258811672,
+        "p75": 1.0744589894488297,
+        "p95": 1.3658306556884026,
+        "max": 1.6338120427304959
+      },
+      "dr_60d": {
+        "n": 1607,
+        "mean": 1.5578329483110473,
+        "median": 1.5684592648825744,
+        "p75": 1.6839448129080767,
+        "p95": 1.9379097435925408,
+        "max": 2.642549667194759
+      },
+      "avg_corr_60d": {
+        "n": 1607,
+        "mean": 0.3670594291244622,
+        "median": 0.3332466558699605,
+        "p75": 0.44099676683691336,
+        "p95": 0.6530356442697665,
+        "max": 0.7620313636832035
+      }
+    }
+  },
+  "delta": {
+    "indep_gap_mean": -0.04278748455269965,
+    "indep_gap_mean_pct_change": -4.7617484197942535,
+    "indep_gap_p95": -0.052777017601820075,
+    "avg_corr_mean": -0.01723086808604185,
+    "mean_n_open": -0.7569528415961297
+  },
+  "paired_daily": {
+    "n_days_both_defined": 1607,
+    "mean_diff": -0.0427874845526998,
+    "median_diff": -0.03255299780822174,
+    "pct_days_variant_lower": 56.316116988176724
+  }
+}

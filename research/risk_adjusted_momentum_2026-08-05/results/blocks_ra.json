@@ -1,0 +1,281 @@
+{
+  "label": "risk_adjusted",
+  "rank_mode": "risk_adjusted",
+  "pass_rule": "abs(max_drawdown_pct) <= abs(sp_dd)*1.5 AND profit_factor > 1.0",
+  "n_blocks_pass": 14,
+  "n_blocks_total": 16,
+  "blocks": [
+    {
+      "block": 0,
+      "start": "2007-01-01",
+      "end": "2008-03-23",
+      "n_trades": 60,
+      "strat_cagr": -21.39,
+      "strat_dd": -7.8,
+      "strat_pf": 0.55,
+      "strat_sharpe": -0.993,
+      "sp_cagr": -5.11,
+      "sp_dd": -18.64,
+      "passed": false,
+      "ranking_fallback_stats": {
+        "scored_candidates": 4114
+      }
+    },
+    {
+      "block": 1,
+      "start": "2008-03-23",
+      "end": "2009-06-13",
+      "n_trades": 255,
+      "strat_cagr": -19.18,
+      "strat_dd": -26.67,
+      "strat_pf": 0.38,
+      "strat_sharpe": -1.519,
+      "sp_cagr": -25.3,
+      "sp_dd": -52.58,
+      "passed": false,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 3661,
+        "scored_candidates": 7612
+      }
+    },
+    {
+      "block": 2,
+      "start": "2009-06-13",
+      "end": "2010-09-03",
+      "n_trades": 266,
+      "strat_cagr": 21.19,
+      "strat_dd": -4.36,
+      "strat_pf": 2.29,
+      "strat_sharpe": 1.047,
+      "sp_cagr": 15.8,
+      "sp_dd": -15.99,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 412,
+        "scored_candidates": 51064
+      }
+    },
+    {
+      "block": 3,
+      "start": "2010-09-03",
+      "end": "2011-11-24",
+      "n_trades": 240,
+      "strat_cagr": 11.46,
+      "strat_dd": -6.98,
+      "strat_pf": 1.86,
+      "strat_sharpe": 0.853,
+      "sp_cagr": 5.27,
+      "sp_dd": -19.39,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 11064,
+        "scored_candidates": 58547
+      }
+    },
+    {
+      "block": 4,
+      "start": "2011-11-24",
+      "end": "2013-02-13",
+      "n_trades": 228,
+      "strat_cagr": 20.4,
+      "strat_dd": -2.96,
+      "strat_pf": 3.27,
+      "strat_sharpe": 1.335,
+      "sp_cagr": 24.92,
+      "sp_dd": -9.94,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 7545,
+        "scored_candidates": 52053
+      }
+    },
+    {
+      "block": 5,
+      "start": "2013-02-13",
+      "end": "2014-05-06",
+      "n_trades": 239,
+      "strat_cagr": 11.76,
+      "strat_dd": -4.46,
+      "strat_pf": 1.91,
+      "strat_sharpe": 0.832,
+      "sp_cagr": 18.29,
+      "sp_dd": -5.76,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 13039,
+        "scored_candidates": 73094
+      }
+    },
+    {
+      "block": 6,
+      "start": "2014-05-06",
+      "end": "2015-07-27",
+      "n_trades": 229,
+      "strat_cagr": 13.06,
+      "strat_dd": -3.41,
+      "strat_pf": 2.15,
+      "strat_sharpe": 0.886,
+      "sp_cagr": 8.19,
+      "sp_dd": -7.4,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 14498,
+        "scored_candidates": 70604
+      }
+    },
+    {
+      "block": 7,
+      "start": "2015-07-27",
+      "end": "2016-10-17",
+      "n_trades": 264,
+      "strat_cagr": 5.32,
+      "strat_dd": -5.03,
+      "strat_pf": 1.34,
+      "strat_sharpe": 0.407,
+      "sp_cagr": 1.3,
+      "sp_dd": -13.31,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 10238,
+        "scored_candidates": 49913
+      }
+    },
+    {
+      "block": 8,
+      "start": "2016-10-17",
+      "end": "2018-01-07",
+      "n_trades": 239,
+      "strat_cagr": 12.66,
+      "strat_dd": -2.32,
+      "strat_pf": 1.93,
+      "strat_sharpe": 0.814,
+      "sp_cagr": 23.24,
+      "sp_dd": -3.07,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 13129,
+        "scored_candidates": 78308
+      }
+    },
+    {
+      "block": 9,
+      "start": "2018-01-07",
+      "end": "2019-03-30",
+      "n_trades": 270,
+      "strat_cagr": 6.98,
+      "strat_dd": -10.19,
+      "strat_pf": 1.37,
+      "strat_sharpe": 0.421,
+      "sp_cagr": 2.58,
+      "sp_dd": -19.78,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 14819,
+        "scored_candidates": 64196
+      }
+    },
+    {
+      "block": 10,
+      "start": "2019-03-30",
+      "end": "2020-06-19",
+      "n_trades": 240,
+      "strat_cagr": 11.8,
+      "strat_dd": -5.52,
+      "strat_pf": 1.89,
+      "strat_sharpe": 0.808,
+      "sp_cagr": 6.55,
+      "sp_dd": -33.92,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 12764,
+        "scored_candidates": 65760
+      }
+    },
+    {
+      "block": 11,
+      "start": "2020-06-19",
+      "end": "2021-09-09",
+      "n_trades": 245,
+      "strat_cagr": 15.51,
+      "strat_dd": -2.97,
+      "strat_pf": 1.97,
+      "strat_sharpe": 0.83,
+      "sp_cagr": 35.07,
+      "sp_dd": -9.6,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 10461,
+        "scored_candidates": 84573
+      }
+    },
+    {
+      "block": 12,
+      "start": "2021-09-09",
+      "end": "2022-11-30",
+      "n_trades": 264,
+      "strat_cagr": 10.16,
+      "strat_dd": -6.35,
+      "strat_pf": 1.54,
+      "strat_sharpe": 0.538,
+      "sp_cagr": -7.01,
+      "sp_dd": -25.43,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 20880,
+        "scored_candidates": 68473
+      }
+    },
+    {
+      "block": 13,
+      "start": "2022-11-30",
+      "end": "2024-02-20",
+      "n_trades": 248,
+      "strat_cagr": 12.49,
+      "strat_dd": -5.17,
+      "strat_pf": 1.42,
+      "strat_sharpe": 0.434,
+      "sp_cagr": 17.73,
+      "sp_dd": -10.28,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 8327,
+        "scored_candidates": 60525
+      }
+    },
+    {
+      "block": 14,
+      "start": "2024-02-20",
+      "end": "2025-05-12",
+      "n_trades": 254,
+      "strat_cagr": 18.5,
+      "strat_dd": -9.46,
+      "strat_pf": 1.83,
+      "strat_sharpe": 0.648,
+      "sp_cagr": 13.97,
+      "sp_dd": -18.9,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 17623,
+        "scored_candidates": 94650
+      }
+    },
+    {
+      "block": 15,
+      "start": "2025-05-12",
+      "end": "2026-08-03",
+      "n_trades": 273,
+      "strat_cagr": 35.39,
+      "strat_dd": -12.87,
+      "strat_pf": 2.13,
+      "strat_sharpe": 0.808,
+      "sp_cagr": 23.22,
+      "sp_dd": -9.1,
+      "passed": true,
+      "ranking_fallback_stats": {
+        "fallback_candidates": 16316,
+        "scored_candidates": 82931
+      }
+    }
+  ],
+  "elapsed_sec": 378.27884125709534
+}
