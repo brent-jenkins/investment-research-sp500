@@ -1,0 +1,209 @@
+{
+  "min_momentum_floor": 0.02,
+  "n_candidates": 503,
+  "arms": {
+    "3m": {
+      "lookback_days": 63,
+      "anchor_gap_days": 100,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 99.88,
+      "pct_signal_on": 58.21,
+      "signal_on_days": 476404,
+      "floor_blocked_days": 46301,
+      "pct_of_signal_on_blocked_by_floor": 9.72,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 46301,
+        "2-10%": 175913,
+        "10-25%": 183238,
+        "25-50%": 57420,
+        "50-100%": 11317,
+        ">100%": 2215
+      },
+      "realized_trades": 1329,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.4,
+        "END_OF_DATA": 1.6,
+        "MAX_HOLDING": 54.5,
+        "SIGNAL_OFF": 7.5,
+        "STOP_LOSS": 35.0
+      },
+      "distinct_tickers_traded": 292,
+      "cagr_pct": 18.44
+    },
+    "6m": {
+      "lookback_days": 126,
+      "anchor_gap_days": 200,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 99.75,
+      "pct_signal_on": 60.75,
+      "signal_on_days": 497215,
+      "floor_blocked_days": 33479,
+      "pct_of_signal_on_blocked_by_floor": 6.73,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 33479,
+        "2-10%": 133422,
+        "10-25%": 182533,
+        "25-50%": 106382,
+        "50-100%": 33307,
+        ">100%": 8092
+      },
+      "realized_trades": 1317,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.4,
+        "END_OF_DATA": 2.1,
+        "MAX_HOLDING": 56.0,
+        "SIGNAL_OFF": 2.8,
+        "STOP_LOSS": 37.7
+      },
+      "distinct_tickers_traded": 244,
+      "cagr_pct": 18.07
+    },
+    "9m": {
+      "lookback_days": 189,
+      "anchor_gap_days": 300,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 99.6,
+      "pct_signal_on": 62.02,
+      "signal_on_days": 507642,
+      "floor_blocked_days": 26828,
+      "pct_of_signal_on_blocked_by_floor": 5.28,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 26828,
+        "2-10%": 106214,
+        "10-25%": 164939,
+        "25-50%": 133377,
+        "50-100%": 59248,
+        ">100%": 17036
+      },
+      "realized_trades": 1243,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.5,
+        "END_OF_DATA": 2.3,
+        "MAX_HOLDING": 58.8,
+        "SIGNAL_OFF": 1.4,
+        "STOP_LOSS": 36.0
+      },
+      "distinct_tickers_traded": 234,
+      "cagr_pct": 22.04
+    },
+    "12m": {
+      "lookback_days": 252,
+      "anchor_gap_days": 400,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 99.43,
+      "pct_signal_on": 63.19,
+      "signal_on_days": 517154,
+      "floor_blocked_days": 22598,
+      "pct_of_signal_on_blocked_by_floor": 4.37,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 22598,
+        "2-10%": 90904,
+        "10-25%": 148203,
+        "25-50%": 143046,
+        "50-100%": 84347,
+        ">100%": 28056
+      },
+      "realized_trades": 1270,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.5,
+        "END_OF_DATA": 2.4,
+        "MAX_HOLDING": 57.8,
+        "SIGNAL_OFF": 0.8,
+        "STOP_LOSS": 37.6
+      },
+      "distinct_tickers_traded": 210,
+      "cagr_pct": 19.29
+    },
+    "15m": {
+      "lookback_days": 315,
+      "anchor_gap_days": 500,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 99.25,
+      "pct_signal_on": 64.89,
+      "signal_on_days": 531069,
+      "floor_blocked_days": 20708,
+      "pct_of_signal_on_blocked_by_floor": 3.9,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 20708,
+        "2-10%": 82735,
+        "10-25%": 139986,
+        "25-50%": 145404,
+        "50-100%": 101758,
+        ">100%": 40478
+      },
+      "realized_trades": 1284,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.6,
+        "END_OF_DATA": 2.2,
+        "MAX_HOLDING": 56.9,
+        "SIGNAL_OFF": 1.9,
+        "STOP_LOSS": 37.5
+      },
+      "distinct_tickers_traded": 193,
+      "cagr_pct": 19.95
+    },
+    "18m": {
+      "lookback_days": 378,
+      "anchor_gap_days": 600,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 99.06,
+      "pct_signal_on": 66.0,
+      "signal_on_days": 540199,
+      "floor_blocked_days": 18405,
+      "pct_of_signal_on_blocked_by_floor": 3.41,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 18405,
+        "2-10%": 76139,
+        "10-25%": 131018,
+        "25-50%": 149220,
+        "50-100%": 113899,
+        ">100%": 51518
+      },
+      "realized_trades": 1255,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.5,
+        "END_OF_DATA": 2.4,
+        "MAX_HOLDING": 59.7,
+        "SIGNAL_OFF": 1.0,
+        "STOP_LOSS": 35.4
+      },
+      "distinct_tickers_traded": 175,
+      "cagr_pct": 24.68
+    },
+    "24m": {
+      "lookback_days": 504,
+      "anchor_gap_days": 800,
+      "ticker_days": 818449,
+      "pct_momentum_computable": 98.69,
+      "pct_signal_on": 68.86,
+      "signal_on_days": 563576,
+      "floor_blocked_days": 16695,
+      "pct_of_signal_on_blocked_by_floor": 2.96,
+      "momentum_bands_of_signal_on": {
+        "0-2%": 16695,
+        "2-10%": 67531,
+        "10-25%": 115783,
+        "25-50%": 150142,
+        "50-100%": 137600,
+        ">100%": 75825
+      },
+      "realized_trades": 1285,
+      "median_holding_days": 30.0,
+      "exit_reason_mix": {
+        "CRISIS_EXIT": 1.5,
+        "END_OF_DATA": 2.3,
+        "MAX_HOLDING": 58.3,
+        "SIGNAL_OFF": 0.3,
+        "STOP_LOSS": 37.6
+      },
+      "distinct_tickers_traded": 165,
+      "cagr_pct": 16.42
+    }
+  }
+}
