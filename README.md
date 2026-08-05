@@ -180,7 +180,7 @@ reference_tickers:      # fixed, rarely-changed monitoring/conversion instrument
   - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
 
 data:
-  history_days: 7150    # ~19.6y -- reaches back to 2007-01-01 on first fetch
+  history_start_date: "2007-01-01"    # fixed anchor for a ticker's first-download fetch
   rate_limit_seconds: 2.5
   max_retries: 5
 

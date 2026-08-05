@@ -2927,6 +2927,24 @@ def test_live_current_price_uses_yfinance_fast_info_and_handles_failure(mocker):
     assert _live_current_price("AAPL") is None  # must not raise
 
 
+def test_live_current_price_converts_dot_ticker_to_hyphen_for_yfinance(mocker):
+    """BRK.B / BF.B (real S&P 500 constituents, dot share-class notation)
+    must be converted to yfinance's hyphen notation (BRK-B) before the
+    yfinance call -- confirmed live (2026-08-05) that yf.Ticker("BRK.B")
+    returns no usable price at all, silently, while yf.Ticker("BRK-B")
+    works. This is the same conversion data/ingestion.py:_yf_symbol()
+    applies for price history; this call site needs it independently
+    since it calls yfinance directly."""
+    from brokers.trading212 import _live_current_price
+
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.fast_info.last_price = 555.0
+    ticker_ctor = mocker.patch("yfinance.Ticker", return_value=mock_ticker)
+
+    assert _live_current_price("BRK.B") == 555.0
+    ticker_ctor.assert_called_once_with("BRK-B")
+
+
 # ---------------------------------------------------------------------------
 # Submission-time crisis re-check (2026-08-03) -- passes_entry_gate()'s
 # crisis block is only ever evaluated once, at EOD decide time. Stock

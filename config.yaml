@@ -16,10 +16,14 @@ reference_tickers:
   - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
 
 data:
-  # Calendar days of history to fetch on a ticker's first download.
-  # 7150 (~19.6y) reaches back to 2007-01-01; yfinance falls back to the
-  # asset's real listing date if that precedes it.
-  history_days: 7150
+  # Fixed anchor date for a ticker's first-download history fetch.
+  # Deliberately an absolute date, not a "days back from today" count --
+  # a rolling day-count (the old history_days: 7150 key) only approximates
+  # this date at the moment it's chosen and silently drifts later every
+  # day after that (see CLAUDE.md's "rolling-window start-date fragility"
+  # fix, 2026-08-05). yfinance falls back to the asset's real listing date
+  # if that precedes this.
+  history_start_date: "2007-01-01"
   rate_limit_seconds: 2.5   # delay between yfinance requests
   max_retries: 5
 

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy import text
 
-from data.ingestion import _upsert_price_rows, backfill_price_history
+from data.ingestion import _fetch_ticker, _upsert_price_rows, _yf_symbol, backfill_price_history
 
 _BASE_DATE = datetime(2026, 1, 1)
 
@@ -205,6 +205,148 @@ def test_backfill_never_overwrites_existing_rows(db_engine, mocker):
             {"d": datetime(2016, 6, 15)},
         ).fetchall()
     assert [r[0] for r in after] == before
+
+
+# ---------------------------------------------------------------------------
+# _yf_symbol() / _fetch_ticker() -- dot vs. hyphen share-class notation
+# ---------------------------------------------------------------------------
+#
+# yfinance expects hyphen notation (BRK-B) for share classes, not the dot
+# notation (BRK.B) this codebase uses everywhere else to match
+# universe_membership / the Wikipedia-style source CSV. Confirmed live
+# (2026-08-05): yf.download("BRK.B") returns zero rows every time
+# ("possibly delisted"); yf.download("BRK-B") returns real data. Both real
+# S&P 500 constituents (BRK.B, BF.B) were silently frozen in production
+# because pull_incremental()'s daily period="10d" fetch passed the raw dot
+# ticker straight to yfinance and got nothing back every time -- not
+# flagged unavailable (an empty 10-day window is treated as "market may be
+# closed", by design), just permanently stale.
+
+def test_yf_symbol_converts_dot_to_hyphen():
+    assert _yf_symbol("BRK.B") == "BRK-B"
+    assert _yf_symbol("BF.B") == "BF-B"
+
+
+def test_yf_symbol_leaves_plain_tickers_unchanged():
+    assert _yf_symbol("AAPL") == "AAPL"
+    assert _yf_symbol("^GSPC") == "^GSPC"
+
+
+def test_fetch_ticker_calls_yfinance_with_hyphenated_symbol(mocker):
+    """The DB-facing ticker stays dot-notation; only the outgoing yfinance
+    call is converted."""
+    df = _ohlcv_df({_BASE_DATE: 400.0})
+    download = mocker.patch("data.ingestion.yf.download", return_value=df)
+
+    result = _fetch_ticker("BRK.B", period="10d", max_retries=1, rate_limit=0)
+
+    assert download.call_args.args[0] == "BRK-B"
+    assert result is not None and not result.empty
+
+
+def test_pull_incremental_stores_hyphen_fetch_under_original_dot_ticker(db_engine, mocker):
+    """End-to-end: pull_incremental() for a dot-notation ticker must call
+    yfinance with the hyphenated symbol, but the resulting rows must land
+    in price_data under the original dot ticker -- matching
+    universe_membership and every other reference to this ticker."""
+    from data.ingestion import pull_incremental
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    _insert_rows(db_engine, "BRK.B", {_BASE_DATE - timedelta(days=1): 390.0})  # existing history -> period="10d" path
+    df = _ohlcv_df({_BASE_DATE: 400.0})
+    download = mocker.patch("data.ingestion.yf.download", return_value=df)
+
+    results = pull_incremental(["BRK.B"])
+
+    assert download.call_args.kwargs.get("period") == "10d"
+    assert download.call_args.args[0] == "BRK-B"
+    assert results["BRK.B"] == 1
+    assert _stored_closes(db_engine, "BRK.B") == [390.0, 400.0]
+
+
+# ---------------------------------------------------------------------------
+# pull_history() / pull_incremental() -- fixed history_start_date anchor,
+# not a rolling "now - N days" window (2026-08-05)
+# ---------------------------------------------------------------------------
+#
+# now - history_days only approximated a fixed historical anchor (2007-01-01)
+# at the moment history_days was chosen -- every day that passes after that
+# moment, the same config value reaches back to a LATER date, not the same
+# one. A fresh backfill run today must reach exactly as far back as one run
+# a year from now, with no config change required; only a fixed
+# data.history_start_date (not a day count) can guarantee that.
+
+def test_pull_history_default_uses_fixed_start_date_not_relative_days(db_engine, mocker):
+    """No explicit `days`/`start_date` override: pull_history() must anchor
+    to config's fixed history_start_date, regardless of what "today" is —
+    not compute a start via timedelta from datetime.utcnow()."""
+    from data.ingestion import pull_history
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    fetch = mocker.patch("data.ingestion._fetch_ticker", return_value=None)
+
+    pull_history(["AAPL"])
+
+    assert fetch.call_args.args[1] == datetime(2007, 1, 1)  # start
+
+
+def test_pull_history_explicit_days_override_still_relative(db_engine, mocker):
+    """An explicit `days=` override (e.g. the DAX research script's
+    `days=8000`) is a deliberate, genuinely relative request and must keep
+    working exactly as before -- only the *default* (no override) changed."""
+    from data.ingestion import pull_history
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    fixed_now = datetime(2030, 3, 15)
+    mocker.patch("data.ingestion.datetime", wraps=datetime, **{"utcnow.return_value": fixed_now})
+    fetch = mocker.patch("data.ingestion._fetch_ticker", return_value=None)
+
+    pull_history(["ADS.DE"], days=8000)
+
+    assert fetch.call_args.args[1] == fixed_now - timedelta(days=8000)
+
+
+def test_pull_history_explicit_start_date_override(db_engine, mocker):
+    """An explicit start_date= override takes precedence over config's
+    default history_start_date."""
+    from data.ingestion import pull_history
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    fetch = mocker.patch("data.ingestion._fetch_ticker", return_value=None)
+
+    pull_history(["AAPL"], start_date="1999-06-01")
+
+    assert fetch.call_args.args[1] == datetime(1999, 6, 1)
+
+
+def test_pull_incremental_first_time_download_uses_fixed_start_date(db_engine, mocker):
+    """A brand-new ticker with no stored data at all (e.g. a freshly
+    discovered S&P 500 entrant) must be fetched from the fixed
+    history_start_date, not from a rolling now-minus-days window that
+    reaches less far back the later this code happens to run."""
+    from data.ingestion import pull_incremental
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    fetch = mocker.patch("data.ingestion._fetch_ticker", return_value=None)
+
+    pull_incremental(["BRANDNEWCO"])
+
+    assert fetch.call_args.kwargs["start"] == datetime(2007, 1, 1)
 
 
 # ---------------------------------------------------------------------------

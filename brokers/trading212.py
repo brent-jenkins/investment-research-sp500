@@ -90,7 +90,7 @@ from analysis.decision import (
 )
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
-from data.ingestion import get_price_df
+from data.ingestion import _yf_symbol, get_price_df
 
 logger = logging.getLogger(__name__)
 
@@ -1684,7 +1684,7 @@ def _live_current_price(ticker: str) -> Optional[float]:
     _throttle_yfinance_request()
     try:
         import yfinance as yf  # noqa: PLC0415
-        price = yf.Ticker(ticker).fast_info.last_price
+        price = yf.Ticker(_yf_symbol(ticker)).fast_info.last_price
         if price is None or price <= 0:
             return None
         return float(price)

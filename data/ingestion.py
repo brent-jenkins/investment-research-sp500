@@ -17,7 +17,7 @@ from data.database import PriceData, clear_metadata, get_engine, get_metadata_st
 
 logger = logging.getLogger(__name__)
 
-# Initial history window is read from config.yaml (data.history_days).
+# Initial history start date is read from config.yaml (data.history_start_date).
 # Defined there so it can be changed without a code deploy.
 
 
@@ -107,6 +107,20 @@ def _mark_ticker_unavailable(ticker: str) -> None:
         logger.warning("Could not flag %s as unavailable in metadata: %s", ticker, exc)
 
 
+def _yf_symbol(ticker: str) -> str:
+    """Convert this codebase's dot share-class notation (BRK.B, BF.B --
+    matching universe_membership / the Wikipedia-style source CSV) to the
+    hyphen notation yfinance actually expects (BRK-B, BF-B). Confirmed
+    directly (2026-08-05): yf.download("BRK.B") returns zero rows every
+    time ("possibly delisted"), while yf.download("BRK-B") returns real
+    data -- dot-notation tickers were silently untradeable via this path.
+    Only the outgoing yfinance call is converted; every other use of the
+    ticker (DB storage, logging, decision logic) keeps the dot form so it
+    still matches universe_membership and existing stored rows.
+    """
+    return ticker.replace(".", "-")
+
+
 def _fetch_ticker(
     ticker: str,
     start: Optional[datetime] = None,
@@ -134,7 +148,7 @@ def _fetch_ticker(
                 kwargs["end"]   = end.strftime("%Y-%m-%d")
             else:
                 raise ValueError("Provide either 'period' or both 'start' and 'end'.")
-            df = yf.download(ticker, **kwargs)
+            df = yf.download(_yf_symbol(ticker), **kwargs)
             if df.empty:
                 logger.warning("No data returned for %s (attempt %d)", ticker, attempt)
             else:
@@ -209,17 +223,31 @@ def _upsert_price_rows(df: pd.DataFrame, ticker: str) -> int:
 def pull_history(
     tickers: Optional[list[str]] = None,
     days: Optional[int] = None,
+    start_date: Optional[str] = None,
 ) -> dict[str, int]:
     """Fetch full price history for all (or specified) tickers and store in DB.
 
-    Downloads daily OHLCV data going back data.history_days calendar days
-    (default 3650, ~10 years).  If an asset was listed more recently, yfinance
-    returns whatever is available from the listing date — no error is raised.
+    Downloads daily OHLCV data from a start point through today.  If an
+    asset was listed more recently, yfinance returns whatever is available
+    from the listing date — no error is raised.
 
     Args:
-        tickers: List of ticker symbols. Defaults to the full watchlist.
-        days:    Override for calendar days of history to fetch.
-                 Defaults to config.yaml data.history_days.
+        tickers:    List of ticker symbols. Defaults to the full watchlist.
+        days:       Explicit "N calendar days back from today" window --
+                    genuinely relative to whenever this runs. Use this only
+                    when that relative semantics is actually wanted (e.g. a
+                    one-off "last ~22 years, however long that is today"
+                    research fetch); it is NOT the default, and re-running
+                    the same call on a later date will fetch a later start.
+        start_date: Explicit fixed start date ("YYYY-MM-DD"), unaffected by
+                    when this runs. Takes precedence over `days` if both are
+                    given.
+
+    Neither `days` nor `start_date` given: defaults to config.yaml's
+    data.history_start_date, a fixed anchor (not "N days ago") -- this is
+    the right default for "get full backtest history", which was the
+    original motivation for this function and does not want an answer that
+    silently drifts later every day past whenever a days-count was chosen.
 
     Returns:
         Dict mapping ticker -> number of rows written.
@@ -229,14 +257,17 @@ def pull_history(
 
     if tickers is None:
         tickers = get_all_tickers(config)
-    if days is None:
-        days = config["data"]["history_days"]
 
     rate_limit = config["data"]["rate_limit_seconds"]
     max_retries = config["data"]["max_retries"]
 
     end = datetime.utcnow()
-    start = end - timedelta(days=days)
+    if days is not None:
+        start = end - timedelta(days=days)
+    elif start_date is not None:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+    else:
+        start = datetime.strptime(config["data"]["history_start_date"], "%Y-%m-%d")
 
     results: dict[str, int] = {}
     total = len(tickers)
@@ -340,8 +371,11 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
                     "  No new data for %s in last 10d — market may be closed.", ticker
                 )
         else:
-            # First-time download: fetch full history.
-            start = datetime.utcnow() - timedelta(days=config["data"]["history_days"])
+            # First-time download: fetch full history, anchored to a fixed
+            # start date (not "N days back from today") so this doesn't
+            # silently reach less far back the later this ever runs -- see
+            # pull_history()'s own docstring for the full reasoning.
+            start = datetime.strptime(config["data"]["history_start_date"], "%Y-%m-%d")
             end   = datetime.utcnow()
             logger.info("Fetching %s (full history from %s)…", ticker, start.date())
             df = _fetch_ticker(
@@ -382,9 +416,10 @@ def backfill_price_history(
 
     pull_incremental()/pull_history() are both forward-only in effect — a
     ticker that already has data from (say) 2016 onward never gets asked
-    for anything before 2016 again, no matter how large data.history_days
-    is raised, because incremental refreshes use a rolling 10-day window
-    and pull_history() only ever fetches [today - days, today]. This
+    for anything before 2016 again, no matter how early data.history_start_date
+    is set, because incremental refreshes use a rolling 10-day window and
+    pull_history() only ever fetches [start, today] once a ticker already
+    has any stored data. This
     function is the missing backward direction: a one-off full-range fetch
     from start_date for price data specifically — but deliberately narrower
     than a full re-fetch-and-upsert of the whole range: it only ever
