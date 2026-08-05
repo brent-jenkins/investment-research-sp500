@@ -1,0 +1,64 @@
+{
+  "backstop": {
+    "modest": {
+      "n_total": 416585,
+      "n_multiplied": 104750,
+      "n_genuinely_backstop_bound": 86722,
+      "n_fully_capped_at_ceiling": 86722
+    },
+    "aggressive": {
+      "n_total": 417475,
+      "n_multiplied": 104977,
+      "n_genuinely_backstop_bound": 94149,
+      "n_fully_capped_at_ceiling": 94150
+    },
+    "whole_dist": {
+      "n_total": 417122,
+      "n_multiplied": 312633,
+      "n_genuinely_backstop_bound": 263029,
+      "n_fully_capped_at_ceiling": 263036
+    }
+  },
+  "capacity_displacement": {
+    "baseline": {
+      "n_trades": 1270,
+      "distinct_tickers": 210,
+      "avg_position_gbp": 3313.62,
+      "total_position_gbp": 4208301.79,
+      "total_capital_days_gbp": 95964237.12,
+      "shared_with_baseline": null,
+      "only_in_arm": null,
+      "only_in_baseline_displaced": null
+    },
+    "modest": {
+      "n_trades": 1122,
+      "distinct_tickers": 185,
+      "avg_position_gbp": 3806.28,
+      "total_position_gbp": 4270649.1,
+      "total_capital_days_gbp": 97938509.55,
+      "shared_with_baseline": 312,
+      "only_in_arm": 810,
+      "only_in_baseline_displaced": 958
+    },
+    "aggressive": {
+      "n_trades": 1075,
+      "distinct_tickers": 183,
+      "avg_position_gbp": 3888.03,
+      "total_position_gbp": 4179634.19,
+      "total_capital_days_gbp": 95037539.15,
+      "shared_with_baseline": 267,
+      "only_in_arm": 808,
+      "only_in_baseline_displaced": 1003
+    },
+    "whole_dist": {
+      "n_trades": 1097,
+      "distinct_tickers": 194,
+      "avg_position_gbp": 3963.19,
+      "total_position_gbp": 4347624.52,
+      "total_capital_days_gbp": 98551410.21,
+      "shared_with_baseline": 355,
+      "only_in_arm": 742,
+      "only_in_baseline_displaced": 915
+    }
+  }
+}

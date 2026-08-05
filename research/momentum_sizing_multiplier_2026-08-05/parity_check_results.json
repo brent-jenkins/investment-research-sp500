@@ -1,0 +1,58 @@
+{
+  "baseline": {
+    "arm": "baseline",
+    "n_trades": 1270,
+    "exit_reasons": [
+      "CRISIS_EXIT",
+      "END_OF_DATA",
+      "MAX_HOLDING",
+      "SIGNAL_OFF",
+      "STOP_LOSS"
+    ],
+    "within_vocab": true,
+    "holding_violations": 0,
+    "max_position_gbp": 7984.97
+  },
+  "modest": {
+    "arm": "modest",
+    "n_trades": 1122,
+    "exit_reasons": [
+      "CRISIS_EXIT",
+      "END_OF_DATA",
+      "MAX_HOLDING",
+      "SIGNAL_OFF",
+      "STOP_LOSS"
+    ],
+    "within_vocab": true,
+    "holding_violations": 0,
+    "max_position_gbp": 9384.0
+  },
+  "aggressive": {
+    "arm": "aggressive",
+    "n_trades": 1075,
+    "exit_reasons": [
+      "CRISIS_EXIT",
+      "END_OF_DATA",
+      "MAX_HOLDING",
+      "SIGNAL_OFF",
+      "STOP_LOSS"
+    ],
+    "within_vocab": true,
+    "holding_violations": 0,
+    "max_position_gbp": 8308.93
+  },
+  "whole_dist": {
+    "arm": "whole_dist",
+    "n_trades": 1097,
+    "exit_reasons": [
+      "CRISIS_EXIT",
+      "END_OF_DATA",
+      "MAX_HOLDING",
+      "SIGNAL_OFF",
+      "STOP_LOSS"
+    ],
+    "within_vocab": true,
+    "holding_violations": 0,
+    "max_position_gbp": 9758.84
+  }
+}
