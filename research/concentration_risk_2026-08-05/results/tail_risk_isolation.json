@@ -1,0 +1,331 @@
+{
+  "n_obs_total": 4603,
+  "thresholds": {
+    "p5_relative": -0.01268755203697902,
+    "fixed_-2pct": -0.02,
+    "fixed_-3pct": -0.03
+  },
+  "results": {
+    "p5_relative": {
+      "logit_avg_corr_60d": {
+        "label": "p5_relative_avgcorr",
+        "predictors": [
+          "const",
+          "mkt_vol20",
+          "mkt_dd",
+          "n_open",
+          "avg_corr_60d"
+        ],
+        "coefs": [
+          -5.679855016411552,
+          0.023056775309751653,
+          -0.021968161235935646,
+          0.18070501825221283,
+          0.2599127699631213
+        ],
+        "pvalues": [
+          1.4119770064252262e-52,
+          0.0012054090035485902,
+          0.01795589629118988,
+          4.189698048871381e-12,
+          0.6943743018428649
+        ],
+        "odds_ratios": [
+          0.0034140533892265744,
+          1.023324637471207,
+          0.9782713815070818,
+          1.1980617208234987,
+          1.2968169603405613
+        ],
+        "converged": true,
+        "pseudo_r_squared": 0.043623888683248624,
+        "n_obs": 4603,
+        "n_bad": 231
+      },
+      "logit_indep_gap_60d": {
+        "label": "p5_relative_indepgap",
+        "predictors": [
+          "const",
+          "mkt_vol20",
+          "mkt_dd",
+          "n_open",
+          "indep_gap_60d"
+        ],
+        "coefs": [
+          -5.5739546237394535,
+          0.02112507175297956,
+          -0.02142175737315207,
+          0.1520437542995273,
+          0.3149510837092495
+        ],
+        "pvalues": [
+          1.8484007166191342e-57,
+          0.002258603843198059,
+          0.021548730862635226,
+          2.5511707725624548e-05,
+          0.23008758820282427
+        ],
+        "odds_ratios": [
+          0.003795441173120822,
+          1.0213497856575007,
+          0.9788060588303626,
+          1.164211174562168,
+          1.3701922845934922
+        ],
+        "converged": true,
+        "pseudo_r_squared": 0.044320515014683814,
+        "n_obs": 4603,
+        "n_bad": 231
+      },
+      "matched_tercile_mannwhitney": [
+        {
+          "tercile": "low_vol",
+          "n_bad": 30,
+          "n_good": 1505,
+          "mean_avg_corr_60d_bad": 0.3121973851021541,
+          "mean_avg_corr_60d_good": 0.28953562617819445,
+          "mannwhitney_p_avg_corr_bad_greater": 0.28303936922082173,
+          "mean_indep_gap_60d_bad": 1.0444847380026239,
+          "mean_indep_gap_60d_good": 0.8861297511003918,
+          "mannwhitney_p_indep_gap_bad_greater": 0.12126652873321148
+        },
+        {
+          "tercile": "mid_vol",
+          "n_bad": 77,
+          "n_good": 1457,
+          "mean_avg_corr_60d_bad": 0.3435397226671571,
+          "mean_avg_corr_60d_good": 0.3393616204774081,
+          "mannwhitney_p_avg_corr_bad_greater": 0.2807958171311594,
+          "mean_indep_gap_60d_bad": 1.1583700437528355,
+          "mean_indep_gap_60d_good": 1.0331786685803646,
+          "mannwhitney_p_indep_gap_bad_greater": 0.0006195511596931577
+        },
+        {
+          "tercile": "high_vol",
+          "n_bad": 124,
+          "n_good": 1410,
+          "mean_avg_corr_60d_bad": 0.44797244659944685,
+          "mean_avg_corr_60d_good": 0.44591119044497396,
+          "mannwhitney_p_avg_corr_bad_greater": 0.4112825437941963,
+          "mean_indep_gap_60d_bad": 1.3095374444832768,
+          "mean_indep_gap_60d_good": 1.2694987933786077,
+          "mannwhitney_p_indep_gap_bad_greater": 0.15604264253588268
+        }
+      ]
+    },
+    "fixed_-2pct": {
+      "logit_avg_corr_60d": {
+        "label": "fixed_-2pct_avgcorr",
+        "predictors": [
+          "const",
+          "mkt_vol20",
+          "mkt_dd",
+          "n_open",
+          "avg_corr_60d"
+        ],
+        "coefs": [
+          -7.265393524255392,
+          0.03256046538067055,
+          -0.00022073054056512547,
+          0.19897601495954184,
+          0.7505852916752226
+        ],
+        "pvalues": [
+          1.2460014067539171e-31,
+          0.0016013779323553834,
+          0.9895593599782702,
+          2.007553443487061e-06,
+          0.5008314238156721
+        ],
+        "odds_ratios": [
+          0.0006993260137438827,
+          1.0330963578200234,
+          0.9997792938186283,
+          1.2201527001370258,
+          2.118239441776077
+        ],
+        "converged": true,
+        "pseudo_r_squared": 0.04713067877774302,
+        "n_obs": 4603,
+        "n_bad": 77
+      },
+      "logit_indep_gap_60d": {
+        "label": "fixed_-2pct_indepgap",
+        "predictors": [
+          "const",
+          "mkt_vol20",
+          "mkt_dd",
+          "n_open",
+          "indep_gap_60d"
+        ],
+        "coefs": [
+          -7.0383063542308655,
+          0.029777327672532085,
+          0.0013336640032595938,
+          0.1410154303862382,
+          0.67814387670416
+        ],
+        "pvalues": [
+          7.026226771498265e-35,
+          0.0031001861379891444,
+          0.9377480426822766,
+          0.015368998202976483,
+          0.12588453116937862
+        ],
+        "odds_ratios": [
+          0.0008776116675698065,
+          1.0302251057886913,
+          1.001334553728584,
+          1.1514424150488627,
+          1.9702173698813166
+        ],
+        "converged": true,
+        "pseudo_r_squared": 0.04950311347522496,
+        "n_obs": 4603,
+        "n_bad": 77
+      },
+      "matched_tercile_mannwhitney": [
+        {
+          "tercile": "low_vol",
+          "n_bad": 9,
+          "n_good": 1526,
+          "mean_avg_corr_60d_bad": 0.31469302525715787,
+          "mean_avg_corr_60d_good": 0.2898327665294449,
+          "mannwhitney_p_avg_corr_bad_greater": 0.3588078446586467,
+          "mean_indep_gap_60d_bad": 1.0346474466454025,
+          "mean_indep_gap_60d_good": 0.8883669662689119,
+          "mannwhitney_p_indep_gap_bad_greater": 0.4554111997898534
+        },
+        {
+          "tercile": "mid_vol",
+          "n_bad": 28,
+          "n_good": 1506,
+          "mean_avg_corr_60d_bad": 0.3508667655897094,
+          "mean_avg_corr_60d_good": 0.3393613348236672,
+          "mannwhitney_p_avg_corr_bad_greater": 0.37101297589517124,
+          "mean_indep_gap_60d_bad": 1.2266557728577558,
+          "mean_indep_gap_60d_good": 1.0359823717467083,
+          "mannwhitney_p_indep_gap_bad_greater": 0.008996231209348997
+        },
+        {
+          "tercile": "high_vol",
+          "n_bad": 40,
+          "n_good": 1494,
+          "mean_avg_corr_60d_bad": 0.4639064600556416,
+          "mean_avg_corr_60d_good": 0.44560047088588967,
+          "mannwhitney_p_avg_corr_bad_greater": 0.11244341337190361,
+          "mean_indep_gap_60d_bad": 1.3733651631061288,
+          "mean_indep_gap_60d_good": 1.2700410543878968,
+          "mannwhitney_p_indep_gap_bad_greater": 0.0315475238620803
+        }
+      ]
+    },
+    "fixed_-3pct": {
+      "logit_avg_corr_60d": {
+        "label": "fixed_-3pct_avgcorr",
+        "predictors": [
+          "const",
+          "mkt_vol20",
+          "mkt_dd",
+          "n_open",
+          "avg_corr_60d"
+        ],
+        "coefs": [
+          -10.559937483955167,
+          0.012536595916637722,
+          0.0038761088975641134,
+          0.3165962612055879,
+          1.726370313310637
+        ],
+        "pvalues": [
+          8.382907327680279e-14,
+          0.7216752432989366,
+          0.9334621091261311,
+          0.00010958798804362044,
+          0.5402071999412952
+        ],
+        "odds_ratios": [
+          2.5934472648407503e-05,
+          1.012615508455298,
+          1.0038836307229886,
+          1.3724483494104385,
+          5.620217213853875
+        ],
+        "converged": true,
+        "pseudo_r_squared": 0.07320133069177359,
+        "n_obs": 4603,
+        "n_bad": 13
+      },
+      "logit_indep_gap_60d": {
+        "label": "fixed_-3pct_indepgap",
+        "predictors": [
+          "const",
+          "mkt_vol20",
+          "mkt_dd",
+          "n_open",
+          "indep_gap_60d"
+        ],
+        "coefs": [
+          -10.176857379972148,
+          0.004570519944201678,
+          0.008203394298781048,
+          0.19826328470344057,
+          1.5211216530798841
+        ],
+        "pvalues": [
+          2.0215494395021873e-15,
+          0.8997936404316577,
+          0.8651208057961345,
+          0.09734167843254804,
+          0.16094700313704569
+        ],
+        "odds_ratios": [
+          3.8040568333825716e-05,
+          1.0045809807014432,
+          1.008237134335628,
+          1.2192833702262398,
+          4.577356522861004
+        ],
+        "converged": true,
+        "pseudo_r_squared": 0.08173495854873769,
+        "n_obs": 4603,
+        "n_bad": 13
+      },
+      "matched_tercile_mannwhitney": [
+        {
+          "tercile": "low_vol",
+          "skipped": true,
+          "n_bad": 2
+        },
+        {
+          "tercile": "mid_vol",
+          "skipped": true,
+          "n_bad": 4
+        },
+        {
+          "tercile": "high_vol",
+          "n_bad": 7,
+          "n_good": 1527,
+          "mean_avg_corr_60d_bad": 0.4237859672902033,
+          "mean_avg_corr_60d_good": 0.44618000008822095,
+          "mannwhitney_p_avg_corr_bad_greater": 0.541318494005242,
+          "mean_indep_gap_60d_bad": 1.4695571120071473,
+          "mean_indep_gap_60d_good": 1.271833033396014,
+          "mannwhitney_p_indep_gap_bad_greater": 0.055514239833239644
+        }
+      ]
+    }
+  },
+  "worst_25_days_headline": {
+    "full_sample_indep_gap_60d_p90": 1.5746668262431598,
+    "full_sample_indep_gap_60d_p95": 1.716527334940838,
+    "fraction_of_worst25_days_with_indep_gap_above_p90": 0.4,
+    "fraction_of_worst25_days_with_indep_gap_above_p95": 0.32,
+    "expected_fraction_under_null_p90": 0.1,
+    "expected_fraction_under_null_p95": 0.05,
+    "worst25_mean_indep_gap_60d": 1.3661857843255865,
+    "full_sample_mean_indep_gap_60d": 1.0671022317654772,
+    "binomial_test_p90_p_value": 7.898190106616941e-05,
+    "binomial_test_p95_p_value": 1.9580554079346277e-05
+  }
+}

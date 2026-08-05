@@ -1,0 +1,151 @@
+{
+  "n_obs": 4603,
+  "abs_return": {
+    "label": "absolute daily strategy return",
+    "raw_correlation_dep_vs_avgcorr60d": {
+      "r": 0.1471252296626712,
+      "p": 1.0837132178587794e-23
+    },
+    "residual_after_controlling_mktvol20_correlation_vs_avgcorr60d": {
+      "pearson_r": 0.05505514532591521,
+      "pearson_p": 0.0001861852843698922,
+      "spearman_r": 0.014483430743848344,
+      "spearman_p": 0.3258934802864897
+    },
+    "multivariate_ols": {
+      "dep": "abs_r",
+      "predictors": [
+        "const",
+        "mkt_vol20",
+        "mkt_dd",
+        "n_open",
+        "avg_corr_60d"
+      ],
+      "coefs": [
+        -0.0016245794202200499,
+        0.00012952871704297484,
+        6.427867519558724e-05,
+        0.00045663426497196877,
+        0.002160077110865897
+      ],
+      "pvalues": [
+        0.001067507792784481,
+        2.160301842894112e-24,
+        6.25315502063355e-06,
+        1.4803903700188008e-29,
+        0.007809448102624404
+      ],
+      "r_squared": 0.0669826187825161,
+      "avg_corr_60d_coef": 0.002160077110865897,
+      "avg_corr_60d_pvalue": 0.007809448102624404
+    },
+    "control_only_ols": {
+      "dep": "abs_r",
+      "predictors": [
+        "const",
+        "mkt_vol20"
+      ],
+      "coefs": [
+        0.004547925142400914,
+        8.744689528749139e-05
+      ],
+      "r_squared": 0.02662967203028266
+    }
+  },
+  "downside_return": {
+    "label": "downside-only daily strategy return",
+    "raw_correlation_dep_vs_avgcorr60d": {
+      "r": 0.05726359792113576,
+      "p": 0.00010140426787425427
+    },
+    "residual_after_controlling_mktvol20_correlation_vs_avgcorr60d": {
+      "pearson_r": 0.005689133486160436,
+      "pearson_p": 0.6995856176444828,
+      "spearman_r": -0.18449546262444097,
+      "spearman_p": 1.5916530510087088e-36
+    },
+    "multivariate_ols": {
+      "dep": "downside_r",
+      "predictors": [
+        "const",
+        "mkt_vol20",
+        "mkt_dd",
+        "n_open",
+        "avg_corr_60d"
+      ],
+      "coefs": [
+        -0.0006383648458550871,
+        2.541253350190879e-05,
+        -4.954868231725703e-05,
+        0.0002533265808010956,
+        -0.0005541451374025375
+      ],
+      "pvalues": [
+        0.15681275305024314,
+        0.026914752625369784,
+        0.00012596890326605555,
+        4.403703368595309e-12,
+        0.4523965940390926
+      ],
+      "r_squared": 0.01988283711265315,
+      "avg_corr_60d_coef": -0.0005541451374025375,
+      "avg_corr_60d_pvalue": 0.4523965940390926
+    },
+    "control_only_ols": {
+      "dep": "downside_r",
+      "predictors": [
+        "const",
+        "mkt_vol20"
+      ],
+      "coefs": [
+        0.0019940746053285266,
+        4.309560502963642e-05
+      ],
+      "r_squared": 0.008231116280399298
+    }
+  },
+  "matched_tercile_buckets": [
+    {
+      "mkt_vol_tercile": "low_vol",
+      "n_high_corr": 768,
+      "n_low_corr": 767,
+      "median_corr_split": 0.2846089777820659,
+      "mean_abs_r_high_corr": 0.00485507299603206,
+      "mean_abs_r_low_corr": 0.004105766150900802,
+      "abs_r_ttest_t": 3.5481265493053837,
+      "abs_r_ttest_p": 0.0003997437471890236,
+      "mean_downside_r_high_corr": 0.0020629562355901944,
+      "mean_downside_r_low_corr": 0.001978452354405912,
+      "downside_r_ttest_t": 0.4257084953403782,
+      "downside_r_ttest_p": 0.6703800627008851
+    },
+    {
+      "mkt_vol_tercile": "mid_vol",
+      "n_high_corr": 767,
+      "n_low_corr": 767,
+      "median_corr_split": 0.33159076141964827,
+      "mean_abs_r_high_corr": 0.00627874888760487,
+      "mean_abs_r_low_corr": 0.005964085835313626,
+      "abs_r_ttest_t": 1.0692217221048115,
+      "abs_r_ttest_p": 0.2851417551739436,
+      "mean_downside_r_high_corr": 0.002661063962242748,
+      "mean_downside_r_low_corr": 0.0027545097590699168,
+      "downside_r_ttest_t": -0.354422597038595,
+      "downside_r_ttest_p": 0.7230709845160516
+    },
+    {
+      "mkt_vol_tercile": "high_vol",
+      "n_high_corr": 767,
+      "n_low_corr": 767,
+      "median_corr_split": 0.4323477647191066,
+      "mean_abs_r_high_corr": 0.0076829619469886935,
+      "mean_abs_r_low_corr": 0.006768761524998306,
+      "abs_r_ttest_t": 2.7218427171217483,
+      "abs_r_ttest_p": 0.006567469269063204,
+      "mean_downside_r_high_corr": 0.003514806866960609,
+      "mean_downside_r_low_corr": 0.003116610601661703,
+      "downside_r_ttest_t": 1.3339400686484202,
+      "downside_r_ttest_p": 0.18242529274533384
+    }
+  ]
+}
