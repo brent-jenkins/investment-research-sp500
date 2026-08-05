@@ -17,6 +17,16 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Written by deploy.sh's deploy_steps() (git rev-parse HEAD, right after `git
+# pull`) so the Status page can show exactly which commit is actually
+# running -- captured at deploy time, not re-derived from the checkout at
+# app runtime, so it reflects what was actually deployed even if someone
+# later runs a manual `git pull` on the server without redeploying. Absent
+# in local dev (never written outside deploy.sh), which the "Last
+# Deployment" card handles by simply omitting the hash/link.
+_DEPLOYED_COMMIT_FILE = _ROOT / ".deployed_commit"
+_GITHUB_REPO_URL = "https://github.com/brent-jenkins/investment-research-sp500"
+
 import html
 import json
 import logging
@@ -174,13 +184,30 @@ _LEVEL_COLOUR = {
 }
 
 
-def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") -> None:
-    """Render a colour-coded status card into a Streamlit column."""
+def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok",
+                  link_url: str | None = None, link_text: str | None = None) -> None:
+    """Render a colour-coded status card into a Streamlit column.
+
+    If link_url is given, link_text (defaulting to link_url itself) is
+    rendered as its own clickable line below sub -- used by the "Last
+    Deployment" card to link the deployed commit hash to its GitHub commit
+    page. Built from a URL/hash this code constructs itself (never raw user
+    input), but still html.escape()'d before going into the unsafe_allow_html
+    markdown, same discipline as every other field here.
+    """
     colour  = _LEVEL_COLOUR.get(level, "#8899AA")
     sub_html = (
         f'<div style="font-size:0.78rem;color:#8899AA;margin-top:3px">'
         f'{html.escape(sub)}</div>'
     ) if sub else ""
+    link_html = ""
+    if link_url:
+        _text = html.escape(link_text or link_url)
+        link_html = (
+            f'<div style="font-size:0.78rem;margin-top:3px">'
+            f'<a href="{html.escape(link_url)}" target="_blank" rel="noopener noreferrer" '
+            f'style="color:{colour};text-decoration:underline">{_text}</a></div>'
+        )
     col.markdown(
         f'<div style="border-left:3px solid {colour};background:{colour}18;'
         f'padding:10px 14px;border-radius:0 6px 6px 0;min-height:72px">'
@@ -188,7 +215,7 @@ def _status_card(col, label: str, value: str, sub: str = "", level: str = "ok") 
         f'letter-spacing:0.08em;font-weight:700;margin-bottom:4px">'
         f'{html.escape(label)}</div>'
         f'<div style="font-size:0.95rem;font-weight:600">{html.escape(value)}</div>'
-        f'{sub_html}</div>',
+        f'{sub_html}{link_html}</div>',
         unsafe_allow_html=True,
     )
 
@@ -301,6 +328,31 @@ def _git_log_info() -> tuple[str, str]:
     except Exception:
         pass
     return "Unknown", ""
+
+
+def _deployed_commit_hash() -> str | None:
+    """Return the full commit hash captured at deploy time (deploy.sh writes
+    `git rev-parse HEAD` to _DEPLOYED_COMMIT_FILE right after `git pull`, as
+    the one canonical record of what was actually deployed -- see CLAUDE.md's
+    deploy-pipeline sections). Deliberately NOT re-derived from `git log`/
+    `git rev-parse` against the live checkout at app runtime: this file
+    stays correct even if someone later runs a manual `git pull` on the
+    server without redeploying, which a runtime git command would not catch.
+
+    Returns None if the file doesn't exist (local dev -- deploy.sh never
+    ran here) or is empty/unreadable, so callers can omit the hash/link
+    entirely rather than showing a broken one.
+    """
+    try:
+        raw = _DEPLOYED_COMMIT_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return raw or None
+
+
+def _github_commit_url(commit_hash: str) -> str:
+    """Build the GitHub commit page URL for a given (full or short) hash."""
+    return f"{_GITHUB_REPO_URL}/commit/{commit_hash}"
 
 
 def _service_uptime() -> str:
@@ -1386,13 +1438,18 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     uptime                = _service_uptime()
     db_size_str, db_level = _db_size(config)
 
+    deployed_hash = _deployed_commit_hash()
+    deploy_link_url  = _github_commit_url(deployed_hash) if deployed_hash else None
+    deploy_link_text = deployed_hash[:7] if deployed_hash else None
+
     last_refresh = get_metadata("last_full_refresh")
     last_sched   = get_metadata("last_scheduled_run")
     last_sched_name = get_metadata_str("last_scheduled_run_name") or ""
     last_membership_refresh = get_metadata("last_membership_refresh_success")
 
     sc1, sc2, sc3 = st.columns(3)
-    _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info")
+    _status_card(sc1, "Last Deployment", deploy_ts, deploy_msg, "info",
+                 link_url=deploy_link_url, link_text=deploy_link_text)
     _status_card(sc2, "Service Uptime",  uptime, "Process running", "ok")
     _status_card(sc3, "Database Size",   db_size_str, "", db_level)
 

@@ -1489,3 +1489,100 @@ def test_status_page_recent_orders_and_instrument_mapping_sections_are_gone(stat
     assert "Recent Orders" not in all_text
     assert "Instrument mapping" not in all_text
     assert "instrument resolutions" not in all_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Status page — "Last Deployment" card shows the deployed commit hash as a
+# clickable GitHub link (2026-08-05). deploy.sh writes the real `git
+# rev-parse HEAD` to a `.deployed_commit` file at deploy time; the Status
+# page reads that file (main.py:_deployed_commit_hash()) rather than
+# re-deriving it from `git log` at app runtime. See CLAUDE.md's deploy
+# pipeline sections for why deploy-time capture beats a runtime git call
+# here (it reflects what was actually deployed even after a stray manual
+# `git pull` on the server).
+# ---------------------------------------------------------------------------
+
+def test_deployed_commit_hash_reads_the_deploy_time_file(tmp_path, monkeypatch):
+    import main as _main_mod
+    fake_file = tmp_path / ".deployed_commit"
+    full_hash = "d1a067a1234567890abcdef1234567890abcdef"
+    fake_file.write_text(full_hash + "\n", encoding="utf-8")
+    monkeypatch.setattr(_main_mod, "_DEPLOYED_COMMIT_FILE", fake_file)
+
+    assert _main_mod._deployed_commit_hash() == full_hash
+
+
+def test_deployed_commit_hash_returns_none_when_file_absent(tmp_path, monkeypatch):
+    """Local dev / any environment deploy.sh never ran in -- the Status page
+    must not crash or show a broken link, just omit it."""
+    import main as _main_mod
+    monkeypatch.setattr(_main_mod, "_DEPLOYED_COMMIT_FILE", tmp_path / "does_not_exist")
+
+    assert _main_mod._deployed_commit_hash() is None
+
+
+def test_github_commit_url_is_correctly_formed():
+    import main as _main_mod
+    assert (
+        _main_mod._github_commit_url("d1a067a1234567890abcdef1234567890abcdef")
+        == "https://github.com/brent-jenkins/investment-research-sp500/commit/d1a067a1234567890abcdef1234567890abcdef"
+    )
+
+
+@pytest.fixture
+def deployed_commit_file():
+    """Writes to the REAL `.deployed_commit` path at the repo root (not a
+    tmp_path double), because AppTest.from_file("main.py") re-execs the
+    actual main.py source fresh on every .run() in its own namespace --
+    monkeypatching the separately-imported `main` module's
+    _DEPLOYED_COMMIT_FILE constant has no effect on that fresh execution,
+    the same re-exec gotcha the `app`/`instruments_app` fixtures' own
+    docstrings already document for get_engine/get_all_watchlist_entries.
+    _ROOT is computed from main.py's own __file__, so the real file is the
+    only thing AppTest's execution will ever actually read.
+
+    Saves/restores any pre-existing content so a stray leftover local
+    `.deployed_commit` (there shouldn't be one -- it's deploy.sh/server-only
+    and gitignored) is never lost."""
+    import main as _main_mod
+    real_file = _main_mod._DEPLOYED_COMMIT_FILE
+    original = real_file.read_text(encoding="utf-8") if real_file.exists() else None
+    try:
+        yield real_file
+    finally:
+        if original is None:
+            real_file.unlink(missing_ok=True)
+        else:
+            real_file.write_text(original, encoding="utf-8")
+
+
+def test_status_page_shows_deployed_commit_hash_as_a_github_link(status_app, deployed_commit_file):
+    full_hash = "d1a067a1234567890abcdef1234567890abcdef"
+    deployed_commit_file.write_text(full_hash, encoding="utf-8")
+
+    at = status_app.run()
+    assert not at.exception
+
+    deploy_card = next(
+        (m.value for m in at.markdown if ">Last Deployment</div>" in m.value), None
+    )
+    assert deploy_card is not None, "Last Deployment card not found"
+    assert "d1a067a" in deploy_card, "short (7-char) hash not shown"
+    assert (
+        f'href="https://github.com/brent-jenkins/investment-research-sp500/commit/{full_hash}"'
+        in deploy_card
+    ), "hash is not a link to the real GitHub commit page"
+    assert 'target="_blank"' in deploy_card
+
+
+def test_status_page_last_deployment_card_has_no_hash_link_when_file_absent(status_app, deployed_commit_file):
+    deployed_commit_file.unlink(missing_ok=True)
+
+    at = status_app.run()
+    assert not at.exception
+
+    deploy_card = next(
+        (m.value for m in at.markdown if ">Last Deployment</div>" in m.value), None
+    )
+    assert deploy_card is not None, "Last Deployment card not found"
+    assert "github.com" not in deploy_card

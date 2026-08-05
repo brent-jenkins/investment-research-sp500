@@ -55,6 +55,11 @@ ssh-keys/
 # exclusion between overlapping deploy triggers) — never meant to be committed.
 .deploy.lock.d
 
+# Deployed commit hash, written by deploy.sh on the server at deploy time
+# (read by the Status page to show/link the currently-running commit) —
+# server-generated runtime state, never meant to be committed.
+.deployed_commit
+
 # OS
 .DS_Store
 Thumbs.db

@@ -179,6 +179,18 @@ deploy_steps() {
   (git checkout -- investment-research.service investment-research-scheduler.service 2>/dev/null || true)
   git pull origin main
 
+  echo "  Recording deployed commit hash..."
+  # Written here, right after the pull, rather than left for the app to
+  # derive from `git log`/`git rev-parse` at its own runtime -- this file
+  # stays correct as "what was actually deployed" even if someone later runs
+  # a manual `git pull` on the server without redeploying. Read by the
+  # Status page (main.py:_deployed_commit_hash()) to show and link the
+  # currently-running commit. Same "capture real state at deploy time"
+  # discipline verify_deploy.sh already uses to check git state, just
+  # persisted for the app to read rather than only used inline for
+  # verification.
+  git rev-parse HEAD > "${APP_DIR}/.deployed_commit"
+
   echo "  Installing any new Python packages..."
   python3.11 -m pip install -r requirements.txt --quiet
   # TA-Lib (Linux) is already installed; re-running is a no-op
