@@ -234,8 +234,24 @@ blocks), which suggests those published figures were themselves generated
 without these two tickers — production had them frozen at 2026-07-31 per
 `d1a067a`'s own commit message.
 
-A confirmation re-run on the now-complete 503-ticker universe is recorded in
-`results/confirm_503/` if present.
+**Confirmation re-run completed** on the now-complete 503-ticker universe
+(after `d1a067a` was merged and both tickers backfilled — 4,927 rows each,
+exactly the NYSE session count). Recorded in `results/confirm_503/`:
+
+| 16-block mean | 501: raw | 501: risk-adj | 503: raw | 503: risk-adj |
+|---|---|---|---|---|
+| Blocks passing | 14/16 | 14/16 | 14/16 | 14/16 |
+| CAGR | 12.95% | 9.24% | **12.95%** | **9.20%** |
+| abs drawdown | 8.27% | 7.22% | 8.27% | 7.21% |
+| Profit factor | 1.779 | 1.680 | 1.779 | 1.672 |
+| Sharpe | 0.539 | 0.465 | 0.539 | 0.461 |
+| CAGR blocks won by variant | — | 4/16 | — | 4/16 |
+
+The verdict is unchanged and marginally *worse* for the variant. The raw arm's
+aggregates are identical to three decimals, indicating neither `BRK.B` nor
+`BF.B` was ever admitted under raw-momentum ranking — unsurprising for two
+comparatively low-momentum, low-volatility names. The caveat is therefore
+closed, not merely acknowledged.
 
 ## Preserved output
 
