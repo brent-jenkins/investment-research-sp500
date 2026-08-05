@@ -78,6 +78,7 @@ def _patch_common(monkeypatch, *, now_hour, now_minute, last_refresh_hours_ago, 
         monkeypatch.setattr(scheduler, "get_metadata_str", lambda key: last_dt.isoformat())
 
     monkeypatch.setattr(scheduler, "set_metadata", lambda *a, **k: None)
+    monkeypatch.setattr(scheduler, "clear_metadata", lambda *a, **k: None)
     monkeypatch.setattr(scheduler, "get_all_tickers", lambda config: ["AAPL"])
 
     def fake_pipeline(config, tickers, run_type):
@@ -143,6 +144,52 @@ def test_missed_eod_detected(monkeypatch):
     config, tickers, run_type = calls[0]
     assert tickers == ["AAPL"]
     assert run_type == scheduler.RUN_FULL
+
+
+def test_missed_eod_catch_up_marks_and_clears_job_in_progress(db_engine, monkeypatch):
+    """The catch-up thread queues real candidates too (it's the same
+    _run_analysis_pipeline() call the real EOD job makes), so deploy.sh's
+    check_eod_job_in_progress.py must see it as in-progress just like a
+    full scheduled run -- not only the 21:30 job itself (2026-08-05, see
+    CLAUDE.md's "GitHub webhook deploy" for the incident this closes).
+    Uses the real set_metadata/clear_metadata (via db_engine) rather than
+    _patch_common's no-op versions, specifically to observe the marker's
+    real state."""
+    seen_status_during_call: list = []
+
+    def fake_pipeline(config, tickers, run_type):
+        seen_status_during_call.append(scheduler.get_job_in_progress_status())
+
+    monkeypatch.setattr(scheduler, "datetime", _frozen_datetime(22, 0))
+    now_naive = datetime(*_NOW_DATE, 22, 0)
+    last_dt = now_naive - timedelta(hours=25)
+
+    # Only fake "last_full_refresh" (the staleness check this test needs
+    # to force) -- everything else, notably the job-in-progress marker
+    # key, must fall through to the REAL, db_engine-backed get_metadata_str
+    # so this test can genuinely observe _mark_job_started()'s effect.
+    from data.database import get_metadata_str as _real_get_metadata_str
+
+    def fake_get_metadata_str(key):
+        if key == "last_full_refresh":
+            return last_dt.isoformat()
+        return _real_get_metadata_str(key)
+
+    monkeypatch.setattr(scheduler, "get_metadata_str", fake_get_metadata_str)
+    monkeypatch.setattr(scheduler, "get_all_tickers", lambda config: ["AAPL"])
+    monkeypatch.setattr(scheduler, "_run_analysis_pipeline", fake_pipeline)
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+
+    scheduler._check_missed_eod_run({"some": "config"})
+
+    assert len(seen_status_during_call) == 1
+    assert seen_status_during_call[0] is not None, (
+        "the job-in-progress marker must already be set by the time the real "
+        "pipeline call happens, not only after it returns"
+    )
+    assert seen_status_during_call[0]["job"] == "eod-catch-up"
+    # Cleared once the (synchronously-run, via _ImmediateThread) thread finishes.
+    assert scheduler.get_job_in_progress_status() is None
 
 
 def test_missed_eod_not_triggered_outside_window(monkeypatch):
@@ -1732,3 +1779,129 @@ def test_eod_job_completed_even_when_purge_fails(db_engine, monkeypatch, mocker)
     assert status["status"] == "COMPLETED"
     assert status["order_pipeline_ran"] is True
     assert "pending_orders_purged" not in status
+
+
+# ---------------------------------------------------------------------------
+# _mark_job_started() / _mark_job_finished() / get_job_in_progress_status()
+# -- real-time "is EOD (or its catch-up sibling) genuinely still running"
+# detection (2026-08-05), used by deploy.sh (via check_eod_job_in_progress.py)
+# to defer a deploy on the job's actual state rather than only a static
+# wall-clock window. See CLAUDE.md's "GitHub webhook deploy" for the
+# incident this closes: a deploy correctly deferred through the static
+# EOD window, then hit its own wait cap and force-restarted
+# investment-research-scheduler while that night's EOD job was still
+# genuinely mid-run.
+# ---------------------------------------------------------------------------
+
+def test_mark_and_get_job_in_progress_status_round_trips(db_engine):
+    scheduler._mark_job_started("eod")
+    status = scheduler.get_job_in_progress_status()
+    assert status["job"] == "eod"
+    assert "started_at" in status
+    assert status["elapsed_seconds"] >= 0
+
+
+def test_get_job_in_progress_status_none_when_never_marked(db_engine):
+    assert scheduler.get_job_in_progress_status() is None
+
+
+def test_mark_job_finished_clears_the_marker(db_engine):
+    scheduler._mark_job_started("eod")
+    assert scheduler.get_job_in_progress_status() is not None
+
+    scheduler._mark_job_finished()
+
+    assert scheduler.get_job_in_progress_status() is None
+
+
+def test_mark_job_started_never_raises_on_db_failure(db_engine, mocker):
+    mocker.patch("data.scheduler.set_metadata", side_effect=RuntimeError("db down"))
+    scheduler._mark_job_started("eod")  # must not raise
+
+
+def test_mark_job_finished_never_raises_on_db_failure(db_engine, mocker):
+    mocker.patch("data.scheduler.clear_metadata", side_effect=RuntimeError("db down"))
+    scheduler._mark_job_finished()  # must not raise
+
+
+def test_get_job_in_progress_status_none_on_malformed_payload(db_engine):
+    """A corrupt/partial payload (e.g. a future schema change dropping a
+    field) must read back as "nothing in progress", not raise -- this
+    function's own contract is "never raises", matching every other
+    metadata-read helper in this module."""
+    scheduler.set_metadata(scheduler._JOB_IN_PROGRESS_KEY, "not valid json")
+    assert scheduler.get_job_in_progress_status() is None
+
+
+def test_eod_job_marks_in_progress_before_the_price_pull(db_engine, monkeypatch, mocker):
+    """The marker must be set BEFORE the real work starts, not after --
+    otherwise a deploy racing the very start of the job could still slip
+    through. Verified by checking the marker's state from inside a faked
+    pull_incremental(), the very first real-work step _eod_job() calls."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+
+    seen_status_during_pull: list = []
+
+    def fake_pull(tickers):
+        seen_status_during_pull.append(scheduler.get_job_in_progress_status())
+        return {"^GSPC": 1}
+
+    mocker.patch("data.scheduler.pull_incremental", side_effect=fake_pull)
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    assert len(seen_status_during_pull) == 1
+    assert seen_status_during_pull[0] is not None
+    assert seen_status_during_pull[0]["job"] == "eod"
+
+
+def test_eod_job_clears_in_progress_marker_on_success(db_engine, monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    assert scheduler.get_eod_completion_status()["status"] == "COMPLETED"
+    assert scheduler.get_job_in_progress_status() is None
+
+
+def test_eod_job_clears_in_progress_marker_on_failure(db_engine, monkeypatch, mocker):
+    """The marker must be cleared via the try/finally even when the job
+    raises -- a FAILED run must not leave deploy.sh believing EOD is
+    still running for the rest of the JOB_IN_PROGRESS_STALE_AFTER_SECONDS
+    window."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", side_effect=RuntimeError("yfinance is down"))
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+
+    scheduler._eod_job()
+
+    assert scheduler.get_eod_completion_status()["status"] == "FAILED"
+    assert scheduler.get_job_in_progress_status() is None
+
+
+def test_eod_job_noop_path_never_marks_in_progress(db_engine, monkeypatch):
+    """The pathological >10-day-closure no-op path returns before any real
+    work -- it must never leave a stray in-progress marker for deploy.sh
+    to find (there's nothing running to protect)."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    monkeypatch.setattr(scheduler, "_is_scheduled_trading_day", lambda d: False)
+    monkeypatch.setattr(scheduler, "_has_upcoming_trading_day", lambda d: False)
+
+    scheduler._eod_job()
+
+    assert scheduler.get_job_in_progress_status() is None

@@ -169,6 +169,31 @@ compute_blackout_label() {
   elif [ "$now_min" -ge "$HOURLY_WINDOW_LO" ] || [ "$now_min" -le "$HOURLY_WINDOW_HI" ]; then
     blackout_label="market_hours_check (:00) / account_state_refresh (:05) run every hour, every day — both make real T212 API calls (position poll/exit-check, account reconciliation/snapshot)"
   fi
+
+  # Real job-in-progress detection (2026-08-05), layered ON TOP of the
+  # static windows above rather than replacing them -- see
+  # check_eod_job_in_progress.py's own header for the incident this
+  # closes. The windows above are a cheap, always-available first pass
+  # (and the only signal for jobs with no in-progress marker of their
+  # own); this asks data/scheduler.py's real, current state directly for
+  # EOD specifically, so a deploy correctly keeps waiting for a
+  # genuinely slow EOD run even once the window's nominal end time has
+  # passed, and is not forced to trust that a fast EOD run always takes
+  # the window's full nominal width either. If the check script is
+  # missing (e.g. the disposable test scratch APP_DIR used by
+  # tests/test_deploy_server_side_blackout.py, which has no such file)
+  # or genuinely errors, this silently adds nothing -- never let a
+  # monitoring signal itself block a deploy that the static windows
+  # above didn't already flag.
+  local job_check_script job_check_output
+  job_check_script="${DEPLOY_EOD_JOB_CHECK_SCRIPT:-${APP_DIR}/check_eod_job_in_progress.py}"
+  if [ -f "$job_check_script" ]; then
+    if job_check_output="$("${DEPLOY_PYTHON_BIN:-python3.11}" "$job_check_script" 2>&1)"; then
+      : # exit 0 -- no job genuinely in progress, nothing to add
+    else
+      blackout_label="$job_check_output"
+    fi
+  fi
 }
 # --- End blackout window check definitions ----------------------------------
 

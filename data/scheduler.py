@@ -125,7 +125,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from data.database import get_metadata_str, set_metadata
+from data.database import clear_metadata, get_metadata_str, set_metadata
 from data.ingestion import get_all_tickers, get_all_watchlist_entries, pull_incremental
 
 logger = logging.getLogger(__name__)
@@ -623,6 +623,77 @@ def get_eod_completion_status() -> "dict | None":
         return None
 
 
+_JOB_IN_PROGRESS_KEY = "eod_job_in_progress"
+
+# How long a stored "in progress" marker is trusted before deploy.sh's
+# checker (check_eod_job_in_progress.py) treats it as stale -- i.e. left
+# behind by a process that was killed (crash, OOM, a *previous*
+# systemctl restart) rather than a genuinely still-running job. Must stay
+# comfortably longer than any real observed run: the price pull alone for
+# the current 506-ticker live universe measured ~23 minutes end to end on
+# a clean run (2026-08-03, 21:30:10-21:53:08), plus the decide pipeline
+# and T212 snapshot after it. 3600s (60 minutes) leaves real margin above
+# that without leaving a genuinely crashed marker blocking deploys for
+# the rest of the night. See deploy.sh's own "job in progress" comment
+# for how this is used -- this constant is the single source of truth
+# for the ceiling; the checker script imports it rather than
+# re-deriving its own number.
+JOB_IN_PROGRESS_STALE_AFTER_SECONDS = 3600
+
+
+def _mark_job_started(job_name: str) -> None:
+    """Record that *job_name* (e.g. "eod", "eod-catch-up") has started
+    real work, for deploy.sh's check_eod_job_in_progress.py to detect
+    (2026-08-05) -- lets a deploy defer on "is this job actually still
+    running" rather than only a static wall-clock window, which is what
+    let a deploy force through mid-EOD-run the night this was added (see
+    CLAUDE.md's "GitHub webhook deploy" for the incident). Never raises:
+    a failure to record this must never block or mask the job itself --
+    worst case, deploy.sh falls back to its static-window behaviour."""
+    try:
+        set_metadata(_JOB_IN_PROGRESS_KEY, json.dumps({
+            "job": job_name,
+            "started_at": datetime.utcnow().isoformat(),
+        }))
+    except Exception as exc:
+        logger.warning("Could not record job-in-progress marker for %s: %s", job_name, exc)
+
+
+def _mark_job_finished() -> None:
+    """Clear the marker _mark_job_started() wrote. Called from a
+    try/finally around the job's real work, so it runs whether the job
+    succeeded or raised -- the only case it does NOT run is the process
+    itself being killed outright (e.g. a systemd restart), which is
+    exactly the case JOB_IN_PROGRESS_STALE_AFTER_SECONDS's staleness
+    ceiling exists to time out rather than block deploys forever. Never
+    raises, matching every other metadata-write helper in this module."""
+    try:
+        clear_metadata(_JOB_IN_PROGRESS_KEY)
+    except Exception as exc:
+        logger.warning("Could not clear job-in-progress marker: %s", exc)
+
+
+def get_job_in_progress_status() -> "dict | None":
+    """Read back the current job-in-progress marker, with elapsed_seconds
+    computed, or None if no job is currently marked as running (including
+    right after a clean finish, since _mark_job_finished() clears it).
+    Never raises. Does NOT itself apply the staleness ceiling -- that is
+    the caller's decision (check_eod_job_in_progress.py applies it to
+    decide whether to actually block a deploy; a future Status-page
+    display might legitimately want the raw, unfiltered elapsed time
+    instead, e.g. to surface "stuck for 90 minutes" as its own signal)."""
+    try:
+        raw = get_metadata_str(_JOB_IN_PROGRESS_KEY)
+        if not raw:
+            return None
+        status = json.loads(raw)
+        started_at = datetime.fromisoformat(status["started_at"])
+        status["elapsed_seconds"] = (datetime.utcnow() - started_at).total_seconds()
+        return status
+    except Exception:
+        return None
+
+
 def _eod_job() -> None:
     """Daily, 21:30 UTC — market-calendar-gated (2026-08-02), not a Mon-Fri
     cron filter. Two independently-gated steps, not one combined gate:
@@ -680,6 +751,12 @@ def _eod_job() -> None:
         set_metadata("last_scheduled_run_name", "End of Day")
     except Exception as _exc:
         logger.warning("Could not stamp last_scheduled_run: %s", _exc)
+
+    # From here on, real work happens (price pull and/or the decide
+    # pipeline) -- mark it so deploy.sh can detect a genuinely in-progress
+    # run rather than only inferring one from a static wall-clock window.
+    # See _mark_job_started()'s own docstring for the incident this closes.
+    _mark_job_started("eod")
 
     # A direct "did tonight's EOD job actually run to completion" signal
     # (2026-08-02) — distinct from and in addition to the specific
@@ -783,6 +860,13 @@ def _eod_job() -> None:
         logger.error("EOD job failed with an unhandled exception: %s", exc, exc_info=True)
         _record_eod_completion("FAILED", today_utc, error=str(exc), **details)
         return
+    finally:
+        # Runs whether the job succeeded or raised above -- the only case
+        # this does NOT run is the process being killed outright (e.g. a
+        # systemd restart mid-run), which is exactly what
+        # JOB_IN_PROGRESS_STALE_AFTER_SECONDS's staleness ceiling exists
+        # to time out rather than leave deploys blocked indefinitely.
+        _mark_job_finished()
 
     _record_eod_completion("COMPLETED", today_utc, **details)
 
@@ -1287,9 +1371,20 @@ def _check_missed_eod_run(config: dict) -> None:
     set_metadata("missed_eod_catch_up", now_utc.isoformat())
 
     import threading  # noqa: PLC0415
+
+    def _run_catch_up_pipeline() -> None:
+        # Marked the same way _eod_job() marks its own real work (2026-08-05)
+        # -- this thread queues real candidates too, so deploy.sh's
+        # check_eod_job_in_progress.py should see it as in-progress just
+        # like a full EOD run, not just the scheduled 21:30 job.
+        _mark_job_started("eod-catch-up")
+        try:
+            _run_analysis_pipeline(config, get_all_tickers(config), RUN_FULL)
+        finally:
+            _mark_job_finished()
+
     t = threading.Thread(
-        target=_run_analysis_pipeline,
-        args=(config, get_all_tickers(config), RUN_FULL),
+        target=_run_catch_up_pipeline,
         name="eod-catch-up",
         daemon=True,
     )

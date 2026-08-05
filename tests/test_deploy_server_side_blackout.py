@@ -403,3 +403,90 @@ def test_blackout_clears_partway_through_the_wait(deploy_scratch, monkeypatch):
         f"expected multiple poll/recheck iterations before the cap, saw {defer_count} -- "
         "the defer loop may have stopped polling"
     )
+
+
+# ---------------------------------------------------------------------------
+# Real job-in-progress detection (2026-08-05), layered on top of the static
+# windows above -- see check_eod_job_in_progress.py's own header and
+# CLAUDE.md's "GitHub webhook deploy" for the incident this closes: a
+# deploy correctly deferred through the static EOD window, then hit its own
+# wait cap and force-restarted investment-research-scheduler while EOD was
+# still genuinely mid-run. These tests drive deploy.sh's real
+# compute_blackout_label() against a small stand-in "check script" (plain
+# bash, run via DEPLOY_PYTHON_BIN=bash rather than a real python3.11 --
+# the fixture's own python3.11 stub always exits 0 unconditionally and
+# ignores its arguments, so it can't stand in for real per-scenario logic
+# the way it can for the static-window tests above) rather than the real
+# check_eod_job_in_progress.py, keeping these tests fast and independent of
+# a real database.
+# ---------------------------------------------------------------------------
+
+def _write_job_check_script(scratch, *, exit_code: int, message: str = ""):
+    script = scratch["app_dir"] / "fake_job_check.sh"
+    script.write_text(
+        f"#!/usr/bin/env bash\n"
+        + (f'echo "{message}" >&2\n' if message else "")
+        + f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def test_job_in_progress_check_defers_even_outside_any_static_window(deploy_scratch):
+    """The whole point of real detection: it must be able to extend a
+    defer PAST what the static windows alone would ever trigger. Wednesday
+    12:30 UTC is inside none of the four static windows, but the check
+    script reports a job genuinely still running -- deploy.sh must still
+    defer, not just proceed because no static window matched."""
+    scratch = deploy_scratch
+    script = _write_job_check_script(scratch, exit_code=1, message="eod has been running for 300s")
+
+    result, elapsed = _run_server_side(scratch, {
+        "DEPLOY_TEST_NOW_HM": "1230",
+        "DEPLOY_TEST_NOW_MIN": "30",
+        "DEPLOY_TEST_NOW_DOW": "3",
+        "DEPLOY_EOD_JOB_CHECK_SCRIPT": str(script),
+        "DEPLOY_PYTHON_BIN": "bash",
+        "DEPLOY_MAX_BLACKOUT_WAIT_SECONDS": "2",
+        "DEPLOY_BLACKOUT_POLL_INTERVAL_SECONDS": "1",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Deploy deferred" in result.stdout
+    assert "eod has been running" in result.stdout
+    assert elapsed >= 2, "should have waited out the cap, not proceeded immediately"
+
+
+def test_job_in_progress_check_does_not_block_when_script_reports_clear(deploy_scratch):
+    """A present check script that reports "nothing running" (exit 0) must
+    not itself add any deferral -- outside every static window too, this
+    must behave identically to having no check script at all."""
+    scratch = deploy_scratch
+    script = _write_job_check_script(scratch, exit_code=0)
+
+    result, elapsed = _run_server_side(scratch, {
+        "DEPLOY_TEST_NOW_HM": "1230",
+        "DEPLOY_TEST_NOW_MIN": "30",
+        "DEPLOY_TEST_NOW_DOW": "3",
+        "DEPLOY_EOD_JOB_CHECK_SCRIPT": str(script),
+        "DEPLOY_PYTHON_BIN": "bash",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Deploy deferred" not in result.stdout
+    assert elapsed < 5, f"deploy took {elapsed:.1f}s with a clear job-check script -- should be near-instant"
+
+
+def test_missing_job_check_script_does_not_block_deploy(deploy_scratch):
+    """A missing check script (the normal case for every OTHER test in
+    this file, which don't set DEPLOY_EOD_JOB_CHECK_SCRIPT at all, and the
+    real, expected case whenever this repo is checked out at a commit
+    before this file existed) must never itself block a deploy -- the
+    real-time check is additive, never a new hard dependency."""
+    result, elapsed = _run_server_side(deploy_scratch, {
+        "DEPLOY_TEST_NOW_HM": "1230",
+        "DEPLOY_TEST_NOW_MIN": "30",
+        "DEPLOY_TEST_NOW_DOW": "3",
+        "DEPLOY_EOD_JOB_CHECK_SCRIPT": "/nonexistent/check_eod_job_in_progress.py",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Deploy deferred" not in result.stdout
+    assert elapsed < 5
