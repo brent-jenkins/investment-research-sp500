@@ -1,0 +1,676 @@
+{{Short description|Blue chip stock market index}}
+{{Other uses|Dax (disambiguation)}}
+{{Use dmy dates|date=January 2025}}
+{{bots|deny=Citation bot}}
+{{Infobox index
+|name         = DAX
+|logo         = DAX-logo.svg
+|image        = Dax-chart-1959-2019.png
+|Currency Euro|foundation   = 1 July 1988
+|operator     = [[STOXX]] ([[Qontigo]], [[Deutsche Börse]])
+|exchanges    = [[Frankfurt Stock Exchange]]
+|constituents = 40 (expanded from 30 in 2021)
+|cap_level    = Large cap
+|mcap         = [[Euro|€]]1.891 trillion <small>(March 2025)</small><ref>{{Cite web|url=https://stoxx.com/index/daxnr/|title=1-DAX (DAXNR) (DE000A1A4D00)|website=STOXX}}</ref>
+|weighting    = [[Capitalization-weighted index|Capitalization-weighted]]
+|related      = [[MDAX]], [[SDAX]], [[TecDAX]]
+|homepage     = [https://www.boerse-frankfurt.de/indices/dax?mic=XETR Official website]
+}}
+
+The '''DAX''' (''Deutscher Aktienindex'' (German stock index); {{IPA|de|daks|-|De-DAX.ogg}}) is a [[stock market index]] consisting of the 40 major German [[Blue chip (stock market)|blue chip]] companies trading on the [[Frankfurt Stock Exchange]]. It is a [[total return index]]. Prices are taken from the [[Xetra (trading system)|Xetra]] trading venue. According to [[Deutsche Börse]], the operator of Xetra, DAX measures the performance of the [[Prime Standard]]'s 40 largest German companies in terms of order book volume and market capitalization.<ref>{{Cite web|url=http://deutsche-boerse.com/dbag/dispatch/en/isg/gdb_navigation/private_investors/20_Equities/20_Indices/10_DAX?module=InOverview_Index&wp=DE0008469008&wplist=DE0008469008&foldertype=_Index|title=DAX|website=deutsche-boerse.com|access-date=1 April 2007|archive-date=29 September 2007|archive-url=https://web.archive.org/web/20070929111611/http://deutsche-boerse.com/dbag/dispatch/en/isg/gdb_navigation/private_investors/20_Equities/20_Indices/10_DAX?module=InOverview_Index&wp=DE0008469008&wplist=DE0008469008&foldertype=_Index|url-status=live}}</ref> DAX is the equivalent of the UK [[FTSE 100]] and the US [[Dow Jones Industrial Average]], and because of its small company selection it does not necessarily represent the vitality of the German economy as a whole.
+
+The L-DAX Index is an indicator of the German benchmark DAX index's performance after the Xetra trading venue closes based on the [[floor trading]] at the Börse Frankfurt trading venue. The L-DAX Index basis is the "floor" trade (''Parketthandel'') at the Frankfurt stock exchange; it is computed daily between 09:00 and 17:45 Hours CET.<ref>{{cite web|url=https://www.xetra.com/resource/blob/250972/24d50260d22cd63e0f600ae2543ca529/data/handelsparameter-xetra.pdf|title=Trading Parameter Xetra Frankfurt|publisher=[[Xetra (trading system)|Xetra]]|date=23 November 2020|archive-url=https://web.archive.org/web/20210826023256/https://www.xetra.com/resource/blob/250972/24d50260d22cd63e0f600ae2543ca529/data/handelsparameter-xetra.pdf|archive-date=2021-08-26|url-status=live}}</ref> The L/E-DAX index (Late/Early DAX) is calculated from 17:55 to 22:00 CET and from 08:00 to 09:00 CET. The [[Eurex]], a European electronic futures and options exchange based in [[Zurich]], Switzerland with a subsidiary in [[Frankfurt]], Germany, offers options (ODAX) and Futures (FDAX) on the DAX from 01:10 to 22:00 CET or from 02:10 to 22:00 CEST.<ref>{{cite web|url=https://www.eurex.com/resource/blob/1412768/e61a2c41d65ad165af7909002223b943/data/er18088e.pdf|title=Extension of trading hours for selected benchmark futures and MSCI futures|publisher=[[Eurex Exchange]]|date=15 November 2018|archive-url=https://web.archive.org/web/20210826023630/https://www.eurex.com/resource/blob/1412768/e61a2c41d65ad165af7909002223b943/data/er18088e.pdf|archive-date=2021-08-26|url-status=live}}</ref>
+
+The Base date for the DAX is 30 December 1987, and it was started from a base value of 1,000. The Xetra technology calculates the index every second since 1 January 2006.
+
+On 24 Nov 2020, Deutsche Börse announced an expansion of the DAX from 30 to 40 members and a tightening of rules in response to the [[Wirecard scandal|Wirecard accounting scandal]].<ref>{{Cite news|url=https://www.reuters.com/article/deutsche-boerse-dax-idUSL8N2IA0QV|title=Germany's DAX to expand to 40 members from 30 in index shake-up|date=24 November 2020|agency=Reuters|archive-date=8 December 2020|access-date=20 May 2021|archive-url=https://web.archive.org/web/20201208133236/https://www.reuters.com/article/deutsche-boerse-dax-idUSL8N2IA0QV|url-status=live}}</ref> The expansion occurred in the 3rd quarter of 2021.<ref>{{Cite web|url=https://www.metro.us/germanys-dax-index-gets/|title=Germany's DAX index gets shake-up in wake of Wirecard scandal – Metro US|first1=Shriya|last1=Ramakrishnan|first2=Shivani|last2=Kumaresan|website=metro.us|date=24 November 2020|access-date=20 May 2021|archive-date=8 December 2020|archive-url=https://web.archive.org/web/20201208133323/https://www.metro.us/germanys-dax-index-gets/|url-status=live}}</ref>
+
+== Versions ==
+The DAX has two versions, called performance index and price index, depending on whether dividends are counted. The performance index, which measures [[total return]], is the more commonly quoted, however the price index is more similar to commonly quoted indexes in other countries.{{Citation needed|date=August 2021}}
+
+== Contract specifications ==
+DAX futures are traded on the Deutsche Borse Indices & ETF exchange (DBIndex). The contract specifications for the DAX Combined Index (ticker symbol DAXA) are listed below:
+{| class="wikitable"
+|+Contract Specifications<ref>{{Cite web |title=Historical DAX Combined Index Intraday Data (DAXA) |url=https://34.194.240.109/historical-futures-data/historical-dax-intraday-futures-data-daxa/ |access-date=2022-09-30 |website=PortaraCQG |language=en-US }}{{Dead link|date=May 2025 |bot=InternetArchiveBot |fix-attempted=yes }}</ref>
+!DAX Combined Index (DAXA) 
+!
+|-
+|Exchange: 
+|DBIndex 
+|-
+|Sector: 
+|Index 
+|-
+|Tick Size: 
+|0.01
+|-
+|Tick Value: 
+|1 EUR 
+|-
+|Big Point Value (BPV): 
+|100
+|-
+|Denomination: 
+|EUR 
+|-
+|Decimal Place: 
+|2 
+|}
+
+== Price history ==
+On 16 March 2015, the performance index first closed above 12,000.<ref>{{Cite web|url=https://www.ft.com/content/340af600-cbfa-11e4-beca-00144feab7de |archive-url=https://ghostarchive.org/archive/20221210/https://www.ft.com/content/340af600-cbfa-11e4-beca-00144feab7de |archive-date=10 December 2022 |url-access=subscription |url-status=live|title=Dax breaks 12,000 barrier |website=Financial Times|location=London}}</ref>
+
+==Record values==
+{| class="wikitable"
+! colspan="1"|Category
+! colspan="2"|All-time highs<ref>{{Cite web |url=https://www.cnbc.com/amp/2025/05/09/europe-stocks-set-to-as-investors-look-ahead-to-us-china-trade-talks.html |title= Europe stocks close up, Germany's DAX at record high as investors eye U.S.-China trade talks |date=9 May 2025 |publisher=CNBC}}</ref><ref>{{Cite web |url=https://finance.yahoo.com/quote/%5EGDAXI/history |title=DAX Performance Index (^GDAXI) |publisher=Yahoo Finance |access-date=9 May 2025}}</ref>
+|-
+| Closing || 26,001.31|| Monday, 3 August 2026
+|-
+| Intraday || 26,266.50|| Tuesday, 4 August 2026
+|}
+
+== Annual returns ==
+The following collapsible table shows the annual development of the DAX, calculated retroactively up to 1950.<ref>{{Cite web|url=http://tool.boerse.de/DAX-Indizes-846900-kurshistorie/|archive-url=https://web.archive.org/web/20101019034637/http://tool.boerse.de/DAX-Indizes-846900-kurshistorie/|archive-date=2010-10-19|title=Index DAX (846900) {{!}} Indexstand {{!}} Börsenkurs {{!}} Kurs {{!}} Tool – boerse.de|date=2010-10-19|access-date=2020-01-20}}</ref><ref>{{Cite web|url=https://www.dax-indices.com/de/web/dax-indices/index-details?isin=DE0008469008|title=DAX Digital {{!}} DAX® (TR) EUR|last=DAX|website=dax-indices.com|language=en|access-date=2020-01-20|archive-date=27 March 2020|archive-url=https://web.archive.org/web/20200327141552/https://www.dax-indices.com/de/web/dax-indices/index-details?isin=DE0008469008|url-status=live}}</ref>
+{| class="wikitable sortable mw-collapsible mw-collapsed" style="text-align:right;"
+!Year
+!Closing level
+!Change in Index<br />in Points
+!Change in Index<br />in %
+|-
+| 1950 || 30.18 || −2.42 || −7.42
+|-
+| 1951 || 65.01 || 34.83 || 115.41
+|-
+| 1952 || 59.75 || −5.26 || −8.09
+|-
+| 1953 || 74.09 || 14.34 || 24.00
+|-
+| 1954 || 135.28 || 61.19 || 82.59
+|-
+| 1955 || 148.81 || 13.53 || 10.00
+|-
+| 1956 || 137.80 || −11.01 || −7.40
+|-
+| 1957 || 144.97 || 7.17 || 5.20
+|-
+| 1958 || 232.23 || 87.26 || 60.19
+|-
+| 1959 || 417.79 || 185.56 || 79.90
+|-
+| 1960 || 534.09 || 116.30 || 27.84
+|-
+| 1961 || 489.79 || −44.30 || −8.29
+|-
+| 1962 || 386.32 || −103.47 || −21.13
+|-
+| 1963 || 438.95 || 52.63 || 13.62
+|-
+| 1964 || 477.89 || 38.94 || 8.87
+|-
+| 1965 || 422.36 || −55.53 || −11.62
+|-
+| 1966 || 333.36 || −89.00 || −21.07
+|-
+| 1967 || 503.22 || 169.86 || 50.95
+|-
+| 1968 || 555.62 || 52.40 || 10.41
+|-
+| 1969 || 622.38 || 66.76 || 12.02
+|-
+| 1970 || 443.86 || −178.52 || −28.68
+|-
+| 1971 || 473.46 || 29.60 || 6.67
+|-
+| 1972 || 536.36 || 62.90 || 13.29
+|-
+| 1973 || 403.88 || −132.48 || −24.70
+|-
+| 1974 || 401.79 || −2.09 || −0.52
+|-
+| 1975 || 563.25 || 161.46 || 40.19
+|-
+| 1976 || 509.02 || −54.23 || −9.63
+|-
+| 1977 || 549.34 || 40.32 || 7.92
+|-
+| 1978 || 575.15 || 25.81 || 4.70
+|-
+| 1979 || 497.79 || −77.36 || −13.45
+|-
+| 1980 || 480.92 || −16.87 || −3.39
+|-
+| 1981 || 490.39 || 9.47 || 1.97
+|-
+| 1982 || 552.77 || 62.38 || 12.72
+|-
+| 1983 || 773.95 || 221.18 || 40.01
+|-
+| 1984 || 820.91 || 46.96 || 6.07
+|-
+| 1985 || 1,366.23 || 545.32 || 66.43
+|-
+| 1986 || 1,432.25 || 66.02 || 4.83
+|-
+| '''1987''' || '''1,000.00''' || −432.25 || −30.18
+|-
+| 1988 || 1,327.87 || 327.87 || 32.79
+|-
+| 1989 || 1,790.37 || 462.50 || 34.83
+|-
+| 1990 || 1,398.23 || −392.14 ||style="color:red"| −21.90
+|-
+| 1991 || 1,577.98 || 179.75 || 12.86
+|-
+| 1992 || 1,545.05 || −32.93 ||style="color:red"| −2.09
+|-
+| 1993 || 2,266.68 || 721.63 || 46.71
+|-
+| 1994 || 2,106.58 || −160.10 ||style="color:red"| −7.06
+|-
+| 1995 || 2,253.88 || 147.30 || 6.99
+|-
+| 1996 || 2,888.69 || 634.81 || 28.17
+|-
+| 1997 || 4,249.69 || 1,361.00 || 47.11
+|-
+| 1998 || 5,002.39 || 752.70 || 17.71
+|-
+| 1999 || 6,958.14 || 1,955.75 || 39.10
+|-
+| 2000 || 6,433.61 || −524.53 ||style="color:red"| −7.54
+|-
+| 2001 || 5,160.10 || −1,273.51 ||style="color:red"| −19.79
+|-
+| 2002 || 2,892.63 || −2,267.47 ||style="color:red"| −43.94
+|-
+| 2003 || 3,965.16 || 1,072.53 || 37.08
+|-
+| 2004 || 4,256.08 || 290.92 || 7.34
+|-
+| 2005 || 5,408.26 || 1,152.18 || 27.07
+|-
+| 2006 || 6,596.92 || 1,188.66 || 21.98
+|-
+| 2007 || 8,067.32 || 1,470.40 || 22.29
+|-
+| 2008 || 4,810.20 || −3,257.12 ||style="color:red"| −40.37
+|-
+| 2009 || 5,957.43 || 1,147.23 || 23.85
+|-
+| 2010 || 6,914.19 || 956.76 || 16.06
+|-
+| 2011 || 5,898.35 || −1,015.84 ||style="color:red"| −14.69
+|-
+| 2012 || 7,612.39 || 1,714.04 || 29.06
+|-
+| 2013 || 9,552.16 || 1,939.77 || 24.77
+|-
+| 2014 || 9,805.55 || 253.39 || 2.65
+|-
+| 2015 || 10,743.01 || 937.46 || 9.56
+|-
+| 2016 || 11,481.06 || 738.05 || 6.87
+|-
+| 2017 || 12,917.64 || 1,436.58 || 12.51
+|-
+| 2018 || 10,558.96 || −2,358.68 ||style="color:red"| −18.26
+|-
+| 2019 || 13,249.01 || 2,690.05 || 25.48
+|-
+| 2020 || 13,718.78 || 469.77 || 3.55
+|-
+| 2021 || 15,884.86 || 2,166.08 || 15.79
+|-
+| 2022 || 13,923.59 || −1,961.27 ||style="color:red"| −12.35
+|-
+| 2023 || 16,751.64 || 2,828.05 || 20.31
+|-
+| 2024 || 19,909.14 || 3,157.50 || 18.85
+|-
+|2025
+|24,490.41
+|4,581.27
+|23.01
+|}
+
+== Components ==
+Below is the list of companies which are a component of the DAX 40, as of 22 September 2025. The current stock prices and list of DAX companies are available from financial websites.<ref>{{Cite web|url=https://www.finanzen.net/index/dax/30-werte|title=DAX 30 Liste {{!}} DAX Werte {{!}} DAX Aktien|website=finanzen.net|language=de|access-date=2019-09-24|archive-date=10 March 2020|archive-url=https://web.archive.org/web/20200310195130/https://www.finanzen.net/index/dax/30-werte|url-status=live}}</ref><ref>{{Cite web|url=https://www.boerse.de/kurse/Dax-Aktien/DE0008469008|title=DAX 30 Liste: Dax Realtime-Kursliste {{!}} DAX Aktien {{!}} DAX Werte {{!}} Dax Unternehmen|website=boerse.de|language=de|access-date=2019-09-24|archive-date=8 October 2019|archive-url=https://web.archive.org/web/20191008193112/https://www.boerse.de/kurse/Dax-Aktien/DE0008469008|url-status=live}}</ref> The index weighting refers to the DAX performance index.<ref name="DAXcomposition">{{Cite web |author=dax-indices.com |url=https://www.dax-indices.com/document/Resources/WeightingFiles/Composition/2020/September/DAX_ICR.20200921.xls |title=Index Composition Report |format=xls |access-date=2020-10-17}}</ref>
+
+{| class="wikitable sortable" style="text-align: center; font-size: 100%;" id="constituents" cellspacing="2" cellpadding="2"
+|-
+! Ticker !! Logo !! Company !! [[Prime Standard]] Sector !! Index weighting (%){{ref|1|1}} !! Employees !! Founded
+|-
+| {{FWB link|ADS.DE}} || [[File:Adidas-group-logo-fr.svg|80px]] || [[Adidas]] || Apparel || 2.5 || {{0}}62,035 (2024) || 1924
+|-
+| {{FWB link|AIR.PA}} || [[File:Airbus Logo 2017.svg|80px]] || [[Airbus]] || Aerospace & Defence || 6.1 || 126,495 (2021) || 1970
+|-
+| {{FWB link|ALV.DE}} || [[File:Allianz.svg|80px]] || [[Allianz]] || Financial Services || 8.4 || 156,626 (2024) || 1890
+|-
+| {{FWB link|BAS.DE}} || [[File:BASF-Logo bw.svg|80px]] || [[BASF]] || Chemicals || 2.8 || 111,822 (2024) || 1865
+|-
+| {{FWB link|BAYN.DE}} || [[File:Logo Bayer.svg|40px]] || [[Bayer]] || Pharmaceuticals || 1.5 || {{0}}94,081 (2024) || 1863
+|-
+| {{FWB link|BEI.DE}} || [[File:Beiersdorf Logo.svg|80px]] || [[Beiersdorf]] || Consumer goods || 0.7 || {{0}}22,678 (2024) || 1882
+|-
+| {{FWB link|BMW.DE}} || [[File:BMW logo (gray).svg|40px]] || [[BMW]] || Automotive || 1.5 || 159,104 (2024) || 1916
+|-
+| {{FWB link|BNR.DE}} || [[File:Brenntag Logo 2022.svg|80px]] || [[Brenntag]] || Distribution || 0.5 || {{0}}18,122 (2024) || 1874
+|-
+| {{FWB link|CBK.DE}} || [[File:Commerzbank (2009).svg|80px]] || [[Commerzbank]] || Financial Services || 1.5 || {{0}}40,233 (2024) || 1870
+|-
+| {{FWB link|CON.DE}} || [[File:Continental wordmark.svg|80px]] || [[Continental AG|Continental]] || Automotive || 0.5 || 190,875 (2021) || 1871
+|-
+| {{FWB link|DTG.DE}} || [[File:Daimler Truck Logo.svg|80px]] || [[Daimler Truck]] || Automotive || 1.3 || {{0}}99,849 (2021) || 2021
+|-
+| {{FWB link|DBK.DE}} || [[File:Deutsche Bank logo without wordmark.svg|40px]] || [[Deutsche Bank]] || Financial Services || 2.8 || {{0}}82,969 (2021) || 1870
+|-
+| {{FWB link|DB1.DE}} || [[File:Deutsche Börse Group Logo.svg|80px]] || [[Deutsche Börse]] || Financial Services || 3.1 || {{0}}10,200 (2021) || 1992
+|-
+| {{FWB link|DHL.DE}} || [[File:Deutsche Post DHL.svg|80px]] || [[Deutsche Post]] || Logistics || 2.5 || 482,638 (2024) || 1995
+|-
+| {{FWB link|DTE.DE}} || [[File:Deutsche Telekom 2022.svg|30px]] || [[Deutsche Telekom]] || Telecommunication || 7.5 || 204,414 (2024) || 1995
+|-
+| {{FWB link|EOAN.DE}} || [[File:Logo E.ON.svg|80px]] || [[E.ON]] || Utilities || 1.8 || {{0}}72,242 (2024) || 2000
+|-
+| {{FWB link|FRE.DE}} || [[File:Fresenius Logo.svg|80px]] || [[Fresenius SE|Fresenius]] || Healthcare || 1.0 || 316,078 (2021) || 1912
+|-
+| {{FWB link|FME.DE}} || [[File:Fresenius Medical Care logo.svg|80px]] || [[Fresenius Medical Care]] || Healthcare || 0.6 || 130,251 (2021) || 1996
+|-
+| {{FWB link|G1A.DE}} || [[File:GEA Logo 2022.svg|80px]] || [[GEA Group]] || Mechanical Engineering || TBD || {{0}}18,500 (2024) || 1881
+|-
+| {{FWB link|HNR1.DE}} || [[File:Hannover RE Logo 2024.svg|80px]] || [[Hannover Re]] || Insurance || 1.0 || {{0}}{{0}}3,346 (2021) || 1966
+|-
+| {{FWB link|HEI.DE}} || [[File:HeidelbergCement 2022 logo.svg|80px]] || [[HeidelbergCement|Heidelberg Materials]] || Construction Materials || 1.5 || {{0}}51,209 (2021) || 1874
+|-
+| {{FWB link|HEN3.DE}} || [[File:Henkel-Logo.svg|80px]] || [[Henkel]] || Consumer Goods || 0.8 || {{0}}52,450 (2021) || 1876
+|-
+| {{FWB link|IFX.DE}} || [[File:Infineon-Logo.svg|80px]] || [[Infineon Technologies]] || Technology || 2.7 || {{0}}50,280 (2021) || 1999
+|-
+| {{FWB link|MBG.DE}} || [[File:Mercedes-Benz Group black.svg|80px]] || [[Mercedes-Benz Group]] || Automotive || 2.5 || 175,000 (2024) || 1926
+|-
+| {{FWB link|MRK.DE}} || [[File:Logo Merck KGaA 2015.svg|80px]] || [[Merck Group|Merck]] || Pharmaceuticals || 1.1 || {{0}}{{0}}62,557 (2024) || 1668
+|-
+| {{FWB link|MTX.DE}} || [[File:MTU Aero Engines Logo.svg|80px]] || [[MTU Aero Engines]] || Aerospace & Defence || 1.1 || {{0}}10,833 (2022) || 1934
+|-
+| {{FWB link|MUV2.DE}} || [[File:Münchener Rück logo.svg|80px]] || [[Munich Re]] || Financial Services || 4.8 || {{0}}40,177 (2022) || 1880
+|-
+| {{FWB link|PAH3.DE}} || [[File:Porsche SE Logo.svg|80px]] || [[Porsche SE]] || Automotive || 0.4 || {{0}}{{0}}{{0}}882 (2021) || 2007
+|-
+| {{FWB link|QIA.DE}} || [[File:Qiagen.svg|40px]] || [[Qiagen]] || Biotech || 0.5 || {{0}}{{0}}5,765 (2024) || 1984
+|-
+| {{FWB link|RHM.DE}} || [[File:Rheinmetall Logo 2021.svg|80px]] || [[Rheinmetall]] || Aerospace & Defence || 3.5 || {{0}}28,539 (2024) || 1889
+|-
+| {{FWB link|RWE.DE}} || [[File:RWE Logo 2020.svg|80px]] || [[RWE]] || Utilities || 1.3 || {{0}}18,246 (2021) || 1898
+|-
+| {{FWB link|SAP.DE}} || [[File:SAP 2011 logo.svg|80px]] || [[SAP]] || Technology || 14.0 || 109,972 (2024) || 1972
+|-
+| {{FWB link|G24.DE}} || [[File:Scout24 Logo 2020.svg|80px]] || [[Scout24]] || E-Commerce || TBD || {{0}}{{0}}1,200 (2024) || 2012
+|-
+| {{FWB link|SIE.DE}} || [[File:Siemens AG logo.svg|80px]] || [[Siemens]] || Industrials || 10.7 || 327,000 (2024) || 1847
+|-
+| {{FWB link|ENR.DE}} || [[File:Siemens Energy logo.svg|80px]] || [[Siemens Energy AG|Siemens Energy]] || Energy technology || 2.5 || {{0}}92,000 (2021) || 2020
+|-
+| {{FWB link|SHL.DE}} || [[File:Siemens Healthineers logo.svg|80px]] || [[Siemens Healthineers]] || Medical Equipment || 0.9 || {{0}}66,000 (2021) || 2020
+|-
+| {{FWB link|SY1.DE}} || [[File:Symrise wordmark logo.svg|80px]] || [[Symrise]] || Chemicals || 0.7 || {{0}}11,276 (2021) || 2003
+|-
+| {{FWB link|VOW3.DE}} || [[File:Volkswagen Group.svg|80px]] || [[Volkswagen Group]] || Automotive || 1.3 || 679,472 (2024) || 1937
+|-
+| {{FWB link|VNA.DE}} || [[File:Vonovia Logo.svg|80px]] || [[Vonovia]] || Real Estate || 1.1 || {{0}}15,900 (2022) || 2001
+|-
+| {{FWB link|ZAL.DE}} || [[File:Zalando Logo 2024.svg|80px]] || [[Zalando]] || E-Commerce || 0.5 || {{0}}17,000 (2021) || 2008
+|}
+
+
+<small>{{note|1|Note 1}}: Weightings as of 22 September 2025</small><ref name="DAXcomposition"/>
+
+== Former DAX components ==
+{{More citations needed|section|date=July 2021}}
+This table lists former DAX components and the companies which replaced them.
+
+{| class="wikitable"
+!Date
+!Component excluded
+!Component included
+!Reason for exclusion/ ''Comments''
+|-
+|rowspan=2|03.09.1990
+|Feldmühle Nobel
+|[[Metallgesellschaft]]
+|Takeover of Feldmühle Nobel by [[Stora Enso]]
+|-
+|Nixdorf Germany
+|[[Preussag]] ''(now [[TUI AG|TUI]])''
+|Merged with Siemens to form [[Siemens-Nixdorf]]
+|-
+|18.09.1995
+|Deutsche Babcock
+|[[SAP AG|SAP]]
+|Replaced by SAP because of lower market capitalisation
+|-
+|22.07.1996
+|Kaufhof
+|[[Metro AG|METRO]]
+|Merger of Kaufhof and Metro Cash & Carry
+|-
+|23.09.1996
+|Continental
+|[[Münchener Rück]]
+|''Continental was added back to the DAX on 22 September 2003, though it was demoted again in 2008 and added back again in 2012''
+|-
+|18.11.1996
+|Metallgesellschaft
+|[[Deutsche Telekom]]
+|IPO of Deutsche Telekom
+|-
+|rowspan="2"|22.06.1998
+|Bayerische Hypotheken-<br />und Wechselbank
+|[[Adidas]]
+|rowspan="2"|Merger of Vereinsbank and Hypobank to form HypoVereinsbank
+|-
+|Bayerische Vereinsbank
+|[[HypoVereinsbank]]
+|-
+|21.12.1998
+|Daimler-Benz
+|DaimlerChrysler <br/>''(now [[Daimler AG|Daimler]])''
+|Merger of Daimler-Benz with [[Chrysler]]
+|-
+|22.03.1999
+|Degussa
+|Degussa-Hüls
+|Merger of Degussa AG with [[Hüls AG]] and renaming to Degussa-Hüls AG
+|-
+|25.03.1999
+|Thyssen
+|[[ThyssenKrupp]]
+|Merger of Thyssen and [[Friedrich Krupp AG|Krupp]]
+|-
+|20.09.1999
+|Hoechst
+|[[Fresenius Medical Care|Fresenius Medical Care]]
+|Merger of Hoechst and [[Rhône-Poulenc]] with [[Aventis]]
+|-
+|14.02.2000
+|Mannesmann
+|[[Epcos]]
+|Takeover of Mannesmann by [[Vodafone]]
+|-
+|rowspan="2"|19.06.2000
+|Veba
+|[[E.ON]]
+|rowspan="2"|Merger of Veba and Viag to form E.ON
+|-
+|VIAG
+|[[Infineon]]
+|-
+|18.12.2000
+|Degussa-Hüls
+|Degussa
+|Merger of Degussa-Hüls AG and SKW Trostberg AG to new Degussa AG
+|-
+|19.03.2001
+|KarstadtQuelle
+|[[Deutsche Post]]
+|IPO of Deutsche Post
+|-
+|23.07.2001
+|Dresdner Bank
+|[[MLP AG|MLP Vz.]]
+|Takeover of Dresdner Bank by Allianz
+|-
+|23.09.2002
+|Degussa
+|[[Altana]]
+|Inadequate market capitalisation
+|-
+|23.12.2002
+|Epcos
+|[[Deutsche Börse]]
+|Fast-exit of Epcos, as Epcos' market capitalisation became inadequate.<ref>Deutsche Börse: [http://deutsche-boerse.com/dbag/dispatch/de/notescontent/gdb_navigation/press/10_Latest_Press_Releases/10_All/INTEGRATE/mr_pressreleases?notesDoc=92B7DA7B354D09EAC12573D5004E4579&newstitle=deutscheboerseabdem23.dezember&location=press Deutsche Börse ab dem 23. Dezember im DAX] {{Webarchive|url=https://web.archive.org/web/20090111213136/http://deutsche-boerse.com/dbag/dispatch/de/notescontent/gdb_navigation/press/10_Latest_Press_Releases/10_All/INTEGRATE/mr_pressreleases?notesDoc=92B7DA7B354D09EAC12573D5004E4579&newstitle=deutscheboerseabdem23.dezember&location=press |date=11 January 2009}} Pressemitteilung, 12. November 2002</ref>
+|-
+|22.09.2003
+|MLP
+|Continental
+|Inadequate free float and market capitalisation.
+|-
+|31.01.2005
+|
+|[[Lanxess]]
+|rowspan="2"|Lanxess was spun off from Bayer, for calculating reasons added to the DAX as a temporary 31st component, and removed a day later. It was added to the DAX in 2012 and removed again in 2015.
+|-
+|01.02.2005
+|Lanxess
+|
+|-
+|19.12.2005
+|HypoVereinsbank
+|[[Hypo Real Estate]]
+|Takeover of HypoVereinsbank by [[UniCredit]]
+|-
+|18.09.2006
+|Schering
+|[[Deutsche Postbank|Postbank]]
+|Takeover of Schering by Bayer
+|-
+|18.06.2007
+|Altana
+|[[Merck KGaA|Merck]]
+|After the sale of [[Nycomed]], inadequate market capitalisation<ref>Frankfurter Allgemeine Zeitung: [https://www.faz.net/s/RubC8BA5576CDEE4A05AF8DFEC92E288D64/Doc~E3978D7E828BC40709D96F5A2B3076A86~ATpl~Ecommon~Scontent.html Merck ersetzt Altana im DAX]</ref>
+|-
+|22.09.2008
+|TUI
+|[[K+S]]
+|Fast-entry of K+S, inadequate market capitalisation of TUI<ref>Deutsche Börse: [http://deutsche-boerse.com/dbag/dispatch/de/notescontent/gdb_navigation/press/10_Latest_Press_Releases/INTEGRATE/mr_pressreleases?notesDoc=B34593A00B1F173CC12574B900704103&newstitle=k+sersetzttuiindax&location=press K+S ersetzt TUI in DAX] {{Webarchive|url=https://web.archive.org/web/20090111181443/http://deutsche-boerse.com/dbag/dispatch/de/notescontent/gdb_navigation/press/10_Latest_Press_Releases/INTEGRATE/mr_pressreleases?notesDoc=B34593A00B1F173CC12574B900704103&newstitle=k+sersetzttuiindax&location=press |date=11 January 2009 }} Pressemitteilung, 3 September 2008</ref>
+|-
+|22.12.2008
+|Continental
+|[[Beiersdorf AG|Beiersdorf]]
+|Fast-exit of Continental because of inadequate free-float market capitalisation after the acquisition by [[Schaeffler Group]]
+|-
+|22.12.2008
+|Hypo Real Estate
+|[[Salzgitter AG|Salzgitter]]
+|Fast-exit of Hypo Real Estate because of inadequate free-float market capitalisation after a stake by American investor [[JC Flowers]], as well as huge decline in market capitalisation during the [[2008 financial crisis]]
+|-
+|rowspan="2"|23.03.2009
+|Deutsche Postbank
+|[[Hannover Re]]
+|rowspan="2"|Fast-exit due to inadequate market capitalisation<ref>{{Cite web |url=https://www.handelsblatt.com/finanzen/maerkte/boerse-inside/postbank-und-infineon-verlassen-leitindex-fresenius-und-hannover-rueck-steigen-in-dax-auf/3127570.html |title=Fresenius und Hannover Rück steigen in Dax auf |work=Handelsblatt |date=2009-03-04 |language=de |access-date=2021-06-24 |archive-date=23 May 2022 |archive-url=https://web.archive.org/web/20220523191215/https://www.handelsblatt.com/finanzen/maerkte/boerse-inside/postbank-und-infineon-verlassen-leitindex-fresenius-und-hannover-rueck-steigen-in-dax-auf/3127570.html |url-status=dead }}</ref>
+|-
+|Infineon Technologies
+|Fresenius Vz
+|-
+|21.09.2009
+|Hannover Re
+|Infineon Technologies
+|Inadequate market capitalisation
+|-
+|21.06.2010
+|Salzgitter
+|[[HeidelbergCement]]
+|Inadequate market capitalisation
+|-
+|24.09.2012
+|MAN
+|Continental
+|Inadequate free-float capitalisation after acquisition by Volkswagen
+|-
+|24.09.2012
+|Metro
+|[[Lanxess]]
+|Inadequate market capitalisation
+|-
+|21.09.2015
+|Lanxess
+|[[Vonovia]]
+|Inadequate market capitalisation
+|-
+|21.03.2016
+|K+S
+|[[ProSiebenSat.1 Media]]
+|Inadequate market capitalisation
+|-
+|19.03.2018
+|ProSiebenSat.1 Media
+|[[Covestro]]
+|Inadequate market capitalisation
+|-
+|24.09.2018
+|[[Commerzbank]]
+|[[Wirecard]]
+|Inadequate market capitalisation
+|-
+|23.09.2019<ref>{{Cite web|url=https://www.dax-indices.com/document/News/2019/September/20190904_PR_DAX%20review_E1.pdf|title=Sep 2019 Media release}}</ref>
+|[[ThyssenKrupp]]
+|MTU Aero Engines
+|Inadequate market capitalisation
+|-
+|22.06.2020<ref>{{cite web|url=https://www.marketwatch.com/story/deutsche-lufthansa-to-leave-germanys-dax-index-2020-06-05-1485477|title=Deutsche Lufthansa to leave Germany's DAX Index|publisher=[[Marketwatch]]|date=5 June 2020|access-date=5 June 2020}}</ref>
+|[[Lufthansa|Deutsche Lufthansa]]
+|[[Deutsche Wohnen]]
+|Inadequate market capitalisation
+|-
+|19.08.2020<ref>{{cite web|url=https://www.dax-indices.com/document/News/2020/August/Unscheduled_Component_Change_DAX_Selection_Indices_ENG_20200819.pdf|title=Unscheduled Component Change in DAXSelection Indices|publisher=[[STOXX]]|date=19 August 2020}}</ref>
+|[[Wirecard]]
+|[[Delivery Hero]]
+|new Insolvency Rule (section 5.1.1)
+|-
+|22.03.2021<ref>{{cite web|url=https://www.dax-indices.com/document/News/2021/March/Index_Update_Composition_Changes_in_DAX_Indices_ENG_20210303.pdf|title=Composition Changes for DAX, MDAX, SDAX and TecDAX Indices|publisher=[[STOXX]]|date=3 March 2021}}</ref>
+|[[Beiersdorf]]
+|[[Siemens Energy AG|Siemens Energy]]
+|Inadequate market capitalisation
+|-
+|16.09.2021
+|
+|[[Vitesco Technologies|Vitesco]]
+|rowspan="2"|Vitesco was spun off from Continental, for calculating reasons added to the DAX as a temporary 31st component, and removed a day later.
+|-
+|17.09.2021
+|Vitesco
+|
+|-
+|rowspan="10"|20.09.2021
+|
+|[[Airbus]]
+|rowspan="10"|10 companies added to expand DAX to 40 components
+|-
+|
+|[[Brenntag]]
+|-
+|
+|[[HelloFresh]]
+|-
+|
+|[[Porsche SE]]
+|-
+|
+|[[Puma (brand)|Puma]]
+|-
+|
+|[[Qiagen]]
+|-
+|
+|[[Sartorius AG|Sartorius]]
+|-
+|
+|[[Siemens Healthineers]]
+|-
+|
+|[[Symrise]]
+|-
+|
+|[[Zalando]]
+|-
+|29.10.2021
+|Deutsche Wohnen
+|Beiersdorf
+|
+|-
+|10.12.2021
+|
+|[[Daimler Truck]]
+|rowspan="2"|Daimler Truck was spun off from Mercedes-Benz, for calculating reasons added to the DAX as a temporary 41st component, and removed next trading day. It was added to the DAX again in 2022.
+|-
+|13.12.2021
+|Daimler Truck
+|
+|-
+|rowspan="2"|21.03.2022
+|Beiersdorf
+|Daimler Truck
+|
+|-
+|Siemens Energy
+|Hannover Re
+|
+|-
+|20.06.2022
+|Delivery Hero
+|Beiersdorf
+|
+|-
+|19.09.2022
+|HelloFresh
+|Siemens Energy
+|
+|-
+|19.12.2022
+|Puma
+|Porsche
+|Initial public offering of Porsche
+|-
+|27.02.2023
+|[[Linde plc|Linde]]
+|Commerzbank
+|Delisting of Linde on Frankfurt stock exchange<ref>{{cite news |title=Unscheduled Component Change of DAX Index |url=https://www.stoxx.com/document/News/2023/February/Unscheduled_Component_Change_of_DAX_Index_EN.pdf |access-date=26 February 2025 |publisher=STOXX Ltd |date=17 February 2023}}</ref>
+|-
+|20.03.2023
+|Fresenius Medical Care
+|[[Rheinmetall]]
+|<ref name="DerSpiegel-2023-03-04">{{cite news |title=Rheinmetall schafft Sprung in den Dax |url=https://www.spiegel.de/wirtschaft/unternehmen/ruestungsindustrie-rheinmetall-schafft-sprung-in-den-dax-a-9c9ed3c8-10be-4aeb-9869-5460432334a1 |access-date=26 February 2025 |work=Der Spiegel |date=4 March 2023 |language=de}}</ref>
+|-
+|27.12.2024
+|[[Covestro|Covestro AG]]
+|Fresenius Medical Care
+|Inadequate free-float capitalisation<ref name="stoxx-2024-12-19">{{cite news |title=Unscheduled component changes in DAX, MDAX and SDAX (December 19, 2024) |url=https://stoxx.com/unscheduled-component-changes-in-dax-mdax-and-sdax-december-19-2024/ |access-date=26 April 2025 |work=STOXX |date=19 December 2024 |quote=Effective December 27, 2024, Covestro AG will be deleted from the DAX due to breach of basic criteria according to chapter 5.4.2 (DAX Equity Index Methodology Guide) — Minimum Free Float of 10%.}}</ref>
+|}
+
+[[File:Boerse Frankfurt inside.jpg|thumb|DAX 30 chart at the Frankfurt Stock Exchange]]
+[[File:Hauptsitze der DAX-Unternehmen 2013.jpg|thumb|The headquarters of DAX companies in 2013]]
+
+== See also ==
+;Stock market lists
+* [[List of stock exchanges]]
+*[[List of European stock exchanges]]
+;Other lists
+*[[List of largest German companies]]
+;Other stock market indices
+* [[List of stock market indices]]
+*[[CDAX]], every listed German company
+* [[HDAX]], union of DAX, MDAX and TecDAX (successor to DAX 100, and equivalent of the [[FTSE 100]] or the [[S&P 100]])
+* [[MDAX]], the next 50 largest companies after the DAX
+* [[SDAX]], the next 70 largest companies after the MDAX
+* [[ÖkoDAX]], top 10 companies in renewable energy
+* [[TecDAX]], top 30 companies trading in the "new economy"
+
+== References ==
+{{Reflist}}
+
+== External links ==
+* [https://www.boerse-frankfurt.de/indices/dax?mic=XETR Official website]
+* [https://www.bloomberg.com/apps/quote?ticker=DAX:IND Bloomberg page for DAX:IND]
+* [https://web.archive.org/web/20140101103009/http://dax.mobi/ DAX MOBILE]
+* [http://www.eurexchange.com/exchange-en/ Eurex Exchange Homepage]
+* [https://web.archive.org/web/20180827150158/http://www.frankfurtstockexchange.de/ Frankfurt Stock Exchange]
+
+{{DAX companies}}
+{{European Stock market indices}}
+{{Stock market indices}}
+{{Authority control}}
+
+[[Category:1988 establishments in West Germany]]
+[[Category:German stock market indices]]
+[[Category:Companies listed on the Frankfurt Stock Exchange| ]]
+[[Category:European stock market indices]]

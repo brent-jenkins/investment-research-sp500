@@ -1,0 +1,26 @@
+{
+  "variant": "full500",
+  "label": "Full-500 (no market-cap gate)",
+  "n_input_tickers": 500,
+  "n_tickers_with_data": 500,
+  "start": "2007-01-01T00:00:00",
+  "end": "2026-08-03T00:00:00",
+  "split": "2020-01-01T00:00:00",
+  "reset_capital_gbp": 50000.0,
+  "backtest_convention": "reset-at-boundary",
+  "engine": "simulate_portfolio_compounding_mtm_reset_at_boundary (source-introspected from the real, current simulate_portfolio_compounding_mtm)",
+  "config_reentry_cooldown_days": 0,
+  "config_min_momentum_pct": 0.02,
+  "config_per_trade_pct": 0.05,
+  "config_max_total_deployed": 0.5,
+  "test_metrics": {
+    "n_trades": 1184,
+    "win_rate_pct": 49.49,
+    "profit_factor": 1.79,
+    "cagr_pct": 19.99,
+    "max_drawdown_pct_fixed_denom": -27.57,
+    "max_drawdown_pct_peak_relative": -11.12,
+    "ending_balance_gbp": 165985.98
+  },
+  "full_walk_n_trades": 3152
+}

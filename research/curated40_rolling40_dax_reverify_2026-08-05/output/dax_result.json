@@ -1,0 +1,307 @@
+{
+  "variant": "dax",
+  "label": "DAX (European stocks-only), point-in-time reconstructed",
+  "n_input_tickers": 40,
+  "n_tickers_with_data": 40,
+  "start": "2007-01-01T00:00:00",
+  "end": "2026-08-03T00:00:00",
+  "split": "2020-01-01T00:00:00",
+  "starting_capital_gbp": 50000.0,
+  "backtest_convention": "continuous-walk (no compounding/carryover in simulate_trades(), so continuous-walk and reset-at-boundary are numerically identical for this engine)",
+  "engine": "analysis.backtest.run_candidate()/simulate_trades() (uncapped, frozen VaR-sized engine) + monkeypatched analysis.universe.is_member() for the 40 DAX tickers only",
+  "config_starting_capital_gbp": 50000.0,
+  "train_metrics": {
+    "n_trades": 3428,
+    "win_rate_pct": 45.22,
+    "profit_factor": 1.46,
+    "cagr_pct": 6.49,
+    "max_drawdown_pct_fixed_denom": -14.45,
+    "max_drawdown_pct_peak_relative": -10.34,
+    "ending_balance_gbp": 113740.75
+  },
+  "test_metrics": {
+    "n_trades": 2404,
+    "win_rate_pct": 41.39,
+    "profit_factor": 1.41,
+    "cagr_pct": 10.09,
+    "max_drawdown_pct_fixed_denom": -18.56,
+    "max_drawdown_pct_peak_relative": -16.48,
+    "ending_balance_gbp": 94115.63
+  },
+  "full_metrics": {
+    "n_trades": 5832,
+    "win_rate_pct": 43.64,
+    "profit_factor": 1.44,
+    "cagr_pct": 6.05,
+    "max_drawdown_pct_fixed_denom": -18.56,
+    "max_drawdown_pct_peak_relative": -10.34,
+    "ending_balance_gbp": 157856.38
+  },
+  "benchmark_gdaxi": {
+    "train_cagr_pct": 5.41,
+    "train_dd_pct": -54.77,
+    "test_cagr_pct": 10.61,
+    "test_dd_pct": -38.78,
+    "full_cagr_pct": 7.19,
+    "full_dd_pct": -54.77
+  },
+  "blocks_passed": 14,
+  "blocks_total": 16,
+  "block_results": [
+    {
+      "block": 0,
+      "start": "2007-01-01",
+      "end": "2008-03-23",
+      "n_trades": 333,
+      "strat_cagr": 0.89,
+      "strat_dd": -10.65,
+      "strat_pf": 1.17,
+      "sp_cagr": -4.48,
+      "sp_dd": -23.73,
+      "passed": true
+    },
+    {
+      "block": 1,
+      "start": "2008-03-23",
+      "end": "2009-06-13",
+      "n_trades": 49,
+      "strat_cagr": 0.25,
+      "strat_dd": -2.89,
+      "strat_pf": 1.03,
+      "sp_cagr": -18.75,
+      "sp_dd": -49.26,
+      "passed": true
+    },
+    {
+      "block": 2,
+      "start": "2009-06-13",
+      "end": "2010-09-03",
+      "n_trades": 343,
+      "strat_cagr": 11.06,
+      "strat_dd": -7.59,
+      "strat_pf": 1.35,
+      "sp_cagr": 20.46,
+      "sp_dd": -10.46,
+      "passed": true
+    },
+    {
+      "block": 3,
+      "start": "2010-09-03",
+      "end": "2011-11-24",
+      "n_trades": 336,
+      "strat_cagr": 10.26,
+      "strat_dd": -13.51,
+      "strat_pf": 1.4,
+      "sp_cagr": -9.82,
+      "sp_dd": -32.62,
+      "passed": true
+    },
+    {
+      "block": 4,
+      "start": "2011-11-24",
+      "end": "2013-02-13",
+      "n_trades": 290,
+      "strat_cagr": 17.58,
+      "strat_dd": -3.1,
+      "strat_pf": 2.31,
+      "sp_cagr": 32.03,
+      "sp_dd": -16.6,
+      "passed": true
+    },
+    {
+      "block": 5,
+      "start": "2013-02-13",
+      "end": "2014-05-06",
+      "n_trades": 403,
+      "strat_cagr": 20.05,
+      "strat_dd": -5.03,
+      "strat_pf": 1.95,
+      "sp_cagr": 19.31,
+      "sp_dd": -9.83,
+      "passed": true
+    },
+    {
+      "block": 6,
+      "start": "2014-05-06",
+      "end": "2015-07-27",
+      "n_trades": 414,
+      "strat_cagr": 12.12,
+      "strat_dd": -9.83,
+      "strat_pf": 1.45,
+      "sp_cagr": 13.02,
+      "sp_dd": -14.53,
+      "passed": true
+    },
+    {
+      "block": 7,
+      "start": "2015-07-27",
+      "end": "2016-10-17",
+      "n_trades": 337,
+      "strat_cagr": 5.8,
+      "strat_dd": -10.76,
+      "strat_pf": 1.22,
+      "sp_cagr": -4.93,
+      "sp_dd": -24.78,
+      "passed": true
+    },
+    {
+      "block": 8,
+      "start": "2016-10-17",
+      "end": "2018-01-07",
+      "n_trades": 444,
+      "strat_cagr": 13.0,
+      "strat_dd": -5.3,
+      "strat_pf": 1.63,
+      "sp_cagr": 21.53,
+      "sp_dd": -7.32,
+      "passed": true
+    },
+    {
+      "block": 9,
+      "start": "2018-01-07",
+      "end": "2019-03-30",
+      "n_trades": 298,
+      "strat_cagr": -5.54,
+      "strat_dd": -10.15,
+      "strat_pf": 0.72,
+      "sp_cagr": -11.46,
+      "sp_dd": -23.44,
+      "passed": false
+    },
+    {
+      "block": 10,
+      "start": "2019-03-30",
+      "end": "2020-06-19",
+      "n_trades": 299,
+      "strat_cagr": 9.81,
+      "strat_dd": -9.74,
+      "strat_pf": 1.55,
+      "sp_cagr": 4.54,
+      "sp_dd": -38.78,
+      "passed": true
+    },
+    {
+      "block": 11,
+      "start": "2020-06-19",
+      "end": "2021-09-09",
+      "n_trades": 351,
+      "strat_cagr": 10.46,
+      "strat_dd": -4.77,
+      "strat_pf": 1.59,
+      "sp_cagr": 22.04,
+      "sp_dd": -12.82,
+      "passed": true
+    },
+    {
+      "block": 12,
+      "start": "2021-09-09",
+      "end": "2022-11-30",
+      "n_trades": 377,
+      "strat_cagr": -7.78,
+      "strat_dd": -15.65,
+      "strat_pf": 0.77,
+      "sp_cagr": -6.41,
+      "sp_dd": -26.4,
+      "passed": false
+    },
+    {
+      "block": 13,
+      "start": "2022-11-30",
+      "end": "2024-02-20",
+      "n_trades": 499,
+      "strat_cagr": 7.8,
+      "strat_dd": -9.17,
+      "strat_pf": 1.22,
+      "sp_cagr": 14.35,
+      "sp_dd": -10.82,
+      "passed": true
+    },
+    {
+      "block": 14,
+      "start": "2024-02-20",
+      "end": "2025-05-12",
+      "n_trades": 539,
+      "strat_cagr": 40.03,
+      "strat_dd": -4.82,
+      "strat_pf": 2.28,
+      "sp_cagr": 29.93,
+      "sp_dd": -16.01,
+      "passed": true
+    },
+    {
+      "block": 15,
+      "start": "2025-05-12",
+      "end": "2026-08-03",
+      "n_trades": 523,
+      "strat_cagr": 17.79,
+      "strat_dd": -7.29,
+      "strat_pf": 1.48,
+      "sp_cagr": 8.1,
+      "sp_dd": -12.27,
+      "passed": true
+    }
+  ],
+  "decision_engine_parity_check": {
+    "sample_size": 25,
+    "membership_ok": 25,
+    "holding_period_ok": 17,
+    "failures": [
+      {
+        "ticker": "BAYN.DE",
+        "entry_date": "2014-02-06",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "IFX.DE",
+        "entry_date": "2018-04-05",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "DHL.DE",
+        "entry_date": "2025-10-02",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "BEI.DE",
+        "entry_date": "2023-03-03",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "MTX.DE",
+        "entry_date": "2021-04-08",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "VNA.DE",
+        "entry_date": "2025-04-10",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "VNA.DE",
+        "entry_date": "2025-06-05",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "CBK.DE",
+        "entry_date": "2015-05-07",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      }
+    ]
+  }
+}

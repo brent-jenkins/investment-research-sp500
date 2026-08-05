@@ -1,0 +1,29 @@
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:            fwd_ret_30d   R-squared:                       0.023
+Model:                            OLS   Adj. R-squared:                  0.021
+Method:                 Least Squares   F-statistic:                     8.506
+Date:                Wed, 05 Aug 2026   Prob (F-statistic):           5.72e-08
+Time:                        14:04:55   Log-Likelihood:                 1002.1
+No. Observations:                1782   AIC:                            -1992.
+Df Residuals:                    1776   BIC:                            -1959.
+Df Model:                           5                                         
+Covariance Type:            nonrobust                                         
+=====================================================================================
+                        coef    std err          t      P>|t|      [0.025      0.975]
+-------------------------------------------------------------------------------------
+const                -0.0076      0.011     -0.689      0.491      -0.029       0.014
+trend_since_entry     0.0248      0.006      4.192      0.000       0.013       0.036
+momentum_at_cap      -0.0004      0.003     -0.140      0.889      -0.006       0.005
+2010-2019_bull        0.0265      0.012      2.223      0.026       0.003       0.050
+2020_covid            0.0442      0.017      2.569      0.010       0.010       0.078
+2021-2026_recent      0.0372      0.013      2.932      0.003       0.012       0.062
+==============================================================================
+Omnibus:                      212.218   Durbin-Watson:                   1.506
+Prob(Omnibus):                  0.000   Jarque-Bera (JB):              717.206
+Skew:                           0.576   Prob(JB):                    1.82e-156
+Kurtosis:                       5.887   Cond. No.                         15.3
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.

@@ -1219,7 +1219,10 @@ uses), benchmarked against `^GDAXI`, now with real point-in-time gating:
 | Full period max drawdown | -18.56% | -54.77% |
 | Profit factor (train / test) | 1.46 / 1.41 | — |
 
-**Blocks passed: 12/16 (75%)** — unchanged from the first (wrong) attempt
+**Blocks passed: 12/16 (75%)** [**superseded 2026-08-05 — now 14/16 under
+the current engine, for a reason unrelated to any live/backtest parity
+fix; see "Curated-40 / rolling-40 / full-500 and DAX re-verified against
+the corrected engine" near the end of this file**] — unchanged from the first (wrong) attempt
 at the aggregate level, and the same 4 blocks fail both ways (0, 1, 9, 12)
 — but the absolute numbers behind that tally are materially more modest:
 the strategy no longer clearly beats the benchmark's CAGR (it does in
@@ -5499,7 +5502,10 @@ shrinking one.
 
 **Removing the gate helps — materially on return, at a real, quantified
 cost on risk.** Full-500 beats both gated variants on CAGR and matches
-curated-40's best-in-class profit factor, but its max drawdown
+curated-40's best-in-class profit factor [**superseded 2026-08-05 —
+this PF tie no longer holds under today's engine; see "Curated-40 /
+rolling-40 / full-500 and DAX re-verified against the corrected
+engine" near the end of this file**], but its max drawdown
 (−27.43%) is meaningfully worse than either gated variant's — a wider,
 unconstrained candidate pool trades more often and absorbs more
 idiosyncratic single-name risk along the way. A genuine trade-off, not a
@@ -8413,3 +8419,39 @@ Two findings surfaced while setting up a fresh local research environment, both 
 **Fix.** `config.yaml`'s `data.history_days: 7150` replaced with `data.history_start_date: "2007-01-01"` — a fixed date, not a day count. `pull_history()` gained an explicit `start_date` parameter (mirroring `backfill_price_history()`'s own naming) and now defaults to `config["data"]["history_start_date"]` when neither `days` nor `start_date` is given; an explicit `days=` override (the DAX script's use case) still works exactly as before, unaffected. `pull_incremental()`'s first-time-download fallback now anchors to the same fixed `history_start_date` directly, closing the gap in the one real production code path that shared the old drift bug. `README.md`'s mirrored config example updated to match. Regression tests (`tests/test_ingestion.py`) prove the default no longer depends on `datetime.utcnow()`, that an explicit `days=` override still computes relative to "now," and that `pull_incremental()`'s brand-new-ticker path uses the fixed date.
 
 **Full test suite: 862 passed, 0 failed** (up from the pre-existing baseline — 26 new tests added across both parts, 0 removed). Deployed to production via the standard `git push origin main` → GitHub Actions test gate → signed webhook → `deploy.sh` path; production backfill for BRK.B/BF.B and `verify_deploy.sh`'s pass confirmed directly over SSH after the deploy completed.
+
+## Curated-40 / rolling-40 / full-500 and DAX re-verified against the corrected engine (2026-08-05)
+
+Closes the open item flagged in "30-day re-entry cooldown — live/backtest parity gap closed" above ("Not independently re-verified: the curated-40 and rolling-40 columns of the same original comparison table, and the DAX/European reproduction ... should not be treated as confirmed without running the identical before/after comparison"). Purely an archival-accuracy check — these are historical research variants, not live configuration, so nothing here affects current trading. Run in an isolated local research directory (`research/curated40_rolling40_dax_reverify_2026-08-05/`) against a disposable copy of the production DB, deleted after use; no production file was modified.
+
+**Timeline, git-log-verified rather than trusted from prose ordering** (this mattered — see below): DAX corrected finding `66dd31f` (2026-07-31 19:27); price-sanity check `e4d8c92` (2026-07-31 18:39, predates *all three* studies, not just some — a correction to this task's own initial framing); curated-40/rolling-40/full-500 investigation `3266f1e`/`2fd5f26`/`4d133ed` (2026-08-02, 10:00–12:29); `INDEX_REMOVAL` removed from `evaluate_exit_reason()`'s exit priority `f2b2cf1` (2026-08-02 21:57 — a fourth relevant change, not named in the original re-verification request, found by diffing `simulate_trades()`'s source between the DAX commit and HEAD rather than trusting its "frozen" framing at face value); re-entry cooldown parity fix `15fcc62` (2026-08-03 12:51); momentum floor `0783a6f` (2026-08-03 19:01).
+
+**Curated-40 vs. rolling-40 vs. full-500 — the ranking holds; one specific claim in the write-up above is superseded.** Re-run via the identical `simulate_portfolio_compounding_mtm_reset_at_boundary()` reset technique, same three candidate pools (full-500 reconstructed as the exact same 500 tickers, confirmed by matching the original's own named `FDXF`/`HONA`/`Q` exclusions exactly; rolling-40 rebuilt from the now-deleted `analysis/market_cap.py`'s real SEC EDGAR pipeline via `git show`, independently reproducing the original's own named `META` data-gap finding), £50,000 reset at 2020-01-01, test period to 2026-08-03, today's real production config:
+
+| | Curated-40 | Rolling-40 | Full-500 |
+|---|---|---|---|
+| CAGR | 15.67% | 12.02% | 19.99% |
+| PF | **1.88** | 1.59 | 1.79 |
+| Max DD (fixed / peak-rel) | −16.78% / −8.23% | −15.27% / −8.92% | −27.57% / −11.12% |
+| Trades | 1,063 | 1,099 | 1,184 |
+
+Full-500 > curated-40 > rolling-40 on CAGR, unchanged from the original (19.99%>15.67%>12.02% vs. originally 19.83%>14.31%>11.08%). **But the original's claim that full-500 "matches curated-40's best-in-class profit factor" (both 1.77) no longer holds** — curated-40's PF is now 1.88, clearly above full-500's 1.79. Isolated directly, not inferred: re-running curated-40 with `min_momentum_pct` forced to 0.0 (the original study's implicit, pre-existing-floor state) reproduces the original almost exactly (PF 1.77, CAGR 14.13%, within ordinary data-recency drift of 1,073/1.77/14.31%). **The 2026-08-03 momentum floor — which didn't exist when the original study ran — is the specific, near-entire cause**, and hits the narrow 40-ticker curated pool materially harder (PF 1.77→1.88, CAGR +1.54pp) than the same floor's own original validation sweep found on the full 500-ticker pool (CAGR +0.02pp) — consistent with, not a new instance of, the capacity-cascade path-dependency this file already documents narrower pools being more exposed to. The re-entry cooldown fix is confirmed irrelevant to all three figures (proven by construction: `cooldown_days=0` is mathematically identical to "no mechanism," independently reconfirmed by the near-exact reproduction above); price-sanity is confirmed structurally inapplicable to any backtest engine (`grep` for its check function in `analysis/backtest.py` returns nothing — it only ever runs at live order submission).
+
+**Corrected replacement for the "matches curated-40's best-in-class profit factor" claim**: full-500 still beats both gated variants on CAGR at a real, quantified drawdown cost, but it no longer matches curated-40 on profit factor — under today's config, curated-40's PF (1.88) is clearly higher than full-500's (1.79), a gap attributable almost entirely to the 2026-08-03 momentum floor's disproportionate effect on the narrower pool, not to any change in relative stock-selection quality between the universes.
+
+**DAX — the core claim holds; the block-pass count is superseded, for a reason unrelated to any of the three named fixes.** `DAX_MEMBERSHIP` rebuilt from scratch (the original disposable clone's own version is gone) from two independently cross-checked sources — STOXX's own official historical-composition PDF and Wikipedia's dated "Former DAX components" table — every one of the original write-up's own named examples (`G24.DE`/`G1A.DE` 2025-09-22, `HNR1.DE`'s two-window pattern, `RHM.DE` 2023-03-20, `MTX.DE` 2019-09-23, all seven 2021-09-20 DAX 30→40 expansion additions) reproduced with identical dates. Re-run via the same non-compounding `simulate_trades()` engine (confirmed exempt from the cooldown/momentum-floor/price-sanity fixes by explicit docstring and by the same `grep` check above), current `evaluate_exit_reason()`:
+
+| | Fresh | Original |
+|---|---|---|
+| Test CAGR (strategy / `^GDAXI`) | 10.09% / 10.61% | 10.06% / 10.37% |
+| Full CAGR (strategy / `^GDAXI`) | 6.05% / 7.19% | 6.22% / 7.11% |
+| Full max DD (strategy / `^GDAXI`) | −18.56% / −54.77% | −18.56% / −54.77% |
+| PF (train / test) | 1.46 / 1.41 | 1.46 / 1.41 |
+
+PF and drawdown reproduce to the exact original decimal in every reported field; CAGR is within 0.02–0.22pp throughout — strong, direct evidence the reconstructed membership windows are faithful, and any residual gap is ordinary 3-day data-recency drift, not a reconstruction error. "Real, substantial risk reduction, not clearly better absolute return" still holds exactly.
+
+**But blocks passed is now 14/16 (87.5%), not 12/16 (75%)** — blocks 0 and 1 flip from fail to pass, blocks 9 and 12 still fail, unchanged. This traces to **none of the three fixes this re-verification was originally scoped to check** — it's the fourth change named above: `f2b2cf1` (2026-08-02) removed `INDEX_REMOVAL` from the shared exit-priority chain for every engine, including the frozen DAX one. Before that change, a DAX position could be force-closed the moment its ticker's point-in-time membership window ended; DAX's narrower, more frequently-gapped windows made it disproportionately more exposed to that specific mechanism than the US universe ever was, so removing it moved DAX's own numbers more than it moved anything else in this file.
+
+**Corrected replacement for "Blocks passed: 12/16 (75%)"**: 14/16 (87.5%) under the current engine — the improvement traces to the 2026-08-02 removal of `INDEX_REMOVAL` from the shared exit-priority chain (a real, deliberate, evidence-based production change, unrelated to the re-entry-cooldown/momentum-floor/price-sanity fixes this re-verification was scoped to check), not to a reconstruction artifact — PF and drawdown reproducing to the exact original decimal in every field confirms the point-in-time membership reconstruction itself is faithful.
+
+**Recommendation**: no config or production code change — this was archival-accuracy-only, exactly as scoped. Full trade-level output for all four re-runs (curated-40, rolling-40, full-500, DAX) preserved at `research/curated40_rolling40_dax_reverify_2026-08-05/`, per this file's own Research Reproducibility Standard — the same standard this exact investigation thread (the original £442,558.70/£288,323.01 discrepancy) motivated in the first place.

@@ -1,0 +1,14 @@
+{
+  "spearman_trend_fwd30_rho": 0.055150790212021496,
+  "spearman_trend_fwd30_p": 0.0198983188057104,
+  "n_spearman": 1782,
+  "mannwhitney_u": 407333.0,
+  "mannwhitney_p": 0.17029104072174017,
+  "n_strengthening": 985,
+  "n_decaying": 797,
+  "ols_trend_coef": 0.024222039374925442,
+  "ols_trend_pvalue": 1.6437071404065497e-08,
+  "ols_r_squared": 0.023375596141183674,
+  "skipped_trades": 0,
+  "total_max_holding": 1796
+}

@@ -1,0 +1,2809 @@
+22 JUNE 2026
+
+Historical Index
+Compositions of DAX
+Equity Indices
+
+STOXX.com
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES  2/60
+
+CONTENTS
+
+1. DAX® INDEX COMPOSITION                3
+
+2. TECDAX® INDEX COMPOSITION             6
+
+3. MDAX® INDEX COMPOSITION               9
+
+4. SDAX® INDEX COMPOSITION               19
+
+5. DAX® 50 ESG INDEX COMPOSITION         33
+
+6. DAX® 30 ESG INDEX COMPOSITION         35
+
+7. DAX® ESG TARGET INDEX COMPOSITION     37
+
+8. DAX® ESG SCREENED INDEX COMPOSITION   39
+
+9. MDAX® ESG SCREENED INDEX COMPOSITION  41
+
+10. DAX® 50 ESG+ INDEX COMPOSITION       43
+
+11. MDAX® ESG+ INDEX COMPOSITION         45
+
+12. DIVDAX® INDEX COMPOSITION            47
+
+13. DAXPLUS® EXPORT STRATEGY INDEX COMPOSITION 50
+
+14. DAXPLUS® MAXIMUM DIVIDEND INDEX COMPOSITION 52
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES
+
+                                                                                                                                                                                      3/60
+
+1. DAX® INDEX COMPOSITION
+
+30 December 1987: Initial Composition  Deutsche Babcock           MAN
+                                       Deutsche Bank              Mannesmann
+Allianz                                Deutsche Lufthansa         Nixdorf
+BASF                                   Dresdner Bank              RWE
+Bayer                                  Feldmühle Nobel            Schering
+Bayer. Hypo.- und Wechsel-Bank         Henkel                     Siemens
+Bayerische Vereinsbank                 Hoechst                    Thyssen
+BMW                                    Karstadt                   Veba
+Commerzbank                            Kaufhof                    Viag
+Continental                            Linde                      Volkswagen
+Daimler-Benz
+Degussa
+
+DAX®
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      -                           -
+  18.09.1989              22.05.1990  Feldmühle Nobel             Metallgesellschaft
+                                      Nixdorf *                   Preussag
+  03.09.1990              18.07.1995  -                           -
+                          06.01.1996  -                           -
+  23.09.1991              16.07.1996  -                           -
+  21.09.1992              16.07.1996  -                           -
+  20.09.1993                          Deutsche Babcock            SAP
+  19.09.1994              26.05.1998  Kaufhof*                    Metro
+  18.09.1995                          Continental                 Münchener Rückversicherung
+  22.07.1996              05.11.1998  Metallgesellschaft          Deutsche Telekom
+  23.09.1996              03.02.1999  -                           -
+  18.11.1996              09.12.1998  Bayerische Vereinsbank*     Bayer. Hypo- und Vereinsbank
+  22.09.1997              20.07.1999  Bay. Hypo-und Wechsel-
+                          10.02.2000  Bank*                       adidas-Salomon
+  22.06.1998              10.05.2000  -
+                                      Daimler-Benz*               -
+  21.09.1998              14.11.2000  Conversion from DEM to EUR  DaimlerChrysler
+  21.12.1998              14.02.2001  Degussa*
+  01.01.1999                          Thyssen*                    Degussa-Hüls
+  22.03.1999                          Hoechst                     ThyssenKrupp
+  25.03.1999                          Mannesmann                  Fresenius Medical Care
+  20.09.1999                          Veba*                       EPCOS
+  14.02.2000                          Viag*                       E.ON
+                                      -                           Infineon
+  19.06.2000                          Degussa-Hüls*               -
+                                      Karstadt Quelle             Degussa
+  18.09.2000                                                      Deutsche Post
+  18.12.2000
+  19.03.2001
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                       4/60
+
+Date of       Date of                 Deletion                     Addition
+change        announcement
+                                      Dresdner Bank                MLP
+  23.07.2001              26.06.2001  -                            -
+  24.09.2001                          Degussa                      Altana
+  23.09.2002              13.08.2002  EPCOS                        Deutsche Börse
+  23.12.2002              12.11.2002  MLP                          Continental
+  22.09.2003              19.08.2003  -                            -
+  20.09.2004              03.09.2004  -                            Lanxess*
+  31.01.2005              26.01.2005  Lanxess*                     -
+  31.01.2005              26.01.2005  -                            -
+  19.09.2005              05.09.2005  Bayer. Hypo- und
+                                      Vereinsbank                  Hypo Real Estate Holding
+  19.12.2005              05.12.2005  -
+                                      Schering                     -
+  19.06.2006              06.06.2006  Altana                       Deutsche Postbank
+  18.09.2006              14.09.2006  TUI                          Merck KGaA
+  18.06.2007              05.06.2007  Continental                  K+S
+  22.09.2008              03.09.2008  Hypo Real Estate             Beiersdorf
+                                      Infineon                     Salzgitter
+  22.12.2008              03.12.2008  Deutsche Postbank            Fresenius Pref
+                                      Hannover Rück                Hannover Rückversicherung
+  23.03.2009              04.03.2009  Volkswagen (St)              Infineon
+                                      Salzgitter                   Volkswagen (Vz)
+  21.09.2009              03.09.2009  MAN                          HeidelbergCement
+  23.12.2009              18.12.2009  Metro                        Lanxess
+  21.06.2010              04.06.2010  Lanxess AG                   Continental
+                                      K+S                          Vonovia SE
+  24.09.2012              05.09.2012                               ProSiebenSat.1 Media
+                                      Deutsche Börse*              Deutsche Börse (z. Umtausch
+  21.09.2015              03.09.2015                               eingereichte Aktie)*
+  21.03.2016              03.03.2016  Deutsche Börse (z. Umtausch
+                                      eingereichte Aktie)*         Deutsche Börse*
+  18.07.2016              13.07.2016
+                                      Linde AG                     Linde AG (z. Umtausch
+  04.04.2017              31.03.2017                               eingereichte Aktie*)
+                                      ProSiebenSat.1 Media SA      Covestro AG
+  25.10.2017              20.10.2017  Commerzbank AG               Wirecard AG
+                                      Thyssenkrupp AG              MTU Aero Engines
+  19.03.2018              05.03.2018  Deutsche Lufthansa AG        Deutsche Wohnen SE
+  24.09.2018              05.09.2018  Wirecard AG                  Delivery Hero SE
+  23.09.2019              04.09.2019
+  22.06.2020              04.06.2020  Beiersdorf AG                Siemens Energy AG
+  24.08.2020              19.08.2020
+  22.03.2021              03.03.2021                               Airbus SE
+                                                                   Brenntag SE
+20.09.2021    03.09.2021 -                                         HelloFresh SE
+                                                                   Porsche Automobile Holding VZO
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                  5/60
+
+Date of  Date of                Deletion                       Addition
+change   announcement
+                                                               Puma SE
+    29.10.2021      26.10.2021  Deutsche Wohnen SE             Qiagen NV
+                                                               Sartorius AG VZ
+    21.03.2022      03.03.2022  Beiersdorf AG                  Siemens Healthineers AG
+    20.06.2022                  Siemens Energy AG              Symrise AG
+    19.09.2022      03.06.2022  Delivery Hero SE               Zalando SE
+    19.12.2022      05.09.2022  HelloFresh SE
+    27.02.2023      05.12.2022  Puma SE                        Beiersdorf AG
+    20.03.2023      17.02.2023  Linde PLC
+    27.12.2024      03.03.2023  Fresenius Medical Care         Daimler Truck Holding
+    22.09.2025      19.12.2024  Covestro                       Hannover Rück SE
+                                Sartorius AG VZ                Beiersdorf AG
+    22.06.2026      03.09.2025  Dr. Ing. h.c. F. Porsche VZOI  Siemens Energy AG
+                                                               Dr. Ing. h.c. F. Porsche VZOI
+*Merger / Spin-off  03.06.2026  Porsche Automobil Holding      Commerzbank AG
+                                Pref                           Rheinmetall AG
+                                                               Fresenius Medical Care
+                                                               GEA Group
+                                                               Scout24
+
+                                                               Hochtief
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                 6/60
+
+2. TECDAX® INDEX COMPOSITION
+
+24 March 2003: Initial Composition
+
+AIXTRON              IXOS Software                             QIAGEN
+                                                               Repower Systems
+AT&S                 Jenoptik                                  SAP Systems Integration
+                                                               SCM Microsystems
+BB Biotech           Kontron                                   Singulus Technologies
+                                                               Software AG
+Drägerwerk           LION bioscience                           T-Online International
+                                                               United Internet
+ELMOS Semiconductor  MediGene                                  WEB.DE
+                                                               WEDECO
+EPCOS                Micronas Semiconductor
+                                                                 Addition
+Evotec OAI           mobilcom
+                                                                 freenet.de
+COR+FJA AG           Nordex                                      Süss Micro Tec
+                                                                 Teles
+GPC Biotech          Pfeiffer Vacuum                             Dialog Semiconductor
+                                                                 QSC
+IDS Scheer           Plambeck Neue Energien                      Rofin-Sinar Technologies
+                                                                 Bechtle
+TecDAX®                                                          Funkwerk
+                                                                 MorphoSys
+Date of       Date of                 Deletion                   SolarWorld
+change        announcement                                       MediGene
+                                      MediGene                   Conergy
+  22.09.2003              19.08.2003  Nordex                     Tele Atlas
+                                      Plambeck Neue Energien     ErSol Solar Energy
+  22.03.2004              17.02.2004  IXOS Software              Q-Cells
+                                      LION bioscience            SOLON
+  20.09.2004              03.09.2004  WEDECO                     Nordex
+                                      COR+FJA                    Wirecard
+  20.12.2004              03.12.2004  SAP Systems Integration    ADVA Optical Networking
+  21.03.2005              03.03.2005  SCM Microsystems           freenet (former teleunico)
+  20.06.2005              03.06.2005  Repower Systems            Carl Zeiss Meditec
+  19.09.2005              05.09.2005  Dialog Semiconductor       BB Medtech
+  19.12.2005              05.12.2005  Süss Micro Tec             Versatel
+  20.03.2006              03.03.2006  Teles                      Centrotherm
+  09.06.2006              06.06.2006  ELMOS Semiconductor        Repower Systems
+  18.09.2006              14.09.2006  Micronas Semiconductor     Phoenix Solar
+                                      Funkwerk                   Roth & Rau
+  05.03.2007              01.03.2007  T-Online International     Manz Automation
+  19.03.2007              05.03.2007  comBOTS (before WEB.DE)
+  24.09.2007              05.09.2007  MediGene
+  27.12.2007              05.12.2007  mobilcom
+  25.03.2008              05.03.2008  freenet.de
+  05.06.2008              03.06.2008  Evotec OAI
+  22.09.2008              03.09.2008  Jenoptik
+                                      GPC Biotech
+                                      ADVA Optical Networking
+                                      AT&S
+                                      Tele Atlas
+                                      Ersol Solar Energy
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                  7/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      BB Medtech                  SMA Solar Technology
+  22.12.2008              03.12.2008  EPCOS                       Smartrac
+  09.02.2009              05.02.2009  Versatel                    Jenoptik
+  23.03.2009              04.03.2009  Repower Systems             MediGene
+                                      Manz Automation             Infineon
+  21.09.2009              03.09.2009  Infineon                    Dialog Semiconductor
+                                      Singulus Technologies       Manz Automation
+  28.10.2009              26.10.2009  SOLON                       Drillisch
+  22.03.2010              04.03.2010  IDS Scheer                  EVOTEC
+  20.09.2010              03.09.2010  Rofin Sinar                 Singulus Technologies
+  19.11.2010              17.11.2010  MediGene                    ADVA AG Optical Networking
+  21.03.2011              03.03.2011  SMARTRAC                    STRATEC Biomedical Systems
+                                      Conergy                     Gigaset
+  19.09.2011              05.09.2011  Manz Automation             Süss MicroTec
+  19.03.2012              05.03.2012  Roth + Rau                  Xing
+  18.06.2012              05.06.2012  Phoenix Solar               PSI
+                                      Global PVQ                  Euromicron
+  24.09.2012              05.09.2012  Centrotherm Photovolt.      Cancom
+  18.03.2013              06.03.2013  BB Biotech                  Sartorius
+  23.09.2013              04.09.2013  Gigaset                     LPKF Laser+Electron.
+  24.03.2014              05.03.2014  Singulus Tec.               BB Biotech
+  22.09.2014              03.09.2014  SolarWorld                  Telefonica Dtld.
+  23.03.2015              04.03.2015  Euromicron                  CompuGroup
+  22.06.2015              03.06.2015  Süss Micro Tec              Nemetschek
+  21.12.2015              03.12.2015  Adva Opt.Netw.              Manz AG
+  21.03.2016              03.03.2016  PSI                         RIB Software
+  19.09.2016              05.09.2016  Kontron AG                  GFT Technologies AG
+  19.12.2016              05.12.2016  BB Biotech AG               ADVA Optical Networking SE
+  20.03.2017              03.03.2017  Manz AG                     Siltronic AG
+  19.03.2018              05.03.2018  QSC                         SLM Solutions Group
+  18.06.2018              05.06.2018  LPKF Laser+Electron         Süss Micro Tec AG
+                                      Süss Microtec AG            S+T AG
+  24.09.2018              05.09.2018  Aixtron SE                  Medigene AG
+                                      STRATEC Biomedical Systems  Aixtron SE
+  23.12.2019              04.12.2019  ADVA Optical Networking SE  Aumann AG
+                                      GFT Technologies SE         ISRA VISION AG
+                                      Aumann AG                   Siemens Healthineers AG
+                                      Medigene AG                 SAP SE
+                                      SLM Solutions AG            Deutsche Telekom AG
+                                      SMA Solar Technol.          Infineon Tech. AG
+                                      Draegerwerk                 Varta AG
+                                      Isra Vision                 TeamViewer AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                               8/60
+
+Date of       Date of                 Deletion                Addition
+change        announcement
+                                      Dialog Semiconductor    Isra Vision
+  23.03.2020              04.03.2020  RIB Software            Draegerwerk
+  30.04.2020              27.04.2020  Isra Vision             Eckert + Ziegler
+  08.05.2020              05.05.2020  Wirecard AG             LPKF Laser & Electronics AG
+  24.08.2020              19.08.2020  New Work SE             SMA Solar Technology AG
+  22.03.2021              03.03.2021  Draegerwerk VZO         SUSE S.A.
+                                      LPKF Laser+Electronics  Vantage Towers AG
+  20.09.2021              03.09.2021  Pfeiffer Vacuum Tech.   Nagarro SE
+                                      SMA Solar Technology    Verbio Ver.Bioenergie
+  20.12.2021              03.12.2021  Eckert+Ziegler AG       Hensoldt AG
+  21.03.2022              03.03.2022  Nordex SE               SMA Solar Technology
+  20.06.2022              03.06.2022  1&1 AG                  Adtran Holdings
+  20.06.2022              15.06.2022  Kontron AG              Nordex SE
+                                      Varta AG                Eckert+Ziegler
+  19.09.2022              05.09.2022  Evotec SE               Kontron AG
+                                      Vantage Towers AG       Atoss Software AG
+  20.03.2023              03.03.2023  SUSE S.A.               Evotec SE
+  09.05.2023              04.05.2023  Software AG             PNE AG
+  10.05.2023              05.05.2023  Eckert+Ziegler AG       Energiekontor
+  19.06.2023              05.06.2023  Telefonica              1&1 AG
+  25.07.2023              20.07.2023  Verbio                  Eckert+Ziegler
+  18.09.2023              05.09.2023  Adtran Holdings         Suess Microtec
+  25.01.2024              22.01.2024  MorphoSys               Elmos Semiconductor
+                                      Energiekontor           IONOS Group
+  18.03.2024              05.03.2024  SMA Solar Technology    Nexus
+                                      Nexus                   Formycon
+  24.06.2024              18.06.2024  Nagarro N               Draegerwerk Pref
+                                      CompuGroup Medical      Nagarro
+  23.12.2024              04.12.2024  1&1 AG                  SMA Solar Technology
+                                      Formycon                1&1 AG
+  13.01.2025              08.01.2025  PNE                     Ottobock
+  09.05.2025              06.05.2025  Nagarro N               PVA Tepla
+  25.06.2025              20.06.2025  1&1                     Verbio
+  11.07.2025              08.07.2025
+  22.09.2025              03.09.2025
+  22.12.2025              03.12.2025
+
+  22.06.2026              03.06.2026
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                  9/60
+
+3. MDAX® INDEX COMPOSITION
+
+11 April 1994: Initial Composition (at the time of the introduction of HDAX®)
+
+AEG                                   DSL Holding                 KSB
+
+AGIV                                  Dürr                        LEIFHEIT
+
+Altana                                ESCADA                      Linotype-Hell
+
+AMB Aachen.u.Münchener Bet. FAG Kugelfischer G. Schäfer MOKSEL
+
+asko                                  Felten & Guilleaume         Otto Reichelt
+
+AVA                                   Fresenius                   PHILIPP HOLZMANN
+
+Bankgesellschaft Berlin               Friedrich GROHE             PWA
+
+Barmag                                Fried. Krupp AG Hoesch-Krupp Rheinelektra
+
+Beiersdorf                            GEA                         RHEINMETALL
+
+BEWAG                                 GEHE                        Salamander
+
+BHF-Bank                              Gerresheimer Glas           SAP
+
+Bilfinger + Berger Bau                HEIDELBERGER ZEMENT         Schmalbach-Lubeca
+
+Brau und Brunnen                      Herlitz                     SPAR Handels
+
+Bremer Vulkan                         HOCHTIEF                    STRABAG
+
+Buderus                               Hornbach Holding            Südzucker AG
+                                                                  Mann./Ochs.
+
+CKAG Colonia Konzern                  Horten                      VARTA
+
+COMPUTER 2000                         IKB Deutsche Industriebank  VEW
+
+DBV-Winterthur                        IVG                         Villeroy & Boch
+
+DEPFA Deutsche Pfandbriefbank IWKA                                Volksfürsorge
+
+Deutz                                 Jungheinrich                WAYSS & FREYTAG
+
+Didier-Werke                          Kampa-Haus                  WELLA
+
+DLW                                   Klöckner-Werke              Weru
+
+DOUGLAS HOLDING                       Kolbenschmidt Pierburg
+
+Dr. Ing. h.c. F. Porsche              Krones
+
+MDAX®
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      COMPUTER 2000               Dyckerhoff
+  19.09.1994              19.07.1994  LEIFHEIT                    Hornbach Baumarkt
+                                      MOKSEL                      Münchener Rückversicherung
+  18.09.1995              18.07.1995  Villeroy & Boch             VICTORIA
+                                      Didier-Werke                SKW Trostberg
+  18.03.1996              16.01.1996  DSL Holding                 Rütgers
+                                      Otto Reichelt               plettac
+                                      Wayss & Freytag             Fielmann
+                                      SAP                         Deutsche Babcock
+                                      AEG                         adidas
+                                      asko                        Merck KgaA
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                     10/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      Barmag                      SGL Carbon
+  23.09.1996              16.07.1996  Horten                      Schwarz Pharma
+                                      Bremer Vulkan               Continental
+  18.11.1996              16.07.1996  DLW                         Puma
+                                      Linotype-Hell               Rhön-Klinikum
+  24.03.1997              21.01.1997  Münchener Rückversicherung  Tarkett
+                          10.04.1997                              Metallgesellschaft (later GEA
+  14.04.1997              22.07.1997  Hornbach Baumarkt           Group)
+  22.09.1997              20.01.1998                              Kiekert
+  23.03.1998              26.05.1998  Rütgers                     Hannover Rückversicherung
+  19.06.1998              21.07.1998  SALAMANDER                  MLP
+  21.09.1998              09.12.1998  VEW                         Fresenius Medical Care
+  21.12.1998              19.01.1999  Weru                        Lahmeyer
+  01.01.1999              08.03.1999  Rheinelektra*               BHW Holding
+  22.03.1999              20.07.1999  STRABAG                     Vossloh
+  22.03.1999              09.11.1999  Volksfürsorge               Pro Sieben Media
+  20.09.1999                          PWA                         Phoenix
+  20.12.1999              08.02.2000  Felten & Guilleaume         Heidelberger Druckmaschinen
+                                      adidas-Salomon              Kali und Salz
+  20.03.2000              18.08.2000  Herlitz                     Sixt
+                                      Hornbach Holding            WCM Bet.- u. Grundbesitz
+  18.09.2000                          Kampa-Haus
+                                      Fried. Krupp AG Hoesch-     Jenoptik
+                                      Krupp
+                                      Conversion from DEM to EUR  Gold-Zack
+                                      Plettac                     Hugo Boss
+                                      Lahmeyer                    Kamps
+                                      Fresenius Medical Care
+                                      GEA (later merged with      Software
+                                      Metallgesellschaft)
+                                      BHF-Bank                    Stinnes
+                                      Friedrich GROHE             Beate Uhse
+                                      AXA Colonia Konzern         Baader Wertpapierhandelsbank
+                                      Brau + Brunnen              Celanese
+                                      DBV-Winterthur              GfK
+                                      VARTA                       VCL Film + Medien
+                                      Gerresheimer Glas           Techem
+                                      Kiekert                     tecis Holding
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                         11/60
+
+Date of       Date of                 Deletion                       Addition
+change        announcement
+                                      Schmalbach-Lubeca              WEDECO
+  18.12.2000              14.11.2000  SKW Trostberg                  CargoLifter
+  19.03.2001              14.02.2001  Klöckner-Werke                 AWD Holding
+  18.06.2001              09.05.2001  KSB                            Karstadt Quelle
+  23.07.2001              26.06.2001  Tarkett Sommer                 Norddeutsche Affinerie
+  30.07.2001              26.06.2001  PHILIPP HOLZMANN               Deutsche Börse
+  24.09.2001              07.08.2001  MLP                            STADA Arzneimittel
+                                      ERGO Versicherungsgruppe       Koenig & Bauer
+  27.12.2001              07.11.2001  Dr. Ing. h.c. F. Porsche       BERU
+                                      SPAR Handels-AG                Fraport
+  18.03.2002              13.02.2002  VCL Film + Medien              Salzgitter
+  25.07.2002              16.07.2002  Bankgesellschaft Berlin        GILDEMEISTER
+  29.07.2002              25.07.2002  BEWAG                          Loewe
+  23.09.2002              13.08.2002  FAG Kugelfischer G. Schäfer    Zapf Creation
+  03.10.2002              30.09.2002  Baader
+  23.12.2002              12.11.2002  Wertpapierhandelsbank          DIS Deutsch. Industrie Service
+                                      Deutz
+  24.03.2003              11.02.2003  DEPFA Dt. Pfandbriefbank       GERRY WEBER Internat.
+                                      tecis Holding                  INDUS Holding
+                                      Kamps                          LEONI
+                                      Altana                         Drägerwerk
+                                      Babcock Borsig                 Degussa
+                                      CargoLifter                    Aareal Bank
+                                      Gold-Zack                      Klöckner-Werke
+                                      Stinnes                        Mannheimer AG Holding
+                                      Deutsche Börse                 Hornbach Holding
+                                      AGIV                           EPCOS
+                                      AVA                            DEPFA Dt. Pfandbriefbank
+                                      Beate Uhse                     EADS
+                                      BHW Holding                    MEDION
+                                      DIS Deutscher Industrie Serv.  Teleplan International
+                                      Drägerwerk                     Thiel Logistik
+                                      Dürr
+                                      EPCOS
+                                      ESCADA
+                                      Fielmann
+                                      GERRY WEBER Internat.
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                      12/60
+
+Date of       Date of                 Deletion                      Addition
+change        announcement
+                                      GfK                           Fielmann
+  14.07.2003              10.07.2003  GILDEMEISTER                  MLP
+  22.09.2003              19.08.2003  Hornbach Holding              Comdirect bank
+  22.03.2004              17.02.2004  INDUS Holding                 Hypo Real Estate Holding
+  21.06.2004              18.05.2004  Jenoptik                      MPC Münchm. Peters. Capital
+  20.09.2004              03.09.2004  Jungheinrich                  Deutsche EuroShop
+  21.03.2005              03.03.2005  Klöckner-Werke                Deutsche Postbank
+  20.06.2005              03.06.2005  Kolbenschmidt Pierburg        WINCOR NIXDORF
+  19.09.2005              05.09.2005  Loewe                         Pfleiderer
+  19.12.2005              05.12.2005  Mannheimer AG Holding         Lanxess
+  01.03.2006              27.02.2006  Phoenix                       Premiere
+  20.03.2006              03.03.2006  Sixt                          MTU Aero Engines
+  19.06.2006              06.06.2006  Software AG                   Bayer. Hypo- und Vereinsbank
+  18.09.2006              14.09.2006  WEDECO                        Vivacon
+  18.12.2006              05.12.2006  Buderus                       Praktiker Bau- und
+  29.01.2007              25.01.2007  Continental                   Heimwerkermärkte Holding
+  19.03.2007              05.03.2007  Teleplan International        Wacker Chemie
+  18.06.2007              05.06.2007  Dyckerhoff                    PATRIZIA Immobilien
+                                      Celanese                      DEUTZ
+                                      Koenig & Bauer                GAGFAH
+                                      WELLA                         Klöckner & Co
+                                      Zapf Creation                 Symrise
+                                      comdirect bank                Altana
+                                      Thiel Logistik
+                                      WCM Bet.- u. Grundbesitz
+                                      BERU
+                                      Hypo Real Estate Holding
+                                      Degussa
+
+                                      MEDION
+
+                                      MPC Münchm. Peters. Capital
+                                      Deutsche Postbank
+                                      Vivacon
+                                      Fielmann
+                                      Bayer. Hypo- und Vereinsbank
+                                      Schwarz Pharma
+                                      Merck KgaA
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                    13/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      Patrizia Immoblilien        Tognum
+  24.09.2007              05.09.2007  DEPFA Dt. Pfandbriefbank    ARQUES Industries
+  01.10.2007              26.09.2007  Techem                      Gildemeister
+  12.12.2007              10.12.2007  AWD Holding                 Hamburger Hafen und Logistik
+  25.03.2008              05.03.2008  IKB Deutsche Industriebank  Demag Cranes
+  23.06.2008              04.06.2008  ARQUES Industries           Fuchs Petrolub
+  22.09.2008              03.09.2008  K+S                         TUI
+                                      Deutz                       Bauer
+  22.12.2008              03.12.2008  Beiersdorf                  Continental
+                                      Salzgitter                  Hypo Real Estate
+  06.01.2009              30.12.2008  AMB Generali                Gerresheimer
+                                      Altana                      Fielmann
+  23.03.2009              04.03.2009  Fresenius Pref              Deutsche Postbank
+                                      Hannover Rückversicherung   Rational
+  21.09.2009              03.09.2009  Aareal Bank                 ElringKlinger
+                                      Arcandor                    Hannover Rück
+  21.06.2010              04.06.2010  Hypo Real Estate            Aareal Bank
+                                      KUKA                        BayWa
+  20.09.2010              03.09.2010  HeidelbergCement            Salzgitter
+  08.12.2010              03.12.2010  Pfleiderer                  Kabel Deutschland
+  29.06.2011              27.06.2011  MLP                         Brenntag
+                                      Bauer                       Axel Springer
+  19.09.2011              05.09.2011  Postbank                    Deutsche Wohnen
+                                      Tognum                      Gerry Weber international
+  19.03.2012              05.03.2012  Praktiker                   Deutz
+  18.06.2012               -          Demag Cranes                KUKA
+                                      IVG Immobilien              GSW Immobilien
+  24.09.2012              05.09.2012  Heidelberg Druck            Duerr
+                                      Hugo Boss AG VZO            Hugo Boss AG NA
+  12.12.2012              07.12.2012  Deutz                       Metro
+  18.03.2013              06.03.2013  Continental                 MAN
+  24.06.2013              05.06.2013  Lanxess AG                  Tag Immobilien
+  23.09.2013              04.09.2013  DOUGLAS HOLDING             Talanx
+                                      Vossloh                     Norma Group
+                                      Hamburger Hafen & Logistik  LEG Immobilien
+                                      BayWa                       Osram Licht
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                          14/60
+
+Date of       Date of                 Deletion                      Addition
+change        announcement
+                                      Puma                          Evonik
+  27.11.2013              22.11.2013  SGL Carbon                    RTL Group
+  22.09.2014              03.09.2014  GSW Immobilien                SGL Carbon
+  04.12.2014              01.12.2014  Rational                      Dt. Annington Immobilien
+  24.02.2015              19.02.2015  SGL Carbon                    Kion Group
+  01.04.2015              27.03.2015  Sky Deutschland AG            Jungheinrich AG
+  22.06.2015              03.06.2015  Gagfah S.A.                   Bertrandt AG
+  21.09.2015              03.09.2015  TUI AG                        CTS Eventim AG
+                                      Bertrandt AG                  Zalando SE
+  21.12.2015              03.12.2015  Vonovia AG                    Lanxess AG
+                                      Gerry Weber Intern. AG        Deutsche Pfandbriefbank AG
+  21.03.2016              03.03.2016  Celesio AG                    Hella KgaA Hueck & Co
+                                      MAN SE                        Covestro AG
+  01.04.2016              29.03.2016  Kabel Deutschland Holding
+  21.04.2016              18.04.2016  AG                            Stroeer SE
+  20.06.2016              03.06.2016  Klöckner & Co
+  13.07.2016              08.07.2016  ElringKlinger                 K+S
+  11.08.2016              08.08.2016  Pro SiebenSat1.Media          Steinhoff International Holdings
+  19.12.2016              05.12.2016                                Alstria Office REIT
+  19.12.2016              05.12.2016  Wincor Nixdorf AG             Wincor Nixdorf AG (z. Umtausch
+  18.09.2017              05.09.2017                                eingereichte Aktie)
+                                      Wincor Nixdorf AG (z.
+  19.03.2018              05.03.2018  Umtausch eingereichte Aktie)  Wincor Nixdorf AG
+                                      Wincor Nixdorf AG
+  18.06.2018              05.06.2018                                Schaeffler AG
+                                      Kuka AG                       Kuka AG (z. Umtausch
+                                                                    eingereichte Aktie)
+                                      Kuka AG (z. Umtausch
+                                      eingereichte Aktie)           Rational AG
+                                      DMG MORI AG
+                                      Rhoen-Klinikum AG             innogy SE
+                                      Bilfinger SE                  Uniper SE
+                                      Rational AG                   Metro AG
+                                      Steinhoff International       Grand City Properties S.A.
+                                      Holdings NV
+                                      Covestro AG                   Aroundtown SA
+                                      Südzucker AG
+                                      Stada Arzneimittel AG         ProSiebenSat.1 Media SE
+                                      Alstria Office REIT AG        Rocket Internet SE
+                                      Krones AG                     Scout24 AG
+                                                                    Delivery Hero AG
+                                                                    Puma SE
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                      15/60
+
+Date of     Date of       Deletion                    Addition
+change      announcement
+                          Ceconomy AG                 Commerzbank AG
+                          Jungheinrich AG VZO         Qiagen
+                          Leoni AG                    Siemens Health.
+                          Stroeer SE + CO. KGAA       UTD. Internet AG
+                          Talanx AG                   Sartorius AG VZO
+                                                      Morphosys AG
+24.09.2018  05.09.2018                                Freenet AG
+                                                      Siltronic AG
+27.12.2018  05.12.2018    CTS Eventim                 Evotec AG
+18.03.2019  05.03.2019    Salzgitter AG               Nemetschek SE
+24.06.2019  05.06.2019    Schaeffler AG               Bechtle AG
+29.08.2019  26.08.2019    Wacker Chemie AG            Telefonica
+16.09.2019  11.09.2019    Axel Springer SE            1+1 Drillisch AG
+                          Innogy SE                   Software AG
+23.09.2019  04.09.2019    MTU Aero Engines AG         Alstria Office REIT-AG
+                          Deutsche EuroShop           Carl Zeiss Meditec AG
+23.12.2019  04.12.2019    Norma Group SE              Knorr-Bremse AG
+23.03.2020  04.03.2020    1&1 Drillisch AG            Dialog Semiconductor
+22.06.2020  04.06.2020    Fielmann AG                 Grenke AG
+24.08.2020  19.08.2020    Dialog Semiconductor        Cancom SE
+21.09.2020  05.09.2020    Deutsche Wohnen SE          CTS Eventim
+21.12.2020  03.12.2020    Deutsche Pfandbriefbank AG  Thyssenkrupp AG
+                          Delivery Hero SE            CompuGroup Medical SE
+22.03.2021  03.03.2021    RTL Group                   Rational AG
+                          Rocket Internet             TeamViewer AG
+                          Grenke AG                   Varta AG
+                          Siemens Energy AG           HelloFresh
+                          Aareal Bank AG              Deutsche Lufthansa AG
+                          Metro AG                    Ströer SE & Co KgaA
+                                                      Aixtron SE
+                                                      Shop Apotheke Europe
+                                                      Wacker Chemie
+                                                      Siemens Energy AG
+                                                      Beiersdorf AG
+                                                      Porsche Automobile Holding
+                                                      Encavis AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                               16/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement                                        Nordex SE
+                                      Osram Licht AG              Auto1 Group SE
+  21.06.2021              03.06.2021  Siltronic AG                Befesa S.A.
+                                      Airbus SE                   Hypoport SE
+  20.09.2021              03.09.2021  Brenntag SE                 Jungheinrich AG
+                                      HelloFresh SE               Vantage Towers AG
+  29.10.2021              26.10.2021  Porsche Automobile Holding  Zooplus AG
+  20.12.2021              03.12.2021  VZI
+  11.02.2022              08.02.2022  Puma SE                     Talanx AG
+  21.03.2022              03.03.2022  Qiagen NV                   Deutsche Wohnen SE
+  20.06.2022              03.06.2022  Sartorius AG VZ             Daimler Truck Holding
+  19.09.2022              05.09.2022  Siemens Healthineers AG     RTL Group
+  19.12.2022              05.12.2022  Symrise AG                  Sixt SE
+  27.02.2023              17.02.2023  Zalando SE                  Siltronic AG
+  20.03.2023              03.03.2023  Encavis AG                  Siemens Energy
+                                      Hochtief AG                 Beiersdorf
+                                      Morphosys AG                Delivery Hero SE
+                                      Nordex SE                   Encavis AG
+                                      Shop Apotheke Europe        HelloFresh SE
+                                      Beiersdorf AG               Adtran Holdings
+                                      Zooplus AG                  Hella GmbH + Co. KGAA
+                                      Alstria Office REIT         Stabilus SE
+                                      Compugroup Med.             Verbio Ver. Bionenergie
+                                      Hella GmbH + Co. KGAA       Puma SE
+                                      Auto1 Group SE              Nordex SE
+                                      Hannover Rueck              Fresenius Medical Care
+                                      Daimler Truck Holding       Jenoptik AG
+                                      Hypoport SE
+                                      Beiersdorf AG
+                                      Siemens Energy AG
+                                      Uniper SE
+                                      Grand City Properties
+                                      Cancom SE
+                                      Varta AG
+                                      Deutsche Wohnen SE
+                                      Commerzbank AG
+                                      Rheinmetall AG
+                                      Verbio AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                      17/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      Software AG                 Hensoldt AG
+  09.05.2023              04.05.2023
+  10.05.2023              05.05.2023  Evotec SE                   SMA Solar Technology AG
+
+  19.06.2023              05.06.2023  Vantage Towers AG           Hochtief AG
+
+  25.07.2023              20.07.2023  UTD. Internet AG            Evotec SE
+  18.09.2023              05.09.2023
+  18.12.2023              05.12.2023  Siltronic AG                Krones AG
+  25.01.2024              22.01.2024
+  18.03.2024              05.03.2024  Aroundtown SA               Redcare Pharmacy
+
+  24.06.2024              05.06.2024  Adtran Holdings             Software AG
+
+  23.09.2024              04.09.2024  Software AG                 Vitesco Technologies Group
+  23.12.2024              04.12.2024
+  27.12.2024              19.12.2024  Krones AG                   UTD. Internet AG
+  24.03.2025              05.03.2025  Prosiebensat.1              Aroundtown
+  23.06.2025              04.06.2025  Duerr                       Siltronic AG
+  22.09.2025              03.09.2025  Befesa                      Krones AG
+                                      Telefonica                  Befesa
+  22.12.2025              03.12.2025  Rational                    Bilfinger
+  09.03.2026              04.03.2026  Vitesco Technologies Group  Morphosys
+  23.03.2026              04.03.2026  MorphoSys                   Rational
+  10.04.2026              07.04.2026  SMA Solar Technology        TUI
+                                      SIXT                        Traton
+  22.06.2026              03.06.2026  Evotec SE                   Hypoport
+                                      Encavis                     Schott Pharma
+                                      Befesa SA                   AUTO1 Group
+                                      Stabilus                    Evotec
+                                      Fresenius Medical Care      Deutsche Wohnen
+                                      Hypoport                    DWS Group GmbH & Co. KgaA
+                                      SCHOTT Pharma               FlatexDEGIRO N
+                                      Siltronic                   Renk
+                                      Jenoptik                    IONOS GROUP
+                                      Evotec                      Fielmann Group
+                                      GEA Group                   Sartorius AG VZ
+                                      Scout24                     Dr. Ing. h.c. F. Porsche VZOI
+                                      Gerresheimer                Aumovio
+                                      Hellofresh AG               TKMS
+                                      Deutsche Wohnen             Schaeffler
+                                      Carl Zeiss Meditec          Salzgitter
+                                      Fielmann Group              Deutz
+                                      TeamViewer                  Jenoptik
+                                      Gerresheimer                Shelly Group
+                                      Hochtief                    Porsche Automobil Holding pref
+                                      Redcare Pharmacy            Elmos Semiconductor
+                                      Stroeer                     Siltronic
+                                      Jungheinrich Pref.          Suess Microtec
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES  18/60
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                 19/60
+
+4. SDAX® INDEX COMPOSITION
+
+21 June 1999: Initial Composition
+
+A.S. Création Tapeten              Fuchs Petrolub              Norddeutsche Affinerie
+                                                               Nürnberger Beteiligungs-AG
+Adolf Ahlers                       GARDENA Holding             Pfleiderer
+                                                               plettac
+Allbecon                           GERRY WEBER International   Pongs & Zahn
+                                                               Porta Systems
+Amadeus                            GESCO Industrie Holding
+                                                               Quante
+APCOA Parking                      Gontard & MetallBank
+                                                               R. Stahl
+B.U.S Berzelius Umwelt-Ser.        Grammer                     RSE Grundb. U. Beteiligungs-
+                                                               AG
+Baader                             Graphitwerk Kropfmühl       Salzgitter
+Wertpapierhandelsbank                                          Sanacorp Pharmahandel
+                                                               Sartorius
+BAUSCH                             HACH                        Schlott
+                                                               Schuler
+Bau-Verein zu Hamburg              Hans Einhell                SG Holding
+                                                               Spütz
+Beate Uhse                         Hawesko Holding             Sto
+Berentzen-Gruppe                   HEINKEL
+Berliner Elektro Holding           Herlitz                     TA Triumph-Adler
+BERU                               Hornbach Holding
+Bien-Haus                          Hymer                       tecis Holding
+Bijou Brigitte mod. Accessoires    INDUS Holding               TFG Venture Capital
+Biotest                            K & M Möbel
+BÖWE SYSTEC                        Kässbohrer Geländefahrzeug  UZIN UTZ
+Bonifatius Hospital &
+Seniorenr.                         Kampa-Haus                  VCL Film + Medien
+CeWe Color Holding                                             Villeroy & Boch
+CinemaxX                           Kamps                       Vivanco Gruppe
+                                   Kaufring                    VOGT electronic
+Concord Effekten                   Kling, Jelko, Dr. Dehmel
+                                   Wertph.                     VTG-LEHNKERING
+Creaton                            KNORR CAPITAL PARTNER
+DATA MODUL                         Köhler & Krenzer Fashion    WALTER
+Deutsche Beteiligungs AG           Koenig & Bauer              WESUMAT Holding
+Dt. Steinzeug Cremer & Breuer      LEIFHEIT                    Winkler + Dünnebier
+DIS Deutscher Industrie                                        WMF Württ. Metallwarenf.
+Service                            Leonische Drahtwerke        Wünsche
+Dr. Scheller Cosmetics                                         Zapf Creation
+DSL Holding                        Ludwig Beck am Rathauseck
+Edscha                             M.A.X. Holding
+eff-eff Fritz Fuss                 Mannheimer AG Holding
+Ehlebracht                         Marseille-Kliniken
+elexis                             Möbel WALTHER
+EUROBIKE                           MVV Energie
+Fritz Nols Global Equity           MWB Wertpapierhandelshaus
+Services
+                                   Neschen
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                 20/60
+
+SDAX® (1999)
+
+Date of       Date of                 Deletion                  Addition
+change        announcement
+                                      Kamps                     Brüder Mannesmann
+  17.09.1999              20.07.1999  eff-eff Fritz Fuss        bmp
+  17.09.1999              01.09.1999  DSL Holding               Loewe
+  20.12.1999              09.11.1999  Beate Uhse                PROCON MultiMedia
+                                      Baader
+  20.03.2000              08.02.2000  Wertpapierhandelsbank     Brau + Brunnen
+                                      Bijou Brigitte mod.
+  19.06.2000              10.05.2000  Accessoires               GILDEMEISTER
+                                      Hans Einhell
+  18.09.2000              08.08.2000  Köhler & Krenzer Fashion  OAR Consulting
+  18.12.2000              14.11.2000  VCL Film + Medien         STADA Arzneimittel
+  19.03.2001              14.02.2001  Brüder Mannesmann         WEDECO
+  18.06.2001              09.05.2001  Bonifatius Hospital &     Börsenmakler Schnigge
+                                      Senioren.
+  24.09.2001              07.08.2001  Porta Systems             CONDOMI
+                                      RSE Grundb. U. Beteilig.
+                                      Quante                    RATIONAL
+                                      SG Holding                TAKKT
+                                      Tecis Holding             AHAG Wertpapierhandelshaus
+                                      VTG-LEHNKERING            Holsten-Brauerei
+                                      WEDECO                    Masterflex
+                                      Kaufring                  RINOL
+                                      CinemaxX                  Rohwedder
+                                      Norddeutsche Affinerie    German Brokers
+                                      APCOA Parking             HWAG
+                                      A.S. Création Tapeten     MediClin
+                                      Ehlebracht                Power Automation
+                                      HACH                      Tarkett Sommer
+                                      OAR Consulting            KSB
+                                      Adolf Ahlers              MPC Münchm. Peters. Capital
+                                      AHAG                      Philipp Holzmann
+                                      Wertpapierhandelshaus     HACH
+                                      UZIN UTZ
+                                      MVV Energie               InnoTec TSS
+                                      BERU
+                                      Salzgitter                Turbon
+                                                                Maternus-Kliniken
+                                                                VCL Film + Medien
+                                                                WIGE Media
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                           21/60
+
+Date of     Date of       Deletion                       Addition
+change      announcement                                 agiplan TechnoSoft
+                          GILDEMEISTER                   A.S. Creation Tapeten
+27.12.2001  07.11.2001    Loewe                          AUTANIA
+                          Zapf Creation                  burgbad
+18.03.2002  13.02.2002    AdCapital                      Curanum Bonifatius
+                          Grammer                        Eichborn
+08.04.2002  04.04.2002    Hymer                          Essanelle Hair Group
+                          K & M Möbel                    Geratherm Medical
+                          Kässbohrer Geländefahrzeug     Hans Einhell
+                          plettac                        OAR Consulting
+                          Börsenmakler Schnigge          Progress-Werk Oberkirch
+                          Schuler                        SM Wirtschaftsberatungs
+                          SURTECO                        TAG Tegerns. Imm.-u. Bet.
+                          WMF Württ. Metallwarenf.       Triplan
+                          Wünsche                        Arndt
+                          Berentzen-Gruppe               Baader Wertpapierhandelsbank
+                          Brau + Brunnen                 Ehlebracht
+                          B.U.S. Berzelius Umw.-Ser.     STRATEC Biomedical Systems
+                          Creaton
+                          DIS Deutscher Industrie Serv.                          -
+                          GERRY WEBER Internat.                                  -
+                          Hans Einhell
+                          Heinkel
+                          Herlitz
+                          INDUS Holding
+                          Kampa-Haus
+                          möbel WALTHER
+                          WALTER
+                          Bau-Verein zu Hamburg
+                          OAR Consulting*
+                          Philipp Holzmann*
+
+* leaving SMAX® Segment
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                               22/60
+
+24 June 2002: Initial Composition (after reduction to 50 components)
+
+Amadeus                   Marseille-Kliniken
+
+Baader
+
+Wertpapierhandelsbank     Masterflex
+
+Biotest                   MediClin
+
+Capital Stage             Münchmeyer Petersen Capital
+
+CEAG                      MVV Energie
+
+CeWe Color Holding        Pfleiderer
+
+Concord Effekten          Progress-Werk Oberkirch
+
+CONDOMI                   R. Stahl
+
+DATA MODUL                RATIONAL
+
+Deutsche Beteiligungs AG  Rohwedder
+
+Edscha                    Sartorius
+
+Elexis                    schlott sebaldus
+
+EUROBIKE                  SM Wirtschaftsberatungs AG
+
+Fuchs Petrolub            Spütz
+
+GARDENA Holding           Sto
+
+GESCO Industrie Holding   TA Triumph-Adler
+
+                          TAG Tegernsee Immobilien- und Beteiligungs-
+
+Hawesko Holding           AG
+
+Holsten-Brauerei          TAKKT
+
+Hornbach Holding          Tarkett Sommer
+
+Hornbach Baumarkt         TFG Venture Capital
+
+KSB                       Turbon
+
+LEIFHEIT                  VCL Film + Medien
+
+LEONI                     Villeroy & Boch
+
+Ludwig Beck am Rathauseck VOGT electronic
+
+Mannheimer AG Holding     Winkler + Dünnebier
+
+SDAX® (2002)
+
+Date of        Date of                Deletion                 Addition
+change         announcement
+                                      LEONI                    Graphit Kropfmühl
+  25.07.2002              16.07.2002  Concord Effekten         A.S. Création Tapeten
+                                      Spütz                    Dr. Scheller Cosmetics
+  23.09.2002              13.08.2002  GARDENA Holding          RINOL
+                                      Mannheimer AG Holding    STRATEC Biomedical Systems
+  03.10.2002              30.09.2002  Hornbach Holding         PROCON MultiMedia
+                                      Capital Stage            AUTANIA
+  23.12.2002              12.11.2002  SM Wirtschaftsberatungs  MEDISANA
+                                      TFG Venture Capital      SURTECO
+  24.03.2003              11.02.2003  VOGT electronic          WashTec
+                                      A.S. Création Tapeten    ACG Advanced Component Gr.
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                    23/60
+
+Date of       Date of                Deletion                    Addition
+change        announcement
+                                     Amadeus                     AGIV Real Estate
+  14.07.2003             10.07.2003  AUTANIA                     AIG
+  22.09.2003             19.08.2003  Baader
+  13.11.2003             10.11.2003  Wertpapierhandelsbk.        AVA
+  22.12.2003             18.11.2003  Biotest
+  04.03.2004             17.02.2004  CEAG                        Balda
+                                     CONDOMI                     Beate Uhse
+                                     DATA MODUL                  BHW Holding
+                                     Dr. Scheller Cosmetics      BÖWE SYSTEC
+                                     Edscha                      ce CONSUMER ELECTRONIC
+                                     Elexis                      comdirect bank
+                                     EUROBIKE                    D.Logistics
+                                     GESCO Industrie Holding     DAB bank
+                                     Graphit Kropfmühl           DEUTZ
+                                     KSB                         DIS Deutscher Industrie Serv.
+                                     LEIFHEIT                    Dürr
+                                     Ludwig Beck am Rathauseck   EM.TV
+                                     Marseille-Kliniken          ESCADA
+                                     Masterflex                  Fielmann
+                                     MEDISANA                    GERICOM
+                                     PROCON MultiMedia           GERRY WEBER Internat.
+                                     Progress-Werk Oberkirch     GfK
+                                     R. Stahl                    GILDEMEISTER
+                                     RINOL                       GRENKELEASING
+                                     Rohwedder                   Highlight Communications
+                                     Sartorius                   Hornbach Holding
+                                     Schlott sebaldus            INDUS Holding
+                                     Sto                         Jungheinrich
+                                     STRATEC Biomedical Systems  Klöckner-Werke
+                                     SURTECO                     Kolbenschmidt Pierburg
+                                     TA Triumph-Adler            Loewe
+                                     Tarkett Sommer              Mannheimer AG Holding
+                                     Turbon                      Phoenix
+                                     VCL Film + Medien           Sauer-Danfoss
+                                     WashTec                     Sixt
+                                     Winkler + Dünnebier         VIVA Media
+                                     Fielmann                    W.E.T Automotive Systems
+                                     Mannheimer AG Holding       Deutsche EuroShop
+                                     comdirect bank              IM Internationalmedia
+                                     Kolbenschmidt Pierburg      Teleplan International
+                                     MediClin                    ElringKlinger
+                                     Sauer-Danfoss               Baader Wertpapierhandelsbank
+                                     W.E.T. Automotive Systems   BayWa
+                                                                 H&R WASAG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                     24/60
+
+Date of       Date of                Deletion                       Addition
+change        announcement
+                                     AGIV Real Estate               Dyckerhoff
+  22.03.2004             17.02.2004  Holsten-Brauerei               CTS Eventim
+  24.03.2004             22.03.2004  MPC Münchm. Petersen
+  21.06.2004             18.05.2004  Cap.                           MatchNet
+                                     Hornbach Baumarkt
+  20.09.2004             03.09.2004  Deutsche EuroShop              CENTROTEC Sustainable
+                                     GERICOM                        Koenig & Bauer
+  20.12.2004             03.12.2004  IM Internationalmedia          Masterflex
+  28.02.2005             24.02.2005  VIVA Media                     pgam advanced technologies
+  21.03.2005             03.03.2005  AZEGO                          Zapf Creation
+  20.06.2005             03.06.2005  Loewe                          elexis
+  19.09.2005             05.09.2005  pgam advanced                  schlott gruppe
+                                     technologies
+  19.12.2005             05.12.2005  AVA                            Vivacon
+                                     Pfleiderer
+  21.02.2006             17.02.2006  Phoenix                        Loewe
+  01.03.2006             27.02.2006  Ce CONSUMER ELECTRONIC         comdirect bank
+  20.03.2006             03.03.2006  TAG Tegernsee                  fluxx.com
+                                     Baader                         Thiel Logistik
+  19.06.2006             06.06.2006  Wertpapierhandelsbank          WCM Bet.- u. Grundbesitz
+                                     Dürr
+  18.09.2006             14.09.2006  Teleplan                       BERU
+                                     AIG
+                                     BERU                           ARQUES Industries
+                                     D.Logistics                    Grammer
+                                     Spark Network (former          Curanum
+                                     MatchNet)                      D+S europe
+                                                                    HCI Capital
+                                     BHW Holding
+                                                                    Interhyp
+                                     Vivacon
+                                     Hawesko Holding                Praktiker Bau- und
+                                     Hornbach Holding               Heimwerkermärkte Holding
+                                     Praktiker Bau- und             Thielert
+                                     Heimwerkermärkte Holding       cash.life
+                                                                    Colonia Real Estate
+                                     Beate Uhse
+                                     DIS Deutscher Industrie Serv.  MEDION
+                                     WCM Bet.- u. Grundbesitz
+                                     Zapf Creation                  DIC Asset
+                                     PATRIZIA Immobilien            KWS SAAT
+                                     DEUTZ                          MPC Münchm. Peters. Capital
+                                     Villeroy & Boch                PATRIZIA Immobilien
+                                     BÖWE SYSTEC                    Vivacon
+                                                                    Deutsche Wohnen
+                                                                    Air Berlin
+                                                                    Klöckner & Co.
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                          25/60
+
+Date of       Date of                Deletion               Addition
+change        announcement
+                                     schlott gruppe         C.A.T. Oil
+  18.12.2006             05.12.2006  Klöckner-Werke         Demag Cranes
+  29.01.2007             25.01.2007  FLUXX                  BAUER
+  19.03.2007             05.03.2007  Masterflex             Fielmann
+  18.06.2007             05.06.2007  CENTROTEC Sustainable  TAG Tegernsee
+  06.09.2007             03.09.2007  Klöckner & Co          Duerr
+  24.09.2007             05.09.2007  Highlight              Schwarz Pharma
+  01.10.2007             26.09.2007  Thiel Logistik         Axel Springer
+  12.12.2007             10.12.2007  Cewe Color Holding     Alstria
+  27.12.2007             05.12.2007  Schwarz Pharma         Gerresheimer
+  25.03.2008             05.03.2008  DAB Bank               Patrizia Immobilien
+                                     Loewe                  Wacker Constructions
+  23.06.2008             04.06.2008  ARQUES Industries      Homag Group
+                                     Gildemeister           Highlight Communications
+  22.09.2008             03.09.2008  Cash. Life             Biotest
+                                     Demag Cranes           IKB Industriebank
+  22.12.2008             03.12.2008  Fuchs Petrolub         ARQUES Industries
+                                     Thielert               SKW Stahl
+  06.01.2009             30.12.2008  Balda                  Gesco
+  03.03.2009             27.02.2009  Bauer                  Deutz
+  23.03.2009             04.03.2009  Interhyp               Centrotec Sustainable
+                                     D+S Europe             VTG
+  22.06.2009             04.06.2009  Gerresheimer           Klöckner-Werke
+                                     IKB                    Loewe
+  21.09.2009             03.09.2009  HCI Capital            Delticom
+  09.10.2009             07.10.2009  Fielmann               Bertrandt
+  20.11.2009             18.11.2009  Klöckner-Werke         VBH Holding
+  21.12.2009             04.12.2009  Rational               Aareal Bank
+  22.03.2010             04.03.2010  ElringKlinger          CeWe Color
+                                     Escada                 OVB Holding
+  21.06.2010             04.06.2010  Vivacon                Tipp24
+                                     Aareal Bank            KUKA
+  20.09.2010             03.09.2010  BayWa                  Hypo Real Estate
+                                     Hypo Real Estate       Hornbach Holding
+                                     OVB Holding            Villeroy & Boch
+                                     MPC                    Teleplan
+                                     Curanum AG             Balda AG
+                                     Arques Holding         Amadeus Fire
+                                     VBH                    Pfleiderer
+                                     Villeroy & Boch        MLP
+                                     Dyckerhoff             Tom Tailor
+                                     Loewe                  Bauer
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                26/60
+
+Date of       Date of                Deletion                   Addition
+change        announcement
+                                     Axel Springer              Ströer
+  08.12.2010             03.12.2010  Deutsche Wohnen            SAF Holland
+  20.12.2010             03.12.2010  Teleplan                   Hawesko Holding
+  21.03.2011             03.03.2011  Pfleiderer                 Hamborner REIT
+  20.06.2011             17.06.2011  Colonia Real Estate        Norma Group
+  29.06.2011             27.06.2011  Homag Group                GSW Immobilien
+                                     Gerry Weber international  Zooplus
+  19.09.2011             05.09.2011  Deutz                      Praktiker
+                                     KUKA                       IVG Immobilien
+  28.11.2011             23.11.2012  GSW Immobilien             Prime Office Reit
+  19.03.2012             05.03.2012  Elexis                     Derby Cycle
+  24.09.2012             05.09.2012  Medion                     Schaltbau
+  24.09.2012             19.09.2012  Derby Cycle                Schuler
+  18.03.2013             06.03.2013  Duerr                      Heidelberg Druck
+  24.06.2013             05.06.2013  TAG Immobilien             Deutz
+                                     Schuler                    SMT Scharf
+  23.09.2013             04.09.2013  Norma Group                Vossloh
+                                     IVG Immobilien             Hamburger Hafen & Logistik
+  27.11.2013             22.11.2013  Constantin Medien          RTL Group
+  23.12.2013             04.12.2013  Praktiker                  BayWa
+  24.03.2014             05.03.2014  RTL Group                  Puma SE
+                                     SKW Stahl-Metallurgie
+  23.06.2014             04.06.2014  Holding                    SGL Carbon
+                                     Highlight Communications
+  22.09.2014             03.09.2014  SMT Scharf                 Kion Group
+                                     SGL Carbon                 Dt. Annington Immobilien
+  04.12.2014             01.12.2014  MVV Energie                Villeroy + Boch
+  22.12.2014             03.12.2014  H+R                        SHW
+  19.01.2015             15.01.2015  Vtg                        Surteco
+  24.02.2015             19.02.2015  Air Berlin                 Capital Stage
+  01.04.2015             27.03.2015  Koenig & Bauer             Borussia Dortmund
+  22.06.2015             03.06.2015  Balda                      Hornbach Baumarkt
+                                     Dt. Annington Immobilien   Braas Monier
+                                     Hawesko Holding            Rational
+                                     Kion Group                 SGL Carbon
+                                     Jungheinrich AG            Stabilus
+                                     Centrotec Sustainable AG   VTG AG
+                                     C.A.T. Oil AG              Zalando SE
+                                     Bertrandt AG               Hella KgaA Hueck & Co. AG
+                                     CTS Eventim KGAA           TLG Immobilien AG
+                                     Surteco SE                 Westgrund AG
+                                     Delticom AG                Tele Columbus AG
+                                                                Koenig & Bauer AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                       27/60
+
+Date of       Date of                Deletion                    Addition
+change        announcement
+                                     BAUER AG                    ADLER Real Estate AG
+  23.06.2015             18.06.2015  Zalando SE                  Bertrandt AG
+  21.09.2015             03.09.2015  Westgrund AG                Ferratum OYJ
+  13.10.2015             08.10.2015  Hella KgaA Hueck & Co       Gerry Weber Intern. AG
+                                     Villeroy & Boch             Sixt Leasing AG
+  21.12.2015             03.12.2015  DO Deutsche Office AG       ADO Properties S.A.
+                                     Stroeer SE                  Scout24 AG
+                                     Tom Tailor Holding AG       Schaeffler AG
+                                                                 WCM Beteiligungs- und
+                                     Gesco AG                    Grundbesitz AG
+                                                                 Hypoport AG
+21.03.2016    03.03.2016             SHW AG
+                                     Alstria Office REIT         Klöckner & Co
+20.06.2016    03.06.2016             MLP                         ElringKlinger
+11.08.2016    08.08.2016             Sixt Leasing AG             WashTec
+19.09.2016    05.09.2016             Hornbach Baumarkt           Wüstenrot & Württembergische
+14.10.2016    11.10.2016             Schaltbau Holding           Hapag-Lloyd
+19.12.2016    05.12.2016             Schaeffler AG               Wincor Nixdorf AG
+19.12.2016    05.12.2016             Rational AG                 Chorus Clean Energy AG
+03.02.2017    31.01.2017             comdirect Bank AG           Leifheit AG
+22.03.2017    17.03.2017             CHORUS Clean Energy AG      Rocket Internet SE
+19.06.2017    06.06.2017             Ferratum Oyj                DMG MORI AG
+                                     Leifheit AG                 Rhoen-Klinikum AG
+18.09.2017    05.09.2017             Braas Monier                bet-at-home.com AG
+                                     GFK SE                      MLP AG
+19.03.2018    05.03.2018             ZEAL Network SE             Grand City Properties S.A
+                                     WCM Beteiligungs- und
+18.06.2018    05.06.2018             Grundbesitz- AG             Rational AG
+                                     Amadeus Fire AG
+24.09.2018    05.09.2018             BayWa AG                    Bilfinger SE
+                                     Grand City Properties S.A.  Aroundtown SA
+                                                                 Delivery Hero AG
+                                     Aroundtown SA               Steinhoff International Holdings
+                                                                 NV
+                                     Rocket Internet SE          Südzucker AG
+                                     MLP SE                      CORESTATE Capital Holding S.A.
+                                     Gerry Weber International
+                                     AG                          JOST Werke AG
+                                     Scout24 AG
+                                     Delivery Hero AG            Krones AG
+                                     Puma SE                     Alstria Office REIT AG
+                                     Diebold Nixdorf AG          DWS Group GmbH & Co. KgaA
+                                     bet-at-home.com AG          HelloFresh SE
+                                     Alstria Office REIT-AG      Aumann AG
+                                                                 Carl Zeiss Meditec AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                     28/60
+
+Date of     Date of       Deletion                 Addition
+change      announcement
+                          Biotest AG VZ            Jenoptik AG
+                          Elringklinger AG         Talanx AG
+                          Grammer AG               Jungheinrich AG VZO
+                                                   Stroeer SE + CO. KGAA
+27.12.2018  05.12.2018    BayWa AG                 Cancom SE
+                          Carl Zeiss Meditec AG    Leoni AG
+18.03.2019  05.03.2019    Knorr-Bremse AG          Dialog Semicond.
+                          Dialog Semiconductor     Aixtron SE
+24.06.2019  05.06.2019    MediGene AG              S+T AG
+24.06.2019  19.06.2019    Tele Columbus AG         Compugroup Med. SE
+29.08.2019  26.08.2019    DMG Mori AG              Ceconomy AG
+16.09.2019  11.09.2019    VTG AG                   Befesa
+23.09.2019  04.09.2019    Grenke AG                Isra Vision
+                          Vossloh AG               XING SE
+23.12.2019  04.12.2019    Hapag-Lloyd AG           Pfeiffer Vacuum Tech.
+                          Cancom SE                RIB Software SE
+                          CTS Eventim              Shop Apotheke Europe
+                          Rational AG              Nordex SE
+                          Aumann AG                Draegerwek VZO
+                          CompuGroup Medical SE    SMA Solar Technol. AG
+                          Varta AG                 Dr. Hoenle AG
+                          BayWa AG                 Baywa AG
+                          Steinhoff International  Medigene AG
+                          Holdings                 CTS Eventim AG & CO KgaA
+                                                   Knorr-Bremse AG
+                                                   Salzgitter AG
+                                                   Schaeffler AG
+                                                   BayWa AG
+                                                   Amadeus FiRe AG
+                                                   ADVA Optical Networking SE
+                                                   Varta AG
+                                                   Wacker Chemie AG
+                                                   Eckert & Ziegler AG
+                                                   DMG MORI AG
+                                                   Instone Real Estate Group AG
+                                                   Traton SE
+                                                   Norma Group SE
+                                                   Dermapharm Holding
+                                                   Deutsche EuroShop
+                                                   1&1 Drillisch AG
+                                                   comdirect bank AG
+
+                                                   Fielmann AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                       29/60
+
+Date of       Date of                Deletion                    Addition
+change        announcement
+                                     comdirect bank AG           Vossloh AG
+  08.01.2020             03.01.2020  TLG Immobilien AG           LPKF Laser & Electronics AG
+  18.02.2020             13.02.2020  Adler Real Estate AG        Elmos Semiconductor AG
+  27.02.2020             24.02.2020  HelloFresh                  Godewind Immobilien AG
+                                     SGL Carbon                  Steinhoff International Holdings
+                                                                 Adler Real Estate AG
+23.03.2020    04.03.2020             Dr. Hönle AG                SNP Schneider-Neureither &
+                                                                 Partner
+02.04.2020    30.03.2020             Heidelberger
+30.04.2020    27.04.2020             Druckmaschinen AG           BayWa AG
+08.05.2020    05.05.2020             Adler Real Estate AG        Stratec
+15.05.2020    12.05.2020             RIB Software                Zeal Network
+29.05.2020    26.05.2020             Isra Vision                 Sixt Leasing
+22.06.2020    04.06.2020             Godewind Immobilien         MLP SE
+14.07.2020    09.07.2020             Sixt Leasing                Deutsche Pfandbriefbank AG
+24.08.2020    19.08.2020             Ströer SE & Co KgaA         Dr. Hönle AG
+21.09.2020    05.09.2020             MLP SE                      ATOSS Software AG
+02.11.2020    28.10.2020             Elmos Semiconductor AG      Tele Columbus AG
+                                     Rhön-Klinikum AG            HORNBACH-Baumarkt-AG
+21.12.2020    03.12.2020             Aixtron SE                  Rocket Internet
+                                     Shop Apotheke Europe        RTL Group
+22.03.2021    05.03.2021             Wacker Chemie               Global Fashion Group
+                                     Steinhoff International     Medios AG
+10.05.2021    06.05.2021             Bertrandt AG                Secunet Security AG
+                                     ATOSS Software AG           CropEnergies AG
+                                     Rocket Internet SE          Grenke AG
+                                     Tele Columbus AG            FlatexDEGIRO AG
+                                     Leoni AG                    Hensoldt AG
+                                     Dr. Hoenle AG
+                                     Secunet Security Networks   HOME24 SE
+                                     AG
+                                     Wüstenrot &                 VERBIO Vereinigte BioEnergie
+                                     Württembergische AG         AG
+                                     DMG MORI AG                 Westwing Group
+                                     WashTec AG                  ElringKlinger AG
+                                     Encavis AG                  Metro AG
+                                     Hornbach Baumarkt AG        Aareal Bank AG
+                                     Nordex SE                   Osram Licht AG
+                                     Cropenergies AG             Suess Microtec SE
+                                     Deutsche Beteiligungs AG    Leoni AG
+                                     SNP Schneider-Neureither &
+                                     Partner SE                  SGL Carbon SE
+                                     Grenke AG
+                                                                 Auto1 Group SE
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                 30/60
+
+Date of       Date of                Deletion                   Addition
+change        announcement
+                                     Auto1 Group SE             Siltronic AG
+  21.06.2021             03.06.2021  Koenig + Bauer AG          Vantage Towers AG
+                                     Corestate Capital          Grenke AG
+                                     Leoni AG                   Nagarro SE
+
+01.07.2021    28.06.2021 Osram Licht AG                         Atoss Software
+
+20.09.2021    03.09.2021             Befesa S.A.                About You Holding AG
+                                     Borussia Dortmund          Encavis AG
+29.10.2021    26.10.2021             Elringklinger AG           Hochtief AG
+20.12.2021    03.12.2021             Hamburger Hafen und
+03.02.2022    31.01.2022             Logistik                   Morphosys AG
+21.03.2022    03.03.2022             Hypoport SE
+20.06.2022    03.06.2022             Jungheinrich AG            Nordex SE
+20.06.2022    15.06.2022             Medios AG                  PVA Tepla AG
+15.07.2022    11.07.2022             Suess Microtec SE          Secunet Security AG
+                                     Vantage Towers AG          Shop Apotheke Europe
+19.09.2022    05.09.2022             Vossloh AG                 Sto SE+Co. KGAA VZO
+                                     Zooplus AG                 Suse S.A.
+19.12.2022    05.12.2022             Talanx AG                  Synlab AG
+                                     Home24 SE                  Basler AG
+                                     Westwing Group             Vitesco Technologies Group
+                                     Hensoldt AG                GFT Technologies
+                                     ADVA OPT.NETW.SE O.N.      Heidelberger Druckmaschinen
+                                     Siltronic AG               ADVA OPT.NETW.SE Z.VERK.
+                                     Sixt SE                    Auto1 Group SE
+                                     RTL Group                  Hella GmbH + Co. KGAA
+                                     Global Fashion Group       Compugroup Med.
+                                     Encavis AG                 Adesso SE
+                                     LPKF Laser+Electron.       Hypoport SE
+                                     SGL Carbon SE              PNE AG
+                                     Nordex SE                  Hensoldt AG
+                                     ADVA OPT.NETW.SE Z.VERK.   Medios AG
+                                     Stabilus SE                Adtran Holdings
+                                     Hella GmbH + Co. KGAA      Cancom SE
+                                     Adtran Holdings            Grand City Properties
+                                     Deutsche Euroshop          Uniper SE
+                                     Adler Group S.A.           Nordex SE
+                                     Aareal Bank AG             Energiekontor
+                                     Takkt AG                   Cropenergies AG
+                                     About You Holding SE       SGL Carbon SE
+                                     Instone Real Estate Group  Deutsche Wohnen SE
+                                     Medios AG                  Varta AG
+                                                                Elmos Semicond.
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                   31/60
+
+Date of       Date of                Deletion                    Addition
+change        announcement
+                                     Verbio Ver. Bioenergie      Adva Opt. Netw. SE
+  27.12.2022             21.12.2022  Uniper SE                   SFC Energy AG
+  27.02.2023             17.02.2023  Nordex SE                   Deutsche Beteiligungs AG
+                                     Hensoldt AG                 Software AG
+  20.03.2023             03.03.2023  Jenoptik AG                 Verbio AG
+                                                                 Wüstenrot & Württembergische
+  09.05.2023             04.05.2023  Cropenergies AG             AG
+  10.05.2023             05.05.2023                              SUESS MicroTec SE
+                                     SMA Solar Technology AG     Vossloh AG
+  19.06.2023             05.06.2023  Hochtief AG                 UTD. Internet AG
+                                     Krones AG                   Siltronic AG
+  25.07.2023             20.07.2023  DIC Asset AG                Aroundtown SA
+  18.09.2023             05.09.2023  Redcare Pharmacy            Adtran Holdings
+  09.10.2023             04.10.2023  Software AG                 Borussia Dortmund
+                                     Vitesco Technologies Group  Thyssenkrupp Nucera
+  18.12.2023             05.12.2023  UTD Internet AG             IONOS Group SE
+                                     Basler                      Krones AG
+  25.01.2024             22.01.2024  SUSE S.A.                   Prosiebensat.1
+  18.03.2024             05.03.2024  Aroundtown                  Duerr
+  09.05.2024             06.05.2024  Siltronic AG                Befesa
+  24.06.2024             05.06.2024  Krones AG                   SCHOTT Pharma
+  24.06.2024             14.06.2024  ZEAL Network SE             Mutares SE & Co.
+  15.07.2024             10.07.2024  New Work SE                 KSB
+  23.09.2024             04.09.2024  Secunet Security AG         Takkt AG
+  02.10.2024             29.09.2024  Befesa                      MLP
+  28.11.2024             25.11.2024  Bilfinger                   Vitesco Technologies Group
+                                     Morphosys                   RENK
+  23.12.2024             04.12.2024  VARTA                       SMA Solar Technology
+                                     Wüstenrot &                 SIXT
+  27.12.2024             19.12.2024  Württembergische            Douglas
+                                     Traton
+                                     Pfeiffer Vacuum             Medios
+                                     Synlab                      Evotec SE
+                                     BayWa                       Encavis AG
+                                     Hypoport                    Deutsche Euroshop
+                                     Schott Pharma               Alzchem Group AG
+                                     Vitesco Technologies Group  Wüstenrot & Württembergische
+                                     Encavis AG                  Stabilus
+                                     Adtran                      Befesa SA
+                                     Evotec                      Nexus
+                                     AUTO1 Group                 Springer Nature
+                                     Takkt AG                    Formycon
+                                     Thyssenkrupp Nucera         LPKF Laser+Electron
+                                     Deutsche Wohnen
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                               32/60
+
+Date of       Date of                Deletion                     Addition
+change        announcement
+                                     Nexus                        About You Holding
+  13.01.2025             08.01.2025  DWS Group GmbH & Co.
+  24.03.2025             05.03.2025  KgaA                         Hypoport
+  24.03.2025             11.03.2025  FlatexDEGIRO N               SCHOTT Pharma
+  17.04.2025             14.04.2025  Renk                         Siltronic
+  09.05.2025             06.05.2025  About You Holding
+                                     Metro AG                     Secunet Scty.Networks
+  23.06.2025             04.06.2025  Mutares                      Friedrich Vorwerk Group
+  25.06.2025             20.06.2025  Stratec                      Procredit Holding
+  11.07.2025             08.07.2025  Nagarro N                    MBB
+  22.09.2025             03.09.2025  IONOS GROUP                  Thyssenkrupp Nucera
+                                     Verbio                       Jenoptik
+  22.12.2025             03.12.2025  Medios                       Mutares
+                                     Compugroup Medical           Nagarro N
+  09.03.2026             04.03.2026  1&1 AG                       Stratec
+  23.03.2026             04.03.2026  Fielmann Group               Verve
+                                     SGL Carbon                   1&1 AG
+  22.06.2026             03.06,2026  Amadeus Fire                 Evotec
+                                     Procredit Holding            Verbio
+                                     LPKF Laser & Electronics AG  Gerresheimer
+                                     Formycon                     PSI Software
+                                     Thyssenkrupp Nucera          Hellofresh AG
+                                     Stratec                      Ottobock
+                                     Schaeffler                   Tonies
+                                     Salzgitter                   Einhell Germany
+                                     Deutz                        Carl Zeiss Meditec
+                                     PSI Software                 INIT
+                                     Jenoptik                     FIelmann Group
+                                     Redcare Pharmacy             TeamViewer
+                                     Stroeer                      Elmos Semiconductor
+                                     Jungheinrich Pref.           Siltronic
+                                     LPKF Laser & Electronics     Suess Microtec
+                                     Vincorion                    Adesso
+                                     Basler                       Borussia Dortmund
+                                     Asta Energy Solutions        Verve
+                                                                  Prosiebensat.1 Media
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                              33/60
+
+5. DAX® 50 ESG INDEX COMPOSITION
+
+4 March 2020: Initial Composition
+
+Adidas              Deutsche Wohnen                            Linde
+                                                               Lufthansa
+Allianz             Dialog Semiconductor                       Merck
+                                                               Metro
+Aroundtown          Evonik                                     Münchener Rück
+                                                               Osram Licht
+BASF                Fraport                                    ProSiebenSat.1 Media
+                                                               Puma
+Bayer               Fresenius                                  SAP
+                                                               Sartorius
+Beiersdorf          GEA Group                                  Scout24
+                                                               Siemens
+BMW                 Hannover Rück                              Symrise
+                                                               Telefónica Deutschland
+Brenntag            HeidelbergCement                           Thyssenkrupp
+                                                               Zalando
+Carl Zeiss Meditec  Henkel
+
+Commerzbank         Hochtief
+
+Continental         Hugo Boss
+
+Covestro            Infineon Technologies
+
+Daimler             K+S
+
+Deutsche Bank       KION Group
+
+Deutsche Börse      Knorr-Bremse
+
+Deutsche Post       Lanxess
+
+Deutsche Telekom    LEG Immobilien
+
+DAX® 50 ESG
+
+Date of        Date of                 Deletion                Addition
+change         announcement
+                                       K+S                     Freenet
+  23.03.2020               05.03.2020  Dialog Semiconductor    Bechtle
+                                       Hugo Boss AG            Rational AG
+  22.06.2020               05.06.2020  Metro AG                Qiagen N.V.
+                                       Osram Licht AG          Fuchs Petrolub SE
+  03.08.2020               29.07.2020  Fuchs Petrolub SE       Vonovia SE
+  21.09.2020               04.09.2020  FRAPORT AG FFM.Aiport   TAG Immobilien
+  21.12.2020               04.12.2020  Qiagen N.V.             Fresenius Medical Care AG
+                                       Hochtief AG             United Internet AG
+  22.03.2021               04.03.2021  Rational AG             Porsche Automobil Holding
+                                       Telefonica Deutschland
+                                       Holding AG              Siemens Energy AG
+
+20.09.2021          06.09.2021 ProSiebenSat. 1 Media AG        TeamViewer AG
+
+29.10.2021          26.10.2021         Deutsche Wohnen SE      Siemens Healthineers AG
+20.12.2021          06.12.2021         TeamViewer AG           Hugo Boss AG
+                                       United Internet AG      K+S AG
+21.03.2022          04.03.2022         Bechtle AG              Aurubis AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                     34/60
+
+Date of       Date of                 Deletion                   Addition
+change        announcement
+                                      Freenet AG                 Volkswagen AG
+  19.12.2022              06.12.2022
+  27.02.2023              17.02.2023  TAG Immobilien             Daimler Truck Holding
+  20.03.2023              06.03.2023
+  19.06.2023              06.06.2023  Linde PLC                  Talanx AG
+  18.09.2023              06.09.2023
+  23.09.2024              05.09.2024  K+S AG                     Dr. Ing. h.c. F. Porsche VZOI
+  23.12.2024              05.12.2024  Aroundtown                 Telefónica Deutschland
+                                      Lufthansa AG               Qiagen N.V.
+  24.03.2025              06.03.2025
+                                      Bayer AG                   Wacker Chemie
+  23.06.2025              05.06.2025  Porsche Automobil Holding  TAG Immobilien
+                                      Qiagen                     Gerresheimer
+  22.12.2025              04.12.2025  Sartorius                  Fuchs
+  23.03.2026              05.03.2026  Heidelberg Materials       Bechtle
+                                      Fuchs Pref                 E.ON
+                                      K+S                        Porsche Automobil Holding Pref
+                                      Wacker Chemie              Qiagen
+                                      BASF                       Heidelberg Materials
+                                      E.ON                       Lufthansa
+                                      Brenntag                   Sartorius Pref.
+                                      Evonik Industries          TUI
+                                      Thyssenkrupp               Nordex
+                                                                 Nemetschek
+                                      Gerresheimer
+                                                                 Traton
+                                      Carl Zeiss Meditec
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES         35/60
+
+6. DAX® 30 ESG INDEX COMPOSITION
+
+3 November 2023: Initial Composition
+
+Adidas                  GEA Group              Münchener Rück
+                                               Puma
+Allianz                 Hannover Rück          Qiagen
+                                               SAP
+BASF                    Heidelberg Materials   Siemens
+                                               Siemens Energy
+Beiersdorf              Henkel                 Siemens Healthineers
+                                               Symrise
+Deutsche Bank           Hugo Boss              Talanx
+                                               Zalando
+Deutsche Telekom        Infineon Technologies
+
+E.ON                    KION Group
+
+Evonik Industries       Knorr-Bremse
+
+Fresenius SE            Mercedes-Benz
+
+Fresenius Medical Care  Merck
+
+DAX® 30 ESG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                              36/60
+
+Date of     Date of                 Deletion                   Addition
+change      announcement
+18.12.2023                          Heidelberg Materials       Daimler Truck
+18.03.2024              06.12.2023  KION Group                 Evotec
+24.06.2024              06.03.2024  Talanx                     Carl Zeiss Meditec
+                        06.06.2024                             KION Group
+23.09.2024                          Evotec
+23.12.2024              05.09.2024                             Gerresheimer
+24.03.2025              05.12.2024  Mercedes-Benz              Porsche Automobil Holding
+23.06.2025              06.03.2025  Hugo Boss                  Talanx
+                        05.06.2025  BASF                       Lanxess
+22.09.2025                          Beiersdorf                 Deutsche Börse
+22.12.2025              04.09.2025  GEA Group                  Brenntag
+23.03.2026              04.12.2025  Talanx                     GEA Group
+                        05.03.2026  Infineon Technologies      Aurubis
+22.06.2026                          E.ON
+                        04.06.2026                             Hugo Boss
+                                    Carl Zeiss Meditec         BMW
+                                                               Heidelberg Materials
+                                    Gerresheimer               Mercedes-Benz Group
+                                    Brenntag                   Nordex
+                                    Hugo Boss                  Hochtief
+                                    Evonik Industries          TRATON
+                                    Puma                       Scout 24
+                                    Siemens Energy             Vonovia SE
+                                    BMW                        Aroundtown
+                                    Lanxess                    Puma
+                                    Hannover Rueck             Siemens Energy
+                                    Mercedes-Benz Group
+                                    Aroundtown                 Tag Immobilien
+                                    Traton                     Hannover Rueck
+                                    Hochtief                   Mercedes-Benz Group
+                                    Porsche Automobil Holding
+                                    Pref
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                 37/60
+
+7. DAX® ESG TARGET INDEX COMPOSITION
+
+1 April 2021: Initial Composition  Deutsche Wohnen         Symrise
+Adidas                             Deutsche Telekom        Volkswagen
+Allianz                            Fresenius               Vonovia
+BASF                               Fresenius Medical Care  Zalando
+Bayer                              HeidelbergCement
+BMW                                Henkel                    Addition
+Brenntag                           Infineon Technologies     Beiersdorf AG
+Continental                        Linde                     Hannover Rück SE
+Covestro                           Merck                     HelloFresh SE
+Daimler                            Münchener Rück            Knorr-Bremse AG
+Delivery Hero                      SAP                       LEG Immobilien SE
+Deutsche Bank                      Siemens                   Porsche Automobile Holding VZO
+Deutsche Börse                     Siemens Energy            Puma SE
+Deutsche Post                                                Sartorius AG VZO
+                                                             Siemens Healthineers AG
+DAX® ESG Target                                              Qiagen NV
+                                                             -
+Date of     Date of                Deletion                  Kion Group AG
+change      announcement                                     Commerzbank AG
+                                                             Daimler Truck Holding
+20.09.2021       06.09.2021 -                                Gea Group AG
+                                                             Scout24 SE
+29.10.2021       26.10.2021 Deutsche Wohnen SE               Evonik Industries
+                                                             Knorr-Bremse AG
+20.12.2021       06.12.2021 Knorr-Bremse AG                  -
+                                                             Dr. Ing. h.c. F. Porsche VZOI
+21.03.2022       04.03.2022        Kion Group AG
+20.06.2022       06.06.2022        Delivery Hero SE
+19.09.2022       06.09.2022        HelloFresh SE
+                                   Puma SE
+19.12.2022       06.12.2022        Bayer AG
+                                   Linde PLC
+27.02.2023       17.02.2023        -
+20.03.2023       06.03.2023
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                          38/60
+
+Date of       Date of                 Deletion                       Addition
+change        announcement
+                                      Scout24 SE                     Hugo Boss AG
+  19.06.2023              06.06.2023  Knorr-Bremse AG                Scout24 SE
+  18.12.2023              06.12.2023  Hugo Boss AG                   Talanx
+  18.03.2024              06.03.2024  Evonik                         Knorr Bremse
+  24.06.2024              06.06.2024  Knorr-Bremse                   Puma
+  23.09.2024              05.09.2024  Talanx                         Evonik
+  23.12.2024              05.12.2024  Puma                           Knorr-Bremse
+                                      Evonik
+  24.03.2025              06.03.2025                                 Puma
+                                      Puma                           CTS Eventim
+  23.06.2025              05.06.2025  Knorr-Bremse                   Nemetschek
+  22.09.2025              04.09.2025  LEG Immobilien                 Lufthansa
+  22.12.2025              04.12.2025                                 E.ON
+  23.03.2026              05.03.2026  CTS Eventim                    Talanx
+                                      Sartorius AG VZO               Knorr Bremse
+  22.06.2026              04.06.2026  Dr. Ing. h.c. F. Porsche VZOI  LEG Immobilien
+                                      Leg Immobilien                 Sartorius Pref.
+                                      Nemetschek                     Hochtief
+                                      Sartorius Pref.                Bayer
+                                      Porsche Automobil Holding
+                                      Pref                           Aixtron
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                        39/60
+
+8. DAX® ESG SCREENED INDEX COMPOSITION
+
+21 February 2022:  Initial  Composition
+Adidas                         Deutsche Telekom
+Allianz                        Fresenius                             Qiagen
+BASF                           Fresenius Medical Care                Sartorius
+Bayer                          HeidelbergCement                      SAP
+BMW                            Hello Fresh                           Siemens
+Beiersdorf                     Henkel                                Siemens Energy
+Brenntag                       Infineon Technologies                 Siemens Healthineers
+Continental                    Linde                                 Symrise
+Covestro                       Mercedes-Benz Group                   Volkswagen
+Delivery Hero                  Merck                                 Vonovia
+Deutsche Bank                  Münchener Rück                        Zalando
+Deutsche Börse                 Porsche
+Deutsche Post                  Puma
+
+DAX® ESG Screened
+
+Date of       Date of                 Deletion                       Addition
+change        announcement
+                                      Beiersdorf AG                  Hannover Rück
+  21.03.2022              09.03.2022  Siemens Energy
+                                      Delivery Hero SE               Beiersdorf AG
+  20.06.2022              07.06.2022  HelloFresh SE                  Siemens Energy AG
+  19.09.2022              06.09.2022  Puma SE                        -
+  19.12.2022              06.12.2022  Linde PLC                      -
+  27.02.2023              17.02.2023                                 Daimler Truck Holding
+                                                                     Commerzbank AG
+20.03.2023         06.03.2023 Fresenius Medical Care                 Dr. Ing. h.c. F. Porsche VZOI
+                                                                     E.ON SE
+19.06.2023         06.06.2023         -
+18.09.2023         06.09.2023                                        Fresenius Medical Care
+                                      -                              Heidelberg Materials
+23.12.2024         05.12.2024         Heidelberg Materials           GEA Group
+                                      Bayer                          Scout24
+24.03.2025         06.03.2025         E.ON SE                        -
+23.06.2025         05.06.2025         -                              Hochtief
+22.09.2025         04.09.2025
+23.03.2026         05.03.2026         -
+22.06.2026         04.06.2026         Sartorius AG VZO
+                                      Dr. Ing. h.c. F. Porsche VZOI
+                                      Siemens Energy
+                                      Porsche Automobil Holding
+                                      Pref
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES  40/60
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                         41/60
+
+9. MDAX® ESG SCREENED INDEX COMPOSITION
+
+21 February 2022: Initial Composition
+
+Aixtron             Freenet                                  Nemetschek
+                                                             Prosiebensat.1
+Aroundtown          Fuchs Petrolub                           Rational
+                                                             Scout24
+Aurubis             Gea Group                                Software
+                                                             Stroeer
+Auto1 Group         Gerresheimer                             TAG Immobilien
+                                                             Talanx
+Bechtle             Grand City Property                      Teamviewer
+                                                             Telefonica Deutschland
+Befesa              Hannover Rück                            United Internet
+                                                             Vantage Towers
+Cancom              Hella                                    Varta
+                                                             Wacker Chemie
+Carl Zeiss Meditec  Hugo Boss
+
+Commerzbank         Hypoport
+
+Compugroup          Jungheinrich
+
+CTS Eventim         K+S
+
+Deutsche Wohnen     Kion Group
+
+Duerr               Knorr-Bremse
+
+Evonik Industries   Lanxess
+
+Evotec              LEG Immobilien
+
+Fraport             Lufthansa
+
+MDAX® ESG Screened
+
+Date of       Date of                 Deletion               Addition
+change        announcement
+                                      Hannover Rück          Siemens Energy
+  21.03.2022              09.03.2022  Compugroup Med.        Sixt SE
+                                      Auto1 Group            Siltronic
+                                      Hella GmbH + Co. KGAA  RTL Group
+                                                             Beiersdorf
+20.06.2022          07.06.2022        Hypoport SE            Delivery Hero SE
+19.09.2022          06.09.2022        Beiersdorf AG          Encavis AG
+                                      Cancom SE              Stabilus SE
+                                      Siemens Energy AG      HelloFresh SE
+                                      Grand City Properties  Adtran Holdings
+                                                             Hella GmbH + Co. KGAA
+19.12.2022          06.12.2022        Deutsche Wohnen SE     Puma SE
+27.02.2023          17.02.2023        Varta AG               Verbio Ver. Bioenergie
+20.03.2023          06.03.2023        Commerzbank AG         -
+                                      Verbio AG              Thyssenkrupp AG
+                                      Software AG            Nordex SE
+                                                             Fresenius Medical Care
+09.05.2023          04.05.2023 Evotec SE                     -
+10.05.2023          05.05.2023 Vantage Towers AG             -
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                      42/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      United Internet             Evotec SE
+  19.06.2023              06.06.2023  Siltronic                   Krones AG
+                                      Aroundtown                  Redcare Pharmacy
+                                      Adtran Holdings             Software AG
+                                                                  SMA Solar Technology
+ 18.09.2023   06.09.2023 Krones AG                                Vitesco Technologies Group
+18.12.2023                                                        UTD. Internet
+18.03.2024    06.12.2023              Befesa                      Aroundtown
+24.06.2024    06.03.2024              Prosiebensat.1              Krones AG
+23.09.2024    06.06.2024              Duerr                       Siltronic AG
+23.12.2024    05.09.2024                                          Jenoptik
+24.03.2025    05.12.2024              Rational                    Morphosys
+23.06.2025    06.03.2025              Vitesco Technologies Group  Befesa
+22.09.2025    05.06.2025              MorphoSys                   Rational
+22.12.2025    04.09.2025              SIXT                        Traton
+23.03.2026    04.12.2025              SMA Solar Technology        TUI
+              05.03.2026              Evotec                      Hypoport
+22.06.2026                            Encavis AG                  Hochtief
+              04.06.2026              Thyssenkrupp AG
+                                      Stabilus SE                 Evotec
+                                      Befesa                      AUTO1 Group
+                                      Hypoport
+                                      Siltronic                   DWS Group GmbH & Co. KgaA
+                                      Jenoptik                    FlatexDEGIRO N
+                                                                  -
+                                      Evotec                      Fielmann Group
+                                      GEA Group                   Sartorius AG VZO
+                                      Scout24                     Dr. Ing. h.c. F. Porsche VZOI
+                                                                  Deutsche Wohnen
+                                      Gerresheimer
+                                      Hellofresh AG               -
+                                      Carl Zeiss Meditec
+                                      Fielmann Group              Salzgitter
+                                      TeamViewer                  Deutz
+                                      Stroeer                     Jenoptik
+                                      Redcare Pharmacy            Siltronic
+                                      Hochtief                    Porsche Automobil Holding Pref
+                                      Jungheinrich Pref           Suess Microtec
+                                                                  Elmoss Semiconductor
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                   43/60
+
+10. DAX® 50 ESG+ INDEX COMPOSITION
+
+2 September 2022:   Initial  Composition
+Adidas                            Evonik Industries
+Allianz                           Freenet                     Münchener Rück
+Aurubis                           Fresenius Medical Care      Porsche Automobil Holding
+BASF                              Fresenius                   Puma
+BMW                               Gea Group                   Qiagen
+Bechtle                           Hannover Rück               SAP
+Befesa                            HeidelbergCement            Scout24
+Beiersdorf                        Henkel                      Siemens
+Carl Zeiss Meditec                Hugo Boss                   Siemens Healthineers
+Commerzbank                       Infineon Technologies       Symrise
+Continental                       Kion Group                  Talanx
+Covestro                          Knorr-Bremse                Telefonica Deutschland
+Deutsche Bank                     Lanxess                     Vantage Towers
+Deutsche Börse                    Linde                       Volkswagen
+Deutsche Post                     Lufthansa                   Vonovia
+Deutsche Telekom                  Mercedes-Benz Group         Wacker Chemie
+Encavis                           Merck                       Zalando
+
+DAX® 50 ESG+                                                    Addition
+
+Date of       Date of                 Deletion                  Sartorius AG VZO
+change        announcement                                      Fraport AG
+                                      Befesa S.A.               LEG Immobilien SE
+  19.09.2022              06.09.2022  Bechtle AG                -
+  19.12.2022              06.12.2022  Fraport AG                Siemens Energy AG
+  27.02.2023              17.02.2023  Linde PLC                 Fraport AG
+                                                                Teamviewer AG
+  20.03.2023              06.03.2023  Freenet AG                Daimler Truck Holding
+                                      Vantage Towers AG         Bechtle AG
+  19.06.2032              06.06.2023  Sartorius AG VZO          SMA Solar Technology
+                                                                Dr. Ing. h.c. F. Porsche VZOI
+  18.09.2023              06.09.2023  Fraport AG                E.ON SE
+                                      Vonovia                   Brenntag SE
+  18.12.2023              06.12.2023  Daimler Truck Holding     Daimler Truck Hldg
+                                      SMA Solar Technology      Evotec
+                                      Telefonica Deutschland    Telefonica Deutschland
+                                      Scout24
+                                      Deutsche Post             Deutsche Post
+                                      Commerzbank               Vonovia
+                                                                Commerzbank
+18.03.2024          06.03.2024 Encavis
+                                      LEG Immobilien
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                      44/60
+
+Date of       Date of                 Deletion              Addition
+change        announcement
+                                      Evotec                Nordex
+  24.06.2024              06.06.2024  Teamviewer            Gerresheimer
+                                      Commerzbank           TUI
+  23.09.2024              05.09.2024  Deutsche Post         Fraport
+                                      Covestro              Teamviewer
+  23.12.2024              05.12.2024  Wacker Chemie         LEG Immobilien
+                                      Fraport               Krones
+  24.03.2025              06.03.2025  Lufthansa             TAG Immobilien
+  23.06.2025              05.06.2025  Nordex                Hellofresh AG
+                                      Teamviewer AG         Commerzbank
+  22.09.2025              04.09.2025  TUI                   Aroundtown
+  22.12.2025              04.12.2025  Heidelberg Materials  Scout 24
+  23.03.2026              05.03.2026  Krones                TUI
+  22.06.2026              06.06.2026  Carl Zeiss Meditec    Heidelberg Materials
+                                      Hellofresh AG         Nordex
+                                      Hugo Boss             Traton SE
+                                      Gerresheimer          Hochtief
+                                      Scout24               Nemetschek
+                                      TUI                   Sartorius AG VZO
+                                      Lanxess               Scout 24
+                                      Siemens Energy        Lufthansa
+                                      Aroundtown            TUI
+                                      Lufthansa             Fraport
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                               45/60
+
+11. MDAX® ESG+ INDEX COMPOSITION
+
+30 May 2022: Initial  Composition
+Aixtron
+Aroundtown                            Freenet                Rational
+Aurubis                               Gea Group              RTL Group
+Bechtle                               Gerresheimer           Scout24
+Befesa                                Grand City Property    Siltronic
+Beiersdorf                            Hugo Boss              Software AG
+Cancom                                Hypoport               Stroeer
+Carl Zeiss Meditec                    Jungheinrich           Talanx
+Commerzbank                           Kion Group             Teamviewer
+Deutsche Wohnen                       Knorr-Bremse           Telefonica Deutschland
+Duerr                                 Lanxess                United Internet
+Evonik Industries                     LEG Immobilien         Vantage Towers
+Evotec                                Lufthansa              Wacker Chemie
+Fraport                               Nemetschek
+                                      Prosiebensat.1           Addition
+
+MDAX® ESG+                                                     K+S AG
+                                                               Encavis AG
+Date of       Date of                 Deletion                 TAG Immobilien AG
+change        announcement                                     Hella GmbH + Co. KGAA
+                                      Hypoport SE              Stabilus SE
+  20.06.2022              07.06.2022  Beiersdorf AG            HelloFresh SE
+                                      K+S AG                   Verbio Ver. Bioenergie
+  19.09.2022              06.09.2022  Grand City Properties    Puma SE
+                                      Cancom SE                -
+  19.12.2022              06.12.2022  Rational AG              Thyssenkrupp AG
+  27.02.2023              17.02.2023  Deutsche Wohnen SE       Nordex SE
+  20.03.2023              06.03.2023  Duerr AG                 Fresenius Medical Care
+                                      Commerzbank              -
+                                      Verbio AG                -
+                                      Software AG              Evotec SE
+                                                               Krones AG
+09.05.2023            04.05.2023 Evotec SE                     SMA Solar Technology
+10.05.2023            05.05.2023 Vantage Towers AG             K+S AG
+                                                               Duerr AG
+19.06.2023            06.06.2023      UTD Internet AG          Software AG
+                                      RTL Group                Vitesco Technologies Group
+                                      Siltronic AG             UTD. Internet
+                                      Aroundtown               Jenoptik
+                                                               Aroundtown
+18.09.2023            06.09.2023      Krones AG
+18.12.2023            06.12.2023
+                                      Prosiebensat.1
+                                      Aixtron
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                      46/60
+
+Date of       Date of                 Deletion                    Addition
+change        announcement
+                                      Duerr                       Krones AG
+  18.03.2024              06.03.2024  Befesa                      Siltronic AG
+  24.06.2024              06.06.2024  Vitesco Technologies Group  Mophosys
+  23.09.2024              05.09.2024                              Befesa
+  23.12.2024              05.12.2024  Nemetschek                  Rational
+  24.03.2025              06.03.2025  Morphosys                   Traton
+  23.06.2025              05.06.2025  SMA Solar Technology        TUI
+                                      Evotec                      Hochtief
+  22.09.2025              04.09.2025  Encavis                     Aixtron
+                                      Stabilus                    Evotec
+  22.12.2025              04.12.2025  Befesa SA                   Nemetschek
+  23.03.2026              05.03.2026  Siltronic                   DWS Group GmbH & Co. KgaA
+                                                                  FlatexDEGIRO N
+                                      Thyssenkrupp                Fuchs Pref
+                                      Jenoptik                    Redcare Pharmacy
+                                      Evotec                      Fielmann Group
+                                      GEA Group                   Sartorius AG VZO
+                                      Scout24                     Deutsche Wohnen
+                                      Fuchs Pref                  Dr. Ing. h.c. F. Porsche VZOI
+                                      Redcare Pharmacy            RTL Group
+                                      Gerresheimer                Fuchs Pref.
+                                      Hellofresh AG               Redcare Pharmacy
+                                      Carl Zeiss Meditec          Salzgitter
+                                      Fielmann Group              Deutz
+                                      TeamViewer                  Auto1 Group
+                                                                  Jenoptik
+22.06.2026    04.06.2026              Stroeer                     Suess Microtec
+                                      Redcare Pharmacy            Delivery Hero
+                                      Hochtief                    Siltronic
+                                      Jungheinrich Pref           Porsche Automobil Holding Pref
+                                      Auto1 Group                 Elmoss Semiconductor
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                47/60
+
+12. DIVDAX® INDEX COMPOSITION
+
+20 September 1999: Initial Composition
+
+adidas Salomon                          DaimlerChrysler     MAN
+                                                            Metro
+BASF                                    Deutsche Lufthansa  Münchener Rückversicherung
+                                                            Schering
+Bayer                                   E.ON                Volkswagen
+
+Bayer. Hypo- und Vereinsbank            Henkel                Addition
+
+BMW                                     Linde                 Commerzbank
+
+DivDAX®                                                       TUI
+
+Date of       Date of                 Deletion                ThyssenKrupp
+change        announcement
+                                      Münchener               Siemens
+  18.09.2000              15.09.2000  Rückversicherung        Deutsche Telekom
+                                      BMW                     RWE
+  24.09.2001              21.09.2001  Bayer. Hypo- und        Bayer. Hypo- und Vereinsbank
+                                      Vereinsbank             MAN
+  23.09.2002              20.09.2002  Henkel                  Deutsche Post
+                                      adidas Salomon          Siemens
+  22.09.2003              19.09.2003  MAN                     Deutsche Lufthansa
+                                      Deutsche Lufthansa
+  20.09.2004              17.09.2004  Schering                Allianz
+  31.01.2005              26.01.2005  Siemens
+  31.01.2005              26.01.2005  Commerzbank             Schering
+  19.09.2005              08.09.2005  Deutsche Telekom        Henkel
+  18.09.2006              14.09.2006  Bayer. Hypo- und        Deutsche Bank
+  18.06.2007              13.06.2007  Vereinsbank             Lanxess*
+  24.09.2007              07.09.2007  Siemens                 -
+                                      Allianz                 Deutsche Telekom
+  22.09.2008              05.09.2008  Deutsche Lufthansa      Deutsche Lufthansa
+                                      -                       Münchener Rückversicherung
+                                      Lanxess*                Altana
+                                      Henkel                  Deutsche Börse
+                                      Linde                   Hypo Real Estate
+                                      Schering                Allianz
+                                      Volkswagen              Commerzbank
+                                      Altana                  Continental
+                                      Bayer                   Merck
+                                      MAN                     MAN
+                                      Metro
+                                      TUI
+                                      Continental
+                                      Hypo Real Estate
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                    48/60
+
+Date of       Date of                 Deletion                     Addition
+change        announcement
+                                      Deutsche Börse               BMW
+  23.03.2009              10.03.2009  Commerzbank                  Bayer
+  21.09.2009              07.09.2009  Daimler                      K+S
+  21.09.2009              07.09.2009  Merck                        Siemens
+  22.03.2010              04.03.2010  BMW                          Metro
+  20.09.2010              08.09.2010  Deutsche Bank                Deutsche Börse
+                                      Lufthansa                    Linde
+  19.09.2011              13.09.2011  Thyssenkrupp                 Volkswagen (Vz)
+                                      K+S                          Beiersdorf
+  24.09.2012              15.09.2012  MAN                          Merck
+  18.03.2013              27.02.2013  Merck KgaG                   Lufthansa
+  23.09.2013              14.09.2013  Linde                        Daimler
+  22.09.2014              03.09.2014  Volkswagen                   MAN
+  23.03.2015              24.02.2015  Beiersdorf                   Bayerische Motorenwerke
+  21.09.2015              09.09.2015  Metro                        Deutsche Bank
+  21.12.2015              03.11.2015  MAN                          K+S
+  21.03.2016              17.02.2016  Lufthansa                    Volkswagen
+  18.07.2016              13.07.2016  Deutsche Bank                Continental
+                                      Continental                  Deutsche Bank
+  19.09.2016              05.09.2016  K+S                          Lufthansa
+                                      Lufthansa                    Linde
+  04.04.2017              31.03.2017  Linde AG                     K+S AG
+  25.10.2017              20.10.2017  Bayer AG                     Vonovia S.E.
+  24.09.2018              12.09.2018  Deutsche Bank AG             Adidas AG
+  23.09.2019              13.09.2019  RWE AG                       Linde AG
+  23.03.2020              16.03.2020                               Deutsche Börse (z. Umtausch
+  21.09.2020              08.09.2020  Deutsche Börse*              eingereichte Aktie)*
+  11.05.2021              06.05.2021                               Bayer AG
+                                      Volkswagen AG                Lufthansa AG
+                                      Adidas AG                    ProSiebenSat.1
+                                      K+S AG
+                                      Deutsche Börse (z. Umtausch  Deutsche Börse*
+                                      eingereichte Aktie*)
+                                                                   Linde AG (z. Umtausch
+                                      Linde AG                     eingereichte Aktie*)
+                                                                   Covestro AG
+                                      Deutsche Börse AG            RWE AG
+                                      ProSiebenSat. 1 Media SE     Continental
+                                      Vonovia                      Volkswagen (Vz)
+                                      Linde                        HeidelbergCement AG
+                                      Lufthansa AG                 Henkel AG+Co. KgaA VZO
+                                      HeidelbergCement AG          Vonovia SE
+                                      Volkswagen VZO               Deutsche Wohnen SE
+                                      Continental AG
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                      49/60
+
+Date of     Date of                Deletion                       Addition
+change      announcement
+                                   Daimler AG                     HeidelbergCement AG
+20.09.2021             07.09.2021  Deutsche Wohnen SE             Porsche Automobile Holding VZO
+                                   Henkel AG + Co.KGAA VZO        Volkswagen AG VZO
+19.09.2022             06.09.2022  RWE AG                         Continental AG
+27.03.2023             22.03.2023  Siemens AG                     Mercedes-Benz Group
+18.09.2023             06.09.2023  Covestro AG                    Henkel AG + Co.KGAA VZO
+18.12.2023             08.12.2023  Continental                    Deutsche Bank
+24.09.2024             05.09.2024  Deutsche Telekom               Fresenius SE+ CO. KGAA
+                                   Henkel AG+Co. KgaA VZO         Daimler Truck Hldg
+    22.09.2025         04.09.2025  Fresenius SE+ CO. KGAA         Deutsche Telekom
+* = Merger / Spin-off              Deutsche Bank                  Continental
+                                   Heidelberg Materials           Brenntag
+                                   Bayer                          Dr. Ing. h.c. F. Porsche VZOI
+                                   Dr. Ing. h.c. F. Porsche VZOI  Henkel AG+Co. KgaA VZO
+                                   Deutsche Telekom               RWE
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                                  50/60
+
+13. DAXPLUS® EXPORT STRATEGY INDEX
+     COMPOSITION
+
+18 March 2002: Initial Composition    HOCHTIEF                   Software AG
+Celesio                               Klöckner-Werke AG          TUI
+DaimlerChrysler                       Koenig & Bauer
+Fresenius Medical Care                Merck KgaA
+Henkel
+
+DAXplus® Export Strategy
+
+Date of       Date of                 Deletion                   Addition
+change        announcement
+                                      Software AG                Altana
+  24.03.2003               -          Klöckner-Werke AG          EADS
+  22.03.2004               -          Celesio                    Schwarz Pharma
+  21.03.2005               -          Henkel                     Heidelberger Druckmaschinen
+                                      HOCHTIEF                   Bayer
+  19.06.2006              06.06.2006  Koenig & Bauer             Celesio
+  18.06.2007              13.06.2007  Schwarz Pharma             SGL Carbon
+  22.09.2008               -          Altana                     MTU Aero Engines
+  18.06.2009               -          Celesio                    HOCHTIEF
+  22.06.2009               -          TUI                        HeidelbergCement
+  21.09.2009               -          Bayer                      Vossloh
+                                      Daimler                    Altana
+  20.09.2010               -          Fresenius Medical Care     Bayer
+                                      HeidelbergCement           Infineon Tech.
+  19.09.2011               -          MTU Aero Engines           McKesson Europe (Celesio)
+                                      Infineon Technologies      Krones
+  24.09.2012               -          Altana                     Siemens
+                                      EADS                       GEA Group
+  23.09.2013              04.09.2013  Bayer                      K+S
+                                      Heidelberger
+                                      Druckmaschinen             Rational
+                                      McKesson Europe (Celesio)
+                                      SGL Carbon                 EADS
+                                      GEA Group                  Infineon Tech.
+                                      Infineon Tech.             Hamburg.Hafen U. Log..A
+                                      Vossloh                    Heidelberg Druck
+                                      K+S                        SGL Carbon
+                                      Heidelberg Druck           Linde
+                                      SGL Carbon                 Adidas
+                                      Rational                   Symrise
+                                      Hamburg.Hafen U.Log.A      GEA Group
+                                      Siemens                    Fresenius
+                                      Fresenius                  Bayer
+                                      Adidas                     Hugo Boss
+                                                                 Fresenius Medical Care
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                      51/60
+
+Date of       Date of                 Deletion              Addition
+change        announcement
+                                      GEA Group             Adidas
+  22.09.2014              03.09.2014  Hugo Boss             Henkel
+  21.09.2015               -          Krones                MTU Aero Engines
+  19.09.2016               -          MTU Aero Engines      Krones
+  18.09.2017               -          Henkel AG + Co. KgaA  GEA Group AG
+  24.09.2018               -          Krones AG             MTU Aero Engines
+                                      Merck KgaA            Brenntag AG
+  23.09.2019               -          Airbus                Krones AG
+                                      Bayer AG              Morphosys AG
+  21.09.2020               -          Brenntag AG           Siltronic AG
+                                      Krones AG             HeidelbergCement AG
+  20.09.2021               -          MTU Aero Engines      Merck
+                                      Symrise               Dialog Semiconductor
+  19.09.2022               -          GEA Group             Siemens Healthineers
+  09.05.2023              04.05.2023  HeidelbergCement AG   Evotec SE
+  18.09.2023              06.09.2023  Dialog Semiconductor  Aixtron SE
+  23.09.2024              05.09.2024  Siltronic AG          Bayer AG
+  22.09.2025              04.09.2025  Linde PLC             Delivery Hero SE
+  23.03.2026              13.03.2026  Evotec SE             HeidelbergCement AG
+                                      Hochtief AG           Puma SE
+                                      Morphosys AG          Symrise AG
+                                      Puma SE               Evotec SE
+                                      Delivery Hero SE      Siltronic AG
+                                      Siemens Healthineers  Siemens Energy AG
+                                      Evotec SE             GEA Group AG
+                                      HeidelbergCement AG   Evotec
+                                      GEA Group AG          Hochtief AG
+                                      Siltronic AG          Hellofresh
+                                      Siemens Energy AG     Siemens Healthineers
+                                      Evotec                Siemens Energy
+                                      Aixtron               Puma
+                                      Siemens Energy        Brenntag
+                                      Hellofresh            Sartorius Pref.
+ HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                   52/60
+
+14. DAXPLUS® MAXIMUM DIVIDEND INDEX
+     COMPOSITION
+
+25 May 1999: Initial Composition
+
+Mannesmann        Dresdner Bank       Volkswagen              VEBA
+                                      Allianz                 Lufthansa
+Karstadt          Commerzbank                                 Münchener
+                                      Continental             Rückversicherung
+RWE               Metro
+
+Deutsche Telekom
+
+25 November 1999: Composition
+
+Bay. Hypo- und    Linde               SAP                     Daimler Chrysler
+Vereinsbank
+                                      Bayer                   BMW
+Schering          Metallgesellschaft  Siemens                 MAN
+
+Preussag          Adidas
+
+BASF              Henkel
+
+22 May 2000: Composition
+
+ProSieben Media   Metro               Fresenius               Deutsche Bank
+                                      KarstadtQuelle          Continental
+Commerzbank       Deutsche Telekom    Volkswagen              Degussa-Huels
+                                      Heidelberger Zement     ERGO
+Douglas Holding   ThyssenKrupp        Fresenius Medical Care  Dresdner Bank
+
+VIAG              Depfa
+
+Lufthansa         VEBA
+
+20 November 2000: Composition
+
+Kamps             mg technologies     Infineon Technologies   Merck
+                                      ThyssenKrupp            MAN
+Dresdner Bank     BMW                 BASF                    Altana
+                                      Henkel                  Adidas
+Schering          Bayer               EPCOS
+
+SAP               Daimler Chrysler
+
+Deutsche Bank     Siemens
+
+21 May 2001: Composition
+
+KarstadtQuelle    E.ON                RWE                     Hugo Boss
+                                      Linde                   Lufthansa
+ProSiebenSat.1    Preussag
+Media                                 MAN                     Deutsche Post
+                                                              Bay. Hypo- und
+Deutsche Telekom  Fresenius Medical   Volkswagen              Vereinsbank
+                  Care                Commerzbank             Fresenius
+
+Depfa             AMB
+
+Continental AG    Metro
+
+19 November 2001: Composition
+
+Siemens           Altana              Linde                   Volkswagen
+                                      ThyssenKrupp            Deutsche Börse
+Daimler Chrysler  Henkel              Software                Gehe
+                                      BMW                     BASF
+Schering          GEA group           Adidas
+
+SAP               MERCK
+
+Wella             Bayer
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                         53/60
+
+20 May 2002: Composition
+
+Deutsche Telekom  Bay. Hypo- und          Metro                   KarstadtQuelle
+                  Vereinsbank                                     Deutsche Bank
+                                          MAN                     E.ON
+Commerzbank       Fresenius               Beiersdorf              RWE
+                                          Muenchener Rück
+MLP               Deutsche Post                                   Deutsche Börse
+                                          ProSiebenSat.1 Media
+Allianz           Degussa                                         Deutsche Post
+                                          Adidas                  Continental
+Preussag          Fresenius Medical                               Metro
+                  Care
+                                                                  E.ON
+Gehe              Daimler Chrysler                                Siemens
+                                                                  ThyssenKrupp
+BASF              ThyssenKrupp                                    Altana
+
+19 May 2003: Composition                                          Deutsche Bank
+
+TUI               Deutsche Bank           Beiersdorf              Muenchener Rück
+                                          Fresenius Medical Care  K + S Group
+Linde             MAN                     Lufthansa               Beiersdorf
+                                                                  Merck
+Commerzbank       Muenchener Rück
+                                                                  Lufthansa
+24 November 2003: Composition                                     Linde
+
+BASF              Linde                   BMW
+                                          RWE
+Bayer             Henkel                  Merck
+                                          Schering
+HeidelbergCement Celesio
+
+Daimler Chrysler  Allianz
+
+24 May 2004: Composition
+
+Beiersdorf        Celanese                STADA Arzneimittel
+
+Fresenius         Fresenius Medical Care
+
+22 November 2004: Composition
+
+Metro             E.ON                    Deutsche Post
+                                          Deutsche Postbank
+Deutsche Telekom Bayer                    Hochtief
+                                          RWE
+Volkswagen        Altana
+
+BASF              Daimler Chrysler
+
+23 May 2005: Composition
+
+Commerzbank       STADA                   Fresenius Medical Care
+                                          Fresenius
+Hypo Real Estate  Heidelberger            MAN
+                  Druckmaschinen
+
+Deutsche Börse    Hannover Rück
+
+21 November 2005: Composition
+
+E.ON              ThyssenKrupp            Daimler Chrysler        Metro
+                                          BASF                    Deutsche Telekom
+RWE               Bilfinger Berger        Lufthansa               K+S Group
+
+TUI               Bayer                   Volkswagen              Deutsche Postbank
+
+AMB Generali      Deutsche Post           Wincor Nixdorf          Muenchener Rück
+Holding
+
+Hochtief          Hypo Real Estate
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                     54/60
+
+22 May 2006: Composition
+
+Deutsche Bank     ProSiebenSat.1 Media  Fraport            MLP
+                                        STADA              IVG Immobilien
+SolarWorld        United Internet       Merck              Salzgitter
+
+Heidelberger      Rhoen-Klinikum        Douglas Holding    Commerzbank
+Druckmaschinen                          Lufthansa          Muenchener Rück
+                                        Deutsche Börse     K+S Group
+Suedzucker        Conergy
+                                                           IVG Immobilien
+BASF              Allianz                                  Rhoen-Klinikum
+                                                           Freenet
+Wincor Nixdorf    Deutsche Telekom                         ProSiebenSat.1 Media
+
+E.ON              Depfa                                    Lufthansa
+                                                           E.ON
+21 May 2007: Composition                                   ThyssenKrupp
+                                                           Deutsche Post
+STADA             Metro                 Linde
+                                        GAGFAH Group       Lanxess
+Pfleiderer        Aareal Bank           Fraport            Stada Arzneimittel
+                                                           Hypo Real Estate
+MLP               Kloeckner & Co        Deutsche Bank      Bilfinger Berger
+
+Heidelberger      Hypo Real Estate                         Wincor Nixdorf
+Druckmaschinen                                             Celesio
+                                                           Metro
+19 November 2007: Composition                              Lufthansa
+                                                           Siemens
+Hannover Rück     Merck                 BMW
+                                        Daimler            Deutsche Post
+Muenchener Rück Wincor Nixdorf          BASF               Hochtief
+                                        Deutsche Postbank  Rhoen-Klinikum
+MTU Aero Engines Symrise                                   ThyssenKrupp
+                                                           MTU Aero Engines
+RWE               Douglas Holding
+                                                           Deutsche Telekom
+19 May 2008: Composition                                   GEA Group
+
+United Internet   Fresenius             Deutsche Bank
+
+Hamburger Hafen   Deutsche Börse        Tognum
+und Logistik
+                                        SAP
+Fraport           Rhoen-Klinikum        Linde
+
+Allianz           Metro
+
+24 November 2008: Composition
+
+Adidas            HeidelbergerCement    Wacker Chemie
+                                        Deutsche Post
+RWE               Allianz               K+S Group
+                                        GEA Group
+ThyssenKrupp      Bayer                 Hochtief
+
+BASF              Henkel
+
+BMW               Deutsche Telekom
+
+18 May 2009: Composition
+
+SolarWorld        Deutsche Bank         BASF
+                                        Deutsche Börse
+Deutsche Telekom Fraport                RWE
+                                        Metro
+Salzgitter        Linde                 Wincor Nixdorf
+
+K+S Group         SAP
+
+Lufthansa         Allianz
+
+16 November 2009: Composition
+
+BASF              Lanxess               Deutsche Post
+                                        Merck
+Bilfinger Berger  Hochtief
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES             55/60
+
+RWE              K+S Group         Siemens               Metro
+Hannover Rück    Allianz           Muenchener Rück       Wincor Nixdorf
+Bayer            Celesio           E.ON                  Symrise
+
+17 May 2010: Composition
+
+Software AG      United Internet   Deutsche Bank         BMW
+                                   Fraport               Deutsche Börse
+Lanxess          Deutsche Telekom  Rhoen-Klinikum        SAP
+                                   ProSiebenSat.1 Media  Hannover Rück
+Salzgitter       RWE               E.ON                  Wacker Chemie
+
+STADA            Suedzucker
+
+Tognum           Aixtron
+
+15 November 2010: Composition
+
+Allianz          Axel Springer AG  Bayer                 BASF
+                                   Infineon Tech.        RWE
+Bilfinger        Deutsche Telekom  Metro                 Siemens
+                                   MTU Aero Engines      Symrise
+Celesio          E.ON              Muenchner Rück        Wincor Nixdorf
+
+Daimler          Hannover Rück
+
+Deutsche Post    Hochtief
+
+16 May 2011: Composition
+
+Aixtron          Bilfinger         Brenntag              Celesio
+                                   Prosieben-Sat1        Suedzucker
+Deutsche Bank    Fresenius         Rhoen Klinikum        Symrise
+                                   SAP                   Wacker Chemie
+Deutsche Euroshop Kloeckner        MAN                   Stada
+
+Deutsche Post    Lanxess
+
+United Internet  Fraport
+
+14 November 2011: Composition
+
+Allianz          Aurubis           Axel Springer         Bayer
+                                   E.ON                  Fuchs Petrol
+Bilfinger        Daimler           Lufthansa             Merck
+                                   Rheinmetall           RWE
+Gea              Hannover Rück     Thyssen Krupp         Wincor Nixdorf
+
+MTU Aero Engines Muenchener Rück
+
+Siemens          Software
+
+14 May 2012: Composition
+
+Prosieben-Sat1   Europ.Aeron       Metro                 Stada
+                                   BMW                   Brenntag
+SAP              Deutsche Telekom  GSW Immobilien        Kabel Dt.
+                                   Deutsche Wohnen       Leoni
+Deutsche Bank    Rheinmetall       Deutsche Euroshop     Suedzucker
+
+Aixtron          Symrise
+
+Fraport          Deutsche Börse
+
+12 November 2012: Composition
+
+Axel Springer    Daimler           GEA Group             Metro
+                                   Hannover Rück         Muenchner Rück
+Allianz          Deutsche Post     Infineon              RWE
+                                   MAN                   Siemens
+BASF             Deutsche Telekom  Merck                 Thyssenkrupp
+
+Beiersdorf       E.ON
+
+Bilfinger        Fuchs Petrolium
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                  56/60
+
+17 December 2012: Composition
+
+Axel Springer   Daimler                GEA Group            Metro
+                                       Hannover Rück        Muenchener Rück
+Allianz         Deutsche Post          Infineon             RWE
+                                       MAN                  Siemens
+BASF            Deutsche Telekom       Merck                Aurubis
+
+Beiersdorf      E.ON                   Volkswagen           GEA Group
+                                       Siemens              Bilfinger
+Bilfinger       Fuchs Petrolium        Daimler              Duerr
+                                       RWE                  A.Springer
+11 November 2013: Composition          Aurubis              Deutsche Telekom
+
+BASF            Leoni                  Deutsche Bank        Deutsche Börse
+                                       DMG Mori Seiki       Drillish
+Bayer           RTL Group              Fielmann             Fraport
+                                       Kabel Dt.            LEG Immo.
+E.ON            Muenchener Rück        Suedzucker           Telefonica
+
+Wincor Nixdorf  Allianz                Aurubis              BASF
+                                       Dt. Annington Immo.  Deutsche Telekom
+Software AG     Hann. Rück             Hannover Rück        Leoni
+                                       RTL Group            RWE
+12 May 2014: Composition               Volkswagen           Wincor
+
+Aareal Bank     BMW                    BMW                  Deutsche Bank
+                                       Deutsche Wohnen      DMG Mori Seiki
+Deutsche Euroshop Deutsche Post        Duerr                Evonik
+                                       K+S Group.           LEG Immobilien
+Deutsche Telekom Evonik                Stada Arzneimittel   Telefonica
+
+Freenet         Hugo Boss              Daimler              BASF
+                                       Telefonica           Allianz
+MAN             Prosieben-Sat1         RWE                  K+S Group.
+                                       Muenchener Rück      Hannover Rück
+17 November 2014: Composition          Deutsche Börse       Vonovia
+
+Axel Springer   Allianz                Deutsche Post        Deutsche Wohnen
+                                       E.ON                 Evonik
+Bilfinger       Daimler                Hugo Boss            Kuka
+                                       ProSieben-Sat1       United Internet
+Duerr           E.ON
+
+Metro           Muenchener Rück
+
+Siemens         Telefonica
+
+11 May 2015: Composition
+
+Aareal Bank     Airbus Group
+
+Deutsche Börse  Deutsche Post
+
+Drillisch       Deutsche Telekom
+
+Freenet         Hugo Boss
+
+Linde           ProSieben-Sat1
+
+16 November     2015: Composition
+Axel Springer              Leoni
+Hochtief                   RTL Group
+Metro                      Lufthansa
+BMW                        Siemens
+Duerr AG                   Volkswagen
+
+17 May 2016: Composition
+
+Aareal Bank     Brenntag
+
+Drillisch       Deutsche Telekom
+
+Fraport         Fresenius
+
+Lanxess         LEG Immobilien
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                57/60
+
+Stada Arzneimittel Stroeer        Telefonica        Software
+
+14 November 2016: Composition     Deutsche Post     Telefonica
+                                  GEA Group AG      RTL Group
+Allianz         Airbus Group      Muenchener Rück   Bayer
+                                  Siemens           BMW
+Continental AG  Daimler AG        Duerr AG          Hannover Rück
+
+E.ON            Metro             Symrise           Software AG
+                                  Uniper            Fraport
+Lufthansa       Schaeffler        United Internet   Deutsche Börse
+                                  Deutsche Bank     Deutsche Telekom
+RWE             Linde             Aareal Bank       Lanxess
+
+15 May 2017: Composition          Hochtief          GEA Group
+                                                    Linde (z.
+Stada Arzneimittel Hugo Boss      RWE               Umtauscheingereichte
+                                                    Aktie*))
+Deutsche Wohnen BASF              Heidelbergcement  Volkswagen
+                                  E.ON              Aurubis
+Freenet         Evonik            Continental       K+S
+
+Brenntag        LEG Immobilien    Drillisch         Software AG
+                                  Brenntag          United Internet
+Vonovia         ProSieben-Sat1    Deutsche Wohnen   Bayer
+                                  Deutsche Börse    K+S
+13 November 2017: Composition     SAP SE            Fraport
+
+Daimler         Covestro          BASF              Innogy
+                                  Covestro          Osram Licht
+Muenchener Rück Allianz           Bayer             Volkswagen
+                                  Heidelbergcement  Continental
+Schaeffler      BASF              RWE               Deutsche Börse
+Innogy          Siemens
+Steinhoff       Deutsche Post     Volkswagen        Fresenius Medical Care
+                                  Fresenius         Rheinmetall
+14 May 2018: Composition          Commerzbank       K+S
+                                  Deutsche Bank     Lanxess
+Telefonica      BMW               Deutsche Wohnen   Scout24
+                                  Knorr-Bremse
+ProSieben-Sat1  Evonik
+
+Freenet         Aroundtown
+
+Aareal Bank     LEG Immobilien
+
+Deutsche Telekom Uniper
+
+12 November 2018: Composition
+
+Metro           Siemens
+
+Deutsche Telekom GEA Group
+
+Lufthansa       Rheinmetall
+
+Allianz         Commerzbank
+
+Muenchener Rück Hannover Rück SE
+
+13 May 2019: Composition
+
+Telefonica      Aroundtown
+
+ProSieben-Sat1  LEG Immobilien
+
+Freenet         Deutsche Post
+
+Daimler         Evonik
+
+BMW             Brenntag
+
+E.ON            Uniper
+
+Hugo Boss       Vonovia
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                        58/60
+
+11 November 2019: Composition
+
+Allianz         Deutsche Telekom        Kion Group            Thyssenkrupp
+                                        Infineon              Volkswagen
+BASF            GEA Group               Osram Licht           Hochtief
+                                        Henkel                Hugo Boss
+Bayer           Heidelbergcement        RWE
+                                        Siemens               SAP
+Commerzbank     Merck                   Siemens Healthineers  Scout24
+                                                              Nemetschek
+Continental     Metro                   Heidelbergcement      Vonovia
+                                        Henkel
+Covestro        MTU Aero Engines        Linde                 SAP
+                                        Rheinmetall           Siemens
+Daimler         Münchener Rück          RWE                   Siemens Healthineers
+                                        Wirecard              Symrise
+11 May 2020: Composition                Siltronic             Volkswagen
+                                                              Vonovia
+Aroundtown      Deutsche Börse          Linde
+                                        Merck                 Scout24
+BASF            Deutsche Wohnen         MTU Aero Engines      Telefonica
+                                        Münchener Rück        Lanxess
+BMW             Daimler                 Rational              Volkswagen
+                                        RWE                   Vonovia
+Bechtle         Merck
+                                        Knorr-Bremse          Henkel
+Brenntag        Deutsche Telekom        Linde                 Volkswagen
+                                        LEG Immobilien        Münchener Rück
+Continental     E.ON                    Porsche               Deutsche Post
+                                        Münchener Rück        KION Group
+Covestro        Evonik Industries       ProSiebenSat.1        Symrise
+
+16 November 2020: Composition           Vonovia
+                                        MTU Aero Engines
+Allianz         Deutsche Post           ProSiebenSat.1
+                                        RWE
+BASF            Deutsche Telekom        Siemens
+                                        Siemens Healthineers
+Bayer           Hannover Rück           Allianz
+
+BMW             Heidelbergcement
+
+Continental     Henkel
+
+Covestro        Infineon
+
+Daimler
+
+17 May 2021: Composition
+
+Allianz         Deutsche Telekom
+
+Aroundtown      E.ON
+
+BASF            Evonik Industries
+
+Bayer           Fresenius Medical Care
+
+Brenntag        Fresenius
+
+Deutsche Börse  Hannover Rück
+
+Deutsche Wohnen Heidelbergcement
+
+15 November 2021: Composition
+
+Adidas          Daimler
+
+BASF            Deutsche Telekom
+
+BMW             E.ON
+
+Bayer           Fresenius Medical Care
+
+Continental     Hannover Rück
+
+Covestro        HeidelbergCement
+
+16 May 2022: Composition
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                              59/60
+
+Aixtron        Deutsche Bank           SAP                        Evonik
+BASF           Fresenius SE            Scout24                    Freenet
+BMW            Gerresheimer            TAG Immobilien             LEG Immobilien
+                                       Telefonica Deutschland
+Bechtle        Hugo Boss               Aroundtown                 Mercedes-Benz
+                                       Wacker Chemie
+Brenntag       Porsche                 United Internet            Deutsche Börse
+Covestro       Linde                                              Uniper
+
+14 November 2022: Composition
+
+Airbus         Deutsche Post           K+S                        Siemens
+                                       Mercedes-Benz Group        Siemens Healthineers
+Allianz        Deutsche Telekom        MTU Aero Engines           Volkswagen
+                                       Muenchener. Rück           SAP
+Aurubis        Gea Group               Rational
+                                       RWE
+BASF           Hannover Rück           Rheinmetall
+
+BMW            HeidelbergCement
+
+Bayer          Henkel
+
+Covestro       Infineon
+
+15 May 2023: Composition
+
+Aixtron        CTS Eventim             Freenet                    Scout24
+                                       Gerresheimer               Telefonica Deutschland
+Allianz        Daimler Truck           Hensoldt                   Volkswagen
+                                       Lanxess                    Wacker Chemie
+BASF           Deutsche Bank           Mercedes-Benz
+                                       Nemetschek
+BMW            Deutsche Börse          Puma
+
+Bechtle        Deutsche Post
+
+Brenntag       E.ON
+
+Commerzbank    Evonik Industries
+
+13 November 2023: Composition
+
+Airbus         Deutsche Post           Lufthansa                  Siemens
+                                       Mercedes-Benz              Siemens Healthineers
+Allianz        Deutsche Telekom        Merck                      Talanx
+                                       MTU Aero Engines           Thyssenkrupp
+Aurubis        GEA Group               Münchener Rück
+                                       Rational
+BASF           Hannover Rück           Sartorius
+
+Beiersdorf     Henkel
+
+Commerzbank    Hochtief
+
+Continental    Infineon Technologies
+
+13 May 2024: Composition
+
+Adidas         Deutsche Bank           Hensoldt                   SAP
+                                       K+S                        Scout24
+Aixtron        Deutsche Börse          KION Group                 Symrise
+                                       LEG Immobilien             Volkswagen
+Bechtle        E.ON                    Nemetschek
+
+BMW            Evonik Industries       Porsche Automobil Holding
+                                       Rheinmetall
+Brenntag       Fresenius Medical Care
+
+CTS Eventim    Gerresheimer
+
+Daimler Truck  Heidelberg Materials
+
+11 November 2024: Composition
+
+Airbus         Allianz               BASF                Beiersdorf
+HISTORICAL INDEX COMPOSITIONS OF EQUITY AND STRATEGY INDICES                             60/60
+
+Continental           Deutsche Post    Deutsche Telekom          Freenet
+GEA Group             Hannover Rück    Henkel                    Hochtief
+Infineon Techn.       Lufthansa        Mercedes-Benz             Merck
+MTU Aero Engines      Münchener Rück   Rational                  RWE
+Sartorius             Siemens          Siemens Healthineers      Talanx
+Vonovia
+
+12 May 2025: Composition
+
+Adidas                Bilfinger        Commerzbank               CTS Eventim
+Daimler Truck         Deutsche Bank    Deutsche Börse            E.ON
+Evonik Industries     Freenet          Fresenius
+Heidelberg Materials  Jungheinrich     K+S                       Fresenius Medical Care
+LEG Immobilien        Rational         SAP                       KION Group
+Symrise               TAG Immobilien   TRATON                    Scout24
+Vonovia                                                          Volkswagen
+
+17 November 2025: Composition
+
+Airbus                Allianz          Aurubis                   BASF
+Bayer                 Continental      Deutsche Post             Deutsche Telekom
+E.ON                  GEA Group        Hannover Rück             Henkel
+Hochtief              Infineon Techn.  Knorr-Bremse              Mercedes-Benz
+MTU Aero Engines      Münchener Rück   RWE                       SAP
+Siemens               Siemens Energy   Siemens Healthineers      Talanx
+Thyssenkrupp
+
+11 May 2026: Composition
+
+Aroundtown            Bechtle          Bilfinger                 BMW
+Brenntag                                                         Deutsche Boerse
+Deutz                 Commerzbank      Deutsche Bank             Flatexdegiro N
+Fraport                                                          Heidelberg Materials
+Kion Group            Dr ING HC F Porsche PrefEvonik Industries
+Renk                                                             Porsche Automobil Pref
+Volkswagen Pref       Fresenius        Fresenius Medical Care
+                                                                 Traton
+                      Leg Immobilien   Lufthansa
+
+                      Rheinmetall      Tag Immobilien
+

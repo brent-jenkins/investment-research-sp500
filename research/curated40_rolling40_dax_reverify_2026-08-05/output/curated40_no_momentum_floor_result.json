@@ -1,0 +1,11 @@
+{
+  "n_trades": 1076,
+  "win_rate_pct": 47.68,
+  "profit_factor": 1.77,
+  "cagr_pct": 14.13,
+  "max_drawdown_pct_fixed_denom": -15.8,
+  "max_drawdown_pct_peak_relative": -8.12,
+  "ending_balance_gbp": 119389.73,
+  "config_min_momentum_pct": 0.0,
+  "note": "min_momentum_pct forced to 0.0 (the original study's own implicit gate) to isolate the momentum-floor's contribution to the fresh-vs-original curated-40 gap"
+}

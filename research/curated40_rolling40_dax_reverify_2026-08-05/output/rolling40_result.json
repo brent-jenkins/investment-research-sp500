@@ -1,0 +1,98 @@
+{
+  "variant": "rolling40",
+  "label": "Rolling-40 (quarterly market-cap reconstitution, SEC EDGAR XBRL, resurrected)",
+  "n_input_tickers": 500,
+  "n_tickers_with_data": 500,
+  "n_quarterly_reconstitutions": 67,
+  "start": "2007-01-01T00:00:00",
+  "end": "2026-08-03T00:00:00",
+  "split": "2020-01-01T00:00:00",
+  "reset_capital_gbp": 50000.0,
+  "backtest_convention": "reset-at-boundary",
+  "engine": "simulate_portfolio_compounding_mtm_reset_at_boundary + monkeypatched analysis.universe.is_member (layered AND with real membership)",
+  "config_reentry_cooldown_days": 0,
+  "config_min_momentum_pct": 0.02,
+  "config_per_trade_pct": 0.05,
+  "config_max_total_deployed": 0.5,
+  "test_metrics": {
+    "n_trades": 1099,
+    "win_rate_pct": 46.5,
+    "profit_factor": 1.59,
+    "cagr_pct": 12.02,
+    "max_drawdown_pct_fixed_denom": -15.27,
+    "max_drawdown_pct_peak_relative": -8.92,
+    "ending_balance_gbp": 105585.81
+  },
+  "full_walk_n_trades": 2559,
+  "decision_engine_parity_check": {
+    "sample_size": 25,
+    "membership_ok": 25,
+    "holding_period_ok": 16,
+    "failures": [
+      {
+        "ticker": "AVGO",
+        "entry_date": "2024-05-03",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "AAPL",
+        "entry_date": "2021-02-26",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "MO",
+        "entry_date": "2015-04-30",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "GILD",
+        "entry_date": "2015-03-06",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "UNH",
+        "entry_date": "2015-10-23",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "HD",
+        "entry_date": "2012-10-12",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "GOOG",
+        "entry_date": "2023-09-22",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "ABT",
+        "entry_date": "2019-02-15",
+        "holding_days": 31,
+        "max_hold": 30,
+        "check": "holding_period"
+      },
+      {
+        "ticker": "UNH",
+        "entry_date": "2020-06-25",
+        "holding_days": 32,
+        "max_hold": 30,
+        "check": "holding_period"
+      }
+    ]
+  },
+  "shares_outstanding_coverage": "483/500 candidate tickers resolved via SEC EDGAR XBRL; 16 no_data (incl. META, a known SEC/XBRL data gap per CLAUDE_HISTORY.md), 1 no_cik (AEP)"
+}
