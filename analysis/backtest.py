@@ -198,6 +198,17 @@ def precompute_ticker(ticker: str, config: dict) -> Optional[dict]:
     strength/confidence measure, not just the on/off `signal` column. The
     two older engines (`simulate_trades()`/`simulate_portfolio()`) ignore
     this column entirely; adding it here is additive and harmless for them.
+
+    `open`/`low` (added 2026-08-06) are the daily bars `simulate_portfolio_
+    compounding_mtm()`'s realistic STOP_LOSS fill (see that function's own
+    docstring) needs to determine whether a stop was genuinely touched
+    intraday and what price was actually achievable — see research/
+    realistic_stop_fill_resim_2026-08-06/REPORT.md for the investigation
+    that established this. Every other reader of this frame (the three
+    frozen engines, and every research script that has ever called this
+    function) ignores these two columns entirely; adding them here is
+    additive and harmless for all of them, the same reasoning `momentum`
+    was added under above.
     """
     df = get_price_df(ticker, days=8000)
     if df.empty or len(df) < 300:
@@ -208,12 +219,16 @@ def precompute_ticker(ticker: str, config: dict) -> Optional[dict]:
     close = df["close"].astype(float)
     high = df["high"].astype(float)
     low = df["low"].astype(float)
+    open_ = df["open"].astype(float)
 
     atr_s = _atr(high, low, close, config["signals"]["atr_period"])
     momentum_s = signals.compute_momentum_series(close)
     sig = signals.compute_signal_series(close)
 
-    frame = pd.DataFrame({"close": close, "atr": atr_s, "signal": sig, "momentum": momentum_s})
+    frame = pd.DataFrame({
+        "close": close, "atr": atr_s, "signal": sig, "momentum": momentum_s,
+        "open": open_, "low": low,
+    })
     return {"ticker": ticker, "frame": frame}
 
 
@@ -255,6 +270,16 @@ def simulate_trades(
     generated with; adding new behaviour here would break that
     reproducibility guarantee rather than close a live-parity gap that
     matters for anything this engine is still used for.
+
+    Deliberately ALSO exempt from the 2026-08-06 realistic (intraday-
+    touch) STOP_LOSS fill fix (see simulate_portfolio_compounding_mtm()'s
+    own docstring) — same reasoning, not a different case: this is a
+    correctness fix to an existing decision, not a new feature, but the
+    thing that matters for whether an engine should be frozen is not
+    "bug vs. feature," it's whether the engine's own already-published
+    figures need to stay exactly reproducible, which this one still does.
+    Still fires STOP_LOSS off the daily close and fills at exactly
+    stop_price, unchanged.
     """
     bt_cfg = config.get("backtest", {})
     max_hold = get_max_holding_days(ticker, config)
@@ -469,6 +494,15 @@ def simulate_portfolio(tickers_cache: list, config: dict, gspc_close: pd.Series)
     findings" in CLAUDE.md); adding new behaviour here would break the
     reproducibility of already-published figures rather than close a
     live-parity gap that matters for anything this engine still drives.
+
+    Deliberately ALSO exempt from the 2026-08-06 realistic (intraday-
+    touch) STOP_LOSS fill fix (see simulate_portfolio_compounding_mtm()'s
+    own docstring) — same frozen-reproducibility reasoning, applied to a
+    correctness fix rather than a new feature this time; the distinction
+    that actually matters (does this engine's own published figure need
+    to stay exactly reproducible) is unchanged either way. Still fires
+    STOP_LOSS off the daily close and fills at exactly stop_price,
+    unchanged.
     """
     bt_cfg = config.get("backtest", {})
     var_cfg = config.get("trading212_invest", {})
@@ -849,6 +883,14 @@ def simulate_portfolio_compounding(
     figure that cites it (e.g. the "Compounding portfolio backtest" sweep
     in CLAUDE.md) stays exactly reproducible; simulate_portfolio_
     compounding_mtm() below is the corrected, live-matching engine.
+
+    Deliberately ALSO exempt from the 2026-08-06 realistic (intraday-
+    touch) STOP_LOSS fill fix (see simulate_portfolio_compounding_mtm()'s
+    own docstring) -- identical reasoning: this engine's job is staying
+    frozen for reproducibility, not staying maximally realistic, and that
+    job is unaffected by whether the gap being closed is a missing
+    feature or a fill-price correctness bug. Still fires STOP_LOSS off
+    the daily close and fills at exactly stop_price, unchanged.
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -1207,6 +1249,75 @@ def simulate_portfolio_compounding_mtm(
     constant only when that key is absent. Every other engine in this
     file is deliberately exempt — see is_reentry_blocked()'s own
     docstring for the full reasoning.
+
+    **Realistic (intraday-touch) STOP_LOSS fill — PERMANENT DEFAULT
+    (2026-08-06), not an option.** Found by the same-session dividend/
+    fill-convention audit (research/dividend_fill_convention_2026-08-06):
+    firing STOP_LOSS off the daily CLOSE and filling at exactly
+    stop_price is unrealistic on two counts — a day that opens below the
+    stop can never actually fill there (gap-through), and a day whose
+    LOW touches the stop before recovering by the close is a real
+    intraday stop trigger a live broker-side stop would already have
+    acted on, which the close-only check misses entirely (late
+    trigger). This matters now specifically because live trading has
+    placed a real broker-side stop order the instant a BUY fills since
+    2026-08-04 (poll_placed_orders() -> _place_broker_stop_for_filled_
+    buy()) — live genuinely exits on intraday touch, so a backtest that
+    doesn't model this is not a modelling nicety, it is a live/backtest
+    divergence in exactly the class this project's "one implementation
+    of any given trading decision" invariant exists to prevent.
+
+    Mechanically: the STOP_LOSS trigger check below reads that day's LOW
+    (not CLOSE) — evaluate_exit_reason()'s single `price` argument is
+    confirmed used only for the `price <= stop_price` comparison, so
+    every other exit reason (CRISIS_EXIT/SIGNAL_OFF/MAX_HOLDING) is
+    completely unaffected by this. On a STOP_LOSS fire, the fill price
+    is min(stop_price, that day's open) — the stop price itself if the
+    open was still above it (an achievable intraday fill), or the open
+    if the day gapped straight through (the stop price was never
+    achievable that day). Requires precompute_ticker()'s "open"/"low"
+    columns (added the same day, for exactly this).
+
+    research/realistic_stop_fill_resim_2026-08-06/REPORT.md fully
+    re-simulated this (not a first-order per-trade delta — an earlier
+    exit frees capacity, which changes subsequent admission/sizing/
+    compounding for the rest of the run): total P&L on the full
+    2007-2026 continuous walk drops from £484,476.39 to £127,167.80
+    (-73.75%, nearly 1.7x the audit's own first-order £212,267.47
+    estimate), CAGR from 13.60% to 7.05%, and 16-block pass rate from
+    10/16 to 9/16. See CLAUDE_HISTORY.md's "Realistic (intraday-touch)
+    STOP_LOSS fill made the permanent default" section for the full
+    decision record, including why simulate_trades()/simulate_
+    portfolio()/simulate_portfolio_compounding() are deliberately,
+    explicitly EXEMPT from this fix (each of their own docstrings now
+    states this directly) — the same frozen-engine reproducibility
+    reasoning already established for the 2026-08-03 re-entry-cooldown
+    fix above applies with equal force here: those three engines exist
+    now specifically so already-published historical figures stay
+    exactly reproducible, and this is the one engine run_full_
+    validation() actually defaults to and the one confirmed to match
+    live order placement — the only one where a live/backtest fill-
+    convention gap actually matters going forward.
+
+    **Honest limit, stated plainly rather than implied away: this closes
+    the gap MUCH further, it does not make backtest and live byte-for-
+    byte identical.** A daily `low` records only the lowest price
+    reached at SOME point during the session — not when, and not the
+    path price took to get there. A dip in the first few minutes that
+    fully recovers by lunchtime is indistinguishable, in this data, from
+    the identical low reached in the last minutes of an otherwise calm
+    session — even though a real, continuously-monitored broker-side
+    stop fires the instant it's touched in both cases, at genuinely
+    different points in the day with genuinely different context around
+    them. This fix can tell you a stop WAS touched that day and give a
+    realistic achievable fill price for it; it cannot tell you WHEN
+    intraday that happened, because true tick-by-tick/intraday history
+    was never captured for this data and cannot be reconstructed
+    retroactively now. This is the same daily-vs-intraday granularity
+    gap already noted elsewhere this session as something only closeable
+    going forward (by actually capturing intraday data from here on),
+    never something a backtest correction can fix for the past. Treat
+    this fix as "much closer to reality," not "now identical to it."
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -1457,18 +1568,39 @@ def simulate_portfolio_compounding_mtm(
             stop_price = ot["stop_price"]
             holding_days = (dt - ot["entry_date"]).days
 
+            # Realistic (intraday-touch) STOP_LOSS trigger -- PERMANENT
+            # DEFAULT since 2026-08-06, see this function's own docstring.
+            # The stop check reads today's LOW (not close): a real stop --
+            # live's own broker-side stop included, since 2026-08-04 --
+            # fires the instant price touches the level intraday, not only
+            # if the day's close ends up below it.
+            stop_check_price = price
+            low_val = row.get("low")
+            if low_val is not None and pd.notna(low_val):
+                stop_check_price = float(low_val)
+
             # Membership is not computed here at all (2026-08-02) — it no
             # longer participates in an already-open position's exit; the
             # admission helper for this group still computes its own
             # is_member for entry-gate purposes.
             exit_reason = evaluate_exit_reason(
-                crisis_now=crisis_now, price=price,
+                crisis_now=crisis_now, price=stop_check_price,
                 stop_price=stop_price, sig_on=sig_on, holding_days=holding_days,
                 max_holding_days=st["max_hold"],
             )
             if exit_reason is None and dt == st["frame"].index[-1]:
                 exit_reason = "END_OF_DATA"
-            exit_price = stop_price if exit_reason == "STOP_LOSS" else price
+
+            if exit_reason == "STOP_LOSS":
+                # Realistic fill -- PERMANENT DEFAULT since 2026-08-06.
+                # Achievable at the stop itself if the open was still
+                # above it; at the open if the day gapped straight
+                # through (the stop price was never achievable that day).
+                open_val = row.get("open")
+                open_price = float(open_val) if open_val is not None and pd.notna(open_val) else price
+                exit_price = min(stop_price, open_price)
+            else:
+                exit_price = price
 
             if exit_reason:
                 pnl_pct = (exit_price - entry_price) / entry_price
