@@ -1,0 +1,9 @@
+block  1 2008-03-23 -> 2009-06-13: production  268 trades  sha 12fcbbd29eb4b732
+          variant=baseline   268 trades  sha 12fcbbd29eb4b732  IDENTICAL
+block  6 2014-05-06 -> 2015-07-27: production  236 trades  sha 3b4bbf7ba499eb86
+          variant=baseline   236 trades  sha 3b4bbf7ba499eb86  IDENTICAL
+block 11 2020-06-19 -> 2021-09-09: production  261 trades  sha e841e6613719ae76
+          variant=baseline   261 trades  sha e841e6613719ae76  IDENTICAL
+
+======================================================================
+FIDELITY GATE PASSED -- variant=baseline is byte-identical to the production engine on all checked blocks, and the extended precompute is inert.

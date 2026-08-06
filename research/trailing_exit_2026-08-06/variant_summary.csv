@@ -1,0 +1,5 @@
+variant,wins_vs_baseline,median_gap_vs_baseline_pp,mean_gap_vs_baseline_pp,wins_vs_legC_zero,median_gap_vs_legC_zero_pp,wins_vs_legC_real,median_gap_vs_legC_real_pp,wins_vs_legD,median_gap_vs_legD_pp,chained_total_pct,chained_cagr_pct
+T1,3.0,-0.98,-1.61,6.0,-2.02,6.0,-3.5,5.0,-2.78,191.8,5.65
+T2,3.0,-1.84,-2.59,6.0,-3.32,6.0,-3.38,4.0,-4.95,142.2,4.64
+T3,8.0,-0.31,-0.44,8.0,0.16,8.0,-0.74,4.0,-3.0,258.8,6.77
+baseline,,,,,,,,,,287.7,7.2
