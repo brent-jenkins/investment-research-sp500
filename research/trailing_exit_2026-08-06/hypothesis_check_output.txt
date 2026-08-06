@@ -1,0 +1,22 @@
+baseline MAX_HOLDING trades: 1874  mean pnl 8.32%  win rate 86.8%
+  ... of which still at their running peak at exit: 403  mean pnl 15.21%
+  (hypothesis cited 357 such trades at +16.1% avg)
+
+=== SAME TRADES (ticker+entry_date), baseline vs variant ===
+Like-for-like: capacity effects excluded by construction.
+
+T1  all MAX_HOLDING        n=  533  baseline   8.31%  ->  T1   7.76%  (delta  -0.54pp, 34% of trades improved)
+                                  new exit mix: {'TRAILING_STOP': 501, 'END_OF_DATA': 19, 'SIGNAL_OFF': 8, 'STOP_LOSS': 4, 'CRISIS_EXIT': 1}
+T1  MAX_HOLDING at peak    n=  125  baseline  14.48%  ->  T1  13.17%  (delta  -1.31pp, 34% of trades improved)
+                                  new exit mix: {'TRAILING_STOP': 118, 'END_OF_DATA': 5, 'SIGNAL_OFF': 2}
+
+T2  all MAX_HOLDING        n=  516  baseline   7.61%  ->  T2   5.28%  (delta  -2.33pp, 30% of trades improved)
+                                  new exit mix: {'TRAILING_STOP': 505, 'SIGNAL_OFF': 6, 'END_OF_DATA': 5}
+T2  MAX_HOLDING at peak    n=  113  baseline  13.82%  ->  T2   8.91%  (delta  -4.91pp, 22% of trades improved)
+                                  new exit mix: {'TRAILING_STOP': 110, 'SIGNAL_OFF': 2, 'END_OF_DATA': 1}
+
+T3  all MAX_HOLDING        n=  667  baseline   8.23%  ->  T3   8.35%  (delta  +0.12pp, 22% of trades improved)
+                                  new exit mix: {'MAX_HOLDING': 653, 'END_OF_DATA': 8, 'SIGNAL_OFF': 5, 'STOP_LOSS': 1}
+T3  MAX_HOLDING at peak    n=  153  baseline  13.92%  ->  T3  14.07%  (delta  +0.15pp, 41% of trades improved)
+                                  new exit mix: {'MAX_HOLDING': 148, 'END_OF_DATA': 3, 'SIGNAL_OFF': 2}
+
