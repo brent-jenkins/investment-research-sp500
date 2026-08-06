@@ -34,13 +34,27 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
 
     - `reference_tickers:` (^GSPC, GBPUSD=X, EURUSD=X) -- ticker/name/
       exchange only; these never have an execution mapping.
-    - The dynamic live candidate pool (analysis/universe.py:
-      get_live_stock_candidates(), the daily-refreshed S&P 500 stock
-      membership) -- merged in so price history exists for every genuine
-      current index member before it's ever evaluated as a trading
-      candidate. pull_incremental() already does a full-history fetch the
-      first time a ticker has no stored data at all, so a brand-new index
-      entrant needs nothing beyond appearing in this list.
+    - Every stock ticker this system has ever discovered as a genuine S&P
+      500 constituent (analysis/universe.py:get_all_known_stock_tickers())
+      -- deliberately NOT narrowed to today's live candidate pool. Ingestion
+      scope and trading eligibility are two different questions: this list
+      controls what gets a price history; is_member() (via
+      get_live_stock_candidates(), called separately at signal/decision
+      time) still governs what is actually tradeable. Before 2026-08-06
+      this used get_live_stock_candidates() directly, which meant a ticker
+      stopped being ingested the moment it lost membership -- a real,
+      still-growing gap (see CLAUDE.md's "Universe coverage remediation"):
+      real, decades-long constituents (CAG, CPB, BK, MMC, K, IPG, EMN, WBA
+      among them) went permanently missing from price_data purely because
+      nobody ever asked for their history once they rolled off the index.
+      Switching to the full ever-known set closes that gap going forward --
+      it cannot recover what was never ingested, but it stops the hole from
+      growing. get_all_known_stock_tickers() is a superset of
+      get_live_stock_candidates() (the latter is the former filtered by
+      is_member()), so this also makes the get_held_research_tickers()
+      merge below redundant for any stock -- kept anyway because it still
+      covers a held ETF position (ETF sleeve trading is off, not deleted;
+      get_all_known_stock_tickers() deliberately excludes ETF_TICKERS).
     - Every ticker with a currently-open position (brokers/trading212.py:
       get_held_research_tickers()), regardless of today's membership
       status. Without this, a held ticker that drops out of the live
@@ -51,8 +65,8 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
       open. That would make "let momentum, not index removal, govern an
       already-open position" (see analysis/decision.py) unimplementable:
       there would be nothing to compute momentum from. A ticker can be
-      in this set and NOT in get_live_stock_candidates() at the same
-      time -- that is exactly the case this merge exists for.
+      in this set and NOT in get_all_known_stock_tickers() at the same
+      time (an ETF) -- that is exactly the case this merge exists for.
 
     Callers that only need the ticker symbols should use get_all_tickers()
     below; callers that need name/exchange should use this directly.
@@ -67,13 +81,13 @@ def get_all_watchlist_entries(config: Optional[dict] = None) -> list[dict]:
     # init_db() has run) must not break the merge for callers that only
     # need reference_tickers.
     try:
-        from analysis.universe import get_live_stock_candidates
-        for ticker in get_live_stock_candidates():
+        from analysis.universe import get_all_known_stock_tickers
+        for ticker in sorted(get_all_known_stock_tickers()):
             if ticker not in already:
                 entries.append({"ticker": ticker, "name": ticker, "exchange": "NYSE"})
                 already.add(ticker)
     except Exception as exc:
-        logger.warning("Could not load live stock candidates for price ingestion: %s", exc)
+        logger.warning("Could not load known stock tickers for price ingestion: %s", exc)
 
     try:
         from brokers.trading212 import get_held_research_tickers

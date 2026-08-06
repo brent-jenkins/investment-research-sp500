@@ -1,0 +1,29 @@
+ticker,membership_start,membership_end,rows_fetched,validation_accepted,reject_reasons,n_rows,min_date,max_date
+PD,1996-01-02,2007-03-16,1839,False,"no_price_row_within_45d_of_membership_end (data spans 2019-04-11..2026-08-05, membership ended 2007-03-16); entire_series_postdates_membership_end (first row 2019-04-11 is after membership ended 2007-03-16) -- likely symbol reuse",1839,2019-04-11,2026-08-05
+ADCT,1999-08-02,2007-06-26,1562,False,"no_price_row_within_45d_of_membership_end (data spans 2020-05-18..2026-08-05, membership ended 2007-06-26); entire_series_postdates_membership_end (first row 2020-05-18 is after membership ended 2007-06-26) -- likely symbol reuse",1562,2020-05-18,2026-08-05
+KSE,2000-08-21,2007-08-24,0,False,fetch_returned_zero_rows,,,
+TEK,1996-01-02,2007-11-13,447,False,"no_price_row_within_45d_of_membership_end (data spans 2024-10-22..2026-08-05, membership ended 2007-11-13); entire_series_postdates_membership_end (first row 2024-10-22 is after membership ended 2007-11-13) -- likely symbol reuse",447,2024-10-22,2026-08-05
+BC,1996-01-02,2008-06-18,4928,True,,4928,2007-01-03,2026-08-05
+TEX,2006-12-20,2008-11-05,4928,True,,4928,2007-01-03,2026-08-05
+UIS,1996-01-02,2008-11-07,4928,True,,4928,2007-01-03,2026-08-05
+ROH,1996-01-02,2009-04-01,0,False,fetch_returned_zero_rows,,,
+MBI,1996-12-03,2009-12-17,4928,True,,4928,2007-01-03,2026-08-05
+JAVA,1996-01-02,2010-01-21,1213,False,"no_price_row_within_45d_of_membership_end (data spans 2021-10-05..2026-08-05, membership ended 2010-01-21); entire_series_postdates_membership_end (first row 2021-10-05 is after membership ended 2010-01-21) -- likely symbol reuse",1213,2021-10-05,2026-08-05
+BDK,1996-01-02,2010-03-11,0,False,fetch_returned_zero_rows,,,
+STR,2006-12-01,2010-06-29,0,False,fetch_returned_zero_rows,,,
+MI,2002-02-11,2011-07-05,2687,False,"no_price_row_within_45d_of_membership_end (data spans 2015-11-25..2026-08-05, membership ended 2011-07-05); entire_series_postdates_membership_end (first row 2015-11-25 is after membership ended 2011-07-05) -- likely symbol reuse",2687,2015-11-25,2026-08-05
+AKS,2008-07-01,2011-12-14,0,False,fetch_returned_zero_rows,,,
+SHLD,2005-03-28,2012-08-23,725,False,"no_price_row_within_45d_of_membership_end (data spans 2023-09-14..2026-08-05, membership ended 2012-08-23); entire_series_postdates_membership_end (first row 2023-09-14 is after membership ended 2012-08-23) -- likely symbol reuse",725,2023-09-14,2026-08-05
+LXK,1999-08-13,2012-09-25,0,False,fetch_returned_zero_rows,,,
+ANRZQ,2011-06-02,2012-10-01,0,False,fetch_returned_zero_rows,,,
+ANF,2007-03-29,2013-12-18,4928,True,,4928,2007-01-03,2026-08-05
+RDC,1996-01-02,2014-08-13,0,False,fetch_returned_zero_rows,,,
+ATI,1996-01-02,2015-07-01,4928,True,,4928,2007-01-03,2026-08-05
+MWV,1996-01-02,2015-07-01,0,False,fetch_returned_zero_rows,,,
+POM,2007-11-09,2016-03-18,207,False,"no_price_row_within_45d_of_membership_end (data spans 2025-10-08..2026-08-05, membership ended 2016-03-18); entire_series_postdates_membership_end (first row 2025-10-08 is after membership ended 2016-03-18) -- likely symbol reuse",207,2025-10-08,2026-08-05
+LM,2006-04-24,2016-11-29,0,False,fetch_returned_zero_rows,,,
+HP,1996-01-02,2020-05-12,4928,True,,4928,2007-01-03,2026-08-05
+COTY,2016-10-03,2020-09-18,3306,True,,3306,2013-06-13,2026-08-05
+UNM,1996-01-02,2021-08-30,4928,True,,4928,2007-01-03,2026-08-05
+ABMD,2018-05-31,2022-12-19,0,False,fetch_returned_zero_rows,,,
+WBA,1996-01-02,2025-08-08,0,False,fetch_returned_zero_rows,,,

@@ -67,15 +67,18 @@ def test_gold_preserved_as_permanently_ineligible():
 
 
 def test_get_all_watchlist_entries_combines_reference_tickers_and_dynamic_candidates(config, db_engine, mocker):
-    """get_all_watchlist_entries() merges reference_tickers with the
-    dynamic live candidate pool (analysis.universe.get_live_stock_
-    candidates()). Mocked directly here rather than relying on real
-    universe_membership content, since this file's own job is validating
-    config.yaml's structure, not re-testing universe discovery (already
-    covered in tests/test_universe.py)."""
+    """get_all_watchlist_entries() merges reference_tickers with every
+    ever-known stock ticker (analysis.universe.get_all_known_stock_
+    tickers()) -- not just today's live candidates (2026-08-06: ingestion
+    scope was widened to every ticker ever discovered as a genuine
+    constituent, so price history keeps accruing after a ticker loses
+    membership; see get_all_watchlist_entries()'s own docstring). Mocked
+    directly here rather than relying on real universe_membership content,
+    since this file's own job is validating config.yaml's structure, not
+    re-testing universe discovery (already covered in tests/test_universe.py)."""
     from data.ingestion import get_all_watchlist_entries
 
-    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL", "MSFT"])
+    mocker.patch("analysis.universe.get_all_known_stock_tickers", return_value={"AAPL", "MSFT"})
 
     entries = get_all_watchlist_entries(config)
     tickers = [e["ticker"] for e in entries]
@@ -93,7 +96,7 @@ def test_get_all_watchlist_entries_no_dynamic_candidates_falls_back_to_reference
     just returns reference_tickers alone."""
     from data.ingestion import get_all_watchlist_entries
 
-    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=[])
+    mocker.patch("analysis.universe.get_all_known_stock_tickers", return_value=set())
 
     entries = get_all_watchlist_entries(config)
     tickers = [e["ticker"] for e in entries]

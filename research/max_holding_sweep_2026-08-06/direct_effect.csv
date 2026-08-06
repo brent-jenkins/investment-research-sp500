@@ -1,0 +1,5 @@
+cap,n_matched,n_of_base_capped,pct_matched,mean_pnl_pct_at_30,mean_pnl_pct_at_cap,median_pnl_pct_at_30,median_pnl_pct_at_cap,total_delta_pnl_gbp,n_improved,n_worsened,new_exit_reason_mix
+40,251,1723,14.6,8.65,9.9,7.35,8.32,-2108.33,109,142,"{'MAX_HOLDING': 224, 'STOP_LOSS': 23, 'SIGNAL_OFF': 3, 'CRISIS_EXIT': 1}"
+50,256,1723,14.9,9.03,10.45,7.25,8.59,-12997.05,115,141,"{'MAX_HOLDING': 217, 'STOP_LOSS': 31, 'SIGNAL_OFF': 6, 'CRISIS_EXIT': 2}"
+60,250,1723,14.5,7.92,10.39,6.64,8.87,20.67,113,137,"{'MAX_HOLDING': 184, 'STOP_LOSS': 56, 'SIGNAL_OFF': 9, 'CRISIS_EXIT': 1}"
+90,199,1723,11.5,9.62,12.44,7.69,11.85,-13313.53,78,121,"{'MAX_HOLDING': 134, 'STOP_LOSS': 55, 'SIGNAL_OFF': 9, 'CRISIS_EXIT': 1}"

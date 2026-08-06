@@ -1,0 +1,392 @@
+{
+  "30": {
+    "headline": {
+      "n_trades": 3436,
+      "total_pnl_gbp": 127167.8,
+      "cagr_pct": 7.05,
+      "ending_balance_gbp": 177167.8,
+      "profit_factor": 1.29,
+      "win_rate": 0.4464,
+      "max_drawdown_pct_fixed": -50.38,
+      "max_drawdown_pct_peak_relative": -34.48,
+      "avg_holding_days_winners": 30.0,
+      "avg_holding_days_losers": 13.9
+    },
+    "right_tail": {
+      "n_winners": 1534,
+      "mean_win_pnl_pct": 10.06,
+      "median_win_pnl_pct": 7.67,
+      "p90_pnl_pct": 14.27,
+      "p95_pnl_pct": 20.21,
+      "p99_pnl_pct": 35.67,
+      "max_single_winner_pct": 80.66,
+      "total_profit_gbp": 544476.34,
+      "top10_profit_share_pct": 6.1,
+      "top25_profit_share_pct": 11.5,
+      "top50_profit_share_pct": 18.6,
+      "top100_profit_share_pct": 29.7,
+      "n_trades_over_20pct": 177,
+      "n_trades_over_30pct": 67,
+      "n_trades_over_50pct": 10
+    },
+    "exit_mix": {
+      "MAX_HOLDING": {
+        "count": 1723,
+        "pct": 50.15
+      },
+      "STOP_LOSS": {
+        "count": 1526,
+        "pct": 44.41
+      },
+      "SIGNAL_OFF": {
+        "count": 125,
+        "pct": 3.64
+      },
+      "CRISIS_EXIT": {
+        "count": 34,
+        "pct": 0.99
+      },
+      "END_OF_DATA": {
+        "count": 28,
+        "pct": 0.81
+      }
+    },
+    "era": {
+      "2008-2013": {
+        "n_trades": 1140,
+        "cagr_pct": 3.59,
+        "total_pnl_gbp": 11948.15,
+        "win_rate": 0.4447
+      },
+      "2014-2019": {
+        "n_trades": 1017,
+        "cagr_pct": 6.85,
+        "total_pnl_gbp": 24665.86,
+        "win_rate": 0.4513
+      },
+      "2020-2026": {
+        "n_trades": 1279,
+        "cagr_pct": 17.0,
+        "total_pnl_gbp": 90553.79,
+        "win_rate": 0.4441
+      }
+    },
+    "concurrency": {
+      "mean_concurrent_positions": 10.76,
+      "max_concurrent_positions": 21,
+      "mean_deployed_pct_cost_basis_approx": 73.27
+    }
+  },
+  "40": {
+    "headline": {
+      "n_trades": 3085,
+      "total_pnl_gbp": 95597.1,
+      "cagr_pct": 5.92,
+      "ending_balance_gbp": 145597.1,
+      "profit_factor": 1.29,
+      "win_rate": 0.3955,
+      "max_drawdown_pct_fixed": -36.25,
+      "max_drawdown_pct_peak_relative": -36.25,
+      "avg_holding_days_winners": 40.0,
+      "avg_holding_days_losers": 15.5
+    },
+    "right_tail": {
+      "n_winners": 1220,
+      "mean_win_pnl_pct": 12.61,
+      "median_win_pnl_pct": 9.74,
+      "p90_pnl_pct": 16.37,
+      "p95_pnl_pct": 23.97,
+      "p99_pnl_pct": 41.07,
+      "max_single_winner_pct": 103.0,
+      "total_profit_gbp": 419869.86,
+      "top10_profit_share_pct": 6.4,
+      "top25_profit_share_pct": 12.3,
+      "top50_profit_share_pct": 20.2,
+      "top100_profit_share_pct": 31.8,
+      "n_trades_over_20pct": 220,
+      "n_trades_over_30pct": 85,
+      "n_trades_over_50pct": 17
+    },
+    "exit_mix": {
+      "STOP_LOSS": {
+        "count": 1544,
+        "pct": 50.05
+      },
+      "MAX_HOLDING": {
+        "count": 1319,
+        "pct": 42.76
+      },
+      "SIGNAL_OFF": {
+        "count": 155,
+        "pct": 5.02
+      },
+      "CRISIS_EXIT": {
+        "count": 36,
+        "pct": 1.17
+      },
+      "END_OF_DATA": {
+        "count": 31,
+        "pct": 1.0
+      }
+    },
+    "era": {
+      "2008-2013": {
+        "n_trades": 1061,
+        "cagr_pct": 1.77,
+        "total_pnl_gbp": 5655.64,
+        "win_rate": 0.3911
+      },
+      "2014-2019": {
+        "n_trades": 877,
+        "cagr_pct": 4.8,
+        "total_pnl_gbp": 16545.64,
+        "win_rate": 0.3854
+      },
+      "2020-2026": {
+        "n_trades": 1147,
+        "cagr_pct": 14.78,
+        "total_pnl_gbp": 73395.82,
+        "win_rate": 0.4071
+      }
+    },
+    "concurrency": {
+      "mean_concurrent_positions": 11.61,
+      "max_concurrent_positions": 25,
+      "mean_deployed_pct_cost_basis_approx": 62.36
+    }
+  },
+  "50": {
+    "headline": {
+      "n_trades": 2837,
+      "total_pnl_gbp": 92964.4,
+      "cagr_pct": 5.82,
+      "ending_balance_gbp": 142964.4,
+      "profit_factor": 1.31,
+      "win_rate": 0.3757,
+      "max_drawdown_pct_fixed": -33.39,
+      "max_drawdown_pct_peak_relative": -33.39,
+      "avg_holding_days_winners": 48.6,
+      "avg_holding_days_losers": 17.6
+    },
+    "right_tail": {
+      "n_winners": 1066,
+      "mean_win_pnl_pct": 14.12,
+      "median_win_pnl_pct": 10.96,
+      "p90_pnl_pct": 18.19,
+      "p95_pnl_pct": 25.77,
+      "p99_pnl_pct": 46.61,
+      "max_single_winner_pct": 103.87,
+      "total_profit_gbp": 379032.55,
+      "top10_profit_share_pct": 6.1,
+      "top25_profit_share_pct": 12.4,
+      "top50_profit_share_pct": 21.1,
+      "top100_profit_share_pct": 33.7,
+      "n_trades_over_20pct": 242,
+      "n_trades_over_30pct": 99,
+      "n_trades_over_50pct": 21
+    },
+    "exit_mix": {
+      "STOP_LOSS": {
+        "count": 1488,
+        "pct": 52.45
+      },
+      "MAX_HOLDING": {
+        "count": 1106,
+        "pct": 38.98
+      },
+      "SIGNAL_OFF": {
+        "count": 171,
+        "pct": 6.03
+      },
+      "CRISIS_EXIT": {
+        "count": 38,
+        "pct": 1.34
+      },
+      "END_OF_DATA": {
+        "count": 34,
+        "pct": 1.2
+      }
+    },
+    "era": {
+      "2008-2013": {
+        "n_trades": 967,
+        "cagr_pct": 0.02,
+        "total_pnl_gbp": 66.48,
+        "win_rate": 0.3661
+      },
+      "2014-2019": {
+        "n_trades": 788,
+        "cagr_pct": 6.31,
+        "total_pnl_gbp": 22728.45,
+        "win_rate": 0.3706
+      },
+      "2020-2026": {
+        "n_trades": 1082,
+        "cagr_pct": 14.3,
+        "total_pnl_gbp": 70169.47,
+        "win_rate": 0.3882
+      }
+    },
+    "concurrency": {
+      "mean_concurrent_positions": 12.49,
+      "max_concurrent_positions": 28,
+      "mean_deployed_pct_cost_basis_approx": 60.05
+    }
+  },
+  "60": {
+    "headline": {
+      "n_trades": 2660,
+      "total_pnl_gbp": 112457.19,
+      "cagr_pct": 6.55,
+      "ending_balance_gbp": 162457.19,
+      "profit_factor": 1.38,
+      "win_rate": 0.3564,
+      "max_drawdown_pct_fixed": -33.44,
+      "max_drawdown_pct_peak_relative": -33.44,
+      "avg_holding_days_winners": 57.5,
+      "avg_holding_days_losers": 19.6
+    },
+    "right_tail": {
+      "n_winners": 948,
+      "mean_win_pnl_pct": 16.45,
+      "median_win_pnl_pct": 13.09,
+      "p90_pnl_pct": 19.68,
+      "p95_pnl_pct": 27.98,
+      "p99_pnl_pct": 51.77,
+      "max_single_winner_pct": 206.51,
+      "total_profit_gbp": 387690.09,
+      "top10_profit_share_pct": 8.6,
+      "top25_profit_share_pct": 16.0,
+      "top50_profit_share_pct": 25.4,
+      "top100_profit_share_pct": 38.2,
+      "n_trades_over_20pct": 256,
+      "n_trades_over_30pct": 115,
+      "n_trades_over_50pct": 31
+    },
+    "exit_mix": {
+      "STOP_LOSS": {
+        "count": 1466,
+        "pct": 55.11
+      },
+      "MAX_HOLDING": {
+        "count": 943,
+        "pct": 35.45
+      },
+      "SIGNAL_OFF": {
+        "count": 175,
+        "pct": 6.58
+      },
+      "CRISIS_EXIT": {
+        "count": 40,
+        "pct": 1.5
+      },
+      "END_OF_DATA": {
+        "count": 36,
+        "pct": 1.35
+      }
+    },
+    "era": {
+      "2008-2013": {
+        "n_trades": 933,
+        "cagr_pct": 1.39,
+        "total_pnl_gbp": 4412.79,
+        "win_rate": 0.3301
+      },
+      "2014-2019": {
+        "n_trades": 721,
+        "cagr_pct": 5.85,
+        "total_pnl_gbp": 20911.4,
+        "win_rate": 0.344
+      },
+      "2020-2026": {
+        "n_trades": 1006,
+        "cagr_pct": 16.57,
+        "total_pnl_gbp": 87133.0,
+        "win_rate": 0.3897
+      }
+    },
+    "concurrency": {
+      "mean_concurrent_positions": 13.28,
+      "max_concurrent_positions": 29,
+      "mean_deployed_pct_cost_basis_approx": 63.68
+    }
+  },
+  "90": {
+    "headline": {
+      "n_trades": 2390,
+      "total_pnl_gbp": 109165.26,
+      "cagr_pct": 6.43,
+      "ending_balance_gbp": 159165.26,
+      "profit_factor": 1.46,
+      "win_rate": 0.3184,
+      "max_drawdown_pct_fixed": -32.49,
+      "max_drawdown_pct_peak_relative": -32.49,
+      "avg_holding_days_winners": 84.2,
+      "avg_holding_days_losers": 22.7
+    },
+    "right_tail": {
+      "n_winners": 761,
+      "mean_win_pnl_pct": 20.75,
+      "median_win_pnl_pct": 15.83,
+      "p90_pnl_pct": 23.51,
+      "p95_pnl_pct": 33.47,
+      "p99_pnl_pct": 61.87,
+      "max_single_winner_pct": 239.72,
+      "total_profit_gbp": 328268.94,
+      "top10_profit_share_pct": 10.2,
+      "top25_profit_share_pct": 19.3,
+      "top50_profit_share_pct": 30.1,
+      "top100_profit_share_pct": 44.7,
+      "n_trades_over_20pct": 295,
+      "n_trades_over_30pct": 165,
+      "n_trades_over_50pct": 51
+    },
+    "exit_mix": {
+      "STOP_LOSS": {
+        "count": 1392,
+        "pct": 58.24
+      },
+      "MAX_HOLDING": {
+        "count": 722,
+        "pct": 30.21
+      },
+      "SIGNAL_OFF": {
+        "count": 191,
+        "pct": 7.99
+      },
+      "CRISIS_EXIT": {
+        "count": 43,
+        "pct": 1.8
+      },
+      "END_OF_DATA": {
+        "count": 42,
+        "pct": 1.76
+      }
+    },
+    "era": {
+      "2008-2013": {
+        "n_trades": 902,
+        "cagr_pct": 1.26,
+        "total_pnl_gbp": 4078.72,
+        "win_rate": 0.2882
+      },
+      "2014-2019": {
+        "n_trades": 614,
+        "cagr_pct": 5.01,
+        "total_pnl_gbp": 17623.96,
+        "win_rate": 0.3192
+      },
+      "2020-2026": {
+        "n_trades": 874,
+        "cagr_pct": 16.63,
+        "total_pnl_gbp": 87462.58,
+        "win_rate": 0.349
+      }
+    },
+    "concurrency": {
+      "mean_concurrent_positions": 15.4,
+      "max_concurrent_positions": 34,
+      "mean_deployed_pct_cost_basis_approx": 60.76
+    }
+  }
+}

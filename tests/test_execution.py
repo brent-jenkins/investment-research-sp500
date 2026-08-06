@@ -4403,21 +4403,23 @@ def test_get_held_research_tickers_excludes_a_closed_position(db_engine):
 
 
 def test_get_all_watchlist_entries_includes_held_ticker_no_longer_a_live_candidate(db_engine, mocker):
-    """The critical dependency check (2026-08-02): a ticker with a
-    currently-open position must appear in get_all_watchlist_entries() --
-    and therefore in the daily price-pull ticker list -- even when
-    get_live_stock_candidates() (membership-gated) no longer returns it.
-    Without this, a held ticker's price data (and therefore its momentum
-    signal) would silently stop updating the moment it lost S&P 500
-    membership, making "let momentum, not index removal, govern an
-    already-open position" unimplementable."""
+    """The critical dependency check (2026-08-02, widened 2026-08-06): a
+    ticker with a currently-open position must appear in
+    get_all_watchlist_entries() -- and therefore in the daily price-pull
+    ticker list -- even when it's absent from
+    get_all_known_stock_tickers() entirely (e.g. a held ETF position;
+    ETF_TICKERS is deliberately excluded from that function). Without
+    this, a held ticker's price data (and therefore its momentum signal)
+    would silently stop updating, making "let momentum, not index
+    removal, govern an already-open position" unimplementable."""
     from data.ingestion import get_all_watchlist_entries
 
     _seed_open_position(db_engine, ticker="REMOVEDCO", t212_ticker="REMOVEDCO_US_EQ",
                          stop_price=1.0, days_ago=5, is_etf=False)
-    # REMOVEDCO deliberately absent -- it just lost membership, so the
-    # live candidate pool no longer includes it.
-    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL", "MSFT"])
+    # REMOVEDCO deliberately absent from the known-tickers set -- it's an
+    # ETF-style edge case (or a ticker discovery gap) the held-position
+    # merge alone must cover.
+    mocker.patch("analysis.universe.get_all_known_stock_tickers", return_value={"AAPL", "MSFT"})
 
     entries = get_all_watchlist_entries({"reference_tickers": []})
     tickers = [e["ticker"] for e in entries]
@@ -4427,17 +4429,49 @@ def test_get_all_watchlist_entries_includes_held_ticker_no_longer_a_live_candida
     assert len(tickers) == len(set(tickers))
 
 
-def test_get_all_watchlist_entries_held_ticker_never_duplicated_if_also_a_live_candidate(db_engine, mocker):
+def test_get_all_watchlist_entries_held_ticker_never_duplicated_if_also_a_known_ticker(db_engine, mocker):
     from data.ingestion import get_all_watchlist_entries
 
     _seed_open_position(db_engine, ticker="AAPL", t212_ticker="AAPL_US_EQ",
                          stop_price=1.0, days_ago=5, is_etf=False)
-    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AAPL"])
+    mocker.patch("analysis.universe.get_all_known_stock_tickers", return_value={"AAPL"})
 
     entries = get_all_watchlist_entries({"reference_tickers": []})
     tickers = [e["ticker"] for e in entries]
 
     assert tickers.count("AAPL") == 1
+
+
+def test_get_all_watchlist_entries_retains_ticker_after_membership_ends(db_engine, mocker):
+    """The Task A fix itself: a ticker whose only membership window has
+    already ended must still appear in get_all_watchlist_entries() (so
+    pull_incremental() keeps fetching it), even though it is no longer a
+    live trading candidate. Uses the real analysis.universe functions
+    against a seeded universe_membership row rather than mocking
+    get_all_known_stock_tickers(), so this actually exercises the DB
+    query the production code runs."""
+    from data.ingestion import get_all_watchlist_entries
+    from analysis.universe import is_member
+    from sqlalchemy import text
+    from datetime import date
+
+    with db_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO universe_membership (ticker, start_date, end_date, source, fetched_at) "
+                "VALUES ('DEPARTEDCO', '2010-01-01', '2015-01-01', 'test', :now)"
+            ),
+            {"now": datetime.utcnow()},
+        )
+
+    entries = get_all_watchlist_entries({"reference_tickers": []})
+    tickers = [e["ticker"] for e in entries]
+
+    assert "DEPARTEDCO" in tickers, "a ticker whose membership already ended must still be ingested"
+    # Point-in-time tradeability is unaffected by ingestion scope: still
+    # inadmissible today, still admissible inside its real window.
+    assert is_member("DEPARTEDCO", date(2026, 1, 1)) is False
+    assert is_member("DEPARTEDCO", date(2012, 6, 1)) is True
 
 
 def test_reconcile_disabled_or_missing_creds_is_noop(db_engine, v2_mocks, monkeypatch):

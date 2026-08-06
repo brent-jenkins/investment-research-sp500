@@ -1,0 +1,5 @@
+cap,trade_count_base,trade_count_variant,trade_count_delta,n_displaced_pairs,n_confirmed_capacity_rejected_at_variant,mean_fwd_30d_ret_pct_of_foregone,n_foregone_with_fwd_data,mean_concurrent_base,mean_concurrent_variant,mean_deployed_pct_base,mean_deployed_pct_variant
+40,3436,3085,-351,2863,1091,2.11,1091,10.76,11.61,73.27,62.36
+50,3436,2837,-599,2862,1026,1.81,1026,10.76,12.49,73.27,60.05
+60,3436,2660,-776,2887,946,2.14,946,10.76,13.28,73.27,63.68
+90,3436,2390,-1046,2961,920,1.83,920,10.76,15.4,73.27,60.76

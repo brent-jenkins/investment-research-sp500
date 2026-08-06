@@ -1,0 +1,21 @@
+ticker,membership_end,rows_fetched_start2007,date_heuristic_verdict,yfinance_quoteType,yfinance_exchange,yfinance_longName,final_verdict,notes
+BSC,2008-05-29,0,REJECTED,,,,,REJECTED,zero rows returned by yfinance -- no data under this symbol at all (Bear Stearns; JPMorgan-assisted acquisition 2008-05)
+CFC,2008-06-30,3091,not_flagged_by_date_heuristic,MUTUALFUND,YHD,3847602,REJECTED,continuous daily coverage 2007-2019 fooled the date/gap heuristic; yfinance metadata reveals this is an unrelated mutual fund, not Countrywide Financial. Countrywide was acquired by Bank of America 2008-07.
+NCC,2008-12-29,2342,not_flagged_by_date_heuristic,MUTUALFUND,YHD,2030698,REJECTED,data only starts 2012-05 (3+ years after National City ceased to exist -- acquired by PNC 2008-12); confirmed unrelated mutual fund via metadata
+WB,2008-12-29,3093,not_flagged_by_date_heuristic,EQUITY,NMS,Weibo Corporation,REJECTED,ticker reassigned to Weibo Corporation (NASDAQ IPO 2014-04-17); confirmed via metadata. Wachovia was acquired by Wells Fargo 2008-12/2009-01.
+LEH,n/a (not in universe_membership as LEH),0,REJECTED,,,,,REJECTED,zero rows -- Lehman Brothers bankruptcy 2008-09; no yfinance data under any tested symbol
+WAMUQ,n/a,0,REJECTED,,,,,REJECTED,zero rows -- Washington Mutual bankruptcy/FDIC seizure 2008-09
+FRE,n/a,0,REJECTED,,,,,REJECTED,zero rows -- Freddie Mac conservatorship 2008-09
+FNM,n/a,0,REJECTED,,,,,REJECTED,zero rows -- Fannie Mae conservatorship 2008-09
+CIT,n/a,0,REJECTED,,,,,REJECTED,zero rows -- CIT Group Chapter 11 2009-11
+MER,2008-12-29,1,REJECTED (already caught by date heuristic),MUTUALFUND,PNK,Meren Energy Inc.,REJECTED,single row dated 2026-07-17 at $1.42 -- entirely postdates membership end by 17+ years; confirmed unrelated pink-sheet entity via metadata. Merrill Lynch acquired by Bank of America 2008-12/2009-01.
+--- spot-check of stratified-sample ACCEPTED tickers (date heuristic + metadata agree) ---
+BC,2008-06-18,4928,ACCEPTED,EQUITY,NYQ,Brunswick Corporation,ACCEPTED,genuine -- Brunswick still independently trades today, simply left the S&P 500
+TEX,2008-11-05,4928,ACCEPTED,EQUITY,NYQ,Terex Corporation,ACCEPTED,genuine
+UIS,2008-11-07,4928,ACCEPTED,EQUITY,NYQ,Unisys Corporation,ACCEPTED,genuine
+MBI,2009-12-17,4928,ACCEPTED,EQUITY,NYQ,MBIA Inc.,ACCEPTED,genuine
+ANF,2013-12-18,4928,ACCEPTED,EQUITY,NYQ,Abercrombie & Fitch Co.,ACCEPTED,genuine
+ATI,2015-07-01,4928,ACCEPTED,EQUITY,NYQ,ATI Inc.,ACCEPTED,genuine
+HP,2020-05-12,4928,ACCEPTED,EQUITY,NYQ,"Helmerich & Payne, Inc.",ACCEPTED,genuine
+COTY,2020-09-18,3306,ACCEPTED,EQUITY,NYQ,Coty Inc.,ACCEPTED,genuine
+UNM,2021-08-30,4928,ACCEPTED,EQUITY,NYQ,Unum Group,ACCEPTED,genuine
