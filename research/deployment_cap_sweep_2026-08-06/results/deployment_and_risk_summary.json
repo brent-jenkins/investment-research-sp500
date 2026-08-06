@@ -1,0 +1,99 @@
+{
+  "deployment": {
+    "05": {
+      "cap": 0.5,
+      "mean_deployed_pct": 44.98,
+      "median_deployed_pct": 48.84,
+      "p10_deployed_pct": 45.26,
+      "p90_deployed_pct": 50.08,
+      "mean_n_open": 11.43,
+      "median_n_open": 10.0,
+      "max_n_open": 20,
+      "n_capacity_reject_days_total": 4470,
+      "n_block_days_total": 5122,
+      "pct_days_cap_bound": 87.27,
+      "n_capacity_rejections_total": 966432
+    },
+    "07": {
+      "cap": 0.7,
+      "mean_deployed_pct": 62.86,
+      "median_deployed_pct": 68.74,
+      "p10_deployed_pct": 55.54,
+      "p90_deployed_pct": 69.94,
+      "mean_n_open": 15.93,
+      "median_n_open": 14.0,
+      "max_n_open": 28,
+      "n_capacity_reject_days_total": 4441,
+      "n_block_days_total": 5122,
+      "pct_days_cap_bound": 86.7,
+      "n_capacity_rejections_total": 942699
+    },
+    "095": {
+      "cap": 0.95,
+      "mean_deployed_pct": 85.65,
+      "median_deployed_pct": 94.07,
+      "p10_deployed_pct": 55.39,
+      "p90_deployed_pct": 94.79,
+      "mean_n_open": 29.13,
+      "median_n_open": 31.0,
+      "max_n_open": 41,
+      "n_capacity_reject_days_total": 4426,
+      "n_block_days_total": 5122,
+      "pct_days_cap_bound": 86.41,
+      "n_capacity_rejections_total": 872852
+    }
+  },
+  "joint_risk": {
+    "05": {
+      "n_days_total": 6788,
+      "indep_gap_60d_distribution_n_open_ge_2": {
+        "n": 6713,
+        "mean": 1.1194662922285898,
+        "std": 0.43838338904796836,
+        "p5": 0.5114371237677764,
+        "p25": 0.8124600155969164,
+        "p50": 1.0466005991030283,
+        "p75": 1.3788115751354053,
+        "p95": 1.95190117165586,
+        "min": 0.164110970268871,
+        "max": 2.6585016848855743
+      },
+      "mean_n_open": 12.065409546258103,
+      "max_n_open": 20
+    },
+    "07": {
+      "n_days_total": 6788,
+      "indep_gap_60d_distribution_n_open_ge_2": {
+        "n": 6713,
+        "mean": 1.440604692540374,
+        "std": 0.5205426413783278,
+        "p5": 0.7228741410948843,
+        "p25": 1.0744413507321622,
+        "p50": 1.377568108904851,
+        "p75": 1.7184528873345029,
+        "p95": 2.3978945392402973,
+        "min": 0.1641109579769764,
+        "max": 3.1554016143378227
+      },
+      "mean_n_open": 16.81644077784325,
+      "max_n_open": 28
+    },
+    "095": {
+      "n_days_total": 6788,
+      "indep_gap_60d_distribution_n_open_ge_2": {
+        "n": 6713,
+        "mean": 2.056664435195995,
+        "std": 0.5718495122839959,
+        "p5": 1.1962335061766691,
+        "p25": 1.7110752931846958,
+        "p50": 2.025848957984826,
+        "p75": 2.3704883149018725,
+        "p95": 3.12039046931993,
+        "min": 0.16411100612746732,
+        "max": 3.9825892234177873
+      },
+      "mean_n_open": 30.78078962875663,
+      "max_n_open": 41
+    }
+  }
+}

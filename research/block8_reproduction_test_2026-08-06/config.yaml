@@ -1,0 +1,180 @@
+# This file configures exactly one system: a 12-month-momentum long/flat
+# signal with a rare-firing crisis circuit breaker. See CLAUDE.md's "V2
+# architecture" section for the design and validation history.
+
+# Monitoring-only reference tickers -- never have an execution mapping.
+# ^GSPC is the crisis-override reference index; GBPUSD=X/EURUSD=X convert
+# non-GBP positions. The live tradeable universe is sourced dynamically
+# (analysis/universe.py:get_live_stock_candidates(), the daily-refreshed
+# S&P 500 stock membership) -- see CLAUDE.md's "wire the momentum-only,
+# full-S&P-500 selection into live execution" section. The frozen
+# research/backtest universe (analysis/universe.py:ALL_TICKERS) is a
+# separate, deliberately untouched system.
+reference_tickers:
+  - {ticker: "^GSPC", name: "S&P 500", exchange: "NYSE"}
+  - {ticker: "GBPUSD=X", name: "GBP/USD", exchange: "FX"}
+  - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
+
+data:
+  # Fixed anchor date for a ticker's first-download history fetch.
+  # Deliberately an absolute date, not a "days back from today" count --
+  # a rolling day-count (the old history_days: 7150 key) only approximates
+  # this date at the moment it's chosen and silently drifts later every
+  # day after that (see CLAUDE.md's "rolling-window start-date fragility"
+  # fix, 2026-08-05). yfinance falls back to the asset's real listing date
+  # if that precedes this.
+  history_start_date: "2007-01-01"
+  rate_limit_seconds: 2.5   # delay between yfinance requests
+  max_retries: 5
+
+database:
+  path: "database/investment_research.db"
+
+scheduler:
+  timezone: "UTC"
+  # The only scheduled run driven by this dict; every other job (the
+  # hourly market_hours_check/account_state_refresh pair, stock order
+  # submission, membership refresh, weekly summary) is registered directly
+  # in data/scheduler.py:start_scheduler(). EOD is the only run that pulls
+  # prices. (Corrected 2026-08-04 -- this comment previously named the
+  # single hourly trade-alert job and the Monday-only stale-order
+  # cancellation, both removed/split 2026-08-03; see CLAUDE.md's "Splitting
+  # the hourly trade-alert job" and "Monday Pre-Market removed" sections.)
+  runs:
+    eod:
+      hour: 21
+      minute: 30
+      label: "End of Day"
+      type: "full"
+
+signals:
+  # ATR period for stop-loss sizing -- read by analysis/backtest.py and
+  # brokers/trading212.py.
+  atr_period: 14
+
+notifications:
+  email:
+    enabled: true
+    smtp_host: "smtp-relay.brevo.com"
+    smtp_port: 587
+    smtp_user: "your-smtp-login@example.com"
+    smtp_password: ""  # set via SMTP_PASSWORD env var
+    from_address: "hello@example.com"
+    to_addresses:
+      - "you@example.com"
+    alert_cooldown_hours: 8  # minimum hours between auto-sent alert emails
+
+backtest:
+  # Notional account size VaR sizing uses inside simulate_trades(), which
+  # runs one ticker at a time with no shared, compounding cross-ticker
+  # balance -- so this stays constant for a whole run rather than
+  # growing/shrinking the way a real account would.
+  starting_capital_gbp: 50000
+  # Stop-loss distance = entry +/- N x ATR. Read directly by
+  # analysis/volatility.py:_resolve_entry_stop(), the single function both
+  # live order placement and every backtest engine call -- there is no
+  # separate live-side copy.
+  atr_stop_multiplier: 2.0
+
+# Live execution config for the momentum + crisis-override system. See
+# CLAUDE.md's "V2 architecture" section for the validation history behind
+# this design (a single 12-month-momentum signal, long/flat, no regime
+# classifier, plus a rare-firing single-day >=7% crisis circuit breaker).
+trading212_invest:
+  enabled: true
+  live: false   # NEVER set true -- place_market_order() blocks it in code regardless
+  # Percentage of the account's CURRENT total value (fetched fresh on
+  # every decide/submit call) that may be deployed at once. Read
+  # identically by live order placement and the backtest engine's default
+  # simulation -- one shared key, one shared meaning.
+  max_total_deployed: 0.5
+  # VaR sizing ceiling for a single new entry, as a percentage of the
+  # account's current total value rather than a fixed GBP figure.
+  # Position count is an emergent consequence of this and
+  # max_total_deployed together, not a separately-enforced cap.
+  per_trade_pct: 0.05
+  # Rarely-binding safety ceiling -- per_trade_pct governs sizing in every
+  # ordinary case; this only intervenes if that figure somehow becomes
+  # absurd. Set high enough (20x+ a realistic account size) to be inert
+  # under normal operation.
+  absolute_max_position_gbp: 1000000
+  # Historical VaR position sizing, scaled to each ticker's own holding
+  # period via the square-root-of-time rule
+  # (analysis/volatility.py:_var_position_size_core()) -- position size
+  # scales inversely with a ticker's own volatility.
+  var_confidence: 0.95
+  var_lookback_days: 252
+  max_risk_pct: 0.01
+  min_position_gbp: 50
+  # Max holding days for the FROZEN research/backtest universe's ETF
+  # sleeve only (analysis/universe.py:ETF_TICKERS) -- not read for
+  # anything live. The live candidate pool is stocks-only (the ETF sleeve
+  # was removed from live trading entirely); every live ticker uses
+  # stock_max_holding_days below.
+  max_holding_days: 90
+  # Max holding days for every live candidate (analysis/universe.py:
+  # get_max_holding_days() dispatches on ETF_TICKERS membership, not on
+  # any config.yaml registration).
+  stock_max_holding_days: 30
+  # Gates entry CANDIDACY -- whether a ticker is even considered a new
+  # entry candidate at all (signal computed, VaR sized, queued). Defaults
+  # true (absent = enabled). Never gates exits.
+  stock_trading_enabled: true
+  # Gates the exchange-timed submission job (submit_pending_stock_orders()
+  # at 13:30 UTC / NYSE open) for a decision already computed and queued
+  # by stock_trading_enabled above -- a strictly later, narrower cut.
+  stock_submission_enabled: true
+  # Submission-time sanity check: if a ticker's price has moved more than
+  # this fraction since the EOD decision was made, skip submission rather
+  # than execute on a stale decision.
+  price_sanity_threshold_pct: 0.03
+  # How long a RESOLVED pending_orders row (SUBMITTED/FAILED/SKIPPED_*/
+  # REJECTED_CAPACITY/SUPERSEDED) is kept before being genuinely deleted --
+  # a deliberate, scoped exception to "flag, don't delete" for this
+  # specific, high-volume, mostly-routine-noise table. A still-PENDING row
+  # is never purged regardless of age. See purge_old_pending_orders().
+  pending_orders_retention_days: 30
+  # Calendar days after a ticker's last order (either direction) before a
+  # new entry into it is allowed -- see analysis/decision.py:
+  # resolve_reentry_cooldown_days()/is_reentry_blocked(). Set to 0
+  # (2026-08-03): a direct before/after comparison on the MTM engine
+  # showed the prior 30-day default was clearly worse -- CAGR 17.05% vs.
+  # 19.86%, ending balance £140,324.79 vs. £162,914.46 -- for a drawdown
+  # difference (-7.76% vs. -11.19% peak-relative) judged immaterial at
+  # this scale. See CLAUDE.md's "Re-entry cooldown set to 0
+  # (config-driven)" section. Absent entirely, both call sites fall back
+  # to the 30-day REENTRY_COOLDOWN_DAYS constant.
+  reentry_cooldown_days: 0
+  # Minimum absolute momentum an entry candidate must clear, on top of
+  # the existing momentum > 0 signal -- see analysis/decision.py:
+  # resolve_min_momentum_floor()/passes_momentum_floor(). Set to 0.02
+  # (2%, 2026-08-03): a reset-at-boundary sweep found 2% essentially
+  # free (one excluded trade in six years, already a loser), and a
+  # follow-up block-independent check across the full 19-year window
+  # found the excluded population is a clear net loser overall (24.5%
+  # win rate), concentrated mostly in the GFC block -- exactly the
+  # "best of a bad bunch" scenario this floor guards against. See
+  # CLAUDE.md's "Does the entry gate need an absolute minimum momentum
+  # floor?" and "Block-based confirmation of the 2% momentum floor"
+  # sections. Absent entirely, both call sites fall back to 0.0 (no
+  # additional floor) via the MIN_MOMENTUM_FLOOR constant.
+  min_momentum_pct: 0.02
+  # Real, broker-side stop-loss orders (2026-08-04) -- see CLAUDE.md's
+  # "Broker-side stop order" sections. brokers/trading212.py:
+  # poll_placed_orders() places a genuine T212 POST /equity/orders/stop
+  # for every BUY the instant it fills, at that entry's already-computed
+  # stop_price -- enforced continuously by T212 itself, independent of
+  # whether this system's own scheduler is even running (a materially
+  # stronger guarantee than the once-an-hour local check alone). Flipped
+  # to true only after the required single supervised real-order test on
+  # the demo account confirmed T212's actual pending-order status string
+  # ("NEW") and currency behaviour (order-level "currency" is the
+  # account's own GBP; instrument.currency correctly stays USD; stop
+  # price is interpreted in the instrument's own currency) -- this
+  # endpoint is confirmed not-yet-idempotent in beta (a retry on timeout
+  # can create a duplicate standing order -- see place_stop_order()'s own
+  # docstring for why placement is single-attempt only, never retried).
+  # The existing local stop-loss check
+  # (analysis/decision.py:evaluate_exit_reason()'s STOP_LOSS branch)
+  # keeps running regardless of this flag -- both layers are active now.
+  broker_side_stop_enabled: true

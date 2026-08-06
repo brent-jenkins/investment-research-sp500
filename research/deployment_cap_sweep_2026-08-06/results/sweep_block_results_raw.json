@@ -1,0 +1,4226 @@
+[
+  {
+    "cap": 0.5,
+    "block": 0,
+    "start": "2007-01-01",
+    "end": "2008-03-23",
+    "years": 1.21,
+    "n_candidates": 495,
+    "strat_n_trades": 59,
+    "strat_cagr_pct": -5.3,
+    "strat_cagr_tradespan_pct": -26.84,
+    "strat_total_return_pct": -6.38,
+    "strat_dd_peak_pct": -9.34,
+    "strat_dd_fixed_pct": -9.34,
+    "strat_profit_factor": 0.47,
+    "strat_ending_gbp": 46811.96,
+    "strat_return_per_unit_dd": -0.567,
+    "sp_dd_peak_pct": -18.64,
+    "sp_cagr_pct": -5.11,
+    "block_pass": false,
+    "legC_weight": 0.4806,
+    "legC_realised_dd": -9.34,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -2.35,
+      "total_return_pct": -2.83,
+      "max_dd_peak_relative_pct": -9.34,
+      "max_dd_fixed_pct": -4.81,
+      "ending_balance_gbp": 48582.96,
+      "return_per_unit_dd": -0.251
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.4806,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.35,
+          "total_return_pct": -2.83,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -4.81,
+          "ending_balance_gbp": 48582.96,
+          "return_per_unit_dd": -0.251
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4933,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.48,
+          "total_return_pct": -1.79,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -4.07,
+          "ending_balance_gbp": 49104.93,
+          "return_per_unit_dd": -0.159
+        }
+      },
+      "real_pr": {
+        "weight": 0.5097,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -0.59,
+          "total_return_pct": -0.71,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -2.86,
+          "ending_balance_gbp": 49643.4,
+          "return_per_unit_dd": -0.063
+        }
+      },
+      "real_tr": {
+        "weight": 0.5223,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 0.3,
+          "total_return_pct": 0.36,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -2.12,
+          "ending_balance_gbp": 50179.65,
+          "return_per_unit_dd": 0.032
+        }
+      }
+    },
+    "n_capacity_rejections": 4071,
+    "n_capacity_reject_days": 54,
+    "n_block_days": 306
+  },
+  {
+    "cap": 0.7,
+    "block": 0,
+    "start": "2007-01-01",
+    "end": "2008-03-23",
+    "years": 1.21,
+    "n_candidates": 495,
+    "strat_n_trades": 91,
+    "strat_cagr_pct": -9.51,
+    "strat_cagr_tradespan_pct": -43.64,
+    "strat_total_return_pct": -11.39,
+    "strat_dd_peak_pct": -14.27,
+    "strat_dd_fixed_pct": -14.27,
+    "strat_profit_factor": 0.37,
+    "strat_ending_gbp": 44306.93,
+    "strat_return_per_unit_dd": -0.666,
+    "sp_dd_peak_pct": -18.64,
+    "sp_cagr_pct": -5.11,
+    "block_pass": false,
+    "legC_weight": 0.7503,
+    "legC_realised_dd": -14.27,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -3.75,
+      "total_return_pct": -4.52,
+      "max_dd_peak_relative_pct": -14.27,
+      "max_dd_fixed_pct": -7.55,
+      "ending_balance_gbp": 47738.13,
+      "return_per_unit_dd": -0.263
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7503,
+        "realised_dd": -14.27,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -3.75,
+          "total_return_pct": -4.52,
+          "max_dd_peak_relative_pct": -14.27,
+          "max_dd_fixed_pct": -7.55,
+          "ending_balance_gbp": 47738.13,
+          "return_per_unit_dd": -0.263
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7698,
+        "realised_dd": -14.27,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.42,
+          "total_return_pct": -2.93,
+          "max_dd_peak_relative_pct": -14.27,
+          "max_dd_fixed_pct": -6.44,
+          "ending_balance_gbp": 48536.86,
+          "return_per_unit_dd": -0.17
+        }
+      },
+      "real_pr": {
+        "weight": 0.7643,
+        "realised_dd": -14.27,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.93,
+          "total_return_pct": -3.53,
+          "max_dd_peak_relative_pct": -14.27,
+          "max_dd_fixed_pct": -6.65,
+          "ending_balance_gbp": 48234.16,
+          "return_per_unit_dd": -0.205
+        }
+      },
+      "real_tr": {
+        "weight": 0.783,
+        "realised_dd": -14.27,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.63,
+          "total_return_pct": -1.97,
+          "max_dd_peak_relative_pct": -14.27,
+          "max_dd_fixed_pct": -5.58,
+          "ending_balance_gbp": 49014.28,
+          "return_per_unit_dd": -0.114
+        }
+      }
+    },
+    "n_capacity_rejections": 3830,
+    "n_capacity_reject_days": 54,
+    "n_block_days": 306
+  },
+  {
+    "cap": 0.95,
+    "block": 0,
+    "start": "2007-01-01",
+    "end": "2008-03-23",
+    "years": 1.21,
+    "n_candidates": 495,
+    "strat_n_trades": 163,
+    "strat_cagr_pct": -14.93,
+    "strat_cagr_tradespan_pct": -60.47,
+    "strat_total_return_pct": -17.77,
+    "strat_dd_peak_pct": -18.27,
+    "strat_dd_fixed_pct": -18.27,
+    "strat_profit_factor": 0.33,
+    "strat_ending_gbp": 41114.15,
+    "strat_return_per_unit_dd": -0.817,
+    "sp_dd_peak_pct": -18.64,
+    "sp_cagr_pct": -5.11,
+    "block_pass": false,
+    "legC_weight": 0.9783,
+    "legC_realised_dd": -18.27,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -4.99,
+      "total_return_pct": -6.0,
+      "max_dd_peak_relative_pct": -18.27,
+      "max_dd_fixed_pct": -9.89,
+      "ending_balance_gbp": 46997.76,
+      "return_per_unit_dd": -0.273
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9783,
+        "realised_dd": -18.27,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -4.99,
+          "total_return_pct": -6.0,
+          "max_dd_peak_relative_pct": -18.27,
+          "max_dd_fixed_pct": -9.89,
+          "ending_balance_gbp": 46997.76,
+          "return_per_unit_dd": -0.273
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -18.21,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": -3.27,
+          "total_return_pct": -3.94,
+          "max_dd_peak_relative_pct": -18.21,
+          "max_dd_fixed_pct": -8.45,
+          "ending_balance_gbp": 48028.67,
+          "return_per_unit_dd": -0.18
+        }
+      },
+      "real_pr": {
+        "weight": 0.9795,
+        "realised_dd": -18.27,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -4.92,
+          "total_return_pct": -5.92,
+          "max_dd_peak_relative_pct": -18.27,
+          "max_dd_fixed_pct": -9.81,
+          "ending_balance_gbp": 47039.95,
+          "return_per_unit_dd": -0.269
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -18.21,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": -3.27,
+          "total_return_pct": -3.94,
+          "max_dd_peak_relative_pct": -18.21,
+          "max_dd_fixed_pct": -8.45,
+          "ending_balance_gbp": 48028.67,
+          "return_per_unit_dd": -0.18
+        }
+      }
+    },
+    "n_capacity_rejections": 3204,
+    "n_capacity_reject_days": 54,
+    "n_block_days": 306
+  },
+  {
+    "cap": 0.5,
+    "block": 1,
+    "start": "2008-03-23",
+    "end": "2009-06-13",
+    "years": 1.218,
+    "n_candidates": 499,
+    "strat_n_trades": 268,
+    "strat_cagr_pct": -22.94,
+    "strat_cagr_tradespan_pct": -22.94,
+    "strat_total_return_pct": -27.2,
+    "strat_dd_peak_pct": -30.46,
+    "strat_dd_fixed_pct": -31.77,
+    "strat_profit_factor": 0.36,
+    "strat_ending_gbp": 36400.64,
+    "strat_return_per_unit_dd": -0.753,
+    "sp_dd_peak_pct": -52.58,
+    "sp_cagr_pct": -25.3,
+    "block_pass": false,
+    "legC_weight": 0.5012,
+    "legC_realised_dd": -30.46,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -12.7,
+      "total_return_pct": -15.25,
+      "max_dd_peak_relative_pct": -30.46,
+      "max_dd_fixed_pct": -28.47,
+      "ending_balance_gbp": 42372.51,
+      "return_per_unit_dd": -0.417
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5012,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -12.7,
+          "total_return_pct": -15.25,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.47,
+          "ending_balance_gbp": 42372.51,
+          "return_per_unit_dd": -0.417
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5139,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -12.07,
+          "total_return_pct": -14.51,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.42,
+          "ending_balance_gbp": 42745.83,
+          "return_per_unit_dd": -0.396
+        }
+      },
+      "real_pr": {
+        "weight": 0.5059,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -12.48,
+          "total_return_pct": -14.99,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.38,
+          "ending_balance_gbp": 42503.08,
+          "return_per_unit_dd": -0.41
+        }
+      },
+      "real_tr": {
+        "weight": 0.5186,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -11.85,
+          "total_return_pct": -14.25,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.33,
+          "ending_balance_gbp": 42877.21,
+          "return_per_unit_dd": -0.389
+        }
+      }
+    },
+    "n_capacity_rejections": 7416,
+    "n_capacity_reject_days": 139,
+    "n_block_days": 310
+  },
+  {
+    "cap": 0.7,
+    "block": 1,
+    "start": "2008-03-23",
+    "end": "2009-06-13",
+    "years": 1.218,
+    "n_candidates": 499,
+    "strat_n_trades": 339,
+    "strat_cagr_pct": -30.48,
+    "strat_cagr_tradespan_pct": -30.48,
+    "strat_total_return_pct": -35.78,
+    "strat_dd_peak_pct": -38.79,
+    "strat_dd_fixed_pct": -40.54,
+    "strat_profit_factor": 0.33,
+    "strat_ending_gbp": 32109.99,
+    "strat_return_per_unit_dd": -0.786,
+    "sp_dd_peak_pct": -52.58,
+    "sp_cagr_pct": -25.3,
+    "block_pass": false,
+    "legC_weight": 0.6708,
+    "legC_realised_dd": -38.79,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -17.01,
+      "total_return_pct": -20.32,
+      "max_dd_peak_relative_pct": -38.79,
+      "max_dd_fixed_pct": -36.45,
+      "ending_balance_gbp": 39840.83,
+      "return_per_unit_dd": -0.438
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6708,
+        "realised_dd": -38.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -17.01,
+          "total_return_pct": -20.32,
+          "max_dd_peak_relative_pct": -38.79,
+          "max_dd_fixed_pct": -36.45,
+          "ending_balance_gbp": 39840.83,
+          "return_per_unit_dd": -0.438
+        }
+      },
+      "zero_tr": {
+        "weight": 0.6876,
+        "realised_dd": -38.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -16.22,
+          "total_return_pct": -19.39,
+          "max_dd_peak_relative_pct": -38.79,
+          "max_dd_fixed_pct": -36.4,
+          "ending_balance_gbp": 40303.15,
+          "return_per_unit_dd": -0.418
+        }
+      },
+      "real_pr": {
+        "weight": 0.6738,
+        "realised_dd": -38.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -16.87,
+          "total_return_pct": -20.16,
+          "max_dd_peak_relative_pct": -38.79,
+          "max_dd_fixed_pct": -36.4,
+          "ending_balance_gbp": 39921.95,
+          "return_per_unit_dd": -0.435
+        }
+      },
+      "real_tr": {
+        "weight": 0.6905,
+        "realised_dd": -38.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -16.08,
+          "total_return_pct": -19.23,
+          "max_dd_peak_relative_pct": -38.79,
+          "max_dd_fixed_pct": -36.34,
+          "ending_balance_gbp": 40382.98,
+          "return_per_unit_dd": -0.415
+        }
+      }
+    },
+    "n_capacity_rejections": 6510,
+    "n_capacity_reject_days": 132,
+    "n_block_days": 310
+  },
+  {
+    "cap": 0.95,
+    "block": 1,
+    "start": "2008-03-23",
+    "end": "2009-06-13",
+    "years": 1.218,
+    "n_candidates": 499,
+    "strat_n_trades": 480,
+    "strat_cagr_pct": -28.53,
+    "strat_cagr_tradespan_pct": -28.53,
+    "strat_total_return_pct": -33.59,
+    "strat_dd_peak_pct": -38.4,
+    "strat_dd_fixed_pct": -41.24,
+    "strat_profit_factor": 0.42,
+    "strat_ending_gbp": 33206.12,
+    "strat_return_per_unit_dd": -0.743,
+    "sp_dd_peak_pct": -52.58,
+    "sp_cagr_pct": -25.3,
+    "block_pass": false,
+    "legC_weight": 0.6624,
+    "legC_realised_dd": -38.4,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -16.8,
+      "total_return_pct": -20.07,
+      "max_dd_peak_relative_pct": -38.4,
+      "max_dd_fixed_pct": -36.08,
+      "ending_balance_gbp": 39965.35,
+      "return_per_unit_dd": -0.437
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6624,
+        "realised_dd": -38.4,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -16.8,
+          "total_return_pct": -20.07,
+          "max_dd_peak_relative_pct": -38.4,
+          "max_dd_fixed_pct": -36.08,
+          "ending_balance_gbp": 39965.35,
+          "return_per_unit_dd": -0.437
+        }
+      },
+      "zero_tr": {
+        "weight": 0.679,
+        "realised_dd": -38.4,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -16.01,
+          "total_return_pct": -19.15,
+          "max_dd_peak_relative_pct": -38.4,
+          "max_dd_fixed_pct": -36.02,
+          "ending_balance_gbp": 40423.67,
+          "return_per_unit_dd": -0.417
+        }
+      },
+      "real_pr": {
+        "weight": 0.6656,
+        "realised_dd": -38.4,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -16.66,
+          "total_return_pct": -19.91,
+          "max_dd_peak_relative_pct": -38.4,
+          "max_dd_fixed_pct": -36.02,
+          "ending_balance_gbp": 40046.98,
+          "return_per_unit_dd": -0.434
+        }
+      },
+      "real_tr": {
+        "weight": 0.6821,
+        "realised_dd": -38.4,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -15.88,
+          "total_return_pct": -18.99,
+          "max_dd_peak_relative_pct": -38.4,
+          "max_dd_fixed_pct": -35.97,
+          "ending_balance_gbp": 40504.28,
+          "return_per_unit_dd": -0.413
+        }
+      }
+    },
+    "n_capacity_rejections": 4468,
+    "n_capacity_reject_days": 132,
+    "n_block_days": 310
+  },
+  {
+    "cap": 0.5,
+    "block": 2,
+    "start": "2009-06-13",
+    "end": "2010-09-03",
+    "years": 1.218,
+    "n_candidates": 497,
+    "strat_n_trades": 290,
+    "strat_cagr_pct": 16.22,
+    "strat_cagr_tradespan_pct": 16.22,
+    "strat_total_return_pct": 20.1,
+    "strat_dd_peak_pct": -7.83,
+    "strat_dd_fixed_pct": -9.59,
+    "strat_profit_factor": 1.71,
+    "strat_ending_gbp": 60050.46,
+    "strat_return_per_unit_dd": 2.072,
+    "sp_dd_peak_pct": -15.99,
+    "sp_cagr_pct": 15.8,
+    "block_pass": true,
+    "legC_weight": 0.4743,
+    "legC_realised_dd": -7.83,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 7.61,
+      "total_return_pct": 9.35,
+      "max_dd_peak_relative_pct": -7.83,
+      "max_dd_fixed_pct": -2.29,
+      "ending_balance_gbp": 54673.91,
+      "return_per_unit_dd": 0.972
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.4743,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.61,
+          "total_return_pct": 9.35,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.29,
+          "ending_balance_gbp": 54673.91,
+          "return_per_unit_dd": 0.972
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4872,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 8.89,
+          "total_return_pct": 10.93,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.09,
+          "ending_balance_gbp": 55465.35,
+          "return_per_unit_dd": 1.135
+        }
+      },
+      "real_pr": {
+        "weight": 0.4751,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.69,
+          "total_return_pct": 9.44,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.29,
+          "ending_balance_gbp": 54721.75,
+          "return_per_unit_dd": 0.982
+        }
+      },
+      "real_tr": {
+        "weight": 0.488,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 8.97,
+          "total_return_pct": 11.03,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.09,
+          "ending_balance_gbp": 55513.92,
+          "return_per_unit_dd": 1.145
+        }
+      }
+    },
+    "n_capacity_rejections": 50881,
+    "n_capacity_reject_days": 288,
+    "n_block_days": 310
+  },
+  {
+    "cap": 0.7,
+    "block": 2,
+    "start": "2009-06-13",
+    "end": "2010-09-03",
+    "years": 1.218,
+    "n_candidates": 497,
+    "strat_n_trades": 417,
+    "strat_cagr_pct": 18.31,
+    "strat_cagr_tradespan_pct": 18.31,
+    "strat_total_return_pct": 22.74,
+    "strat_dd_peak_pct": -11.79,
+    "strat_dd_fixed_pct": -14.99,
+    "strat_profit_factor": 1.61,
+    "strat_ending_gbp": 61369.98,
+    "strat_return_per_unit_dd": 1.553,
+    "sp_dd_peak_pct": -15.99,
+    "sp_cagr_pct": 15.8,
+    "block_pass": true,
+    "legC_weight": 0.725,
+    "legC_realised_dd": -11.79,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 11.56,
+      "total_return_pct": 14.25,
+      "max_dd_peak_relative_pct": -11.79,
+      "max_dd_fixed_pct": -3.5,
+      "ending_balance_gbp": 57126.94,
+      "return_per_unit_dd": 0.98
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.725,
+        "realised_dd": -11.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.56,
+          "total_return_pct": 14.25,
+          "max_dd_peak_relative_pct": -11.79,
+          "max_dd_fixed_pct": -3.5,
+          "ending_balance_gbp": 57126.94,
+          "return_per_unit_dd": 0.98
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7448,
+        "realised_dd": -11.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.57,
+          "total_return_pct": 16.77,
+          "max_dd_peak_relative_pct": -11.79,
+          "max_dd_fixed_pct": -3.19,
+          "ending_balance_gbp": 58382.89,
+          "return_per_unit_dd": 1.151
+        }
+      },
+      "real_pr": {
+        "weight": 0.7254,
+        "realised_dd": -11.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.6,
+          "total_return_pct": 14.31,
+          "max_dd_peak_relative_pct": -11.79,
+          "max_dd_fixed_pct": -3.5,
+          "ending_balance_gbp": 57152.64,
+          "return_per_unit_dd": 0.984
+        }
+      },
+      "real_tr": {
+        "weight": 0.7452,
+        "realised_dd": -11.79,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.61,
+          "total_return_pct": 16.82,
+          "max_dd_peak_relative_pct": -11.79,
+          "max_dd_fixed_pct": -3.19,
+          "ending_balance_gbp": 58408.07,
+          "return_per_unit_dd": 1.154
+        }
+      }
+    },
+    "n_capacity_rejections": 49405,
+    "n_capacity_reject_days": 266,
+    "n_block_days": 310
+  },
+  {
+    "cap": 0.95,
+    "block": 2,
+    "start": "2009-06-13",
+    "end": "2010-09-03",
+    "years": 1.218,
+    "n_candidates": 497,
+    "strat_n_trades": 663,
+    "strat_cagr_pct": 27.88,
+    "strat_cagr_tradespan_pct": 27.88,
+    "strat_total_return_pct": 34.94,
+    "strat_dd_peak_pct": -12.51,
+    "strat_dd_fixed_pct": -16.95,
+    "strat_profit_factor": 1.58,
+    "strat_ending_gbp": 67469.67,
+    "strat_return_per_unit_dd": 2.229,
+    "sp_dd_peak_pct": -15.99,
+    "sp_cagr_pct": 15.8,
+    "block_pass": true,
+    "legC_weight": 0.7715,
+    "legC_realised_dd": -12.51,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 12.28,
+      "total_return_pct": 15.16,
+      "max_dd_peak_relative_pct": -12.51,
+      "max_dd_fixed_pct": -3.73,
+      "ending_balance_gbp": 57579.3,
+      "return_per_unit_dd": 0.982
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7715,
+        "realised_dd": -12.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.28,
+          "total_return_pct": 15.16,
+          "max_dd_peak_relative_pct": -12.51,
+          "max_dd_fixed_pct": -3.73,
+          "ending_balance_gbp": 57579.3,
+          "return_per_unit_dd": 0.982
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7925,
+        "realised_dd": -12.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.43,
+          "total_return_pct": 17.85,
+          "max_dd_peak_relative_pct": -12.51,
+          "max_dd_fixed_pct": -3.4,
+          "ending_balance_gbp": 58923.8,
+          "return_per_unit_dd": 1.153
+        }
+      },
+      "real_pr": {
+        "weight": 0.7718,
+        "realised_dd": -12.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.32,
+          "total_return_pct": 15.2,
+          "max_dd_peak_relative_pct": -12.51,
+          "max_dd_fixed_pct": -3.73,
+          "ending_balance_gbp": 57600.46,
+          "return_per_unit_dd": 0.985
+        }
+      },
+      "real_tr": {
+        "weight": 0.7928,
+        "realised_dd": -12.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.46,
+          "total_return_pct": 17.89,
+          "max_dd_peak_relative_pct": -12.51,
+          "max_dd_fixed_pct": -3.4,
+          "ending_balance_gbp": 58944.13,
+          "return_per_unit_dd": 1.156
+        }
+      }
+    },
+    "n_capacity_rejections": 45989,
+    "n_capacity_reject_days": 251,
+    "n_block_days": 310
+  },
+  {
+    "cap": 0.5,
+    "block": 3,
+    "start": "2010-09-03",
+    "end": "2011-11-24",
+    "years": 1.21,
+    "n_candidates": 497,
+    "strat_n_trades": 260,
+    "strat_cagr_pct": 6.91,
+    "strat_cagr_tradespan_pct": 6.91,
+    "strat_total_return_pct": 8.42,
+    "strat_dd_peak_pct": -9.71,
+    "strat_dd_fixed_pct": -11.07,
+    "strat_profit_factor": 1.4,
+    "strat_ending_gbp": 54208.87,
+    "strat_return_per_unit_dd": 0.711,
+    "sp_dd_peak_pct": -19.39,
+    "sp_cagr_pct": 5.27,
+    "block_pass": true,
+    "legC_weight": 0.4802,
+    "legC_realised_dd": -9.71,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 2.87,
+      "total_return_pct": 3.49,
+      "max_dd_peak_relative_pct": -9.71,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 51743.61,
+      "return_per_unit_dd": 0.296
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.4802,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.87,
+          "total_return_pct": 3.49,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 51743.61,
+          "return_per_unit_dd": 0.296
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5033,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.08,
+          "total_return_pct": 4.95,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 52476.95,
+          "return_per_unit_dd": 0.42
+        }
+      },
+      "real_pr": {
+        "weight": 0.4804,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.91,
+          "total_return_pct": 3.53,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 51766.71,
+          "return_per_unit_dd": 0.3
+        }
+      },
+      "real_tr": {
+        "weight": 0.5035,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.11,
+          "total_return_pct": 5.0,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 52499.59,
+          "return_per_unit_dd": 0.424
+        }
+      }
+    },
+    "n_capacity_rejections": 58724,
+    "n_capacity_reject_days": 309,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.7,
+    "block": 3,
+    "start": "2010-09-03",
+    "end": "2011-11-24",
+    "years": 1.21,
+    "n_candidates": 497,
+    "strat_n_trades": 366,
+    "strat_cagr_pct": 5.87,
+    "strat_cagr_tradespan_pct": 5.87,
+    "strat_total_return_pct": 7.14,
+    "strat_dd_peak_pct": -12.91,
+    "strat_dd_fixed_pct": -15.16,
+    "strat_profit_factor": 1.33,
+    "strat_ending_gbp": 53571.26,
+    "strat_return_per_unit_dd": 0.454,
+    "sp_dd_peak_pct": -19.39,
+    "sp_cagr_pct": 5.27,
+    "block_pass": true,
+    "legC_weight": 0.6471,
+    "legC_realised_dd": -12.91,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 3.72,
+      "total_return_pct": 4.53,
+      "max_dd_peak_relative_pct": -12.91,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 52262.55,
+      "return_per_unit_dd": 0.289
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6471,
+        "realised_dd": -12.91,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.72,
+          "total_return_pct": 4.53,
+          "max_dd_peak_relative_pct": -12.91,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 52262.55,
+          "return_per_unit_dd": 0.289
+        }
+      },
+      "zero_tr": {
+        "weight": 0.6782,
+        "realised_dd": -12.91,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 5.34,
+          "total_return_pct": 6.5,
+          "max_dd_peak_relative_pct": -12.91,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53251.83,
+          "return_per_unit_dd": 0.414
+        }
+      },
+      "real_pr": {
+        "weight": 0.6473,
+        "realised_dd": -12.91,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.75,
+          "total_return_pct": 4.56,
+          "max_dd_peak_relative_pct": -12.91,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 52278.48,
+          "return_per_unit_dd": 0.291
+        }
+      },
+      "real_tr": {
+        "weight": 0.6783,
+        "realised_dd": -12.91,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 5.37,
+          "total_return_pct": 6.53,
+          "max_dd_peak_relative_pct": -12.91,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53266.49,
+          "return_per_unit_dd": 0.416
+        }
+      }
+    },
+    "n_capacity_rejections": 57136,
+    "n_capacity_reject_days": 309,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.95,
+    "block": 3,
+    "start": "2010-09-03",
+    "end": "2011-11-24",
+    "years": 1.21,
+    "n_candidates": 497,
+    "strat_n_trades": 724,
+    "strat_cagr_pct": 1.58,
+    "strat_cagr_tradespan_pct": 1.58,
+    "strat_total_return_pct": 1.92,
+    "strat_dd_peak_pct": -18.12,
+    "strat_dd_fixed_pct": -21.08,
+    "strat_profit_factor": 1.12,
+    "strat_ending_gbp": 50959.22,
+    "strat_return_per_unit_dd": 0.087,
+    "sp_dd_peak_pct": -19.39,
+    "sp_cagr_pct": 5.27,
+    "block_pass": true,
+    "legC_weight": 0.9292,
+    "legC_realised_dd": -18.12,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 4.99,
+      "total_return_pct": 6.06,
+      "max_dd_peak_relative_pct": -18.12,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 53031.99,
+      "return_per_unit_dd": 0.275
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9292,
+        "realised_dd": -18.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.99,
+          "total_return_pct": 6.06,
+          "max_dd_peak_relative_pct": -18.12,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53031.99,
+          "return_per_unit_dd": 0.275
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9738,
+        "realised_dd": -18.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.3,
+          "total_return_pct": 8.9,
+          "max_dd_peak_relative_pct": -18.12,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 54452.03,
+          "return_per_unit_dd": 0.403
+        }
+      },
+      "real_pr": {
+        "weight": 0.9293,
+        "realised_dd": -18.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.99,
+          "total_return_pct": 6.07,
+          "max_dd_peak_relative_pct": -18.12,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53035.34,
+          "return_per_unit_dd": 0.275
+        }
+      },
+      "real_tr": {
+        "weight": 0.9738,
+        "realised_dd": -18.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.3,
+          "total_return_pct": 8.91,
+          "max_dd_peak_relative_pct": -18.12,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 54453.21,
+          "return_per_unit_dd": 0.403
+        }
+      }
+    },
+    "n_capacity_rejections": 52181,
+    "n_capacity_reject_days": 309,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.5,
+    "block": 4,
+    "start": "2011-11-24",
+    "end": "2013-02-13",
+    "years": 1.221,
+    "n_candidates": 496,
+    "strat_n_trades": 228,
+    "strat_cagr_pct": 22.97,
+    "strat_cagr_tradespan_pct": 22.97,
+    "strat_total_return_pct": 28.72,
+    "strat_dd_peak_pct": -2.7,
+    "strat_dd_fixed_pct": -3.01,
+    "strat_profit_factor": 2.86,
+    "strat_ending_gbp": 64358.87,
+    "strat_return_per_unit_dd": 8.506,
+    "sp_dd_peak_pct": -9.94,
+    "sp_cagr_pct": 24.92,
+    "block_pass": true,
+    "legC_weight": 0.266,
+    "legC_realised_dd": -2.7,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 6.26,
+      "total_return_pct": 7.7,
+      "max_dd_peak_relative_pct": -2.7,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 53851.0,
+      "return_per_unit_dd": 2.32
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.266,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 6.26,
+          "total_return_pct": 7.7,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53851.0,
+          "return_per_unit_dd": 2.32
+        }
+      },
+      "zero_tr": {
+        "weight": 0.266,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 6.93,
+          "total_return_pct": 8.53,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 54264.17,
+          "return_per_unit_dd": 2.567
+        }
+      },
+      "real_pr": {
+        "weight": 0.2669,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 6.34,
+          "total_return_pct": 7.8,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53898.11,
+          "return_per_unit_dd": 2.349
+        }
+      },
+      "real_tr": {
+        "weight": 0.2669,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.01,
+          "total_return_pct": 8.63,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 54313.02,
+          "return_per_unit_dd": 2.597
+        }
+      }
+    },
+    "n_capacity_rejections": 52302,
+    "n_capacity_reject_days": 305,
+    "n_block_days": 305
+  },
+  {
+    "cap": 0.7,
+    "block": 4,
+    "start": "2011-11-24",
+    "end": "2013-02-13",
+    "years": 1.221,
+    "n_candidates": 496,
+    "strat_n_trades": 327,
+    "strat_cagr_pct": 26.23,
+    "strat_cagr_tradespan_pct": 26.23,
+    "strat_total_return_pct": 32.9,
+    "strat_dd_peak_pct": -5.11,
+    "strat_dd_fixed_pct": -5.84,
+    "strat_profit_factor": 2.53,
+    "strat_ending_gbp": 66449.44,
+    "strat_return_per_unit_dd": 5.133,
+    "sp_dd_peak_pct": -9.94,
+    "sp_cagr_pct": 24.92,
+    "block_pass": true,
+    "legC_weight": 0.5069,
+    "legC_realised_dd": -5.11,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 12.16,
+      "total_return_pct": 15.05,
+      "max_dd_peak_relative_pct": -5.11,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 57523.61,
+      "return_per_unit_dd": 2.381
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5069,
+        "realised_dd": -5.11,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.16,
+          "total_return_pct": 15.05,
+          "max_dd_peak_relative_pct": -5.11,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 57523.61,
+          "return_per_unit_dd": 2.381
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5069,
+        "realised_dd": -5.11,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.5,
+          "total_return_pct": 16.73,
+          "max_dd_peak_relative_pct": -5.11,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58362.86,
+          "return_per_unit_dd": 2.643
+        }
+      },
+      "real_pr": {
+        "weight": 0.5076,
+        "realised_dd": -5.11,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.22,
+          "total_return_pct": 15.12,
+          "max_dd_peak_relative_pct": -5.11,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 57558.67,
+          "return_per_unit_dd": 2.391
+        }
+      },
+      "real_tr": {
+        "weight": 0.5076,
+        "realised_dd": -5.11,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.56,
+          "total_return_pct": 16.8,
+          "max_dd_peak_relative_pct": -5.11,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58399.57,
+          "return_per_unit_dd": 2.654
+        }
+      }
+    },
+    "n_capacity_rejections": 50718,
+    "n_capacity_reject_days": 305,
+    "n_block_days": 305
+  },
+  {
+    "cap": 0.95,
+    "block": 4,
+    "start": "2011-11-24",
+    "end": "2013-02-13",
+    "years": 1.221,
+    "n_candidates": 496,
+    "strat_n_trades": 677,
+    "strat_cagr_pct": 26.25,
+    "strat_cagr_tradespan_pct": 26.25,
+    "strat_total_return_pct": 32.93,
+    "strat_dd_peak_pct": -6.51,
+    "strat_dd_fixed_pct": -7.5,
+    "strat_profit_factor": 1.94,
+    "strat_ending_gbp": 66466.48,
+    "strat_return_per_unit_dd": 4.033,
+    "sp_dd_peak_pct": -9.94,
+    "sp_cagr_pct": 24.92,
+    "block_pass": true,
+    "legC_weight": 0.6485,
+    "legC_realised_dd": -6.51,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 15.73,
+      "total_return_pct": 19.53,
+      "max_dd_peak_relative_pct": -6.51,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 59766.13,
+      "return_per_unit_dd": 2.417
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6485,
+        "realised_dd": -6.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 15.73,
+          "total_return_pct": 19.53,
+          "max_dd_peak_relative_pct": -6.51,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 59766.13,
+          "return_per_unit_dd": 2.417
+        }
+      },
+      "zero_tr": {
+        "weight": 0.6485,
+        "realised_dd": -6.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 17.5,
+          "total_return_pct": 21.76,
+          "max_dd_peak_relative_pct": -6.51,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 60880.28,
+          "return_per_unit_dd": 2.688
+        }
+      },
+      "real_pr": {
+        "weight": 0.6489,
+        "realised_dd": -6.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 15.77,
+          "total_return_pct": 19.58,
+          "max_dd_peak_relative_pct": -6.51,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 59790.4,
+          "return_per_unit_dd": 2.423
+        }
+      },
+      "real_tr": {
+        "weight": 0.6489,
+        "realised_dd": -6.51,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 17.54,
+          "total_return_pct": 21.81,
+          "max_dd_peak_relative_pct": -6.51,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 60905.66,
+          "return_per_unit_dd": 2.694
+        }
+      }
+    },
+    "n_capacity_rejections": 45287,
+    "n_capacity_reject_days": 305,
+    "n_block_days": 305
+  },
+  {
+    "cap": 0.5,
+    "block": 5,
+    "start": "2013-02-13",
+    "end": "2014-05-06",
+    "years": 1.221,
+    "n_candidates": 498,
+    "strat_n_trades": 264,
+    "strat_cagr_pct": 10.32,
+    "strat_cagr_tradespan_pct": 10.32,
+    "strat_total_return_pct": 12.74,
+    "strat_dd_peak_pct": -5.64,
+    "strat_dd_fixed_pct": -6.6,
+    "strat_profit_factor": 1.52,
+    "strat_ending_gbp": 56367.86,
+    "strat_return_per_unit_dd": 1.829,
+    "sp_dd_peak_pct": -5.76,
+    "sp_cagr_pct": 18.29,
+    "block_pass": true,
+    "legC_weight": 0.9787,
+    "legC_realised_dd": -5.64,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 17.88,
+      "total_return_pct": 22.25,
+      "max_dd_peak_relative_pct": -5.64,
+      "max_dd_fixed_pct": -2.16,
+      "ending_balance_gbp": 61123.02,
+      "return_per_unit_dd": 3.17
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 17.88,
+          "total_return_pct": 22.25,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 61123.02,
+          "return_per_unit_dd": 3.17
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 20.21,
+          "total_return_pct": 25.2,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 62600.54,
+          "return_per_unit_dd": 3.583
+        }
+      },
+      "real_pr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 17.88,
+          "total_return_pct": 22.25,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 61123.68,
+          "return_per_unit_dd": 3.17
+        }
+      },
+      "real_tr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 20.21,
+          "total_return_pct": 25.2,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 62601.22,
+          "return_per_unit_dd": 3.583
+        }
+      }
+    },
+    "n_capacity_rejections": 73141,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.7,
+    "block": 5,
+    "start": "2013-02-13",
+    "end": "2014-05-06",
+    "years": 1.221,
+    "n_candidates": 498,
+    "strat_n_trades": 357,
+    "strat_cagr_pct": 17.19,
+    "strat_cagr_tradespan_pct": 17.19,
+    "strat_total_return_pct": 21.38,
+    "strat_dd_peak_pct": -6.06,
+    "strat_dd_fixed_pct": -7.68,
+    "strat_profit_factor": 1.69,
+    "strat_ending_gbp": 60689.24,
+    "strat_return_per_unit_dd": 2.837,
+    "sp_dd_peak_pct": -5.76,
+    "sp_cagr_pct": 18.29,
+    "block_pass": true,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -5.76,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 18.29,
+      "total_return_pct": 22.76,
+      "max_dd_peak_relative_pct": -5.76,
+      "max_dd_fixed_pct": -2.2,
+      "ending_balance_gbp": 61382.43,
+      "return_per_unit_dd": 3.175
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 18.29,
+          "total_return_pct": 22.76,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 61382.43,
+          "return_per_unit_dd": 3.175
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 20.68,
+          "total_return_pct": 25.8,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 62898.34,
+          "return_per_unit_dd": 3.589
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 18.29,
+          "total_return_pct": 22.76,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 61382.43,
+          "return_per_unit_dd": 3.175
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 20.68,
+          "total_return_pct": 25.8,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 62898.34,
+          "return_per_unit_dd": 3.589
+        }
+      }
+    },
+    "n_capacity_rejections": 71558,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.95,
+    "block": 5,
+    "start": "2013-02-13",
+    "end": "2014-05-06",
+    "years": 1.221,
+    "n_candidates": 498,
+    "strat_n_trades": 688,
+    "strat_cagr_pct": 23.39,
+    "strat_cagr_tradespan_pct": 23.39,
+    "strat_total_return_pct": 29.26,
+    "strat_dd_peak_pct": -6.41,
+    "strat_dd_fixed_pct": -8.33,
+    "strat_profit_factor": 1.63,
+    "strat_ending_gbp": 64632.49,
+    "strat_return_per_unit_dd": 3.65,
+    "sp_dd_peak_pct": -5.76,
+    "sp_cagr_pct": 18.29,
+    "block_pass": true,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -5.76,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 18.29,
+      "total_return_pct": 22.76,
+      "max_dd_peak_relative_pct": -5.76,
+      "max_dd_fixed_pct": -2.2,
+      "ending_balance_gbp": 61382.43,
+      "return_per_unit_dd": 3.175
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 18.29,
+          "total_return_pct": 22.76,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 61382.43,
+          "return_per_unit_dd": 3.175
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 20.68,
+          "total_return_pct": 25.8,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 62898.34,
+          "return_per_unit_dd": 3.589
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 18.29,
+          "total_return_pct": 22.76,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 61382.43,
+          "return_per_unit_dd": 3.175
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -5.76,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 20.68,
+          "total_return_pct": 25.8,
+          "max_dd_peak_relative_pct": -5.76,
+          "max_dd_fixed_pct": -2.2,
+          "ending_balance_gbp": 62898.34,
+          "return_per_unit_dd": 3.589
+        }
+      }
+    },
+    "n_capacity_rejections": 66356,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.5,
+    "block": 6,
+    "start": "2014-05-06",
+    "end": "2015-07-27",
+    "years": 1.221,
+    "n_candidates": 499,
+    "strat_n_trades": 236,
+    "strat_cagr_pct": 13.59,
+    "strat_cagr_tradespan_pct": 13.59,
+    "strat_total_return_pct": 16.83,
+    "strat_dd_peak_pct": -5.34,
+    "strat_dd_fixed_pct": -5.64,
+    "strat_profit_factor": 1.93,
+    "strat_ending_gbp": 58415.21,
+    "strat_return_per_unit_dd": 2.544,
+    "sp_dd_peak_pct": -7.4,
+    "sp_cagr_pct": 8.19,
+    "block_pass": true,
+    "legC_weight": 0.7183,
+    "legC_realised_dd": -5.34,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 5.89,
+      "total_return_pct": 7.24,
+      "max_dd_peak_relative_pct": -5.34,
+      "max_dd_fixed_pct": -0.54,
+      "ending_balance_gbp": 53619.89,
+      "return_per_unit_dd": 1.103
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7183,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 5.89,
+          "total_return_pct": 7.24,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.54,
+          "ending_balance_gbp": 53619.89,
+          "return_per_unit_dd": 1.103
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7225,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.45,
+          "total_return_pct": 9.18,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.28,
+          "ending_balance_gbp": 54587.96,
+          "return_per_unit_dd": 1.396
+        }
+      },
+      "real_pr": {
+        "weight": 0.7183,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 5.9,
+          "total_return_pct": 7.25,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.54,
+          "ending_balance_gbp": 53622.51,
+          "return_per_unit_dd": 1.104
+        }
+      },
+      "real_tr": {
+        "weight": 0.7226,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.46,
+          "total_return_pct": 9.18,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.28,
+          "ending_balance_gbp": 54591.23,
+          "return_per_unit_dd": 1.397
+        }
+      }
+    },
+    "n_capacity_rejections": 70997,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.7,
+    "block": 6,
+    "start": "2014-05-06",
+    "end": "2015-07-27",
+    "years": 1.221,
+    "n_candidates": 499,
+    "strat_n_trades": 353,
+    "strat_cagr_pct": 14.49,
+    "strat_cagr_tradespan_pct": 14.49,
+    "strat_total_return_pct": 17.97,
+    "strat_dd_peak_pct": -7.54,
+    "strat_dd_fixed_pct": -8.02,
+    "strat_profit_factor": 1.66,
+    "strat_ending_gbp": 58985.33,
+    "strat_return_per_unit_dd": 1.922,
+    "sp_dd_peak_pct": -7.4,
+    "sp_cagr_pct": 8.19,
+    "block_pass": true,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -7.4,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 8.19,
+      "total_return_pct": 10.09,
+      "max_dd_peak_relative_pct": -7.4,
+      "max_dd_fixed_pct": -0.84,
+      "ending_balance_gbp": 55042.83,
+      "return_per_unit_dd": 1.106
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -7.4,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 8.19,
+          "total_return_pct": 10.09,
+          "max_dd_peak_relative_pct": -7.4,
+          "max_dd_fixed_pct": -0.84,
+          "ending_balance_gbp": 55042.83,
+          "return_per_unit_dd": 1.106
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -7.36,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 10.36,
+          "total_return_pct": 12.79,
+          "max_dd_peak_relative_pct": -7.36,
+          "max_dd_fixed_pct": -0.39,
+          "ending_balance_gbp": 56394.17,
+          "return_per_unit_dd": 1.408
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -7.4,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 8.19,
+          "total_return_pct": 10.09,
+          "max_dd_peak_relative_pct": -7.4,
+          "max_dd_fixed_pct": -0.84,
+          "ending_balance_gbp": 55042.83,
+          "return_per_unit_dd": 1.106
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -7.36,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 10.36,
+          "total_return_pct": 12.79,
+          "max_dd_peak_relative_pct": -7.36,
+          "max_dd_fixed_pct": -0.39,
+          "ending_balance_gbp": 56394.17,
+          "return_per_unit_dd": 1.408
+        }
+      }
+    },
+    "n_capacity_rejections": 69370,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.95,
+    "block": 6,
+    "start": "2014-05-06",
+    "end": "2015-07-27",
+    "years": 1.221,
+    "n_candidates": 499,
+    "strat_n_trades": 661,
+    "strat_cagr_pct": 17.7,
+    "strat_cagr_tradespan_pct": 17.7,
+    "strat_total_return_pct": 22.02,
+    "strat_dd_peak_pct": -10.34,
+    "strat_dd_fixed_pct": -11.27,
+    "strat_profit_factor": 1.46,
+    "strat_ending_gbp": 61008.6,
+    "strat_return_per_unit_dd": 1.712,
+    "sp_dd_peak_pct": -7.4,
+    "sp_cagr_pct": 8.19,
+    "block_pass": false,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -7.4,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 8.19,
+      "total_return_pct": 10.09,
+      "max_dd_peak_relative_pct": -7.4,
+      "max_dd_fixed_pct": -0.84,
+      "ending_balance_gbp": 55042.83,
+      "return_per_unit_dd": 1.106
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -7.4,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 8.19,
+          "total_return_pct": 10.09,
+          "max_dd_peak_relative_pct": -7.4,
+          "max_dd_fixed_pct": -0.84,
+          "ending_balance_gbp": 55042.83,
+          "return_per_unit_dd": 1.106
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -7.36,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 10.36,
+          "total_return_pct": 12.79,
+          "max_dd_peak_relative_pct": -7.36,
+          "max_dd_fixed_pct": -0.39,
+          "ending_balance_gbp": 56394.17,
+          "return_per_unit_dd": 1.408
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -7.4,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 8.19,
+          "total_return_pct": 10.09,
+          "max_dd_peak_relative_pct": -7.4,
+          "max_dd_fixed_pct": -0.84,
+          "ending_balance_gbp": 55042.83,
+          "return_per_unit_dd": 1.106
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -7.36,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 10.36,
+          "total_return_pct": 12.79,
+          "max_dd_peak_relative_pct": -7.36,
+          "max_dd_fixed_pct": -0.39,
+          "ending_balance_gbp": 56394.17,
+          "return_per_unit_dd": 1.408
+        }
+      }
+    },
+    "n_capacity_rejections": 64405,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.5,
+    "block": 7,
+    "start": "2015-07-27",
+    "end": "2016-10-17",
+    "years": 1.224,
+    "n_candidates": 506,
+    "strat_n_trades": 283,
+    "strat_cagr_pct": 0.35,
+    "strat_cagr_tradespan_pct": 0.35,
+    "strat_total_return_pct": 0.43,
+    "strat_dd_peak_pct": -9.68,
+    "strat_dd_fixed_pct": -9.68,
+    "strat_profit_factor": 0.99,
+    "strat_ending_gbp": 50212.77,
+    "strat_return_per_unit_dd": 0.036,
+    "sp_dd_peak_pct": -13.31,
+    "sp_cagr_pct": 1.3,
+    "block_pass": false,
+    "legC_weight": 0.7176,
+    "legC_realised_dd": -9.68,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 1.1,
+      "total_return_pct": 1.34,
+      "max_dd_peak_relative_pct": -9.68,
+      "max_dd_fixed_pct": -9.06,
+      "ending_balance_gbp": 50672.22,
+      "return_per_unit_dd": 0.113
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7176,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.1,
+          "total_return_pct": 1.34,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -9.06,
+          "ending_balance_gbp": 50672.22,
+          "return_per_unit_dd": 0.113
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7483,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.78,
+          "total_return_pct": 3.41,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -8.7,
+          "ending_balance_gbp": 51705.61,
+          "return_per_unit_dd": 0.287
+        }
+      },
+      "real_pr": {
+        "weight": 0.7187,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.15,
+          "total_return_pct": 1.42,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -9.06,
+          "ending_balance_gbp": 50707.57,
+          "return_per_unit_dd": 0.119
+        }
+      },
+      "real_tr": {
+        "weight": 0.7493,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.83,
+          "total_return_pct": 3.48,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -8.69,
+          "ending_balance_gbp": 51739.05,
+          "return_per_unit_dd": 0.293
+        }
+      }
+    },
+    "n_capacity_rejections": 49856,
+    "n_capacity_reject_days": 310,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.7,
+    "block": 7,
+    "start": "2015-07-27",
+    "end": "2016-10-17",
+    "years": 1.224,
+    "n_candidates": 506,
+    "strat_n_trades": 398,
+    "strat_cagr_pct": 1.2,
+    "strat_cagr_tradespan_pct": 1.2,
+    "strat_total_return_pct": 1.47,
+    "strat_dd_peak_pct": -11.24,
+    "strat_dd_fixed_pct": -11.24,
+    "strat_profit_factor": 1.03,
+    "strat_ending_gbp": 50732.94,
+    "strat_return_per_unit_dd": 0.106,
+    "sp_dd_peak_pct": -13.31,
+    "sp_cagr_pct": 1.3,
+    "block_pass": true,
+    "legC_weight": 0.8381,
+    "legC_realised_dd": -11.24,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 1.2,
+      "total_return_pct": 1.47,
+      "max_dd_peak_relative_pct": -11.24,
+      "max_dd_fixed_pct": -10.58,
+      "ending_balance_gbp": 50734.14,
+      "return_per_unit_dd": 0.107
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.8381,
+        "realised_dd": -11.24,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.2,
+          "total_return_pct": 1.47,
+          "max_dd_peak_relative_pct": -11.24,
+          "max_dd_fixed_pct": -10.58,
+          "ending_balance_gbp": 50734.14,
+          "return_per_unit_dd": 0.107
+        }
+      },
+      "zero_tr": {
+        "weight": 0.8738,
+        "realised_dd": -11.24,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.16,
+          "total_return_pct": 3.88,
+          "max_dd_peak_relative_pct": -11.24,
+          "max_dd_fixed_pct": -10.17,
+          "ending_balance_gbp": 51938.86,
+          "return_per_unit_dd": 0.281
+        }
+      },
+      "real_pr": {
+        "weight": 0.8388,
+        "realised_dd": -11.24,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.23,
+          "total_return_pct": 1.51,
+          "max_dd_peak_relative_pct": -11.24,
+          "max_dd_fixed_pct": -10.58,
+          "ending_balance_gbp": 50754.37,
+          "return_per_unit_dd": 0.11
+        }
+      },
+      "real_tr": {
+        "weight": 0.8743,
+        "realised_dd": -11.24,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.18,
+          "total_return_pct": 3.91,
+          "max_dd_peak_relative_pct": -11.24,
+          "max_dd_fixed_pct": -10.16,
+          "ending_balance_gbp": 51955.62,
+          "return_per_unit_dd": 0.283
+        }
+      }
+    },
+    "n_capacity_rejections": 48289,
+    "n_capacity_reject_days": 310,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.95,
+    "block": 7,
+    "start": "2015-07-27",
+    "end": "2016-10-17",
+    "years": 1.224,
+    "n_candidates": 506,
+    "strat_n_trades": 729,
+    "strat_cagr_pct": -1.41,
+    "strat_cagr_tradespan_pct": -1.41,
+    "strat_total_return_pct": -1.73,
+    "strat_dd_peak_pct": -14.48,
+    "strat_dd_fixed_pct": -14.48,
+    "strat_profit_factor": 0.97,
+    "strat_ending_gbp": 49135.53,
+    "strat_return_per_unit_dd": -0.098,
+    "sp_dd_peak_pct": -13.31,
+    "sp_cagr_pct": 1.3,
+    "block_pass": false,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -13.31,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 1.3,
+      "total_return_pct": 1.59,
+      "max_dd_peak_relative_pct": -13.31,
+      "max_dd_fixed_pct": -12.62,
+      "ending_balance_gbp": 50794.22,
+      "return_per_unit_dd": 0.097
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -13.31,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 1.3,
+          "total_return_pct": 1.59,
+          "max_dd_peak_relative_pct": -13.31,
+          "max_dd_fixed_pct": -12.62,
+          "ending_balance_gbp": 50794.22,
+          "return_per_unit_dd": 0.097
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -12.79,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 3.51,
+          "total_return_pct": 4.32,
+          "max_dd_peak_relative_pct": -12.79,
+          "max_dd_fixed_pct": -11.64,
+          "ending_balance_gbp": 52157.7,
+          "return_per_unit_dd": 0.275
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -13.31,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 1.3,
+          "total_return_pct": 1.59,
+          "max_dd_peak_relative_pct": -13.31,
+          "max_dd_fixed_pct": -12.62,
+          "ending_balance_gbp": 50794.22,
+          "return_per_unit_dd": 0.097
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -12.79,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 3.51,
+          "total_return_pct": 4.32,
+          "max_dd_peak_relative_pct": -12.79,
+          "max_dd_fixed_pct": -11.64,
+          "ending_balance_gbp": 52157.7,
+          "return_per_unit_dd": 0.275
+        }
+      }
+    },
+    "n_capacity_rejections": 43283,
+    "n_capacity_reject_days": 310,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.5,
+    "block": 8,
+    "start": "2016-10-17",
+    "end": "2018-01-07",
+    "years": 1.218,
+    "n_candidates": 506,
+    "strat_n_trades": 258,
+    "strat_cagr_pct": 10.24,
+    "strat_cagr_tradespan_pct": 10.24,
+    "strat_total_return_pct": 12.61,
+    "strat_dd_peak_pct": -3.52,
+    "strat_dd_fixed_pct": -3.74,
+    "strat_profit_factor": 1.53,
+    "strat_ending_gbp": 56307.45,
+    "strat_return_per_unit_dd": 2.91,
+    "sp_dd_peak_pct": -3.07,
+    "sp_cagr_pct": 23.24,
+    "block_pass": true,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -3.07,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 23.24,
+      "total_return_pct": 29.0,
+      "max_dd_peak_relative_pct": -3.07,
+      "max_dd_fixed_pct": -1.94,
+      "ending_balance_gbp": 64499.17,
+      "return_per_unit_dd": 7.559
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.66,
+          "return_per_unit_dd": 8.395
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.66,
+          "return_per_unit_dd": 8.395
+        }
+      }
+    },
+    "n_capacity_rejections": 78254,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.7,
+    "block": 8,
+    "start": "2016-10-17",
+    "end": "2018-01-07",
+    "years": 1.218,
+    "n_candidates": 506,
+    "strat_n_trades": 346,
+    "strat_cagr_pct": 16.13,
+    "strat_cagr_tradespan_pct": 16.13,
+    "strat_total_return_pct": 19.99,
+    "strat_dd_peak_pct": -3.75,
+    "strat_dd_fixed_pct": -3.75,
+    "strat_profit_factor": 1.68,
+    "strat_ending_gbp": 59993.43,
+    "strat_return_per_unit_dd": 4.302,
+    "sp_dd_peak_pct": -3.07,
+    "sp_cagr_pct": 23.24,
+    "block_pass": true,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -3.07,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 23.24,
+      "total_return_pct": 29.0,
+      "max_dd_peak_relative_pct": -3.07,
+      "max_dd_fixed_pct": -1.94,
+      "ending_balance_gbp": 64499.17,
+      "return_per_unit_dd": 7.559
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.66,
+          "return_per_unit_dd": 8.395
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.66,
+          "return_per_unit_dd": 8.395
+        }
+      }
+    },
+    "n_capacity_rejections": 76672,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.95,
+    "block": 8,
+    "start": "2016-10-17",
+    "end": "2018-01-07",
+    "years": 1.218,
+    "n_candidates": 506,
+    "strat_n_trades": 701,
+    "strat_cagr_pct": 18.65,
+    "strat_cagr_tradespan_pct": 18.65,
+    "strat_total_return_pct": 23.16,
+    "strat_dd_peak_pct": -5.66,
+    "strat_dd_fixed_pct": -5.66,
+    "strat_profit_factor": 1.57,
+    "strat_ending_gbp": 61581.4,
+    "strat_return_per_unit_dd": 3.295,
+    "sp_dd_peak_pct": -3.07,
+    "sp_cagr_pct": 23.24,
+    "block_pass": false,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -3.07,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 23.24,
+      "total_return_pct": 29.0,
+      "max_dd_peak_relative_pct": -3.07,
+      "max_dd_fixed_pct": -1.94,
+      "ending_balance_gbp": 64499.17,
+      "return_per_unit_dd": 7.559
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.66,
+          "return_per_unit_dd": 8.395
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.66,
+          "return_per_unit_dd": 8.395
+        }
+      }
+    },
+    "n_capacity_rejections": 71047,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.5,
+    "block": 9,
+    "start": "2018-01-07",
+    "end": "2019-03-30",
+    "years": 1.218,
+    "n_candidates": 504,
+    "strat_n_trades": 283,
+    "strat_cagr_pct": 0.61,
+    "strat_cagr_tradespan_pct": 0.61,
+    "strat_total_return_pct": 0.75,
+    "strat_dd_peak_pct": -13.76,
+    "strat_dd_fixed_pct": -14.39,
+    "strat_profit_factor": 1.05,
+    "strat_ending_gbp": 50373.55,
+    "strat_return_per_unit_dd": 0.045,
+    "sp_dd_peak_pct": -19.78,
+    "sp_cagr_pct": 2.58,
+    "block_pass": true,
+    "legC_weight": 0.6872,
+    "legC_realised_dd": -13.76,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 2.01,
+      "total_return_pct": 2.46,
+      "max_dd_peak_relative_pct": -13.76,
+      "max_dd_fixed_pct": -9.8,
+      "ending_balance_gbp": 51229.82,
+      "return_per_unit_dd": 0.146
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6872,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.01,
+          "total_return_pct": 2.46,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -9.8,
+          "ending_balance_gbp": 51229.82,
+          "return_per_unit_dd": 0.146
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7056,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.43,
+          "total_return_pct": 4.19,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -8.88,
+          "ending_balance_gbp": 52094.95,
+          "return_per_unit_dd": 0.249
+        }
+      },
+      "real_pr": {
+        "weight": 0.6955,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.66,
+          "total_return_pct": 3.25,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -9.41,
+          "ending_balance_gbp": 51625.77,
+          "return_per_unit_dd": 0.193
+        }
+      },
+      "real_tr": {
+        "weight": 0.7136,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.06,
+          "total_return_pct": 4.97,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -8.5,
+          "ending_balance_gbp": 52483.04,
+          "return_per_unit_dd": 0.295
+        }
+      }
+    },
+    "n_capacity_rejections": 64218,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.7,
+    "block": 9,
+    "start": "2018-01-07",
+    "end": "2019-03-30",
+    "years": 1.218,
+    "n_candidates": 504,
+    "strat_n_trades": 402,
+    "strat_cagr_pct": 1.6,
+    "strat_cagr_tradespan_pct": 1.6,
+    "strat_total_return_pct": 1.95,
+    "strat_dd_peak_pct": -17.46,
+    "strat_dd_fixed_pct": -18.52,
+    "strat_profit_factor": 1.07,
+    "strat_ending_gbp": 50973.36,
+    "strat_return_per_unit_dd": 0.091,
+    "sp_dd_peak_pct": -19.78,
+    "sp_cagr_pct": 2.58,
+    "block_pass": true,
+    "legC_weight": 0.8785,
+    "legC_realised_dd": -17.46,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 2.39,
+      "total_return_pct": 2.92,
+      "max_dd_peak_relative_pct": -17.46,
+      "max_dd_fixed_pct": -12.62,
+      "ending_balance_gbp": 51458.89,
+      "return_per_unit_dd": 0.137
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.8785,
+        "realised_dd": -17.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.39,
+          "total_return_pct": 2.92,
+          "max_dd_peak_relative_pct": -17.46,
+          "max_dd_fixed_pct": -12.62,
+          "ending_balance_gbp": 51458.89,
+          "return_per_unit_dd": 0.137
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9022,
+        "realised_dd": -17.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.2,
+          "total_return_pct": 5.14,
+          "max_dd_peak_relative_pct": -17.46,
+          "max_dd_fixed_pct": -11.49,
+          "ending_balance_gbp": 52570.8,
+          "return_per_unit_dd": 0.241
+        }
+      },
+      "real_pr": {
+        "weight": 0.8817,
+        "realised_dd": -17.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.64,
+          "total_return_pct": 3.22,
+          "max_dd_peak_relative_pct": -17.46,
+          "max_dd_fixed_pct": -12.48,
+          "ending_balance_gbp": 51612.19,
+          "return_per_unit_dd": 0.151
+        }
+      },
+      "real_tr": {
+        "weight": 0.9048,
+        "realised_dd": -17.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.41,
+          "total_return_pct": 5.4,
+          "max_dd_peak_relative_pct": -17.46,
+          "max_dd_fixed_pct": -11.37,
+          "ending_balance_gbp": 52699.79,
+          "return_per_unit_dd": 0.253
+        }
+      }
+    },
+    "n_capacity_rejections": 62569,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.95,
+    "block": 9,
+    "start": "2018-01-07",
+    "end": "2019-03-30",
+    "years": 1.218,
+    "n_candidates": 504,
+    "strat_n_trades": 720,
+    "strat_cagr_pct": 5.48,
+    "strat_cagr_tradespan_pct": 5.48,
+    "strat_total_return_pct": 6.72,
+    "strat_dd_peak_pct": -18.81,
+    "strat_dd_fixed_pct": -20.83,
+    "strat_profit_factor": 1.13,
+    "strat_ending_gbp": 53359.47,
+    "strat_return_per_unit_dd": 0.291,
+    "sp_dd_peak_pct": -19.78,
+    "sp_cagr_pct": 2.58,
+    "block_pass": true,
+    "legC_weight": 0.9491,
+    "legC_realised_dd": -18.81,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 2.51,
+      "total_return_pct": 3.06,
+      "max_dd_peak_relative_pct": -18.81,
+      "max_dd_fixed_pct": -13.67,
+      "ending_balance_gbp": 51530.38,
+      "return_per_unit_dd": 0.133
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9491,
+        "realised_dd": -18.81,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.51,
+          "total_return_pct": 3.06,
+          "max_dd_peak_relative_pct": -18.81,
+          "max_dd_fixed_pct": -13.67,
+          "ending_balance_gbp": 51530.38,
+          "return_per_unit_dd": 0.133
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9747,
+        "realised_dd": -18.81,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.47,
+          "total_return_pct": 5.47,
+          "max_dd_peak_relative_pct": -18.81,
+          "max_dd_fixed_pct": -12.47,
+          "ending_balance_gbp": 52733.56,
+          "return_per_unit_dd": 0.237
+        }
+      },
+      "real_pr": {
+        "weight": 0.9505,
+        "realised_dd": -18.81,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.61,
+          "total_return_pct": 3.19,
+          "max_dd_peak_relative_pct": -18.81,
+          "max_dd_fixed_pct": -13.61,
+          "ending_balance_gbp": 51594.49,
+          "return_per_unit_dd": 0.139
+        }
+      },
+      "real_tr": {
+        "weight": 0.9753,
+        "realised_dd": -18.81,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.52,
+          "total_return_pct": 5.53,
+          "max_dd_peak_relative_pct": -18.81,
+          "max_dd_fixed_pct": -12.43,
+          "ending_balance_gbp": 52766.86,
+          "return_per_unit_dd": 0.24
+        }
+      }
+    },
+    "n_capacity_rejections": 57806,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.5,
+    "block": 10,
+    "start": "2019-03-30",
+    "end": "2020-06-19",
+    "years": 1.218,
+    "n_candidates": 502,
+    "strat_n_trades": 250,
+    "strat_cagr_pct": 6.62,
+    "strat_cagr_tradespan_pct": 6.62,
+    "strat_total_return_pct": 8.12,
+    "strat_dd_peak_pct": -8.43,
+    "strat_dd_fixed_pct": -9.13,
+    "strat_profit_factor": 1.39,
+    "strat_ending_gbp": 54061.61,
+    "strat_return_per_unit_dd": 0.785,
+    "sp_dd_peak_pct": -33.92,
+    "sp_cagr_pct": 6.55,
+    "block_pass": true,
+    "legC_weight": 0.2293,
+    "legC_realised_dd": -8.43,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 1.87,
+      "total_return_pct": 2.28,
+      "max_dd_peak_relative_pct": -8.43,
+      "max_dd_fixed_pct": -4.74,
+      "ending_balance_gbp": 51141.74,
+      "return_per_unit_dd": 0.222
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.2293,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.87,
+          "total_return_pct": 2.28,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -4.74,
+          "ending_balance_gbp": 51141.74,
+          "return_per_unit_dd": 0.222
+        }
+      },
+      "zero_tr": {
+        "weight": 0.2321,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.37,
+          "total_return_pct": 2.89,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -4.37,
+          "ending_balance_gbp": 51447.4,
+          "return_per_unit_dd": 0.281
+        }
+      },
+      "real_pr": {
+        "weight": 0.2307,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.02,
+          "total_return_pct": 3.69,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -3.5,
+          "ending_balance_gbp": 51842.68,
+          "return_per_unit_dd": 0.358
+        }
+      },
+      "real_tr": {
+        "weight": 0.2335,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.52,
+          "total_return_pct": 4.3,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -3.12,
+          "ending_balance_gbp": 52151.53,
+          "return_per_unit_dd": 0.417
+        }
+      }
+    },
+    "n_capacity_rejections": 65901,
+    "n_capacity_reject_days": 298,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.7,
+    "block": 10,
+    "start": "2019-03-30",
+    "end": "2020-06-19",
+    "years": 1.218,
+    "n_candidates": 502,
+    "strat_n_trades": 349,
+    "strat_cagr_pct": 10.07,
+    "strat_cagr_tradespan_pct": 10.07,
+    "strat_total_return_pct": 12.4,
+    "strat_dd_peak_pct": -10.14,
+    "strat_dd_fixed_pct": -11.34,
+    "strat_profit_factor": 1.44,
+    "strat_ending_gbp": 56199.96,
+    "strat_return_per_unit_dd": 0.993,
+    "sp_dd_peak_pct": -33.92,
+    "sp_cagr_pct": 6.55,
+    "block_pass": true,
+    "legC_weight": 0.2772,
+    "legC_realised_dd": -10.14,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 2.24,
+      "total_return_pct": 2.73,
+      "max_dd_peak_relative_pct": -10.14,
+      "max_dd_fixed_pct": -5.76,
+      "ending_balance_gbp": 51364.98,
+      "return_per_unit_dd": 0.22
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.2772,
+        "realised_dd": -10.14,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.24,
+          "total_return_pct": 2.73,
+          "max_dd_peak_relative_pct": -10.14,
+          "max_dd_fixed_pct": -5.76,
+          "ending_balance_gbp": 51364.98,
+          "return_per_unit_dd": 0.22
+        }
+      },
+      "zero_tr": {
+        "weight": 0.2806,
+        "realised_dd": -10.14,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.84,
+          "total_return_pct": 3.47,
+          "max_dd_peak_relative_pct": -10.14,
+          "max_dd_fixed_pct": -5.31,
+          "ending_balance_gbp": 51735.96,
+          "return_per_unit_dd": 0.28
+        }
+      },
+      "real_pr": {
+        "weight": 0.2785,
+        "realised_dd": -10.14,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.31,
+          "total_return_pct": 4.05,
+          "max_dd_peak_relative_pct": -10.14,
+          "max_dd_fixed_pct": -4.6,
+          "ending_balance_gbp": 52024.69,
+          "return_per_unit_dd": 0.327
+        }
+      },
+      "real_tr": {
+        "weight": 0.2819,
+        "realised_dd": -10.14,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.92,
+          "total_return_pct": 4.8,
+          "max_dd_peak_relative_pct": -10.14,
+          "max_dd_fixed_pct": -4.15,
+          "ending_balance_gbp": 52398.71,
+          "return_per_unit_dd": 0.387
+        }
+      }
+    },
+    "n_capacity_rejections": 64331,
+    "n_capacity_reject_days": 298,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.95,
+    "block": 10,
+    "start": "2019-03-30",
+    "end": "2020-06-19",
+    "years": 1.218,
+    "n_candidates": 502,
+    "strat_n_trades": 650,
+    "strat_cagr_pct": 11.27,
+    "strat_cagr_tradespan_pct": 11.27,
+    "strat_total_return_pct": 13.89,
+    "strat_dd_peak_pct": -13.12,
+    "strat_dd_fixed_pct": -14.44,
+    "strat_profit_factor": 1.26,
+    "strat_ending_gbp": 56945.9,
+    "strat_return_per_unit_dd": 0.859,
+    "sp_dd_peak_pct": -33.92,
+    "sp_cagr_pct": 6.55,
+    "block_pass": true,
+    "legC_weight": 0.3618,
+    "legC_realised_dd": -13.12,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 2.86,
+      "total_return_pct": 3.49,
+      "max_dd_peak_relative_pct": -13.12,
+      "max_dd_fixed_pct": -7.57,
+      "ending_balance_gbp": 51745.83,
+      "return_per_unit_dd": 0.218
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.3618,
+        "realised_dd": -13.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.86,
+          "total_return_pct": 3.49,
+          "max_dd_peak_relative_pct": -13.12,
+          "max_dd_fixed_pct": -7.57,
+          "ending_balance_gbp": 51745.83,
+          "return_per_unit_dd": 0.218
+        }
+      },
+      "zero_tr": {
+        "weight": 0.3662,
+        "realised_dd": -13.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.65,
+          "total_return_pct": 4.47,
+          "max_dd_peak_relative_pct": -13.12,
+          "max_dd_fixed_pct": -7.0,
+          "ending_balance_gbp": 52232.86,
+          "return_per_unit_dd": 0.278
+        }
+      },
+      "real_pr": {
+        "weight": 0.363,
+        "realised_dd": -13.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.81,
+          "total_return_pct": 4.66,
+          "max_dd_peak_relative_pct": -13.12,
+          "max_dd_fixed_pct": -6.57,
+          "ending_balance_gbp": 52332.09,
+          "return_per_unit_dd": 0.291
+        }
+      },
+      "real_tr": {
+        "weight": 0.3674,
+        "realised_dd": -13.12,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.61,
+          "total_return_pct": 5.64,
+          "max_dd_peak_relative_pct": -13.12,
+          "max_dd_fixed_pct": -6.0,
+          "ending_balance_gbp": 52821.81,
+          "return_per_unit_dd": 0.351
+        }
+      }
+    },
+    "n_capacity_rejections": 60089,
+    "n_capacity_reject_days": 298,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.5,
+    "block": 11,
+    "start": "2020-06-19",
+    "end": "2021-09-09",
+    "years": 1.216,
+    "n_candidates": 502,
+    "strat_n_trades": 261,
+    "strat_cagr_pct": 15.16,
+    "strat_cagr_tradespan_pct": 15.16,
+    "strat_total_return_pct": 18.72,
+    "strat_dd_peak_pct": -3.21,
+    "strat_dd_fixed_pct": -3.44,
+    "strat_profit_factor": 1.65,
+    "strat_ending_gbp": 59359.94,
+    "strat_return_per_unit_dd": 4.723,
+    "sp_dd_peak_pct": -9.6,
+    "sp_cagr_pct": 35.07,
+    "block_pass": true,
+    "legC_weight": 0.3292,
+    "legC_realised_dd": -3.21,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 10.69,
+      "total_return_pct": 13.14,
+      "max_dd_peak_relative_pct": -3.21,
+      "max_dd_fixed_pct": -1.15,
+      "ending_balance_gbp": 56571.74,
+      "return_per_unit_dd": 3.331
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.3292,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 10.69,
+          "total_return_pct": 13.14,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.15,
+          "ending_balance_gbp": 56571.74,
+          "return_per_unit_dd": 3.331
+        }
+      },
+      "zero_tr": {
+        "weight": 0.3422,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.6,
+          "total_return_pct": 14.27,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.19,
+          "ending_balance_gbp": 57135.87,
+          "return_per_unit_dd": 3.613
+        }
+      },
+      "real_pr": {
+        "weight": 0.3296,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 10.75,
+          "total_return_pct": 13.21,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.15,
+          "ending_balance_gbp": 56606.57,
+          "return_per_unit_dd": 3.348
+        }
+      },
+      "real_tr": {
+        "weight": 0.3426,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.66,
+          "total_return_pct": 14.34,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.19,
+          "ending_balance_gbp": 57170.84,
+          "return_per_unit_dd": 3.631
+        }
+      }
+    },
+    "n_capacity_rejections": 84679,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.7,
+    "block": 11,
+    "start": "2020-06-19",
+    "end": "2021-09-09",
+    "years": 1.216,
+    "n_candidates": 502,
+    "strat_n_trades": 365,
+    "strat_cagr_pct": 16.39,
+    "strat_cagr_tradespan_pct": 16.39,
+    "strat_total_return_pct": 20.27,
+    "strat_dd_peak_pct": -6.07,
+    "strat_dd_fixed_pct": -7.23,
+    "strat_profit_factor": 1.51,
+    "strat_ending_gbp": 60133.14,
+    "strat_return_per_unit_dd": 2.701,
+    "sp_dd_peak_pct": -9.6,
+    "sp_cagr_pct": 35.07,
+    "block_pass": true,
+    "legC_weight": 0.6267,
+    "legC_realised_dd": -6.07,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 21.06,
+      "total_return_pct": 26.16,
+      "max_dd_peak_relative_pct": -6.07,
+      "max_dd_fixed_pct": -2.19,
+      "ending_balance_gbp": 63078.2,
+      "return_per_unit_dd": 3.47
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6267,
+        "realised_dd": -6.07,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 21.06,
+          "total_return_pct": 26.16,
+          "max_dd_peak_relative_pct": -6.07,
+          "max_dd_fixed_pct": -2.19,
+          "ending_balance_gbp": 63078.2,
+          "return_per_unit_dd": 3.47
+        }
+      },
+      "zero_tr": {
+        "weight": 0.6516,
+        "realised_dd": -6.07,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 22.94,
+          "total_return_pct": 28.54,
+          "max_dd_peak_relative_pct": -6.07,
+          "max_dd_fixed_pct": -2.27,
+          "ending_balance_gbp": 64267.74,
+          "return_per_unit_dd": 3.779
+        }
+      },
+      "real_pr": {
+        "weight": 0.6269,
+        "realised_dd": -6.07,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 21.1,
+          "total_return_pct": 26.2,
+          "max_dd_peak_relative_pct": -6.07,
+          "max_dd_fixed_pct": -2.19,
+          "ending_balance_gbp": 63099.05,
+          "return_per_unit_dd": 3.475
+        }
+      },
+      "real_tr": {
+        "weight": 0.6518,
+        "realised_dd": -6.07,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 22.97,
+          "total_return_pct": 28.58,
+          "max_dd_peak_relative_pct": -6.07,
+          "max_dd_fixed_pct": -2.27,
+          "ending_balance_gbp": 64288.04,
+          "return_per_unit_dd": 3.784
+        }
+      }
+    },
+    "n_capacity_rejections": 83063,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.95,
+    "block": 11,
+    "start": "2020-06-19",
+    "end": "2021-09-09",
+    "years": 1.216,
+    "n_candidates": 502,
+    "strat_n_trades": 622,
+    "strat_cagr_pct": 25.86,
+    "strat_cagr_tradespan_pct": 25.86,
+    "strat_total_return_pct": 32.26,
+    "strat_dd_peak_pct": -5.44,
+    "strat_dd_fixed_pct": -6.91,
+    "strat_profit_factor": 1.58,
+    "strat_ending_gbp": 66128.26,
+    "strat_return_per_unit_dd": 4.753,
+    "sp_dd_peak_pct": -9.6,
+    "sp_cagr_pct": 35.07,
+    "block_pass": true,
+    "legC_weight": 0.5608,
+    "legC_realised_dd": -5.44,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 18.71,
+      "total_return_pct": 23.18,
+      "max_dd_peak_relative_pct": -5.44,
+      "max_dd_fixed_pct": -1.96,
+      "ending_balance_gbp": 61588.7,
+      "return_per_unit_dd": 3.439
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5608,
+        "realised_dd": -5.44,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 18.71,
+          "total_return_pct": 23.18,
+          "max_dd_peak_relative_pct": -5.44,
+          "max_dd_fixed_pct": -1.96,
+          "ending_balance_gbp": 61588.7,
+          "return_per_unit_dd": 3.439
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5831,
+        "realised_dd": -5.44,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 20.36,
+          "total_return_pct": 25.26,
+          "max_dd_peak_relative_pct": -5.44,
+          "max_dd_fixed_pct": -2.03,
+          "ending_balance_gbp": 62630.68,
+          "return_per_unit_dd": 3.742
+        }
+      },
+      "real_pr": {
+        "weight": 0.5611,
+        "realised_dd": -5.44,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 18.75,
+          "total_return_pct": 23.23,
+          "max_dd_peak_relative_pct": -5.44,
+          "max_dd_fixed_pct": -1.96,
+          "ending_balance_gbp": 61614.16,
+          "return_per_unit_dd": 3.446
+        }
+      },
+      "real_tr": {
+        "weight": 0.5833,
+        "realised_dd": -5.44,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 20.39,
+          "total_return_pct": 25.31,
+          "max_dd_peak_relative_pct": -5.44,
+          "max_dd_fixed_pct": -2.04,
+          "ending_balance_gbp": 62653.48,
+          "return_per_unit_dd": 3.749
+        }
+      }
+    },
+    "n_capacity_rejections": 78915,
+    "n_capacity_reject_days": 308,
+    "n_block_days": 308
+  },
+  {
+    "cap": 0.5,
+    "block": 12,
+    "start": "2021-09-09",
+    "end": "2022-11-30",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 303,
+    "strat_cagr_pct": 6.41,
+    "strat_cagr_tradespan_pct": 6.41,
+    "strat_total_return_pct": 7.88,
+    "strat_dd_peak_pct": -10.29,
+    "strat_dd_fixed_pct": -10.99,
+    "strat_profit_factor": 1.16,
+    "strat_ending_gbp": 53940.41,
+    "strat_return_per_unit_dd": 0.623,
+    "sp_dd_peak_pct": -25.43,
+    "sp_cagr_pct": -7.01,
+    "block_pass": true,
+    "legC_weight": 0.3864,
+    "legC_realised_dd": -10.29,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -2.23,
+      "total_return_pct": -2.72,
+      "max_dd_peak_relative_pct": -10.29,
+      "max_dd_fixed_pct": -7.64,
+      "ending_balance_gbp": 48640.11,
+      "return_per_unit_dd": -0.217
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.3864,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.23,
+          "total_return_pct": -2.72,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.64,
+          "ending_balance_gbp": 48640.11,
+          "return_per_unit_dd": -0.217
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4019,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.76,
+          "total_return_pct": -2.14,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.28,
+          "ending_balance_gbp": 48927.89,
+          "return_per_unit_dd": -0.171
+        }
+      },
+      "real_pr": {
+        "weight": 0.4086,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.61,
+          "total_return_pct": -1.96,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.48,
+          "ending_balance_gbp": 49017.53,
+          "return_per_unit_dd": -0.157
+        }
+      },
+      "real_tr": {
+        "weight": 0.4243,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.13,
+          "total_return_pct": -1.37,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.11,
+          "ending_balance_gbp": 49313.01,
+          "return_per_unit_dd": -0.109
+        }
+      }
+    },
+    "n_capacity_rejections": 68270,
+    "n_capacity_reject_days": 309,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.7,
+    "block": 12,
+    "start": "2021-09-09",
+    "end": "2022-11-30",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 429,
+    "strat_cagr_pct": 4.29,
+    "strat_cagr_tradespan_pct": 4.29,
+    "strat_total_return_pct": 5.26,
+    "strat_dd_peak_pct": -10.58,
+    "strat_dd_fixed_pct": -11.45,
+    "strat_profit_factor": 1.1,
+    "strat_ending_gbp": 52632.46,
+    "strat_return_per_unit_dd": 0.406,
+    "sp_dd_peak_pct": -25.43,
+    "sp_cagr_pct": -7.01,
+    "block_pass": true,
+    "legC_weight": 0.3976,
+    "legC_realised_dd": -10.58,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -2.31,
+      "total_return_pct": -2.81,
+      "max_dd_peak_relative_pct": -10.58,
+      "max_dd_fixed_pct": -7.86,
+      "ending_balance_gbp": 48595.17,
+      "return_per_unit_dd": -0.218
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.3976,
+        "realised_dd": -10.58,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.31,
+          "total_return_pct": -2.81,
+          "max_dd_peak_relative_pct": -10.58,
+          "max_dd_fixed_pct": -7.86,
+          "ending_balance_gbp": 48595.17,
+          "return_per_unit_dd": -0.218
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4135,
+        "realised_dd": -10.58,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.82,
+          "total_return_pct": -2.22,
+          "max_dd_peak_relative_pct": -10.58,
+          "max_dd_fixed_pct": -7.49,
+          "ending_balance_gbp": 48890.83,
+          "return_per_unit_dd": -0.172
+        }
+      },
+      "real_pr": {
+        "weight": 0.4194,
+        "realised_dd": -10.58,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.7,
+          "total_return_pct": -2.07,
+          "max_dd_peak_relative_pct": -10.58,
+          "max_dd_fixed_pct": -7.71,
+          "ending_balance_gbp": 48964.64,
+          "return_per_unit_dd": -0.161
+        }
+      },
+      "real_tr": {
+        "weight": 0.4355,
+        "realised_dd": -10.58,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.2,
+          "total_return_pct": -1.47,
+          "max_dd_peak_relative_pct": -10.58,
+          "max_dd_fixed_pct": -7.32,
+          "ending_balance_gbp": 49267.34,
+          "return_per_unit_dd": -0.114
+        }
+      }
+    },
+    "n_capacity_rejections": 66561,
+    "n_capacity_reject_days": 309,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.95,
+    "block": 12,
+    "start": "2021-09-09",
+    "end": "2022-11-30",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 747,
+    "strat_cagr_pct": 7.11,
+    "strat_cagr_tradespan_pct": 7.11,
+    "strat_total_return_pct": 8.75,
+    "strat_dd_peak_pct": -14.21,
+    "strat_dd_fixed_pct": -15.3,
+    "strat_profit_factor": 1.15,
+    "strat_ending_gbp": 54375.14,
+    "strat_return_per_unit_dd": 0.5,
+    "sp_dd_peak_pct": -25.43,
+    "sp_cagr_pct": -7.01,
+    "block_pass": true,
+    "legC_weight": 0.5396,
+    "legC_realised_dd": -14.21,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": -3.29,
+      "total_return_pct": -4.0,
+      "max_dd_peak_relative_pct": -14.21,
+      "max_dd_fixed_pct": -10.68,
+      "ending_balance_gbp": 47999.56,
+      "return_per_unit_dd": -0.231
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5396,
+        "realised_dd": -14.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -3.29,
+          "total_return_pct": -4.0,
+          "max_dd_peak_relative_pct": -14.21,
+          "max_dd_fixed_pct": -10.68,
+          "ending_balance_gbp": 47999.56,
+          "return_per_unit_dd": -0.231
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5609,
+        "realised_dd": -14.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.64,
+          "total_return_pct": -3.22,
+          "max_dd_peak_relative_pct": -14.21,
+          "max_dd_fixed_pct": -10.2,
+          "ending_balance_gbp": 48390.98,
+          "return_per_unit_dd": -0.186
+        }
+      },
+      "real_pr": {
+        "weight": 0.556,
+        "realised_dd": -14.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.84,
+          "total_return_pct": -3.45,
+          "max_dd_peak_relative_pct": -14.21,
+          "max_dd_fixed_pct": -10.56,
+          "ending_balance_gbp": 48273.24,
+          "return_per_unit_dd": -0.2
+        }
+      },
+      "real_tr": {
+        "weight": 0.5771,
+        "realised_dd": -14.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.19,
+          "total_return_pct": -2.67,
+          "max_dd_peak_relative_pct": -14.21,
+          "max_dd_fixed_pct": -10.08,
+          "ending_balance_gbp": 48664.44,
+          "return_per_unit_dd": -0.154
+        }
+      }
+    },
+    "n_capacity_rejections": 61890,
+    "n_capacity_reject_days": 309,
+    "n_block_days": 309
+  },
+  {
+    "cap": 0.5,
+    "block": 13,
+    "start": "2022-11-30",
+    "end": "2024-02-20",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 263,
+    "strat_cagr_pct": 11.0,
+    "strat_cagr_tradespan_pct": 11.0,
+    "strat_total_return_pct": 13.59,
+    "strat_dd_peak_pct": -6.0,
+    "strat_dd_fixed_pct": -6.0,
+    "strat_profit_factor": 1.3,
+    "strat_ending_gbp": 56793.6,
+    "strat_return_per_unit_dd": 1.833,
+    "sp_dd_peak_pct": -10.28,
+    "sp_cagr_pct": 17.73,
+    "block_pass": true,
+    "legC_weight": 0.5756,
+    "legC_realised_dd": -6.0,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 10.15,
+      "total_return_pct": 12.53,
+      "max_dd_peak_relative_pct": -6.0,
+      "max_dd_fixed_pct": -4.14,
+      "ending_balance_gbp": 56265.82,
+      "return_per_unit_dd": 1.692
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5756,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 10.15,
+          "total_return_pct": 12.53,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.14,
+          "ending_balance_gbp": 56265.82,
+          "return_per_unit_dd": 1.692
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5945,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.55,
+          "total_return_pct": 14.28,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.02,
+          "ending_balance_gbp": 57141.39,
+          "return_per_unit_dd": 1.926
+        }
+      },
+      "real_pr": {
+        "weight": 0.6211,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.07,
+          "total_return_pct": 16.18,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.35,
+          "ending_balance_gbp": 58090.36,
+          "return_per_unit_dd": 2.178
+        }
+      },
+      "real_tr": {
+        "weight": 0.6393,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.47,
+          "total_return_pct": 17.94,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.22,
+          "ending_balance_gbp": 58970.35,
+          "return_per_unit_dd": 2.411
+        }
+      }
+    },
+    "n_capacity_rejections": 60364,
+    "n_capacity_reject_days": 305,
+    "n_block_days": 305
+  },
+  {
+    "cap": 0.7,
+    "block": 13,
+    "start": "2022-11-30",
+    "end": "2024-02-20",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 365,
+    "strat_cagr_pct": 14.59,
+    "strat_cagr_tradespan_pct": 14.59,
+    "strat_total_return_pct": 18.09,
+    "strat_dd_peak_pct": -7.42,
+    "strat_dd_fixed_pct": -7.42,
+    "strat_profit_factor": 1.27,
+    "strat_ending_gbp": 59044.36,
+    "strat_return_per_unit_dd": 1.966,
+    "sp_dd_peak_pct": -10.28,
+    "sp_cagr_pct": 17.73,
+    "block_pass": true,
+    "legC_weight": 0.7152,
+    "legC_realised_dd": -7.42,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 12.64,
+      "total_return_pct": 15.64,
+      "max_dd_peak_relative_pct": -7.42,
+      "max_dd_fixed_pct": -5.15,
+      "ending_balance_gbp": 57820.22,
+      "return_per_unit_dd": 1.703
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7152,
+        "realised_dd": -7.42,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.64,
+          "total_return_pct": 15.64,
+          "max_dd_peak_relative_pct": -7.42,
+          "max_dd_fixed_pct": -5.15,
+          "ending_balance_gbp": 57820.22,
+          "return_per_unit_dd": 1.703
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7387,
+        "realised_dd": -7.42,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.41,
+          "total_return_pct": 17.87,
+          "max_dd_peak_relative_pct": -7.42,
+          "max_dd_fixed_pct": -5.0,
+          "ending_balance_gbp": 58934.29,
+          "return_per_unit_dd": 1.942
+        }
+      },
+      "real_pr": {
+        "weight": 0.7457,
+        "realised_dd": -7.42,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.62,
+          "total_return_pct": 18.13,
+          "max_dd_peak_relative_pct": -7.42,
+          "max_dd_fixed_pct": -5.29,
+          "ending_balance_gbp": 59063.87,
+          "return_per_unit_dd": 1.97
+        }
+      },
+      "real_tr": {
+        "weight": 0.7675,
+        "realised_dd": -7.42,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 16.32,
+          "total_return_pct": 20.27,
+          "max_dd_peak_relative_pct": -7.42,
+          "max_dd_fixed_pct": -5.12,
+          "ending_balance_gbp": 60134.64,
+          "return_per_unit_dd": 2.199
+        }
+      }
+    },
+    "n_capacity_rejections": 58788,
+    "n_capacity_reject_days": 305,
+    "n_block_days": 305
+  },
+  {
+    "cap": 0.95,
+    "block": 13,
+    "start": "2022-11-30",
+    "end": "2024-02-20",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 712,
+    "strat_cagr_pct": 12.29,
+    "strat_cagr_tradespan_pct": 12.29,
+    "strat_total_return_pct": 15.21,
+    "strat_dd_peak_pct": -11.73,
+    "strat_dd_fixed_pct": -11.82,
+    "strat_profit_factor": 1.25,
+    "strat_ending_gbp": 57604.31,
+    "strat_return_per_unit_dd": 1.048,
+    "sp_dd_peak_pct": -10.28,
+    "sp_cagr_pct": 17.73,
+    "block_pass": true,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -10.28,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 17.73,
+      "total_return_pct": 22.05,
+      "max_dd_peak_relative_pct": -10.28,
+      "max_dd_fixed_pct": -7.2,
+      "ending_balance_gbp": 61025.69,
+      "return_per_unit_dd": 1.725
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -10.28,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 17.73,
+          "total_return_pct": 22.05,
+          "max_dd_peak_relative_pct": -10.28,
+          "max_dd_fixed_pct": -7.2,
+          "ending_balance_gbp": 61025.69,
+          "return_per_unit_dd": 1.725
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -9.96,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 19.64,
+          "total_return_pct": 24.48,
+          "max_dd_peak_relative_pct": -9.96,
+          "max_dd_fixed_pct": -6.77,
+          "ending_balance_gbp": 62237.69,
+          "return_per_unit_dd": 1.972
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -10.28,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 17.73,
+          "total_return_pct": 22.05,
+          "max_dd_peak_relative_pct": -10.28,
+          "max_dd_fixed_pct": -7.2,
+          "ending_balance_gbp": 61025.69,
+          "return_per_unit_dd": 1.725
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -9.96,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 19.64,
+          "total_return_pct": 24.48,
+          "max_dd_peak_relative_pct": -9.96,
+          "max_dd_fixed_pct": -6.77,
+          "ending_balance_gbp": 62237.69,
+          "return_per_unit_dd": 1.972
+        }
+      }
+    },
+    "n_capacity_rejections": 53487,
+    "n_capacity_reject_days": 305,
+    "n_block_days": 305
+  },
+  {
+    "cap": 0.5,
+    "block": 14,
+    "start": "2024-02-20",
+    "end": "2025-05-12",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 296,
+    "strat_cagr_pct": 6.81,
+    "strat_cagr_tradespan_pct": 6.81,
+    "strat_total_return_pct": 8.37,
+    "strat_dd_peak_pct": -15.85,
+    "strat_dd_fixed_pct": -18.44,
+    "strat_profit_factor": 1.23,
+    "strat_ending_gbp": 54186.62,
+    "strat_return_per_unit_dd": 0.429,
+    "sp_dd_peak_pct": -18.9,
+    "sp_cagr_pct": 13.97,
+    "block_pass": true,
+    "legC_weight": 0.8297,
+    "legC_realised_dd": -15.85,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 11.58,
+      "total_return_pct": 14.31,
+      "max_dd_peak_relative_pct": -15.85,
+      "max_dd_fixed_pct": -0.21,
+      "ending_balance_gbp": 57155.79,
+      "return_per_unit_dd": 0.73
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.8297,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.58,
+          "total_return_pct": 14.31,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": -0.21,
+          "ending_balance_gbp": 57155.79,
+          "return_per_unit_dd": 0.73
+        }
+      },
+      "zero_tr": {
+        "weight": 0.8413,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.96,
+          "total_return_pct": 16.04,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58021.54,
+          "return_per_unit_dd": 0.818
+        }
+      },
+      "real_pr": {
+        "weight": 0.8342,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.51,
+          "total_return_pct": 15.48,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": -0.07,
+          "ending_balance_gbp": 57740.2,
+          "return_per_unit_dd": 0.789
+        }
+      },
+      "real_tr": {
+        "weight": 0.8456,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.85,
+          "total_return_pct": 17.16,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58578.22,
+          "return_per_unit_dd": 0.874
+        }
+      }
+    },
+    "n_capacity_rejections": 94573,
+    "n_capacity_reject_days": 307,
+    "n_block_days": 307
+  },
+  {
+    "cap": 0.7,
+    "block": 14,
+    "start": "2024-02-20",
+    "end": "2025-05-12",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 408,
+    "strat_cagr_pct": 9.99,
+    "strat_cagr_tradespan_pct": 9.99,
+    "strat_total_return_pct": 12.33,
+    "strat_dd_peak_pct": -18.23,
+    "strat_dd_fixed_pct": -22.35,
+    "strat_profit_factor": 1.27,
+    "strat_ending_gbp": 56162.79,
+    "strat_return_per_unit_dd": 0.548,
+    "sp_dd_peak_pct": -18.9,
+    "sp_cagr_pct": 13.97,
+    "block_pass": true,
+    "legC_weight": 0.9622,
+    "legC_realised_dd": -18.23,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 13.44,
+      "total_return_pct": 16.64,
+      "max_dd_peak_relative_pct": -18.23,
+      "max_dd_fixed_pct": -0.27,
+      "ending_balance_gbp": 58321.84,
+      "return_per_unit_dd": 0.737
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9622,
+        "realised_dd": -18.23,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.44,
+          "total_return_pct": 16.64,
+          "max_dd_peak_relative_pct": -18.23,
+          "max_dd_fixed_pct": -0.27,
+          "ending_balance_gbp": 58321.84,
+          "return_per_unit_dd": 0.737
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9756,
+        "realised_dd": -18.23,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 15.06,
+          "total_return_pct": 18.69,
+          "max_dd_peak_relative_pct": -18.23,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 59344.95,
+          "return_per_unit_dd": 0.826
+        }
+      },
+      "real_pr": {
+        "weight": 0.9632,
+        "realised_dd": -18.23,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.65,
+          "total_return_pct": 16.91,
+          "max_dd_peak_relative_pct": -18.23,
+          "max_dd_fixed_pct": -0.24,
+          "ending_balance_gbp": 58453.47,
+          "return_per_unit_dd": 0.749
+        }
+      },
+      "real_tr": {
+        "weight": 0.9763,
+        "realised_dd": -18.23,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 15.2,
+          "total_return_pct": 18.86,
+          "max_dd_peak_relative_pct": -18.23,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 59432.23,
+          "return_per_unit_dd": 0.834
+        }
+      }
+    },
+    "n_capacity_rejections": 92922,
+    "n_capacity_reject_days": 307,
+    "n_block_days": 307
+  },
+  {
+    "cap": 0.95,
+    "block": 14,
+    "start": "2024-02-20",
+    "end": "2025-05-12",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 724,
+    "strat_cagr_pct": 20.19,
+    "strat_cagr_tradespan_pct": 20.19,
+    "strat_total_return_pct": 25.18,
+    "strat_dd_peak_pct": -17.59,
+    "strat_dd_fixed_pct": -23.0,
+    "strat_profit_factor": 1.24,
+    "strat_ending_gbp": 62588.69,
+    "strat_return_per_unit_dd": 1.148,
+    "sp_dd_peak_pct": -18.9,
+    "sp_cagr_pct": 13.97,
+    "block_pass": true,
+    "legC_weight": 0.9263,
+    "legC_realised_dd": -17.59,
+    "legC_matched": true,
+    "legC_metrics": {
+      "cagr_pct": 12.93,
+      "total_return_pct": 16.01,
+      "max_dd_peak_relative_pct": -17.59,
+      "max_dd_fixed_pct": -0.26,
+      "ending_balance_gbp": 58005.4,
+      "return_per_unit_dd": 0.735
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9263,
+        "realised_dd": -17.59,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.93,
+          "total_return_pct": 16.01,
+          "max_dd_peak_relative_pct": -17.59,
+          "max_dd_fixed_pct": -0.26,
+          "ending_balance_gbp": 58005.4,
+          "return_per_unit_dd": 0.735
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9393,
+        "realised_dd": -17.59,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.49,
+          "total_return_pct": 17.97,
+          "max_dd_peak_relative_pct": -17.59,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58986.2,
+          "return_per_unit_dd": 0.824
+        }
+      },
+      "real_pr": {
+        "weight": 0.9283,
+        "realised_dd": -17.59,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.34,
+          "total_return_pct": 16.52,
+          "max_dd_peak_relative_pct": -17.59,
+          "max_dd_fixed_pct": -0.2,
+          "ending_balance_gbp": 58261.32,
+          "return_per_unit_dd": 0.758
+        }
+      },
+      "real_tr": {
+        "weight": 0.9409,
+        "realised_dd": -17.59,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.84,
+          "total_return_pct": 18.4,
+          "max_dd_peak_relative_pct": -17.59,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 59201.45,
+          "return_per_unit_dd": 0.843
+        }
+      }
+    },
+    "n_capacity_rejections": 88447,
+    "n_capacity_reject_days": 307,
+    "n_block_days": 307
+  },
+  {
+    "cap": 0.5,
+    "block": 15,
+    "start": "2025-05-12",
+    "end": "2026-08-03",
+    "years": 1.224,
+    "n_candidates": 503,
+    "strat_n_trades": 284,
+    "strat_cagr_pct": 27.3,
+    "strat_cagr_tradespan_pct": 27.3,
+    "strat_total_return_pct": 34.36,
+    "strat_dd_peak_pct": -9.65,
+    "strat_dd_fixed_pct": -13.88,
+    "strat_profit_factor": 1.69,
+    "strat_ending_gbp": 67181.89,
+    "strat_return_per_unit_dd": 2.829,
+    "sp_dd_peak_pct": -9.1,
+    "sp_cagr_pct": 23.22,
+    "block_pass": false,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -9.1,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 23.22,
+      "total_return_pct": 29.12,
+      "max_dd_peak_relative_pct": -9.1,
+      "max_dd_fixed_pct": -1.42,
+      "ending_balance_gbp": 64558.19,
+      "return_per_unit_dd": 2.552
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      }
+    },
+    "n_capacity_rejections": 82785,
+    "n_capacity_reject_days": 307,
+    "n_block_days": 307
+  },
+  {
+    "cap": 0.7,
+    "block": 15,
+    "start": "2025-05-12",
+    "end": "2026-08-03",
+    "years": 1.224,
+    "n_candidates": 503,
+    "strat_n_trades": 405,
+    "strat_cagr_pct": 34.5,
+    "strat_cagr_tradespan_pct": 34.5,
+    "strat_total_return_pct": 43.72,
+    "strat_dd_peak_pct": -14.47,
+    "strat_dd_fixed_pct": -23.52,
+    "strat_profit_factor": 1.6,
+    "strat_ending_gbp": 71861.95,
+    "strat_return_per_unit_dd": 2.384,
+    "sp_dd_peak_pct": -9.1,
+    "sp_cagr_pct": 23.22,
+    "block_pass": false,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -9.1,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 23.22,
+      "total_return_pct": 29.12,
+      "max_dd_peak_relative_pct": -9.1,
+      "max_dd_fixed_pct": -1.42,
+      "ending_balance_gbp": 64558.19,
+      "return_per_unit_dd": 2.552
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      }
+    },
+    "n_capacity_rejections": 80977,
+    "n_capacity_reject_days": 307,
+    "n_block_days": 307
+  },
+  {
+    "cap": 0.95,
+    "block": 15,
+    "start": "2025-05-12",
+    "end": "2026-08-03",
+    "years": 1.224,
+    "n_candidates": 503,
+    "strat_n_trades": 740,
+    "strat_cagr_pct": 41.87,
+    "strat_cagr_tradespan_pct": 41.87,
+    "strat_total_return_pct": 53.43,
+    "strat_dd_peak_pct": -15.75,
+    "strat_dd_fixed_pct": -27.25,
+    "strat_profit_factor": 1.52,
+    "strat_ending_gbp": 76713.16,
+    "strat_return_per_unit_dd": 2.659,
+    "sp_dd_peak_pct": -9.1,
+    "sp_cagr_pct": 23.22,
+    "block_pass": false,
+    "legC_weight": 1.0,
+    "legC_realised_dd": -9.1,
+    "legC_matched": false,
+    "legC_metrics": {
+      "cagr_pct": 23.22,
+      "total_return_pct": 29.12,
+      "max_dd_peak_relative_pct": -9.1,
+      "max_dd_fixed_pct": -1.42,
+      "ending_balance_gbp": 64558.19,
+      "return_per_unit_dd": 2.552
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      }
+    },
+    "n_capacity_rejections": 75998,
+    "n_capacity_reject_days": 307,
+    "n_block_days": 307
+  }
+]

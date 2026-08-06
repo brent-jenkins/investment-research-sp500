@@ -1,0 +1,129 @@
+{
+  "baseline": {
+    "cap": 0.5,
+    "n_trades": 4086,
+    "baseline_momentum_decile": {
+      "n": 4086,
+      "mean": 0.9527,
+      "median": 0.7064,
+      "decile_counts": {
+        "0": 409,
+        "1": 409,
+        "2": 408,
+        "3": 409,
+        "4": 408,
+        "5": 409,
+        "6": 408,
+        "7": 409,
+        "8": 408,
+        "9": 409
+      },
+      "decile_edges": [
+        0.295,
+        0.434,
+        0.519,
+        0.61,
+        0.706,
+        0.816,
+        0.951,
+        1.15,
+        1.603,
+        43.677
+      ]
+    }
+  },
+  "arms": {
+    "07": {
+      "cap": 0.7,
+      "n_trades_total": 5717,
+      "n_trades_baseline": 4086,
+      "trade_count_change": 1631,
+      "direct_effect": {
+        "n_matched_opportunities": 1645,
+        "position_gbp_pct_change_mean": -0.11,
+        "position_gbp_pct_change_median": 0.01,
+        "position_gbp_baseline_mean": 1843.23,
+        "position_gbp_arm_mean": 1848.73
+      },
+      "admission_effect": {
+        "n_new_admissions": 4072,
+        "n_baseline_trades_lost": 2441,
+        "new_admission_momentum_decile": {
+          "n": 4072,
+          "mean": 0.8576,
+          "median": 0.6465,
+          "decile_counts": {
+            "0": 408,
+            "1": 407,
+            "2": 407,
+            "3": 407,
+            "4": 407,
+            "5": 407,
+            "6": 407,
+            "7": 407,
+            "8": 407,
+            "9": 408
+          },
+          "decile_edges": [
+            0.29,
+            0.404,
+            0.477,
+            0.56,
+            0.647,
+            0.743,
+            0.868,
+            1.039,
+            1.454,
+            41.057
+          ]
+        }
+      }
+    },
+    "095": {
+      "cap": 0.95,
+      "n_trades_total": 10401,
+      "n_trades_baseline": 4086,
+      "trade_count_change": 6315,
+      "direct_effect": {
+        "n_matched_opportunities": 1191,
+        "position_gbp_pct_change_mean": -5.22,
+        "position_gbp_pct_change_median": 0.0,
+        "position_gbp_baseline_mean": 1722.05,
+        "position_gbp_arm_mean": 1603.99
+      },
+      "admission_effect": {
+        "n_new_admissions": 9210,
+        "n_baseline_trades_lost": 2895,
+        "new_admission_momentum_decile": {
+          "n": 9210,
+          "mean": 0.6896,
+          "median": 0.5405,
+          "decile_counts": {
+            "0": 921,
+            "1": 921,
+            "2": 921,
+            "3": 921,
+            "4": 921,
+            "5": 921,
+            "6": 921,
+            "7": 921,
+            "8": 921,
+            "9": 921
+          },
+          "decile_edges": [
+            0.269,
+            0.354,
+            0.415,
+            0.477,
+            0.541,
+            0.606,
+            0.701,
+            0.839,
+            1.126,
+            38.159
+          ]
+        }
+      }
+    }
+  }
+}
