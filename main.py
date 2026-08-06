@@ -149,12 +149,6 @@ def _load_config() -> dict:
     return cfg
 
 
-def _build_watchlist(config: dict) -> dict[str, str]:
-    """Return an ordered dict of {ticker: display_name} for every tracked
-    asset (reference_tickers + the dynamic live candidate pool)."""
-    return {e["ticker"]: e.get("name", e["ticker"]) for e in get_all_watchlist_entries(config)}
-
-
 def _hex_rgba(hx: str, alpha: float) -> str:
     """Convert a 6-digit hex colour string to a CSS rgba() value."""
     h = hx.lstrip("#")
@@ -390,11 +384,34 @@ def _price_coverage(config: dict) -> tuple[list[str], list[str], list[str], int]
     Fresh   = data within 3 trading days on the ticker's home exchange.
     Stale   = data present but older than 3 trading days.
     Missing = no rows at all in price_data for that ticker.
+
+    Deliberately scoped to reference tickers + today's live stock candidate
+    pool + any currently-held ticker -- NOT get_all_watchlist_entries()'s
+    full ~1,200-ticker ingestion scope. Ingestion was broadened
+    (2026-08-06, see CLAUDE.md's "Universe coverage remediation") to cover
+    every ticker ever discovered as a genuine constituent, most of which
+    are long-delisted and will never have fresh data again -- correct for
+    backtest coverage, but it made this card report against a denominator
+    dominated by companies nobody can trade, showing hundreds of
+    permanently-stale/missing entries that have no bearing on live
+    trading. This card answers "is the data live decisions actually
+    depend on current," not "how complete is the historical archive."
     """
     import pandas_market_calendars as mcal
+    from analysis.universe import get_live_stock_candidates
+    from brokers.trading212 import get_held_research_tickers
+
+    relevant: set[str] = set(get_live_stock_candidates())
+    try:
+        relevant |= set(get_held_research_tickers())
+    except Exception:
+        pass
+    relevant |= {e["ticker"] for e in config.get("reference_tickers", [])}
 
     ticker_exchange: dict[str, str] = {
-        e["ticker"]: e.get("exchange", "NYSE") for e in get_all_watchlist_entries(config)
+        e["ticker"]: e.get("exchange", "NYSE")
+        for e in get_all_watchlist_entries(config)
+        if e["ticker"] in relevant
     }
 
     try:
@@ -1428,7 +1445,7 @@ def _render_dashboard_page(config: dict) -> None:
 # Status page
 # ---------------------------------------------------------------------------
 
-def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
+def _render_status_page(config: dict) -> None:
     """System status panel — rendered as the Status page."""
     st.cache_data.clear()
     _render_page_wordmark("Status")
@@ -1493,7 +1510,7 @@ def _render_status_page(config: dict, watchlist: dict[str, str]) -> None:
     _status_card(pr3, "Next Scheduled Run", _nxt_val, _nxt_sub, "info")
 
     fresh, stale, missing, _max_stale_td = _price_coverage(config)
-    total = len(watchlist)
+    total = len(fresh) + len(stale) + len(missing)  # scoped to live-relevant tickers, not the full watchlist
 
     if not fresh and not stale and not missing:
         price_desc = "No price data yet — use Manual Controls below to trigger an immediate pull"
@@ -2588,7 +2605,6 @@ def main() -> None:
     role = auth_user["role"]
 
     config = _load_config()
-    watchlist = _build_watchlist(config)
 
     # ---- Sidebar -------------------------------------------------------
     _PAGES_ALL = ["Dashboard", "Instruments", "Backtest", "Status", "Users"]
@@ -2670,7 +2686,7 @@ def main() -> None:
         return
 
     if page_key == "status":
-        _render_status_page(config, watchlist)
+        _render_status_page(config)
         return
 
     if page_key == "backtest":

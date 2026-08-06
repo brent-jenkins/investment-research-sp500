@@ -776,6 +776,19 @@ def send_price_cliff_alert(hits: list[dict], config: dict) -> tuple[bool, str]:
     email lists raw hits for manual review, same as
     send_stop_health_alert()'s "flag, don't auto-remediate" precedent.
 
+    Expects `hits` already filtered by the caller to live-tradeable +
+    currently-held tickers (2026-08-07) -- detect_price_cliffs() itself
+    scans the full price_data table, which since the 2026-08-06 ingestion
+    broadening includes ~700 historical/delisted tickers that can never be
+    traded or held. Confirmed directly that scan's raw hits are dominated
+    by that population (4,387 of 4,401 on the day this was added) and that
+    the ones in it are overwhelmingly genuine crisis-era crashes or
+    corporate actions, not corruption -- alerting on the full table would
+    drown the live-money-risk signal this function exists to surface in
+    noise from companies nobody can trade. This function itself does not
+    re-filter; a caller that passes the full unfiltered table will alert
+    on it as before.
+
     Content-based deduplication, not a time-based cooldown -- the same
     reasoning as every other alert in this module (see
     send_instrument_resolution_failure_alert()'s docstring for the full

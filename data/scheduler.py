@@ -868,11 +868,32 @@ def _eod_job() -> None:
             # manual script) or a future bug in the ingest-time guard
             # itself. Own try/except so a monitoring failure never blocks
             # anything else in this job.
+            #
+            # detect_price_cliffs() scans the FULL price_data table,
+            # including the ~700 historical/delisted tickers ingestion was
+            # broadened to cover (2026-08-06, "Universe coverage
+            # remediation") -- most flagged "cliffs" there are genuine
+            # crisis-era crashes or corporate actions in companies that no
+            # longer trade, not corruption, and pose zero live-money risk
+            # (confirmed directly: of 4,401 raw hits found the day this
+            # scoping was added, only 14 touched a currently-live or
+            # currently-held ticker, and every one of those 14 corresponded
+            # to a real, dated market event -- see CLAUDE.md). The alert
+            # itself is scoped to live-tradeable + currently-held tickers
+            # only, matching the actual risk this alert exists to catch
+            # (a poisoned momentum window on a position that can actually
+            # be traded) -- the full raw count is still recorded below for
+            # visibility, just not emailed about.
             from data.ingestion import detect_price_cliffs  # noqa: PLC0415
             from output.briefing import send_price_cliff_alert  # noqa: PLC0415
+            from analysis.universe import get_live_stock_candidates  # noqa: PLC0415
+            from brokers.trading212 import get_held_research_tickers  # noqa: PLC0415
             cliff_hits = detect_price_cliffs()
-            details["price_cliff_hits"] = len(cliff_hits)
-            send_price_cliff_alert(cliff_hits, config)
+            _relevant = set(get_live_stock_candidates()) | set(get_held_research_tickers())
+            live_cliff_hits = [h for h in cliff_hits if h["ticker"] in _relevant]
+            details["price_cliff_hits_total"] = len(cliff_hits)
+            details["price_cliff_hits"] = len(live_cliff_hits)
+            send_price_cliff_alert(live_cliff_hits, config)
         except Exception as exc:
             logger.warning("Price cliff monitoring check failed: %s", exc)
     except Exception as exc:

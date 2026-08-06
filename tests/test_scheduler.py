@@ -1810,6 +1810,8 @@ def test_eod_job_calls_price_cliff_monitor_and_records_hit_count(db_engine, monk
         return_value=[{"ticker": "X", "date": "2026-01-02", "date_prev": "2026-01-01",
                         "close": 1.0, "close_prev": 4.0, "ratio": 0.25}],
     )
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["X"])
+    mocker.patch("brokers.trading212.get_held_research_tickers", return_value=[])
     mock_alert = mocker.patch("output.briefing.send_price_cliff_alert", return_value=(False, "disabled"))
 
     scheduler._eod_job()
@@ -1819,6 +1821,45 @@ def test_eod_job_calls_price_cliff_monitor_and_records_hit_count(db_engine, monk
     status = scheduler.get_eod_completion_status()
     assert status["status"] == "COMPLETED"
     assert status["price_cliff_hits"] == 1
+    assert status["price_cliff_hits_total"] == 1
+
+
+def test_eod_job_price_cliff_alert_excludes_non_live_non_held_tickers(db_engine, monkeypatch, mocker):
+    """detect_price_cliffs() scans the full price_data table, which includes
+    ~700 historical/delisted tickers that can never be traded or held
+    (2026-08-06 ingestion broadening) -- a cliff hit there is backtest-data
+    housekeeping, not a live-money risk, and must not be emailed about or
+    counted in the alert-worthy price_cliff_hits figure. Only a hit whose
+    ticker is a current live candidate or a currently-held position should
+    reach send_price_cliff_alert()."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
+    mocker.patch(
+        "data.ingestion.detect_price_cliffs",
+        return_value=[
+            {"ticker": "LIVE", "date": "2026-01-02", "date_prev": "2026-01-01",
+             "close": 1.0, "close_prev": 4.0, "ratio": 0.25},
+            {"ticker": "DEAD", "date": "2026-01-02", "date_prev": "2026-01-01",
+             "close": 1.0, "close_prev": 4.0, "ratio": 0.25},
+        ],
+    )
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["LIVE"])
+    mocker.patch("brokers.trading212.get_held_research_tickers", return_value=[])
+    mock_alert = mocker.patch("output.briefing.send_price_cliff_alert", return_value=(False, "disabled"))
+
+    scheduler._eod_job()
+
+    alerted_hits = mock_alert.call_args[0][0]
+    assert [h["ticker"] for h in alerted_hits] == ["LIVE"]
+    status = scheduler.get_eod_completion_status()
+    assert status["price_cliff_hits"] == 1
+    assert status["price_cliff_hits_total"] == 2
 
 
 def test_eod_job_completed_even_when_price_cliff_monitor_fails(db_engine, monkeypatch, mocker):
