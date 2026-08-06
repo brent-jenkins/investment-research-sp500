@@ -9,9 +9,17 @@ no live database or yfinance call is involved.
 from datetime import datetime, timedelta
 
 import pandas as pd
+import pytest
 from sqlalchemy import text
 
-from data.ingestion import _fetch_ticker, _upsert_price_rows, _yf_symbol, backfill_price_history
+from data.ingestion import (
+    _fetch_ticker,
+    _find_retroactive_restatement,
+    _upsert_price_rows,
+    _yf_symbol,
+    backfill_price_history,
+    detect_price_cliffs,
+)
 
 _BASE_DATE = datetime(2026, 1, 1)
 
@@ -352,6 +360,181 @@ def test_pull_incremental_first_time_download_uses_fixed_start_date(db_engine, m
 # ---------------------------------------------------------------------------
 # init_db() no longer purges non-watchlist tickers from price_data
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# _find_retroactive_restatement() / pull_incremental() -- split-adjustment
+# cliff detection (2026-08-06)
+# ---------------------------------------------------------------------------
+#
+# yfinance's Close column is retroactively adjusted for stock splits even
+# under auto_adjust=False. pull_incremental()'s rolling 10-day window means
+# a ticker that splits after its history is already stored will bring in
+# post-split-basis rows for the last ~10 days while everything older on disk
+# stays on the pre-split basis -- a permanent, phantom cliff in the series
+# that (unfixed) silently corrupts momentum/ATR for a year. These tests
+# cover the fix: comparing incoming rows against what's already stored for
+# the same (ticker, date) before upserting, and triggering a full-history
+# re-fetch when they diverge.
+
+def test_find_retroactive_restatement_returns_empty_when_no_overlap(db_engine):
+    """No overlapping dates between incoming and stored -- nothing to compare."""
+    _insert_rows(db_engine, "NOOVERLAP", {datetime(2026, 1, 1): 100.0})
+    incoming = _ohlcv_df({datetime(2026, 2, 1): 105.0})
+    assert _find_retroactive_restatement(incoming, "NOOVERLAP") == []
+
+
+def test_find_retroactive_restatement_returns_empty_within_tolerance(db_engine):
+    """A small vendor-revision-sized divergence (well under 1%) must not
+    trigger a false-positive restatement."""
+    _insert_rows(db_engine, "TINYDIFF", {datetime(2026, 1, 1): 100.00})
+    incoming = _ohlcv_df({datetime(2026, 1, 1): 100.05})  # 0.05% diff
+    assert _find_retroactive_restatement(incoming, "TINYDIFF") == []
+
+
+def test_find_retroactive_restatement_detects_split_sized_divergence(db_engine):
+    """A stored pre-split close vs. an incoming post-split-basis close for
+    the SAME date -- the exact signature of the bug -- must be flagged."""
+    _insert_rows(db_engine, "SPLIT4TO1", {datetime(2026, 1, 1): 400.0})
+    incoming = _ohlcv_df({datetime(2026, 1, 1): 100.0})  # 4:1 split retroactively applied
+    hits = _find_retroactive_restatement(incoming, "SPLIT4TO1")
+    assert len(hits) == 1
+    date_iso, stored_close, new_close = hits[0]
+    assert date_iso == "2026-01-01"
+    assert stored_close == 400.0
+    assert new_close == 100.0
+
+
+def test_find_retroactive_restatement_ignores_non_overlapping_dates_in_same_call(db_engine):
+    """Only dates present in BOTH stored and incoming are compared -- a
+    genuinely new date in the incoming pull is not itself a "divergence"."""
+    _insert_rows(db_engine, "MIXED", {datetime(2026, 1, 1): 100.0})
+    incoming = _ohlcv_df({
+        datetime(2026, 1, 1): 100.02,   # overlapping, within tolerance
+        datetime(2026, 1, 2): 999.0,    # new date, no stored value to compare against
+    })
+    assert _find_retroactive_restatement(incoming, "MIXED") == []
+
+
+def test_pull_incremental_triggers_full_refetch_on_restatement(db_engine, mocker):
+    """End-to-end: a 10-day pull whose overlapping dates diverge from stored
+    price_data by more than the tolerance must trigger a full-history
+    re-fetch and replace, not the normal upsert of just the 10-day window."""
+    from data.ingestion import pull_incremental
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    # Existing stored history on the OLD (pre-split) basis.
+    _insert_rows(db_engine, "SPLITTER", {
+        datetime(2007, 1, 3): 4000.0,
+        datetime(2025, 12, 20): 400.0,
+    })
+
+    ten_day_df = _ohlcv_df({datetime(2025, 12, 20): 100.0, datetime(2025, 12, 22): 101.0})
+    full_history_df = _ohlcv_df({
+        datetime(2007, 1, 3): 1000.0,   # whole history re-based post-split
+        datetime(2025, 12, 20): 100.0,
+        datetime(2025, 12, 22): 101.0,
+    })
+
+    def fetch_side_effect(ticker, *args, **kwargs):
+        if kwargs.get("period") == "10d":
+            return ten_day_df
+        return full_history_df
+
+    fetch = mocker.patch("data.ingestion._fetch_ticker", side_effect=fetch_side_effect)
+
+    results = pull_incremental(["SPLITTER"])
+
+    # Both the 10-day probe AND a full-history re-fetch must have happened.
+    assert fetch.call_count == 2
+    full_calls = [c for c in fetch.call_args_list if c.kwargs.get("period") != "10d"]
+    assert len(full_calls) == 1
+    assert full_calls[0].kwargs["start"] == datetime(2007, 1, 1)
+
+    # The entire stored history must now be on the new (post-split) basis --
+    # not just the last 10 days, and the old pre-split value must be gone.
+    assert results["SPLITTER"] == 3
+    assert _stored_closes(db_engine, "SPLITTER") == [1000.0, 100.0, 101.0]
+
+
+def test_pull_incremental_no_restatement_uses_normal_10day_upsert(db_engine, mocker):
+    """The common case (no restatement) must still take the cheap path --
+    only the 10-day fetch, no full re-fetch triggered."""
+    from data.ingestion import pull_incremental
+
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value={
+        "data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"},
+    })
+    _insert_rows(db_engine, "NORMAL", {datetime(2025, 12, 20): 100.0})
+    ten_day_df = _ohlcv_df({datetime(2025, 12, 20): 100.01, datetime(2025, 12, 22): 101.0})
+    fetch = mocker.patch("data.ingestion._fetch_ticker", return_value=ten_day_df)
+
+    results = pull_incremental(["NORMAL"])
+
+    fetch.assert_called_once()  # no second, full-history call
+    assert results["NORMAL"] == 2
+    assert _stored_closes(db_engine, "NORMAL") == [100.01, 101.0]
+
+
+# ---------------------------------------------------------------------------
+# detect_price_cliffs() -- the full-table backstop scan (2026-08-06),
+# called from the eod scheduled job. Read-only; a different function from
+# _find_retroactive_restatement() (which compares an incoming pull against
+# what's already stored), this one re-scans whatever is ALREADY in
+# price_data end to end -- catches a cliff introduced by a write path other
+# than pull_incremental(), e.g. backfill_price_history() or a manual script.
+# ---------------------------------------------------------------------------
+
+def test_detect_price_cliffs_empty_table_returns_empty(db_engine):
+    assert detect_price_cliffs() == []
+
+
+def test_detect_price_cliffs_no_hits_on_ordinary_series(db_engine):
+    _insert_rows(db_engine, "NORMAL", {
+        datetime(2026, 1, 1): 100.0,
+        datetime(2026, 1, 2): 101.0,
+        datetime(2026, 1, 3): 99.5,
+    })
+    assert detect_price_cliffs() == []
+
+
+def test_detect_price_cliffs_flags_a_split_sized_ratio_break(db_engine):
+    _insert_rows(db_engine, "CLIFFED", {
+        datetime(2026, 1, 1): 400.0,
+        datetime(2026, 1, 2): 100.0,   # a 4:1-sized overnight cliff
+        datetime(2026, 1, 3): 101.0,
+    })
+    hits = detect_price_cliffs()
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["ticker"] == "CLIFFED"
+    assert hit["date_prev"] == "2026-01-01"
+    assert hit["date"] == "2026-01-02"
+    assert hit["close_prev"] == 400.0
+    assert hit["close"] == 100.0
+    assert hit["ratio"] == pytest.approx(0.25)
+
+
+def test_detect_price_cliffs_ignores_moves_within_the_ratio_band(db_engine):
+    """A real, large-but-plausible single-day move (e.g. a genuine ~40%
+    crash) inside [0.5, 2.0] must not be flagged -- only breaks OUTSIDE the
+    band are split-sized."""
+    _insert_rows(db_engine, "BIGMOVE", {
+        datetime(2026, 1, 1): 100.0,
+        datetime(2026, 1, 2): 60.0,  # ratio 0.6 -- large but within band
+    })
+    assert detect_price_cliffs() == []
+
+
+def test_detect_price_cliffs_scans_across_multiple_tickers_independently(db_engine):
+    _insert_rows(db_engine, "CLEAN", {datetime(2026, 1, 1): 50.0, datetime(2026, 1, 2): 51.0})
+    _insert_rows(db_engine, "DIRTY", {datetime(2026, 1, 1): 200.0, datetime(2026, 1, 2): 50.0})
+    hits = detect_price_cliffs()
+    assert [h["ticker"] for h in hits] == ["DIRTY"]
+
 
 def test_init_db_does_not_delete_non_watchlist_ticker_price_data(db_engine):
     """_purge_unlisted_tickers() was removed 2026-08-01 (see CLAUDE.md's

@@ -1322,6 +1322,7 @@ def _mock_eod_dependencies(mocker):
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mock_pull = mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mock_pipeline = mocker.patch("data.scheduler._run_analysis_pipeline")
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
@@ -1594,6 +1595,7 @@ def test_eod_job_passes_record_history_true_to_snapshot_call(monkeypatch, mocker
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1642,6 +1644,7 @@ def test_eod_job_records_completed_on_the_normal_path(db_engine, monkeypatch, mo
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1680,6 +1683,7 @@ def test_eod_job_records_failed_when_pull_incremental_raises(db_engine, monkeypa
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", side_effect=RuntimeError("yfinance is down"))
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mock_pipeline = mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1701,6 +1705,7 @@ def test_eod_job_records_failed_when_order_pipeline_raises(db_engine, monkeypatc
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline", side_effect=RuntimeError("boom"))
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1724,6 +1729,7 @@ def test_eod_job_completed_even_when_only_the_snapshot_step_fails(db_engine, mon
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot", side_effect=RuntimeError("t212 api down"))
@@ -1748,6 +1754,7 @@ def test_eod_job_calls_the_real_pending_orders_purge(db_engine, monkeypatch, moc
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1768,6 +1775,7 @@ def test_eod_job_completed_even_when_purge_fails(db_engine, monkeypatch, mocker)
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1779,6 +1787,60 @@ def test_eod_job_completed_even_when_purge_fails(db_engine, monkeypatch, mocker)
     assert status["status"] == "COMPLETED"
     assert status["order_pipeline_ran"] is True
     assert "pending_orders_purged" not in status
+
+
+# ---------------------------------------------------------------------------
+# Price cliff monitoring backstop (2026-08-06) -- data.ingestion.
+# detect_price_cliffs() / output.briefing.send_price_cliff_alert() run
+# every EOD job, in their own try/except so a monitoring failure never
+# blocks anything else, matching the pending_orders purge pattern above.
+# ---------------------------------------------------------------------------
+
+def test_eod_job_calls_price_cliff_monitor_and_records_hit_count(db_engine, monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
+    mock_detect = mocker.patch(
+        "data.ingestion.detect_price_cliffs",
+        return_value=[{"ticker": "X", "date": "2026-01-02", "date_prev": "2026-01-01",
+                        "close": 1.0, "close_prev": 4.0, "ratio": 0.25}],
+    )
+    mock_alert = mocker.patch("output.briefing.send_price_cliff_alert", return_value=(False, "disabled"))
+
+    scheduler._eod_job()
+
+    mock_detect.assert_called_once()
+    mock_alert.assert_called_once()
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["price_cliff_hits"] == 1
+
+
+def test_eod_job_completed_even_when_price_cliff_monitor_fails(db_engine, monkeypatch, mocker):
+    """A monitoring failure is not trading-relevant -- it must never turn
+    an otherwise-successful EOD run into a FAILED verdict, same as a purge
+    failure above."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
+    mocker.patch("data.ingestion.detect_price_cliffs", side_effect=RuntimeError("boom"))
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["order_pipeline_ran"] is True
+    assert "price_cliff_hits" not in status
 
 
 # ---------------------------------------------------------------------------
@@ -1849,6 +1911,7 @@ def test_eod_job_marks_in_progress_before_the_price_pull(db_engine, monkeypatch,
         return {"^GSPC": 1}
 
     mocker.patch("data.scheduler.pull_incremental", side_effect=fake_pull)
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1865,6 +1928,7 @@ def test_eod_job_clears_in_progress_marker_on_success(db_engine, monkeypatch, mo
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1884,6 +1948,7 @@ def test_eod_job_clears_in_progress_marker_on_failure(db_engine, monkeypatch, mo
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", side_effect=RuntimeError("yfinance is down"))
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")

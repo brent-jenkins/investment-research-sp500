@@ -25,6 +25,7 @@ _MEMBERSHIP_STALENESS_EMAIL_LAST_SENT_KEY = "membership_staleness_email_last_sen
 _INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY = "instrument_resolution_failure_last_tickers"
 _POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY = "position_reconciliation_email_last_sent"
 _STOP_HEALTH_LAST_UNHEALTHY_KEY = "stop_health_last_unhealthy_tickers"
+_PRICE_CLIFF_LAST_HITS_KEY = "price_cliff_last_hits"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -747,4 +748,99 @@ def send_stop_health_alert(unhealthy: list[dict], config: dict) -> tuple[bool, s
             set_metadata(_STOP_HEALTH_LAST_UNHEALTHY_KEY, current_set_key)
         except Exception as exc:
             logger.warning("Could not record stop_health_last_unhealthy_tickers: %s", exc)
+    return sent, detail
+
+
+def send_price_cliff_alert(hits: list[dict], config: dict) -> tuple[bool, str]:
+    """Alert that data/ingestion.py:detect_price_cliffs() found one or more
+    consecutive-trading-day close ratio breaks outside [0.5, 2.0] in
+    price_data -- the signature of a split-adjustment cliff artefact (see
+    CLAUDE.md's "Split-adjustment corruption" section). A phantom
+    multi-hundred-percent single-day move poisons the 252-trading-day
+    momentum window for a year and can fire a real STOP_LOSS/CRISIS_EXIT on
+    a position that never moved, or collapse VaR position sizing via a
+    corrupted ATR -- this is a live-money-risk alert, not a cosmetic
+    data-quality one.
+
+    Called from the eod scheduled job as a backstop only --
+    pull_incremental()'s own ingest-time restatement check
+    (_find_retroactive_restatement()) is the primary defense and should
+    make a genuine hit here near-zero in practice. A hit means either a
+    write path other than pull_incremental() introduced the cliff
+    (backfill_price_history(), a manual script) or the ingest-time guard
+    itself has a bug -- either way this needs a human, so no automatic
+    remediation is attempted here. Deliberately does not attempt the
+    yfinance-cross-referenced real-move-vs-artefact classification
+    research/split_adjustment_audit_2026-08-06/detect_cliffs.py performs --
+    a network call per hit is too slow/fragile for a scheduled job; the
+    email lists raw hits for manual review, same as
+    send_stop_health_alert()'s "flag, don't auto-remediate" precedent.
+
+    Content-based deduplication, not a time-based cooldown -- the same
+    reasoning as every other alert in this module (see
+    send_instrument_resolution_failure_alert()'s docstring for the full
+    "a shared time cooldown can silently suppress a genuinely new,
+    different failure" argument this mirrors). The caller always passes the
+    full, current hit list -- including empty -- every time it runs; an
+    empty list clears the stored set so a later, genuinely new hit is
+    never compared against a stale pre-resolution record.
+    """
+    from data.database import get_metadata_str, set_metadata
+
+    if not hits:
+        try:
+            set_metadata(_PRICE_CLIFF_LAST_HITS_KEY, "")
+        except Exception as exc:
+            logger.warning("Could not clear price_cliff_last_hits: %s", exc)
+        return False, "no price cliffs detected"
+
+    keys = sorted(f"{h['ticker']}:{h['date']}" for h in hits)
+    current_set_key = json.dumps(keys)
+    last_sent_set_key = get_metadata_str(_PRICE_CLIFF_LAST_HITS_KEY)
+    if last_sent_set_key == current_set_key:
+        logger.info(
+            "Price cliff email skipped — hit set unchanged since last alert (%s)", keys,
+        )
+        return False, "unchanged hit set"
+
+    n = len(hits)
+    subject = f"SP500INVEST: {n} possible split-adjustment cliff artefact(s) in price_data"
+    detail_lines = "\n".join(
+        f"  - {h['ticker']}: {h['date_prev']} ({h['close_prev']:.4f}) -> "
+        f"{h['date']} ({h['close']:.4f}), ratio={h['ratio']:.4f}"
+        for h in sorted(hits, key=lambda h: (h["ticker"], h["date"]))
+    )
+    text_body = (
+        f"{n} consecutive-trading-day close ratio break(s) outside [0.5, 2.0] found in "
+        "price_data (data/ingestion.py:detect_price_cliffs()) -- the signature of a "
+        "split-adjustment cliff artefact. pull_incremental()'s ingest-time restatement "
+        "check should make this near-zero; a hit means either another write path "
+        "introduced it or that guard itself has a bug. Not auto-remediated.\n\n"
+        f"{detail_lines}\n\n"
+        "To confirm and repair: cross-reference each ticker/date against yfinance "
+        "'.splits' (see research/split_adjustment_audit_2026-08-06/detect_cliffs.py for "
+        "the classification methodology), then re-fetch and replace that ticker's full "
+        "history if confirmed a genuine artefact rather than a real market move."
+    )
+    detail_rows_html = "".join(
+        f"<li><b>{html.escape(h['ticker'])}</b>: {h['date_prev']} ({h['close_prev']:.4f}) &rarr; "
+        f"{h['date']} ({h['close']:.4f}), ratio={h['ratio']:.4f}</li>"
+        for h in sorted(hits, key=lambda h: (h["ticker"], h["date"]))
+    )
+    html_body = (
+        f'<p style="color:#dc2626;font-weight:bold">{n} possible split-adjustment cliff '
+        "artefact(s) in price_data</p>"
+        "<p>A phantom multi-hundred-percent single-day move can poison the 252-day "
+        "momentum window for a year and fire a real STOP_LOSS/CRISIS_EXIT on a position "
+        "that never moved. Not auto-remediated.</p>"
+        f"<ul>{detail_rows_html}</ul>"
+        "<p>Cross-reference against yfinance '.splits' and re-fetch/replace that "
+        "ticker's full history if confirmed a genuine artefact.</p>"
+    )
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_PRICE_CLIFF_LAST_HITS_KEY, current_set_key)
+        except Exception as exc:
+            logger.warning("Could not record price_cliff_last_hits: %s", exc)
     return sent, detail

@@ -313,6 +313,80 @@ def pull_history(
     return results
 
 
+# Relative divergence, on an overlapping (ticker, date) close, above which an
+# incremental pull is treated as a retroactive restatement (stock split,
+# reverse split, spin-off adjustment, or vendor correction) rather than
+# ordinary data. yfinance's "Close" column is retroactively adjusted for
+# stock splits even under auto_adjust=False (see module-level notes in
+# analysis/signals.py) -- a ticker that splits after its history is already
+# stored will return different Close values for dates already on disk. 1%
+# comfortably exceeds ordinary vendor revision noise (observed to be sub-cent
+# rounding, well under 0.1%) while comfortably catching even the smallest
+# common split ratios (a 5:4 split changes the ratio by 20%, 3:2 by 33%, 2:1
+# by 50%).
+_RESTATEMENT_TOLERANCE = 0.01
+
+
+def _find_retroactive_restatement(
+    df: pd.DataFrame, ticker: str, tolerance: float = _RESTATEMENT_TOLERANCE
+) -> list[tuple]:
+    """Compare incoming close prices against whatever price_data already has
+    stored for the same (ticker, date), for every date the incoming pull
+    overlaps.
+
+    pull_incremental()'s rolling 10-day window overlaps whatever was already
+    stored from the previous run's incremental pulls -- this comparison is
+    free: the signal already exists in every incremental pull, it was
+    previously just discarded by the upsert instead of checked first.
+
+    Returns a list of (date_iso, stored_close, incoming_close) for every
+    overlapping date whose relative divergence exceeds `tolerance`. An empty
+    list means no restatement was detected.
+    """
+    incoming: dict = {}
+    for date_idx, row in df.iterrows():
+        date_val = date_idx if isinstance(date_idx, datetime) else pd.Timestamp(date_idx).to_pydatetime()
+        try:
+            close_val = float(row.get("Close", None))
+        except (TypeError, ValueError):
+            continue
+        if close_val <= 0 or not math.isfinite(close_val):
+            continue
+        incoming[date_val.date()] = close_val
+
+    if not incoming:
+        return []
+
+    lo, hi = min(incoming), max(incoming)
+    engine = get_engine()
+    with engine.connect() as conn:
+        stored_rows = conn.execute(
+            text("SELECT date, close FROM price_data WHERE ticker = :t AND date >= :lo AND date <= :hi"),
+            {
+                "t": ticker,
+                "lo": datetime.combine(lo, datetime.min.time()),
+                "hi": datetime.combine(hi, datetime.max.time()),
+            },
+        ).fetchall()
+
+    diverging = []
+    for date_val, stored_close in stored_rows:
+        # Stored `date` may come back as str or datetime depending on
+        # driver/format -- format="mixed" matches the same normalisation
+        # backfill_price_history() already applies elsewhere in this file.
+        if isinstance(date_val, str):
+            date_val = pd.to_datetime(date_val, format="mixed").to_pydatetime()
+        key = date_val.date()
+        if key not in incoming or stored_close is None or stored_close == 0:
+            continue
+        new_close = incoming[key]
+        rel_diff = abs(new_close - stored_close) / abs(stored_close)
+        if rel_diff > tolerance:
+            diverging.append((key.isoformat(), stored_close, new_close))
+
+    return diverging
+
+
 def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     """Backfill recent price data for each ticker using a rolling 10-day window.
 
@@ -326,6 +400,16 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     Tickers with no stored data at all fall back to a full-history download
     (as in pull_history) and ARE marked unavailable if the fetch fails, since
     that indicates the ticker itself is broken rather than a calendar gap.
+
+    Before upserting, every pull for a ticker with existing history is
+    checked via _find_retroactive_restatement() against what's already
+    stored for the same overlapping dates. A divergence beyond
+    _RESTATEMENT_TOLERANCE triggers a full-history re-fetch and replace
+    instead of the normal 10-day upsert -- see that function's docstring.
+    This is deliberately NOT gated on yfinance's own .splits metadata: the
+    overlap comparison catches any retroactive restatement (reverse splits,
+    spin-off adjustments, vendor corrections), not just an ordinary forward
+    split.
     """
     init_db()
     config = _load_config()
@@ -374,9 +458,42 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
                 logger.debug(
                     "  %s: df.shape=%s, columns=%s", ticker, df.shape, list(df.columns)
                 )
-                count = _upsert_price_rows(df, ticker)
-                results[ticker] = count
-                logger.info("  %s: upserted %d rows.", ticker, count)
+                restatement = _find_retroactive_restatement(df, ticker)
+                if restatement:
+                    logger.warning(
+                        "RETROACTIVE PRICE RESTATEMENT detected for %s: %d overlapping "
+                        "date(s) diverge from stored price_data by more than %.1f%% "
+                        "(e.g. %s: stored=%.4f incoming=%.4f) — likely a stock split, "
+                        "reverse split, or spin-off adjustment. Triggering a full-history "
+                        "re-fetch and replace instead of the normal 10-day upsert.",
+                        ticker, len(restatement), _RESTATEMENT_TOLERANCE * 100, *restatement[0],
+                    )
+                    full_start = datetime.strptime(config["data"]["history_start_date"], "%Y-%m-%d")
+                    full_end = datetime.utcnow()
+                    full_df = _fetch_ticker(
+                        ticker, start=full_start, end=full_end,
+                        max_retries=max_retries, rate_limit=rate_limit,
+                    )
+                    if full_df is not None and not full_df.empty:
+                        if isinstance(full_df.columns, pd.MultiIndex):
+                            full_df.columns = [col[0] for col in full_df.columns]
+                        count = _upsert_price_rows(full_df, ticker)
+                        results[ticker] = count
+                        logger.warning(
+                            "  %s: full re-fetch replaced %d rows across entire stored "
+                            "history after restatement detection.", ticker, count,
+                        )
+                    else:
+                        results[ticker] = 0
+                        logger.error(
+                            "  %s: restatement detected but full re-fetch failed — "
+                            "stored history may still contain a cliff artefact until "
+                            "the next run retries.", ticker,
+                        )
+                else:
+                    count = _upsert_price_rows(df, ticker)
+                    results[ticker] = count
+                    logger.info("  %s: upserted %d rows.", ticker, count)
             else:
                 # Empty is normal when the exchange was closed for all 10 days
                 # (e.g. extended holiday); do NOT mark unavailable.
@@ -511,6 +628,62 @@ def backfill_price_history(
             logger.info("  No data available for %s that far back.", ticker)
 
     return results
+
+
+_CLIFF_RATIO_LOW = 0.5
+_CLIFF_RATIO_HIGH = 2.0
+
+
+def detect_price_cliffs(
+    ratio_low: float = _CLIFF_RATIO_LOW, ratio_high: float = _CLIFF_RATIO_HIGH
+) -> list[dict]:
+    """Scan the full price_data table for consecutive-trading-day close
+    ratio breaks outside [ratio_low, ratio_high] -- the signature of a
+    split-adjustment cliff artefact (see _find_retroactive_restatement()'s
+    docstring for the root cause). This is a backstop, not the primary
+    defense: pull_incremental() now guards against this at ingest time for
+    its own rolling-10-day-window write path; this function re-scans the
+    whole table so a different write path (backfill_price_history(), a
+    manual script) or a future bug in the ingest-time guard doesn't sit
+    silently uncaught. Called by the eod scheduled job (data/scheduler.py)
+    and by research/split_adjustment_audit_2026-08-06/detect_cliffs.py's
+    one-off deeper audit (yfinance-cross-referenced classification), which
+    this function deliberately does not attempt -- a network call per hit
+    is too slow/fragile for a scheduled job, and the expected hit rate
+    after the ingest-time fix is near-zero. Flags for manual review.
+
+    Returns a list of dicts (ticker, date, date_prev, close, close_prev,
+    ratio), one per flagged consecutive-day break, empty if none found.
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        df = pd.read_sql_query(
+            text("SELECT ticker, date, close FROM price_data ORDER BY ticker, date"), conn
+        )
+    if df.empty:
+        return []
+    df["date"] = pd.to_datetime(df["date"], format="mixed")
+
+    hits: list[dict] = []
+    for ticker, g in df.groupby("ticker", sort=False):
+        close = g["close"].to_numpy()
+        dates = g["date"].to_numpy()
+        if len(close) < 2:
+            continue
+        ratio = close[1:] / close[:-1]
+        bad = (ratio < ratio_low) | (ratio > ratio_high)
+        for i in bad.nonzero()[0]:
+            hits.append(
+                {
+                    "ticker": ticker,
+                    "date_prev": pd.Timestamp(dates[i]).date().isoformat(),
+                    "date": pd.Timestamp(dates[i + 1]).date().isoformat(),
+                    "close_prev": float(close[i]),
+                    "close": float(close[i + 1]),
+                    "ratio": float(ratio[i]),
+                }
+            )
+    return hits
 
 
 def get_last_update_timestamp() -> Optional[datetime]:

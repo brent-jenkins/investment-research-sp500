@@ -1,8 +1,17 @@
-"""Momentum signal — trailing 12-month total return, per ticker, no blended
-score and no separate regime classifier. Long when positive, flat
-otherwise. Validated across the phased rebuild (Phase 1) as the stronger
-of two externally-grounded candidates tested (12-month momentum vs.
-200-day SMA); adopted as the system's sole entry/exit signal.
+"""Momentum signal — trailing 12-month PRICE return (not total return), per
+ticker, no blended score and no separate regime classifier. Long when
+positive, flat otherwise. Validated across the phased rebuild (Phase 1) as
+the stronger of two externally-grounded candidates tested (12-month
+momentum vs. 200-day SMA); adopted as the system's sole entry/exit signal.
+
+Ingestion fetches with auto_adjust=False (see data/ingestion.py), so the
+`close` this module reads is split-adjusted but NOT dividend-adjusted --
+the signal excludes dividends entirely. A dividend-paying stock's true
+total return is therefore understated relative to a non-payer with the
+same price path. `adj_close` (dividend+split adjusted) is stored by
+ingestion but read by nothing in this module. See CLAUDE.md's momentum
+construction investigation for whether this materially biases sector/stock
+selection.
 """
 import pandas as pd
 
@@ -33,7 +42,9 @@ _MAX_ANCHOR_GAP_DAYS = 400
 
 
 def compute_momentum_series(close: pd.Series) -> pd.Series:
-    """Trailing 12-month (252 trading day) total return, per date.
+    """Trailing 12-month (252 trading day) PRICE return, per date -- computed
+    from `close` (split-adjusted, not dividend-adjusted), so this excludes
+    dividends. Not total return.
 
     NaN for the first MOMENTUM_LOOKBACK_DAYS rows (insufficient history) —
     callers must treat NaN as "no signal yet", not as False. Also NaN for
