@@ -1,0 +1,4 @@
+variant,n_trades,n_distinct_tickers,win_rate,profit_factor,sharpe_ratio,max_drawdown_pct,cagr_pct,total_return_pct
+baseline,3161,331,0.4919,1.65,0.607,-88.77,13.6,968.95
+gate,3150,339,0.48,1.62,0.577,-81.45,13.01,871.26
+rerank,3171,327,0.4841,1.67,0.619,-109.49,14.09,1058.96
