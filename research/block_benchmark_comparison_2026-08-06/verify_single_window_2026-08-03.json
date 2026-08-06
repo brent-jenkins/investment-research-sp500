@@ -1,0 +1,24 @@
+{
+  "strategy": {
+    "n_tickers_total": 503,
+    "n_tickers_with_data": 500,
+    "n_trades": 1370,
+    "cagr_pct": 10.74,
+    "max_drawdown_pct_fixed": -24.71,
+    "max_drawdown_pct_peak_relative": -15.7,
+    "profit_factor": 1.34,
+    "win_rate_pct": 44.2,
+    "ending_balance_gbp": 97868.26,
+    "total_pct_change": 95.74,
+    "per_trade_pct": 0.05,
+    "max_total_deployed": 0.5,
+    "reentry_cooldown_days": 0,
+    "min_momentum_pct": 0.02
+  },
+  "sp500": {
+    "cagr_pct": 13.73,
+    "max_drawdown_pct_peak_relative": -33.92,
+    "ending_balance_gbp": 116649.01,
+    "total_pct_change": 133.3
+  }
+}
