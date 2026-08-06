@@ -8658,4 +8658,636 @@ This is a keyword-swept triage against each item's own `REPORT.md`, not an exhau
 
 **Bottom line, stated as plainly as the interpretation guidance this task started under requires:** the realistic, data-supported point estimate is now in hand for 2 of the 3 originally-degenerate blocks — one real, moderate, direction-confirming effect (block 13, −1.41pp) and one real null (block 14, 0.00pp) — with block 15 remaining structurally unmeasurable for a reason unrelated to coverage. This does not, on its own, resolve the size of the bias across the full 16-block benchmark or the dominant era; it demonstrates the corrected-Arm-3 methodology works exactly as designed once the data it depends on actually exists, and gives two genuine (small) data points rather than the 0.21-9.25pp adversarial-upper-bound range this thread previously had to rely on alone. Applying this to the full chained 16-block aggregate remains future work, not done here — two blocks is not a basis for reweighting a 16-block headline figure.
 
+**The pre-warm's 46-minute actual runtime vs. its own ~3.5-4hr estimate — root-caused precisely, not merely noted, since the same estimate will be reused for future backfills.** Reconciled exactly against the full pre-warm log (`prewarm_ingestion_full.log`, preserved): 1,208 total tickers processed = 701 "new" (full-history) attempts + 507 "existing" (10-day incremental) attempts. **Every one of the 701 new tickers was genuinely attempted — nothing was skipped**: 331 succeeded (exactly matching the measured `price_data` growth) and 370 failed after exhausting retries, 331+370=701 exactly. All 507 existing-ticker attempts succeeded, zero failures. The 540→507 gap (33 tickers) is fully explained: ETF tickers and ad-hoc research-only tickers (`SPY`/`QQQ`/`AGG`/`^IRX`, used by the benchmark harness but never part of the production daily watchlist) sit in `price_data` from before the ETF-sleeve removal or one-off backfills, but are outside `get_all_tickers()`'s scope entirely and were correctly never touched. **The runtime gap itself traces to a real asymmetry in `_fetch_ticker()`'s retry logic, not to fewer failures than predicted (370 actual vs. ~301 estimated — the failure rate was, if anything, higher).** Traced one failure (`AABA`) to the exact second: all 5 retry attempts logged within the same wall-clock second. `_fetch_ticker()`'s `time.sleep(rate_limit * attempt)` backoff only fires inside the `except Exception:` branch; a "possibly delisted" response from yfinance does not raise an exception, it returns an empty DataFrame, which hits the `if df.empty:` branch and loops to the next attempt with **zero sleep**. The original estimate assumed every retry — exception or empty result alike — incurred the backoff; in practice the dominant failure mode for a genuinely dead ticker incurs none. This is not a bug being flagged for a fix (immediate retries on an empty-but-non-erroring response don't hammer the API the way retrying immediately after a real error/rate-limit exception would) — it is the actual, verified mechanism behind the 5x gap, recorded here so the next backfill estimate uses the real number rather than repeating the same overestimate.
+
+**The remaining 370-ticker gap is qualitatively worse than its size suggests, and this is worth restating plainly rather than leaving implicit in the coverage percentages above.** The 331 tickers this pre-warm recovered were, definitionally, the population Stage 0 already established recovers cleanly — survivors that simply left the index and were never asked for again. They were never the population driving the bias. The 370 that remain are the ones already tested and confirmed dead: no data available under the ticker's own symbol, or (per Task B) a reused symbol now serving an unrelated company. This is the failed/acquired-in-distress population specifically — the coverage percentage improved from 64.3% to 76.9% in the dominant era, but the qualitative character of what's still missing did not improve at all; if anything it's now more precisely known to be the permanent floor, since all 370 have a real, confirmed attempt behind the `unavailable_ticker` flag rather than merely being untested.
+
+**Split-adjustment fix (`59138df`) deployed the same session, not left open.** Merged and pushed alongside this task's own final commit (`350742b`); deployed via the same break-glass path once GitHub Actions' outage was confirmed still active (githubstatus.com, "Capacity remains constrained," 19:43 UTC update). No reason to leave a zero-cost data-integrity guard undeployed before the next scheduled ingestion run.
+
 **Files**: `research/coverage_bias_depletion_2026-08-06/depletion_results_postbackfill.json` / `depletion_trades_arm_tagged_postbackfill.csv`; `research/universe_coverage_remediation_2026-08-06/universe_coverage_by_block_postbackfill.csv`, `missing_ticker_classification_postbackfill.csv`, `regenerate_coverage_by_block.py`.
+
+## Dynamic momentum-trend holding-period cap — researched, not adopted (2026-08-05)
+
+Investigated whether the fixed 30-day `stock_max_holding_days` cap should instead extend dynamically based on a position's own momentum trend since entry — i.e., let a `MAX_HOLDING` exit be deferred for positions whose momentum is still strengthening, rather than closing every position at the identical fixed day count regardless of trajectory. Investigation only, run in a local session (main checkout, no worktree — no concurrent-session evidence found), staged as a Step 1 descriptive/statistical gate before any Step 2 engine build; no production changes without an exceptional, block-validated result.
+
+**Backtest convention: continuous walk**, stated explicitly per CLAUDE.md's standing requirement — Step 1 reused the real, already-established 3,161-trade 2007-01-01→2026-08-03 continuous-walk run (`simulate_portfolio_compounding_mtm()` via `run_full_validation(config, mark_to_market=True, live_universe=True)`, live 503-ticker universe), reproduced and asserted exactly (`total_trades=3161`, `MAX_HOLDING=1796`, 56.8%) before computing anything new. Exit-reason breakdown: MAX_HOLDING 1,796 (56.8%), STOP_LOSS 1,169, SIGNAL_OFF 131, CRISIS_EXIT 35, END_OF_DATA 30.
+
+**Exact definition tested**, stated as code, not paraphrase:
+
+```python
+trend_since_entry(t) = momentum[t] - momentum[entry_date]
+strengthening_at_cap = momentum[exit_date] - momentum[entry_date] > 0
+decaying_at_cap      = momentum[exit_date] - momentum[entry_date] <= 0
+```
+
+Population: all 1,796 real `MAX_HOLDING` trades (0 skipped for missing data) — the only trades a dynamic-cap mechanism could actually change.
+
+**At face value, a mixed signal.** Strengthening (988 trades, 55.0%) beat Decaying (808 trades, 45.0%) by mean 30-day forward return: 2.64% vs. 1.78%. `Spearman(trend_since_entry, fwd_ret_30d): rho=0.0552, p=0.0199, n=1782`; era-controlled `OLS: trend_since_entry coef=0.0242, p=1.64e-08` (R²=0.023). But the binary comparison that actually maps onto "would a dynamic cap pick a different outcome" was **not significant**: `Mann-Whitney U=407333.0, p=0.1703` (Strengthening vs. Decaying, fwd_ret_30d, n=985/797). Top-vs-bottom quintile comparison also not significant (`p=0.2222`), and the quintile gradient was **not monotonic** — Q3 (mean fwd30 1.51%) dipped below both Q1 (1.46%) and Q2 (2.09%).
+
+**Not robust to outlier removal.** Winsorizing (clip at 1st/99th pct) left the result intact (`rho=0.0551, p=0.0201`), but genuinely dropping the top/bottom 1% of trades entirely killed significance (`rho=0.0382, p=0.1107`) — the same outlier-fragility shape as the sibling momentum-horizon investigation's rejected Weak-band finding, diluted across a larger sample but present.
+
+**Decisive finding — the effect is a single-era artifact.** Within-era decomposition: 2007-2009 GFC (n=158, 8.8% of population) shows `rho=0.2705, p=0.0006` (Strengthening 1.42% vs. Decaying −3.95%); but the **dominant era — 2010-2019 bull market, 944 trades, 52.6% of the entire MAX_HOLDING population — shows essentially zero relationship: `rho=0.0185, p=0.5694`** (Strengthening 1.96% vs. Decaying 1.89%, statistically indistinguishable). 2020 covid: `rho=-0.0242, p=0.8022`. 2021-2026: `rho=0.0859, p=0.0404`, weak. The population-wide correlation is pulled almost entirely by the small, atypical GFC-recovery era; the era-dummy OLS shifts intercepts per era but does not verify the slope holds across eras, and it plainly doesn't.
+
+**One genuinely positive sub-finding, insufficient to rescue the gate.** Momentum *level* at the cap point alone has no predictive power (`Spearman(momentum_at_cap, fwd_ret_30d): rho=0.0224, p=0.3449`), while trend does (joint OLS: `trend_since_entry coef=0.0248, p<0.001`; `momentum_at_cap coef=-0.0004, p=0.889`) — trend carries real, distinct information beyond level. This does not rescue the overall gate decision since the trend signal independently fails monotonicity, outlier-robustness, and within-era consistency.
+
+**Fitness diagnostic** (not decisive, recorded for completeness): `trend_since_entry` is noisy earlier in the hold (mean 2.37 sign flips, median 2, over ~30 days) but stabilizes near the cap boundary (mean 90.4%/median 100.0% agreement over the last 5 trading days; 77.5% of trades have full 5/5-day agreement). Reasonably fit for evaluation right at the existing 30-day boundary; would need an explicit smoothing/hysteresis rule to act materially earlier in the hold — moot here since the gate failed on statistical grounds first.
+
+**Gate decision: NOT WARRANTED — no Step 2 engine build or 16-block validation run.** Per the task's own explicit gating rule and this project's "no meaningful difference found is a fully valid outcome" culture: the Mann-Whitney/quintile binary comparisons are not significant, the quintile gradient is not monotonic, the aggregate Spearman/OLS significance does not survive genuine outlier removal, and the effect is essentially absent (rho=0.019, p=0.57) in the single largest era subgroup. Had Step 2 been warranted, sizing would have stayed fixed at entry (only exit timing adjusts) — VaR sizing was not re-run mid-trade, to avoid confounding the cap-extension effect with a second, independent sizing lever — but this was never exercised since Step 1 didn't clear its gate.
+
+**Recommendation: researched, not adopted.** The existing fixed 30-day `stock_max_holding_days` cap, independent of any momentum-trend adjustment, remains the best-supported choice. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, and `brokers/trading212.py` are all unchanged. Caveat: this tests only the one "cumulative momentum change since entry" trend definition specified by the task — not the sibling script's 20-day-recency `momentum_decaying_at_exit` measure, not any smoothed/regression-slope variant, not ADX/VIX/RSI. Full trade-level output (`max_holding_trend_annotated.csv`, all 1,796 `MAX_HOLDING` trades) and supporting statistics preserved at `research/dynamic_momentum_cap_2026-08-05/`.
+
+## Exploratory hypothesis pass — candidate ideas only, nothing tested (2026-08-05/06)
+
+**Not a finding.** A read-only pass over already-computed fields across tonight's twelve preserved trade-level research outputs, looking for plausible, structurally-motivated candidates worth a properly-scoped future investigation. No reset-at-boundary run, no block validation, no p-value threshold treated as a significance claim, no recommendation to adopt anything, no code or config touched. Where a pattern was checked and found to be an artifact, that is reported too.
+
+**Primary population**: the 3,161-trade continuous-walk baseline (`simulate_portfolio_compounding_mtm()`, live 503-ticker universe, mark-to-market, 2007-01-01→2026-08-03, current `config.yaml`), confirmed identical across four independent investigations' own reproductions (`concentration_risk`, `momentum_horizon`, `dynamic_momentum_cap`, `stop_cluster_coordination` all report 3,161 trades / MAX_HOLDING 1,796 / STOP_LOSS 1,169 / SIGNAL_OFF 131 / CRISIS_EXIT 35 / END_OF_DATA 30). Variant-arm data from other investigations (sizing multipliers, lookback variants, risk-adjusted momentum, deployment-cap grid, DAX/rolling-40 reruns) were used only for their own reports' own already-stated findings, never pooled into new computation.
+
+**Candidates, ranked by plausibility and support:**
+
+1. **December-entry vs. July-entry exit-reason mix (strongest candidate).** December entries reach the 30-day cap (`MAX_HOLDING`) at 66.1% (n=239) vs. 45.8% for July entries (n=277) — a ~20pp gap, and specifically a mix effect, not a magnitude effect (mean `pnl_pct` within `MAX_HOLDING` trades is flat, 5.3%-9.7%, across months; within `STOP_LOSS` trades, flat too, -5.9% to -7.4%). Held across the two largest, most "normal" eras — 2010-2019 (Dec 76.5% n=115 vs. Jul 47.7% n=130) and 2020-2026 (Dec 65.2% n=89 vs. Jul 45.9% n=109) — and only reversed in the smallest, most atypical era (2007-2009, n=35/38), the opposite robustness profile from the GFC-concentrated findings this project's culture routinely rejects. Structurally grounded in independently-documented equity seasonality (Q4/January strength, summer/August thinness). Not tested further — no seasonal sizing or entry-gate variant was built. (Formally tested as "seasonal_stopout_2026-08-06" below — rejected on the pre-specified confirmatory test.)
+
+2. **Compounding-amplified recent-cluster concentration (storage/semiconductor names — SNDK/WDC/MU/LITE/STX and related).** Independently named by three separate investigations tonight (`concentration_risk`'s worst-day list, `momentum_horizon`'s continuation list, `stop_cluster_coordination`'s largest cluster). Cluster share of trades rose from 13.4% (2017, prior peak) to 23.0% (2026 partial year, n=32/139), while average position size in the cluster rose from £5,717 to £17,070 (~8x growth since 2008, £2,070→£17,070, purely from compounding). Both trade frequency and dollar exposure are near a 19-year high simultaneously. `deployment_cap_tradeoff` tested raising caps uniformly; a cap/correlation threshold that tightens specifically as account size grows past some multiple of starting capital was not tested by anything tonight.
+
+3. **Sector/ticker-scoped concentration constraint — worth testing, but real counter-evidence exists.** The storage/semi cluster (139 trades) actually outperforms the rest of the population — win rate 52.5% vs. 49.0%, mean pnl_pct 5.98% vs. 1.70% — so a narrow block on this specific cluster would likely cost more than the blanket correlation-haircut already rejected (`concentration_risk`: better drawdown, worse CAGR/PF/Sharpe, did not dominate baseline). Ranked below candidates 1 and 2 because the data available tonight argues against it, not for it.
+
+4. **Cross-market (DAX/European) sleeve — most speculative, reasoned not evidenced.** `curated40_rolling40_dax_reverify`'s DAX rerun showed a real drawdown reduction vs. its own benchmark (test max DD −18.56% vs. `^GDAXI`'s −38.78%; train −14.45% vs. −54.77%). No correlation between the DAX sleeve's trade sequence and the US live-universe sleeve's trade sequence was ever computed by any investigation tonight — flagged explicitly as the most speculative candidate for exactly that reason.
+
+**Checked and ruled out: exit day-of-week artifact.** An apparent spread (Monday exits 59.9% win rate/+3.67% mean pnl; Tuesday 22.0%/-2.50%) fully dissolves once decomposed by exit reason: `STOP_LOSS` trades are −6.4% to −6.7% and mechanically 0% win rate on every weekday; `MAX_HOLDING` trades are +7.6% to +8.4% and 82-89% win rate on every weekday. The apparent effect is a composition artifact — entries cluster on Monday/Wednesday/Friday (850/772/723 vs. 344/472 Tuesday/Thursday), and since `MAX_HOLDING` exits land ~30 trading days after entry, the skewed entry-weekday distribution flows through into a skewed exit-weekday exit-reason mix. Recorded so it isn't re-discovered as "new."
+
+**Recommendation: researched, not adopted — none of these are findings.** Ranking restated: (1) December-entry seasonal split — strongest, cross-era robust, literature-grounded; (2) compounding-amplified cluster concentration — strong convergent cross-investigation evidence, untested "scale with account size" angle; (3) sector-scoped concentration constraint — worth a narrow test, tempered by real counter-evidence; (4) cross-market DAX sleeve — most speculative. Nothing was tested further, validated, block-validated, or committed. Full write-up and file references preserved at `research/exploratory_hypothesis_pass_2026-08-05/`.
+
+## Momentum-strength band vs. 30-day MAX_HOLDING cap — Step 1 gate NOT WARRANTED, no Step 2 built (2026-08-05)
+
+Investigated whether entry-time momentum-strength band predicts what happens after a position hits the 30-day `stock_max_holding_days` cap — motivated by `MAX_HOLDING` being 56.8% of all exits (1,796/3,161) in the real, unmodified engine's full-history run. Investigation only, run in a local session, per the task's own two-step gating rule: build a Step 2 mechanism/16-block validation only if Step 1's purely descriptive check shows a real, promising, reasonably-sized pattern.
+
+**Backtest convention, stated explicitly per CLAUDE.md's standing requirement: Step 1 is a CONTINUOUS WALK** — this is deliberate and correct for the question ("pull one real, already-fidelity-established trade set and look at what happened next"), not a variant comparison. Engine: the real, unmodified `analysis.backtest.simulate_portfolio_compounding_mtm()` via `analysis.validation.run_full_validation(CONFIG, start=2007-01-01, end=2026-08-03, mark_to_market=True, live_universe=True)` — no custom harness for trade generation.
+
+**Note: this investigation ran on the pre-correction engine.** It predates the 2026-08-06 realistic-intraday-touch `STOP_LOSS` fill correction (documented above under "Realistic (intraday-touch) STOP_LOSS fill made the permanent default"), and `momentum_horizon_2026-08-05` is listed by name in that fix's 18-item re-verification queue ("Highest exposure" tier — explicit per-block narrative in the write-up) — its figures below should be treated as unconfirmed against the corrected engine until re-run.
+
+**Band summary (n=1,796 `MAX_HOLDING` trades):**
+
+| Band | n | % of MAX_HOLDING | mean fwd_ret_30d | median fwd_ret_30d | % fwd_ret_30d > 0 |
+|---|---|---|---|---|---|
+| Weak | 17 | 0.9% | 5.33% | 2.05% | 58.8% |
+| Moderate | 89 | 5.0% | 1.06% | 1.89% | 53.9% |
+| Strong | 111 | 6.2% | 3.43% | 1.89% | 62.2% |
+| Very Strong | 1,573 | 87.6% | 2.23% | 1.54% | 54.8% |
+
+**No monotonic gradient across bands, and the one apparently interesting figure is a regime artifact, not a momentum-strength effect.** Mean `fwd_ret_30d` bounces (5.33% → 1.06% → 3.43% → 2.23%, Weak→Moderate→Strong→Very Strong) rather than trending, and 14 of the Weak band's 17 trades (82.4%) entered inside a single 17-month window (2008-07 to 2009-11, the GFC-recovery era) against only 4.5% pre-2010 concentration in the dominant Very Strong band. Restricted to its own dominant regime, the Weak band's headline +5.33% mean collapses to +2.16%, driven by two outlier trades (MU +27.85%, NCLH +29.57%) in a 17-trade sample.
+
+**Direct statistical tests confirm no relationship, not just an ambiguous one:**
+
+```
+Spearman(momentum_at_entry, fwd_ret_30d), all bands:        rho = 0.0165, p = 0.4863, n = 1782
+Spearman(momentum_at_entry, fwd_ret_30d), Very Strong only:  rho = 0.0279, p = 0.2707, n = 1559
+OLS: fwd_ret_30d = 0.0202 + 0.0046*momentum_at_entry - 0.0264*era_pre2010
+     momentum_at_entry: coef=0.0046, p=0.094 (not significant)
+     era_pre2010:       coef=-0.0264, p=0.024 (significant)
+     R² = 0.005
+```
+
+**Step 1 gate decision: NOT WARRANTED — no Step 2 built or run.** No monotonic band gradient, the only divergent bands (Weak/Moderate/Strong, 12.1% of the population) are confounded by market regime nearly 3:1 relative to the dominant band, entry momentum shows essentially zero correlation with post-cap continuation even within the dominant Very Strong band alone (rho≈0.03, p=0.27, n=1,559), and the dominant band's own continuation statistics are nearly identical to the aggregate population. Per the task's own gating instruction, no engine modification, no reset-at-boundary sweep, and no 16-block validation were performed.
+
+**Recommendation: researched, not adopted.** A fixed 30-day `stock_max_holding_days` cap, independent of entry-time momentum strength, remains the best-supported choice. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, and `brokers/trading212.py` are all unchanged. Full trade-level output (all 3,161 trades, all 1,796 annotated `MAX_HOLDING` trades) preserved at `research/momentum_horizon_2026-08-05/`.
+
+## Trailing-momentum lookback window (3–24 months) — researched, not adopted, 12 months confirmed (2026-08-05)
+
+Investigated whether `MOMENTUM_LOOKBACK_DAYS` (currently 252 trading days / 12 months) — chosen once during the V1→V2 rebuild, compared only against a 200-day SMA, and never swept since — is still the right value. The most structurally central untested parameter in the system.
+
+**Convention: RESET-AT-BOUNDARY**, per CLAUDE.md's standing requirement — this is a variant comparison (which lookback is better), test period 2020-01-01 → 2026-08-03, live 503-ticker universe, `_MAX_ANCHOR_GAP_DAYS` correctly scaled with lookback (`round(lookback_days * 400 / 252)`) so longer lookbacks aren't silently starved of signal by a stale calendar-staleness guard. Fidelity verified: byte-identical to the real unpatched engine at production lookback (2,856 trades, exact), decision-engine parity confirmed from real trade output (0 holding-period violations, 0 sizing violations).
+
+**Note: this investigation ran on the pre-correction engine.** It predates the 2026-08-06 realistic-intraday-touch `STOP_LOSS` fill correction, and `momentum_lookback_2026-08-05` is listed by name in that fix's 18-item re-verification queue ("Structural-only exposure" tier — block validation used as an aggregate pass-count gate, no era-specific narrative on top) — its figures below should be treated as unconfirmed against the corrected engine until re-run.
+
+**Single-window sweep (reset-at-boundary, test period):**
+
+| Lookback | Trades | CAGR | Max DD | PF | Sharpe |
+|---|---|---|---|---|---|
+| 3m | 1,329 | 18.44% | -21.92% | 1.82 | 0.693 |
+| 6m | 1,317 | 18.07% | -24.83% | 1.74 | 0.665 |
+| 9m | 1,243 | 22.04% | -34.89% | 1.85 | 0.708 |
+| **12m (current)** | 1,270 | 19.29% | -27.56% | 1.74 | 0.670 |
+| 15m | 1,284 | 19.95% | -25.96% | 1.73 | 0.648 |
+| 18m | 1,255 | **24.68%** | -34.46% | **1.97** | **0.783** |
+| 24m | 1,285 | 16.42% | -20.72% | 1.60 | 0.559 |
+
+**Block 0 (2007-01-01→2008-03-23) is structurally unfair to long lookbacks** — 15m/18m/24m produce literally zero trades in that block (no prior history to anchor a trailing return against the dataset's own left edge), so they automatically fail `pf > 1.0` there. 3m's apparent 15/16-block headline advantage comes almost entirely from this; excluding block 0, 3m and 12m both pass 14/15.
+
+**16-block validation, pass rule imported directly from `analysis/validation.py:_block_passes()`:**
+
+```python
+dd_ok = sp_dd is None or sp_dd == 0 or abs(strat_metrics["max_drawdown_pct"]) <= abs(sp_dd) * 1.5
+pf_ok = strat_metrics.get("profit_factor", 0.0) > 1.0
+```
+
+Excluding the block-0 confound (blocks 1–15), head-to-head CAGR wins against 12m: 3m 5/15, 6m 6/15, 9m 7/15, 15m 7/15, 18m 7/15, 24m 7/15 — **no alternative beats 12m in more than 7 of 15 blocks; every single one loses its head-to-head against the incumbent.**
+
+**18-month lookback is a textbook single-window false positive.** Best single-window CAGR (24.68%), best PF (1.97), best Sharpe (0.783) — yet it **wins 0 of 16 blocks**, posts the **worst mean Sharpe of all seven arms** (0.509), and the **worst worst-block CAGR** (-24.64%). Its mean block CAGR (13.07%) is a rounding error from 12m's (12.95%).
+
+**`min_momentum_pct` interaction — a real, load-bearing finding.** The 0.02 floor is not lookback-neutral: it blocks 9.72% of signal-on candidate-days at 3m vs. 2.96% at 24m, a **3.3× stronger filter at 3m than at 24m**, because shorter lookbacks compress momentum magnitudes. Longer lookbacks also concentrate the portfolio into fewer names (292 distinct tickers at 3m vs. 165 at 24m, a 44% reduction, monotonic across the sweep) — worsening exactly the correlated-concentration exposure documented elsewhere the same night. A future lookback change could never be a one-line constant edit; it would require re-sweeping `min_momentum_pct` and re-examining concentration exposure together.
+
+**Recommendation: researched, not adopted — 12 months confirmed (existing value, not a new adoption).** No alternative wins more than 7 of 15 head-to-head blocks against 12m, and 12m holds the best or near-best median block CAGR (15.25% / 15.37% excluding block 0) of any arm. `config.yaml` and `analysis/signals.py` untouched, nothing deployed. Full trade-level output (`results/reset_{3,6,9,12,15,18,24}m.json`, per-block metrics and trades) preserved at `research/momentum_lookback_2026-08-05/`.
+
+## Momentum-strength-conditioned position-sizing multiplier — researched, not adopted (2026-08-05)
+
+Investigated whether layering a momentum-strength-conditioned sizing multiplier on top of the existing volatility-only VaR sizing (never replacing it) improves outcomes — confirmed first, from code, that momentum plays no role in current sizing in either live or backtest (`_var_position_size_core()`, `resolve_dynamic_max_position_gbp()`, `resolve_cash_constrained_position_gbp()` never take momentum as an argument in either `analysis/backtest.py` or `brokers/trading212.py`).
+
+**Note: this investigation ran on the pre-correction engine.** It predates the 2026-08-06 realistic-intraday-touch `STOP_LOSS` fill correction, and `momentum_sizing_multiplier_2026-08-05` is listed by name in that fix's 18-item re-verification queue ("Structural-only exposure" tier — block validation used as an aggregate pass-count gate, no era-specific narrative on top) — its figures below should be treated as unconfirmed against the corrected engine until re-run.
+
+**Mechanism**: multiplier applied to the real, unmodified `_var_position_size_core()` output, with the `dynamic_max_position_gbp` ceiling explicitly re-applied immediately after (`position_gbp = min(position_gbp * multiplier, dynamic_max_position_gbp)`), so both existing safety limits still genuinely apply to the (possibly larger) multiplied position. Three schedules tested, keyed to `main.py`'s own momentum-strength bands:
+
+```python
+SCHEDULE_MODEST      = {"Weak": 1.0, "Moderate": 1.0, "Strong": 1.15, "Very Strong": 1.3}
+SCHEDULE_AGGRESSIVE  = {"Weak": 1.0, "Moderate": 1.0, "Strong": 1.3,  "Very Strong": 1.6}
+SCHEDULE_WHOLE_DIST  = {"Weak": 1.0, "Moderate": 1.1, "Strong": 1.2,  "Very Strong": 1.35}
+```
+
+**Convention: RESET-AT-BOUNDARY**, per CLAUDE.md's standing requirement (a variant comparison against baseline) — test period 2020-01-01→2026-08-03, live universe, production `per_trade_pct=0.05`/`max_total_deployed=0.5`.
+
+**Step 3 — reset-at-boundary single-window sweep:**
+
+| Variant | Trades | CAGR | DD (fixed) | DD (peak-rel) | PF | Sharpe | Ending £ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Baseline (real, unmodified) | 1,270 | 19.29% | -27.56% | -12.47% | 1.74 | 0.670 | £159,699 |
+| Modest | 1,122 | 20.71% | -25.04% | -9.96% | 1.76 | 0.670 | £172,658 |
+| Aggressive | 1,075 | 19.04% | -29.23% | -11.27% | 1.68 | 0.615 | £157,557 |
+| Whole-distribution | 1,097 | 21.49% | -38.85% | -11.02% | 1.79 | 0.666 | £180,170 |
+
+Modest dominated baseline on 4 of 5 metrics (CAGR, both DD conventions, PF; Sharpe tied) — the cleanest single-window "win" of the three.
+
+**Backstop-absorption finding — a significant result in its own right.** For 82.8% (modest), 89.7% (aggressive), and 84.1% (whole-distribution) of multiplied candidates, the pre-existing `dynamic_max_position_gbp` ceiling fully absorbs the nominal schedule's boost — the realized position size increase is `ceiling / var_sized_value`, not the schedule's nominal 1.15–1.6×. Confirmed with real trade-level evidence: COST 2020-04-01 (modest), VaR-sized £2,062.36 → 1.3× multiplier would give £2,681.07 → correctly re-clamped to the £2,369.63 ceiling, a realized ~15% increase, not the intended 30%.
+
+**Joint-risk-gap counter-finding — a genuine, unanticipated result, reported honestly with its own caveat.** Contrary to the anticipated concentration-risk concern, all three schedules *reduced* `indep_gap_60d` relative to baseline (1.239) in this test period: modest 1.100 (-11.3%), aggressive 1.049 (-15.4%), whole-distribution 1.081 (-12.8%). This is period-specific, not a general guarantee — the boosted candidates in this particular window (COST, DG, WMT, KR, GIS, EQIX, CHTR, BMY) happened to be consumer-staples/retail/telecom names rather than the correlated semiconductor/storage cluster (SNDK, WDC, MU, LITE, STX) documented elsewhere as this project's worst concentration episodes.
+
+**Step 5 — 16-block independent validation, pass rule imported directly from `_block_passes()`; all three variants FAILED:**
+
+| | Baseline | Modest | Aggressive | Whole-dist |
+|---|---:|---:|---:|---:|
+| Blocks passing | 14/16 | 14/16 | 14/16 | 14/16 |
+| Mean block CAGR | 12.94% | 11.83% | 13.16% | 12.06% |
+| Mean block PF | 1.778 | 1.691 | 1.761 | 1.714 |
+| Mean block |DD| | 8.27% | 8.73% | 8.68% | 8.54% |
+| Blocks won head-to-head vs baseline (CAGR) | — | 5/16 | 7/16 | 6/16 |
+
+No schedule wins more than half its head-to-head blocks, and none improves mean CAGR, mean PF, and mean drawdown simultaneously relative to baseline. Modest — the single-window "winner" on 4/5 metrics — performs *worse* than baseline on every 16-block measure. This is the same clean-single-window-win-evaporates-under-block-validation pattern found in five sibling investigations the same night.
+
+**Recommendation: researched, not adopted.** No schedule clears the bar for implementation. `config.yaml`, `analysis/decision.py`, `analysis/volatility.py`, `analysis/backtest.py`, and `brokers/trading212.py` are all unchanged; nothing committed or pushed. Full trade-level output (`results/reset_{baseline,modest,aggressive,whole_dist}.json`, per-candidate sizing records, per-block trades) preserved at `research/momentum_sizing_multiplier_2026-08-05/`.
+
+## Risk-adjusted momentum ranking — researched, not adopted (2026-08-05)
+
+Investigated whether ranking admission candidates by momentum ÷ trailing volatility, instead of raw momentum, ranks better than raw momentum alone. Directly motivated by the same-day concentration-risk investigation, whose worst historical episodes were dominated by clusters of extreme-momentum, highly-correlated names (the recurring semiconductor/storage cluster — SNDK, WDC, MU, LITE, STX and others). An explicit correlation-aware constraint was tested there and rejected; this tested a different mechanism for the same concern — does risk-adjusted ranking naturally deprioritize the high-momentum/high-volatility profile without any explicit correlation rule.
+
+**The exact variant tested.** Production ranks candidates by raw momentum descending, tie-broken by insertion order (`analysis/backtest.py:_admit_group()`, and its identical twin in `simulate_portfolio_compounding()`; live's SQL equivalent `ORDER BY momentum_pct DESC, decided_at ASC`). The isolated change tested was the sort key only, using the volatility measure production's own VaR sizing already computes: `score = momentum / abs(daily_var)` where `daily_var` is the 5th percentile of the trailing 252-day log-return distribution (`var_lookback=252`, `var_confidence=0.95`), falling back to `-inf` when fewer than 60 returns are available. Not entry gating, not exits, not sizing, not capacity/cash clamps.
+
+**A real methodological artifact, found and fixed mid-investigation.** The first block-validation run had the insufficient-history ranking fallback bind on 18.08% of scored candidates (174,776 / 966,417), because block truncation cuts `close_series` to `[block_start, block_end]`, leaving no candidate with 60 prior returns for the first ~60 sessions of every block — all scored `-inf` and ranked arbitrarily. This handicapped the variant arm only. Fixed by estimating ranking volatility from each ticker's untruncated close history (a live system genuinely has that history); sizing, gating, exits and events still use the truncated series. Fallback incidence after the fix: 0.0000% (0/965,857). This mattered materially, not cosmetically: the pre-fix variant showed max DD -16.31% and PF 1.78 (apparently better than baseline's -27.56%/1.74); the corrected variant showed max DD -26.19% and PF 1.71 (worse than baseline on PF). The apparent 41% drawdown reduction was really ~5%, and the PF "win" reversed. Anyone reading only the first run would have concluded the opposite.
+
+**Reset-at-boundary comparison (corrected).** Per CLAUDE.md's "Two backtest conventions," this is a variant comparison, so reset-at-boundary is the correct convention — used throughout. Test period 2020-01-01 → 2026-08-03, live universe. Raw momentum (baseline): CAGR 19.29%, max DD (fixed) -27.56%, max DD (peak-relative) -12.47%, PF 1.74, Sharpe 0.670, 1,270 trades. Risk-adjusted: CAGR 16.35% (worse, -2.94pp), max DD (fixed) -26.19% (marginally better), max DD (peak-relative) -8.89% (better), PF 1.71 (worse), Sharpe 0.635 (worse), 1,202 trades. Does not dominate — better on drawdown only.
+
+**16-block validation.** Formula quoted verbatim from `analysis/validation.py:_block_passes()`:
+```python
+dd_ok = sp_dd is None or sp_dd == 0 or abs(strat_metrics["max_drawdown_pct"]) <= abs(sp_dd) * 1.5
+pf_ok = strat_metrics.get("profit_factor", 0.0) > 1.0
+return bool(dd_ok and pf_ok)
+```
+Raw momentum: 14/16 blocks pass, mean CAGR 12.95%, blocks won on CAGR 12/16 (i.e. its own baseline), mean abs drawdown 8.27%, mean PF 1.779, mean Sharpe 0.539. Risk-adjusted: also 14/16 blocks pass (same two failures — block 0 pre-GFC, block 1 GFC-acute), mean CAGR 9.24%, **only 4/16 blocks won on CAGR** against raw momentum, mean abs drawdown 7.22% (better in 12/16), mean PF 1.680 (better in only 6/16), mean Sharpe 0.465. The drawdown improvement is robust (better in 12 of 16 independent windows) but costs 3.71pp of mean CAGR, and is a clean reversal from the single-window PF read: block-level PF inverts from an apparent 1.78-vs-1.74 edge to 1.680-vs-1.779 across blocks. Despite being a Sharpe-like ranking criterion, risk-adjusted ranking produces a **worse realized Sharpe ratio** than raw momentum (0.465 vs 0.539 mean across blocks) — dividing by trailing volatility systematically demotes exactly the high-volatility, high-momentum names that generate this strategy's returns.
+
+**Concentration effect.** It does reduce realized joint risk, measurably but modestly: `indep_gap_60d` mean falls from 0.8986 to 0.8472 (-5.72%), mean pairwise 60-day correlation falls from 0.3843 to 0.3647 (-0.0196), mean simultaneous open positions falls from 12.23 to 11.57. Does not meaningfully close the ~2x gap the concentration investigation identified.
+
+**Universe caveat, closed.** All runs above initially ran under the pre-`d1a067a` universe (BRK.B/BF.B silently absent — 501 effective tickers, not 503). A confirmation re-run on the complete 503-ticker universe reproduced identical raw-momentum aggregates to three decimals (CAGR 12.95%, DD 8.27%, PF 1.779, Sharpe 0.539) and a marginally worse risk-adjusted result (CAGR 9.20%, PF 1.672, Sharpe 0.461, still 4/16 blocks won) — confirming neither BRK.B nor BF.B was ever admitted under raw-momentum ranking, and the caveat is closed rather than merely acknowledged.
+
+**Note on where this sits in the correction timeline.** This investigation is listed in the 18-item re-verification queue raised by the 2026-08-06 realistic-intraday-touch STOP_LOSS fill correction (see "Realistic (intraday-touch) STOP_LOSS fill made the permanent default" above), since its baseline figures (19.29% CAGR / -27.56% DD / 14/16 blocks) match the pre-correction convention — it was researched on the pre-correction engine and has not been re-verified against the corrected default.
+
+**Recommendation: researched, not adopted.** `config.yaml` untouched; nothing deployed. Worse on the primary return metric in 12 of 16 independent windows, worse on PF and Sharpe both single-window and across blocks; the risk it removes and the return it removes come from the same source. It does beat the sibling, also-rejected correlation constraint on both CAGR (16.35% vs 16.27%) and peak-relative DD (-8.89% vs -18.90%), so if the concentration concern is ever revisited, this is the better of the two mechanisms tried so far. Full trade-level output (including the pre-correction artifact runs, kept deliberately for auditability) preserved at `research/risk_adjusted_momentum_2026-08-05/`.
+
+## Correlated, uncoordinated STOP_LOSS clustering — researched, not adopted (2026-08-05)
+
+Investigated whether stop-losses firing in correlated clusters (multiple positions closing near-simultaneously off the same market move) represent a real, coordinatable cost — and whether an actual forward-looking coordination mechanism (rather than an independent per-position stop) could capture it.
+
+**Part 1 — retrospective cost, a real and highly robust finding.** Reused the `simulate_portfolio_compounding_mtm()` continuous-walk population directly (3,161 trades, 1,169 STOP_LOSS exits, confirmed exactly before use). Cluster definition (exact, not paraphrase): for window `W` trading days and minimum cluster size `N`, every STOP_LOSS trade's trailing count of STOP_LOSS trades within `[day_idx-(W-1), day_idx]` is computed; a trade is flagged once that count reaches `N`; flagged trades' windows are merged into maximal cluster spans; a cluster's `detection_moment` is the exit date of the chronologically earliest flagged trade in the span; any cluster overlapping a real crisis day (via `analysis.crisis.compute_raw_trigger`) is discarded (zero of the 7 real crisis days in the full history overlapped any cluster at any tested (W,N)). Hypothetical coordinated-exit P&L closes every other member position at `detection_moment`'s real stored price, no lookahead.
+
+Across all 9 tested (W,N) combinations, **every single delta was positive** — coordinated exit would have improved aggregate outcome under every parameter choice, ranging from 6.20% to **29.91%** of total 19-year strategy P&L (£484,476.39 across 3,161 trades). The largest: W=5,N=2, delta +£144,925 (29.91% of total P&L). Primary combination selected via a Poisson-null calibration: W=3,N=3 (the smallest/tightest combination clearing a 5%-style "distinguishable from background" bar, empirical P(≥N stops in W days)=3.56% vs. 16.0% for W=3,N=2). Detailed findings for W=3,N=3: 129 genuine clusters, 743 member trades, real aggregate P&L -£363,221.05, hypothetical -£297,078.92, **delta +£66,142.13** (18.2% relative loss reduction, 1.30% of combined entry value, **13.65% of total strategy P&L**), mean 11.33 positions open at detection, mean 53.09% of that day's open book represented by the cluster. Recent years (2024-2026) account for 55% of the total delta (£36,218 of £66,142), consistent with position sizing growth via compounding rather than more frequent clustering.
+
+**Part 2 — an actual forward-looking mechanism, built and block-validated.** `stop_cluster_engine.py`: a verbatim copy of `simulate_portfolio_compounding_mtm()` with an isolated, edge-triggered rolling STOP_LOSS trailing-window trigger, force-closing every other open position at last-known price once the cluster first arms (not on every day the trailing count stays ≥N — a first-version state-based bug fired 1,509 coordinated closures against only 391 real STOP_LOSS exits in the same window, a ~4x mismatch from what Part 1 actually measured; fixed via a `cluster_active` boolean, after which the same window produced 442 coordinated closures against 377 real exits). Fidelity confirmed: byte-identical to real `simulate_portfolio_compounding_mtm()` with inert defaults (2,854==2,854 trades on a real subset); materially different real output with W=3/N=3 set (831 STOP_CLUSTER_COORDINATED exits).
+
+**Reset-at-boundary sweep** (test period 2020-01-01→2026-08-03, per CLAUDE.md's "Two backtest conventions" — a variant comparison, correctly reset-at-boundary): Baseline (real, unmodified): 1,270 trades, CAGR **19.29%**, DD fixed -27.56%, DD peak-rel -12.47%, PF **1.74**, Sharpe **0.670**. Coordinated W=3,N=3 (the statistically primary combination): 1,463 trades, CAGR 16.53%, DD fixed **-39.24%** (worse), DD peak-rel -12.77%, PF 1.62, Sharpe 0.612 — worse on every metric including drawdown, ruled out with no block validation attempted. Coordinated W=10,N=4 (Part 1's second-largest historical delta, £111,571/23.03% of total P&L, 98 clusters): 1,533 trades, CAGR 18.98% (negligibly lower), DD fixed **-25.07%** (better), DD peak-rel **-9.05%** (better), PF 1.73 (negligibly lower), Sharpe **0.699** (better) — close enough to dominance to warrant the mandatory 16-block check.
+
+**16-block validation** (`analysis.validation._block_passes()` quoted verbatim: `dd_ok = sp_dd is None or sp_dd == 0 or abs(strat_metrics["max_drawdown_pct"]) <= abs(sp_dd) * 1.5; pf_ok = strat_metrics.get("profit_factor", 0.0) > 1.0`): Baseline **14/16** blocks pass, mean CAGR **12.94%**, median CAGR **15.26%**. Coordinated W=10,N=4: **13/16** blocks pass, mean CAGR 11.26%, median CAGR 11.67% — loses on win-count, mean CAGR, and median CAGR. Blocks 0 and 1 fail for both (known pre-GFC/GFC-acute pattern). **Block 8 (2016-10-17→2018-01-07) is a genuine new failure the coordinated variant introduces that baseline does not have**: a calm bull block (S&P DD -3.07%) where baseline's natural exits kept DD to -2.85% (under the 1.5×3.07%=4.61% threshold, PF 2.03), but the coordinated variant's 70 forced closures pushed DD to -4.72% (narrowly breaching the threshold by 0.11pp) and PF down to 1.59 — a concrete illustration of the mechanism's real trade-off: it also force-closes positions that would not otherwise have hit their own stop, and in a period with no genuine correlated-decline pattern, that cost shows up as pure downside.
+
+**This investigation was researched on the pre-correction backtest engine and is listed in the 18-item re-verification queue raised by the 2026-08-06 realistic-intraday-touch STOP_LOSS fill correction** (its baseline reproduces 19.29%/-27.56%/14-16-blocks, the pre-correction convention).
+
+**Recommendation: researched, not adopted.** Part 1's retrospective finding is real and robust (positive delta across all 9 tested (W,N) combinations, 6.2%-29.9% of total strategy P&L). But turning it into an actual, non-lookahead mechanism revealed a real cost the retrospective view structurally cannot see: even the best-performing parameter choice (W=10,N=4) came close to but did not achieve dominance in the single reset-at-boundary comparison, and failed 16-block validation on win-count, mean CAGR and median CAGR, including one genuine new block failure. No change recommended to `analysis/decision.py`'s exit-priority chain or `analysis/crisis.py`'s coordination scope — the existing "coordinated response only to a genuine acute crisis, independent per-position stops otherwise" design remains best-supported. Full trade-level output preserved at `research/stop_cluster_coordination_2026-08-05/` (`primary_clusters_summary.csv`, `primary_clusters_detail.json`, per-block trade detail).
+
+## Deployment-cap / per-trade-size trade-off sweep — characterized, no adopt/reject decision made (2026-08-05)
+
+Swept `max_total_deployed` × `per_trade_pct` as a 9-combination grid (50%/60%/70% deployed × 5%/6%/7% per-trade, current production is 50%/5%) to characterize — not decide — the mechanical trade-off of raising capital deployment above current production levels. Explicitly framed by the task brief as not a "researched, not adopted" verdict: more capital at work predictably raises both return and drawdown, and this report lays that trade-off out honestly across the grid, block-validates it, and re-checks the joint-risk-gap effect at each cell, leaving the adopt/reject call to a human. No config, code, or deploy infrastructure was touched; nothing implemented on the VM; `config.yaml` shows zero diff.
+
+**Fidelity verified before trusting any grid cell.** Every cell calls the real, unmodified `analysis.backtest.simulate_portfolio_compounding_mtm()` directly (`max_total_deployed`/`per_trade_pct` are already native parameters of it — no custom engine, no monkeypatch), with ticker frames precomputed once via the real `precompute_ticker()`/`slice_ticker()` purely for speed. Byte-identical fidelity confirmed at the baseline cell (50%/5%): `analysis.validation.run_full_validation()` (the real production entrypoint) and this investigation's cached-slice call produced **1,270 trades both sides, byte-identical, `sum_pnl_gbp` identical to the cent (£109,699.42)**, metrics (CAGR 19.29%, DD −27.56%, PF 1.74, Sharpe 0.67) cross-validated against two sibling reports' own independently-reported baselines. Spot-checked at three swept cells (`d50_t05`, `d60_t06`, `d70_t07`): all `MAX_HOLDING` exits (734/822/919 trades respectively) clustered at 30-33 calendar days against the real `get_max_holding_days()` (30 for every live stock ticker), consistent with production behavior at every combination checked, not just baseline. Same-instrument duplication was confirmed structurally prevented on both live (`maybe_place_orders()`'s `if t212_ticker in positions_by_t212: continue`) and backtest (one `open_trade` slot per ticker, a dict not a list) and empirically re-confirmed against an independent 3,161-trade, 331-ticker full run with zero overlapping same-ticker windows found.
+
+**Convention: RESET-AT-BOUNDARY**, stated explicitly per CLAUDE.md's "Two backtest conventions" requirement — this is a variant comparison, not a track-record report. Primary sweep: fresh reset at 2020-01-01 (`VALIDATION_TRAIN_TEST_SPLIT`), walking to 2026-08-03, £50,000 starting capital, zero open positions at the boundary, live universe, mark-to-market, everything else at current production config.
+
+**The 9-combination primary sweep:**
+
+| max_deployed | per_trade | Trades | CAGR | DD (fixed) | DD (peak-rel) | PF | Sharpe | Ending £ |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 50% (current) | 5% (current) | 1,270 | 19.29% | −27.56% | −12.47% | 1.74 | 0.670 | £159,699 |
+| 50% | 6% | 1,176 | 18.41% | −23.96% | −12.03% | 1.72 | 0.635 | £152,145 |
+| 50% | 7% | 1,157 | 18.39% | −28.38% | −8.69% | 1.70 | 0.631 | £151,980 |
+| 60% | 5% | 1,501 | 23.94% | −42.38% | −11.31% | 1.73 | 0.652 | £205,424 |
+| 60% | 6% | 1,427 | 24.46% | −52.71% | −13.14% | 1.78 | 0.663 | £211,252 |
+| 60% | 7% | 1,361 | 24.97% | −37.69% | −11.03% | 1.84 | 0.700 | £216,986 |
+| 70% | 5% | 1,734 | 30.78% | −55.62% | −12.21% | 1.87 | 0.714 | £292,632 |
+| 70% | 6% | 1,612 | 28.22% | −50.72% | −13.97% | 1.81 | 0.688 | £256,903 |
+| 70% | 7% | 1,602 | 26.68% | −61.48% | −12.01% | 1.74 | 0.636 | £237,307 |
+
+**The two drawdown conventions diverge sharply, and mechanically, not as a data artifact.** DD (fixed, against the original £50,000) balloons to as much as −61.48%, while DD (peak-relative) stays contained to a −8.7% to −14.0% band across the whole grid — because every higher-deployment combo compounds to a much larger equity peak before any drawdown occurs (peak equity ranges from £159k at baseline up to £315,050 at 70%/5%), so a moderate, genuinely-contained pullback from a much higher peak still reads as a huge percentage of the original £50k denominator. Both conventions are reported per CLAUDE.md's standing requirement; peak-relative better represents "how bad relative to where the account actually was," fixed-denominator better represents "how bad relative to what was originally put in."
+
+**16-block independent validation**, using `analysis.backtest.make_blocks(2007-01-01, 2026-08-03, 16)` and `analysis.validation._block_passes()` imported directly (not reimplemented):
+```python
+dd_ok = sp_dd is None or sp_dd == 0 or abs(strat_metrics["max_drawdown_pct"]) <= abs(sp_dd) * 1.5
+pf_ok = strat_metrics.get("profit_factor", 0.0) > 1.0
+return bool(dd_ok and pf_ok)
+```
+144 total block runs (16 blocks × 9 combinations), each a genuine independent reset (fresh £50,000, zero open positions, truncated `[block_start, block_end]`):
+
+| max_deployed | per_trade | Blocks pass | Mean block CAGR | Median block CAGR | Failing blocks |
+|---:|---:|---:|---:|---:|---|
+| 50% | 5% | 14/16 | 12.94% | 15.25% | 0, 1 |
+| 50% | 6% | 14/16 | 12.31% | 15.98% | 0, 1 |
+| 50% | 7% | 14/16 | 12.73% | 14.77% | 0, 1 |
+| 60% | 5% | 13/16 | 14.49% | 17.38% | 0, 1, 15 |
+| 60% | 6% | 13/16 | 15.17% | 18.21% | 0, 1, 15 |
+| 60% | 7% | 13/16 | 14.59% | 17.48% | 0, 1, 15 |
+| 70% | 5% | 13/16 | 17.38% | 19.80% | 0, 1, 15 |
+| 70% | 6% | 13/16 | 16.58% | 21.06% | 0, 1, 15 |
+| 70% | 7% | 13/16 | 17.83% | 21.61% | 0, 1, 15 |
+
+Blocks 0 (pre-GFC) and 1 (GFC-acute) fail at every combination including current production — the well-established pre-existing pattern documented elsewhere, not new here. **A clean, mechanical new failure appears at every combination with `max_deployed_pct >= 60%`: block 15 (2025-05-12 to 2026-08-03), and it is a pure drawdown failure, not a profitability failure.** Inspected directly:
+
+| | S&P DD (block 15) | Strategy DD | 1.5×S&P threshold | Strategy PF | Strategy CAGR |
+|---|---:|---:|---:|---:|---:|
+| 50%/5% (passes) | −9.10% | −11.76% | −13.65% | 2.03 | 36.34% |
+| 60%/5% (fails) | −9.10% | −17.03% | −13.65% | 2.07 | 45.14% |
+| 70%/7% (fails) | −9.10% | −20.33% | −13.65% | 2.21 | 59.98% |
+
+Profit factor stays strong (2.0-2.2) and CAGR keeps rising across all three — the block fails the `dd_ok` half of `_block_passes()` cleanly (not a narrow miss) at every combination ≥60%, while `pf_ok` never comes close to failing. Win-count, mean and median block CAGR all rise monotonically with combination aggressiveness (mean CAGR 12.94%→17.83% from baseline to 70%/7%) at the identical cost of losing this one additional block.
+
+**Joint-risk-gap (`indep_gap_60d`) at each combination**, reusing `research/concentration_risk_2026-08-05/analyze_concentration.py`'s own formula, adapted to each combination's own real day-by-day open-position weights (test period 2020-2026, not extrapolated from baseline):
+```python
+indep_gap_60d = P_real/P_ind - 1
+P_real = sqrt(w' Cov w)                 # realized 60d covariance, weighted by entry-time position_gbp
+P_ind  = sqrt(sum(w_i^2 * sigma_i^2))   # zero-cross-correlation (independence) assumption
+```
+(This test-period-only sample's baseline mean, 1.239 at 50%/5%, is higher than the concentration-risk sibling report's full 2007-2026 continuous-walk mean of 1.067 — different window/convention, stated explicitly, not a discrepancy.)
+
+| max_deployed | per_trade | mean indep_gap_60d | p95 | mean n_open | max n_open |
+|---:|---:|---:|---:|---:|---:|
+| 50% | 5% | 1.239 | 1.957 | 12.23 | 20 |
+| 50% | 6% | 1.197 | 1.851 | 11.56 | 18 |
+| 50% | 7% | 1.177 | 1.864 | 11.31 | 18 |
+| 60% | 5% | 1.385 | 2.083 | 14.53 | 24 |
+| 60% | 6% | 1.338 | 2.106 | 13.73 | 21 |
+| 60% | 7% | 1.308 | 2.084 | 13.38 | 21 |
+| 70% | 5% | 1.532 | 2.263 | 16.83 | 28 |
+| 70% | 6% | 1.482 | 2.182 | 15.75 | 23 |
+| 70% | 7% | 1.444 | 2.288 | 15.42 | 23 |
+
+**Raising `max_total_deployed` alone makes the joint-risk gap worse, monotonically and materially:** mean gap rises 1.239 → 1.385 → 1.532 (50%→60%→70% at per_trade fixed at 5%), a **+23.6% relative increase**, with mean simultaneously-open positions rising 12.2 → 14.5 → 16.8 (max observed 28 concurrent positions at 70%/5%, vs. 20 at baseline). **Raising `per_trade_pct` alongside partially offsets this in the mean, but not in the tail.** At every deployed level, 5%→7% reduces the mean gap (50%: −5.0%; 60%: −5.6%; 70%: −5.7% relative), consistent with fewer, larger positions (max n_open dropping 20→18, 24→21, 28→23 respectively). Going from 50%/5% to 70%/7% together increases the mean gap by +16.5% (1.239→1.444) — meaningfully less than the +23.6% from raising deployment alone — so raising per_trade_pct alongside offsets roughly 30% of the deployed-alone mean-gap increase. **This mitigation does not hold at the p95 tail**: p95 is not monotonically reduced by raising per_trade_pct at fixed deployment (50%: 1.957→1.851→1.864; 60%: 2.083→2.106→2.084; 70%: 2.263→2.182→2.288 — dips then finishes above where it started). At 70%, the combined 70%/7% cell's p95 (2.288) is the single highest p95 in the entire 9-cell grid, slightly worse than 70%/5% (2.263) — the "raise per_trade_pct to compensate" mitigation is real for the average day but does not carry over to the worst days.
+
+**Verdict: characterized, no adopt/reject decision made — by design, per the task's own framing.** Return and drawdown rise together predictably (CAGR 19.3%→30.8% peak; peak-relative DD stays contained at −8.7% to −14.0% across the whole grid, fixed-denominator DD balloons mechanically to −61.5%); block-validation degrades by exactly one block (14/16→13/16) the moment `max_total_deployed` crosses 60% and stays there through 70%/7%, entirely attributable to a single pure-drawdown breach in block 15 (PF/CAGR both stay strong in the same block); the joint-risk gap worsens materially with deployment (+23.6% mean at 70%/5%) and raising per-trade size alongside only partially offsets it (~30% of the mean increase, none of the tail). No single combination dominates on every metric, which the report states is expected and correct for this kind of question, not a shortfall of the investigation. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, `analysis/validation.py`, `analysis/universe.py`, and `brokers/trading212.py` are all unchanged; nothing was committed, pushed, or implemented on the VM. Full trade-level and daily-panel output preserved at `research/deployment_cap_tradeoff_2026-08-05/results/` (9 `{json,log}` result files plus 9 `*_daily_panel.csv` files), fidelity-check evidence in `fidelity_check_result.json`, and joint-risk-gap detail in `joint_risk_gap_results.json`.
+
+## Momentum + relative-volume re-evaluation at the 30-day cap — Step 1 NOT WARRANTED for either signal, no Step 2 built (2026-08-06)
+
+A third, distinct attempt at the "can anything predict what happens after `MAX_HOLDING`" question, after `momentum_horizon_2026-08-05` (entry-time momentum band, rejected) and `dynamic_momentum_cap_2026-08-05` (momentum trend since entry, rejected). This investigation tests two different, structurally distinct signals, re-read **at the cap point itself**: momentum-strength band re-checked at exit, and a new signal — trailing relative trading volume — separately and in combination.
+
+**Backtest convention: CONTINUOUS WALK**, per CLAUDE.md's standing requirement — identical framing to both sibling investigations (retrospective, no variant comparison). Engine: the real, unmodified `simulate_portfolio_compounding_mtm()` via `run_full_validation(..., mark_to_market=True, live_universe=True)`. The backtest was deliberately re-run fresh (not reused from either sibling's saved output) because production code changed after both sibling runs (`d1a067a`, the BRK.B/BF.B ticker fix) — reproduction confirmed the fix did not change the historical trade set (3,161 total trades, 1,796 `MAX_HOLDING`, identical to both siblings).
+
+**Note: this investigation ran on the pre-correction engine.** It predates the 2026-08-06 realistic-intraday-touch `STOP_LOSS` fill correction (a same-day fix that landed after this investigation), and `momentum_volume_reeval_cap_2026-08-06` is listed by name in that fix's 18-item re-verification queue ("Highest exposure" tier — explicit per-block narrative in the write-up) — its figures below should be treated as unconfirmed against the corrected engine until re-run.
+
+**Signal definitions:**
+
+```python
+rel_volume(t) = volume[t] / mean(volume[t-20 .. t-1])   # trailing 20d, excluding day t
+```
+banded with the identical q25/q75/q90 percentile-split scheme as momentum, "elevated" ⟺ Strong or Very Strong band.
+
+**Band summaries (n=1,796):**
+
+| Signal | Weak mean/median fwd30 | Moderate | Strong | Very Strong |
+|---|---|---|---|---|
+| Momentum-at-cap | +4.51%/−1.68% (n=13) | +0.54%/+1.04% | +0.74%/+1.30% | +2.54%/+1.70% |
+| Rel-volume-at-cap | +1.91%/+1.64% (n=482) | +2.71%/+2.01% | +1.45%/+0.62% | +2.21%/+1.09% |
+
+Rel-volume shows no usable gradient at all (Moderate highest, Strong lowest, Very Strong in between — not even superficially monotonic). Momentum-at-cap is Strong/Very Strong for 94.3% of all `MAX_HOLDING` trades — a structural echo of `momentum_horizon`'s own finding, now more concentrated at the cap point.
+
+**Statistical checks — neither signal shows a distinguishable relationship anywhere tested:**
+
+```
+Spearman(momentum_at_exit, fwd_ret_30d), ALL:                            rho=0.0224, p=0.3449, n=1782
+Spearman(momentum_at_exit, fwd_ret_30d), Very Strong band ONLY:          rho=0.0081, p=0.7546, n=1486
+Spearman(rel_volume_at_exit, fwd_ret_30d), ALL:                          rho=-0.0171, p=0.4710, n=1782
+Group comparison (elevated vs. not, Mann-Whitney):
+  Momentum-at-cap:     +2.33% vs +0.97%, p=0.387
+  Rel-volume-at-cap:   +1.78% vs +2.41%, p=0.168  (wrong direction)
+  Both elevated:       +1.93% vs +2.35%, p=0.260  (wrong direction)
+```
+
+Both signals' point estimates flip negative within the dominant 2010-2019 regime (momentum rho=-0.0310, p=0.3420; rel-volume rho=-0.0395, p=0.2257), and outlier-trimming makes the already-non-significant momentum relationship weaker still (rho=0.0101, p=0.6719), not stronger.
+
+**Step 1 gate decision: NOT WARRANTED for either signal, alone or combined — no Step 2 built or run.** Momentum-at-cap: no significant relationship anywhere tested (p=0.387 aggregate group comparison, p=0.345 Spearman), none within its own dominant Very Strong band alone (rho=0.008, p=0.75, n=1,486). Relative volume: no significant relationship anywhere, and consistently wrong-signed. Combined: no significant relationship (p=0.260), tracking volume's wrong-direction lean. A structural, independent reason a momentum-at-cap gate would do very little even if real: 94.3% of `MAX_HOLDING` trades already clear the Strong/Very Strong bar by construction, so such a gate's practical effect would be close to "extend almost everything." Per the task's own gating rule, no engine modification, reset-at-boundary sweep, or 16-block validation was performed.
+
+**Recommendation: researched, not adopted.** The existing fixed 30-day `stock_max_holding_days` cap remains the best-supported choice. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, and `brokers/trading212.py` are all unchanged. Full trade-level output (all 3,161 trades, all 1,796 annotated `MAX_HOLDING` trades, band summaries, Spearman/group-comparison results) preserved at `research/momentum_volume_reeval_cap_2026-08-06/`.
+
+## Does having a STOP_LOSS mechanism at all improve outcomes? — researched, not adopted, elevated bar not met (2026-08-06)
+
+A genuinely more fundamental question than any prior stop-related investigation: not tuning stop distance or coordination, but removing `STOP_LOSS` from the exit priority chain entirely (`CRISIS_EXIT → SIGNAL_OFF → MAX_HOLDING` only). Run fresh against the just-corrected, realistic-intraday-touch-fill engine specifically — any prior intuition about whether stops help was likely shaped by the old, overstated fill convention and was not trusted here. No re-verification-queue caveat applies to this report; it postdates the correction.
+
+**Mechanism**: two isolated, marked, temporary additions to the real `simulate_portfolio_compounding_mtm()`, both verified inert at their defaults and reverted immediately after capturing results (`git checkout -- analysis/backtest.py`, confirmed clean): `disable_stop_loss=True` passes `stop_price=None` into the shared `evaluate_exit_reason()`, falling through cleanly to `SIGNAL_OFF`/`MAX_HOLDING`; `reset_at_boundary_date=2020-01-01` force-resets `current_balance` to `starting_capital_gbp` exactly once at the boundary. **Convention: RESET-AT-BOUNDARY**, per CLAUDE.md's standing requirement — comparing with-stop vs. no-stop is a variant comparison, not a track-record report.
+
+**TEST-period (entry ≥ 2020-01-01) headline comparison — no-stop wins on every metric:**
+
+| Metric | With-stop | No-stop | Change |
+|---|---|---|---|
+| Trades | 1,279 | 931 | −348 (−27.2%) |
+| **Total P&L** | £52,607.99 | **£74,387.60** | **+£21,779.61 (+41.4%)** |
+| Win rate | 44.25% | 56.07% | +11.82pp |
+| Profit factor | 1.38 | 1.65 | +0.27 |
+| Max DD (peak-relative) | −15.57% | −11.48% | improved |
+| CAGR | 11.54% | 14.88% | +3.34pp |
+
+**16-block validation: with-stop 11/16 passed, no-stop 13/16 passed.** No block ever flips pass→fail under no-stop; the only two blocks that differ (7, 8) both flip fail→pass. But **Block 0 — the block spanning the leading edge of the 2007–2008 financial crisis — is measurably worse without the stop**: CAGR −32.03% (with-stop) → **−42.34%** (no-stop), the exact failure mode a stop-loss exists to guard against, showing up in the one part of 19 years of history that most resembles a genuine crisis regime.
+
+**Direct-downside effect (capacity-turnover reported separately, per CLAUDE.md's standing requirement)**: of 138 positions that were `STOP_LOSS` under with-stop and also admitted under no-stop, the matched population is roughly neutral-to-positive on average (total delta_pnl_gbp across the 138 = +£1,400.96 net; 77/138 better off, 61/138 worse off) — but this average hides real, identified tail risk: **five confirmed single-position losses a stop-loss specifically would have prevented, ranging −18.5% to −45.0%**, across three different market eras (2008 GFC-adjacent, 2011, 2022 tech selloff, 2024):
+
+| Ticker | Entry date | With-stop pnl% | No-stop pnl% | No-stop exit reason |
+|---|---|---|---|---|
+| TMUS | 2011-07-25 | −4.90% | **−45.04%** | SIGNAL_OFF |
+| AAPL | 2008-01-03 | −6.08% | **−32.46%** | MAX_HOLDING |
+| NVDA | 2022-03-28 | −11.64% | **−34.74%** | MAX_HOLDING |
+| WAT | 2008-01-03 | −3.64% | **−27.96%** | SIGNAL_OFF |
+| CEG | 2024-10-03 | −7.97% | **−18.54%** | MAX_HOLDING |
+
+**Capacity-turnover effect, reported separately per the same requirement**: total trades fall from 3,436 (with-stop) to 2,553 (no-stop) across the full 2007–2026 run, −883 (−25.7%). Confirmed directly via the no-stop run's own rejection log: 1,311 with-stop-admitted candidates were explicitly `REJECTED_CAPACITY` under no-stop because a slot stayed occupied by a position that would have stopped out — those foregone candidates had a mean 30-trading-day forward return of +2.43% (median +2.04%, 58.5% positive), a real, quantified, positive-expectancy opportunity cost from trading less.
+
+**Recommendation: researched, not adopted — the elevated bar is not met.** Quoted directly from the report: *"the task set an explicitly elevated bar for touching a core safety mechanism, and three independent pieces of evidence say this doesn't clear it: (1) real, identified, severe tail risk — five confirmed single-position losses from −18.5% to −45.0%... (2) the one crisis-regime block in 19 years of history is measurably worse without the stop... (3) a real, quantified capacity-turnover cost — 27% fewer trades in the test period, with the specifically-identified foregone candidates showing positive expected value."* Removing a bounded-loss mechanism entirely is judged a structural, qualitative change to the strategy's risk character, not a parameter tweak — VaR-based position sizing is calibrated against an assumed downside that the stop-loss is the actual enforcement mechanism for. `config.yaml`, `analysis/decision.py`, `brokers/trading212.py` are all unchanged; `analysis/backtest.py` was temporarily modified and confirmed reverted (`git diff` clean). Full trade-level output (`trades_with_stop_reset.csv`/`trades_no_stop_reset.csv`, block validation results, matched-trade and foregone-candidate detail) preserved at `research/no_stop_loss_2026-08-06/`.
+
+## 16-block benchmark comparison against four passive alternatives — validated, not adopted (2026-08-06)
+
+Investigated whether the previously-cited single-window (2020-2026) result — the strategy beating the S&P 500 on a risk-adjusted basis — generalises across 16 independent historical blocks, and how it compares against four passive alternatives, two of them matched to its own risk profile. Measurement only: no mechanism changed, nothing committed or deployed, no production file touched. Run locally in an isolated `git worktree` against a copied production database, per CLAUDE.md's standing practice.
+
+**Verification gate, passed before any block output was trusted.** The cited single-window figures reproduce exactly — strategy CAGR 10.74% (ref 10.74%), max DD peak-relative −15.70% (ref −15.7%), total return +95.74% (ref +95.74%); S&P CAGR 13.73%, max DD −33.92%, total return +133.30% — but only at an end date of **2026-08-03**, not the task-specified 2026-08-06 (at 08-06, with two extra sessions in the local DB, the same code returns strategy 11.26%/+101.93% and S&P 14.03%/+137.47%, neither matching). All block work therefore runs 2007-01-01 → 2026-08-03. Decision-engine parity was verified with evidence from this run's own trades (not inherited by assumption), per CLAUDE.md's standing rule: all 4,087 trades carry exit reasons only the shared `evaluate_exit_reason()` chain can emit (`INDEX_REMOVAL` absent); 739 trades running past the raw 30-calendar-day cap all exited on the first available trading day against an independently recomputed `get_max_holding_days()`; a 400-trade sample were all genuine index members on entry with signal ON independently recomputed via `signals.compute_signal_series()` and clearing the independently resolved `passes_momentum_floor()` at 0.02; and 14.25% of `STOP_LOSS` exits filled below their stop, direct proof the corrected 2026-08-06 intraday-touch fill engine was genuinely active.
+
+**Conventions, stated explicitly per CLAUDE.md's standing requirement.** Reset-at-boundary: every one of the 16 blocks starts fresh at £50,000 with zero open positions, truncated to its own window — the correct convention for a cross-variant comparison, never the continuous walk. Engine: `simulate_portfolio_compounding_mtm()` with the 2026-08-06 realistic intraday-touch `STOP_LOSS` fill as its permanent default, not the frozen exempt engines. Both drawdown conventions (peak-relative and fixed-denominator) are reported for every leg. CAGR is annualised over each block's own calendar span for every leg including the strategy (not `compute_metrics_fixed()`'s trade-span convention, which would be apples-to-oranges against a passively-held leg; the production-convention figure is retained separately as `strat_cagr_tradespan`). All legs are unconverted USD scaled onto nominal GBP starting capital, symmetric across legs, no FX applied to any leg. Legs C and D rebalance monthly. "Chained aggregate" figures compound the 16 reset-at-boundary block returns in sequence — a derived summary of block results, explicitly not a continuous walk.
+
+**Headline: the single-window result generalises, and the strategy does not beat the simplest passive alternative matched to its own risk profile.** Against leg C (drawdown-matched index+cash, the primary comparator), the strategy wins 8/16 blocks on the harshest reasonable treatment (C-real, total return) and 9/16 on the most favourable (C-zero, price return) — a coin flip on block count. But wins are smaller than losses (mean win +6.12pp vs. mean loss −7.47pp across the 16 sorted C-real-tr gaps: −16.71, −11.09, −9.89, −7.04, −5.60, −3.47, −3.45, −2.48, +2.66, +2.80, +3.10, +3.50, +6.13, +7.25, +7.54, +15.96), so chaining the 16 reset-at-boundary blocks the strategy compounds to **7.20%/yr** against leg C's **7.54%** (C-zero) and **8.09%** (C-real) — behind on both cash treatments. On chained aggregate return the strategy finishes last of all five legs: strategy 7.20% < C-zero-tr 7.54% < 60/40 8.00% < C-real-tr 8.09% < S&P price-return 8.91% (S&P total return higher still).
+
+**Leg C match quality: 14/16 blocks matched the target drawdown exactly** (weight solved per block by bisection on the actual realised curve, not a linear-scaling shortcut). The two misses, blocks 8 and 15, are where the strategy's own drawdown exceeded what 100% index exposure could reach — leg C caps at w=1.0 and the strategy is strictly dominated on both axes in those two blocks.
+
+| Leg C variant | Wins (of 16) | Median gap | Mean gap | sd |
+|---|---|---|---|---|
+| C-zero, price return | 9 (56.2%) | +2.44pp | +1.13pp | 7.91 |
+| C-zero, total return | 8 (50.0%) | +1.05pp | −0.14pp | 8.26 |
+| C-real, price return | 8 (50.0%) | +1.40pp | +0.59pp | 8.01 |
+| C-real, total return | 8 (50.0%) | +0.09pp | −0.67pp | 8.34 |
+
+**Legs A, B, D — supporting context.**
+
+| Leg | Wins (of 16) | Median gap | Mean gap |
+|---|---|---|---|
+| A — S&P 500, price return | 7 (43.8%) | −0.57pp | −2.10pp |
+| A — S&P 500, est. total return | 4 (25.0%) | −2.63pp | −4.12pp |
+| B — NASDAQ-100, price return | 1 (6.2%) | −7.98pp | −8.64pp |
+| B — NASDAQ-100, est. total return | 1 (6.2%) | −8.59pp | −9.57pp |
+| D — 60/40, price-return equity sleeve | 6 (37.5%) | −1.39pp | +0.63pp |
+| D — 60/40, est. total-return equity sleeve | 6 (37.5%) | −2.73pp | −0.55pp |
+
+Leg B confirms the strategy is substantially a tech-momentum vehicle — it wins 1 block of 16 against the NASDAQ-100. Leg D is the most notable: a plain monthly-rebalanced 60/40, requiring no signal, universe maintenance, or execution infrastructure, beats the strategy in 10/16 blocks and on chained aggregate (8.00% vs. 7.20%) — though the strategy does win 9/16 on return-per-unit-drawdown against it, so not a clean sweep. Return-per-unit-drawdown is the one axis the strategy consistently holds up on (A-pr 9/16, D 9/16, C 8–9/16, B 5/16) — exactly the axis leg C was built to neutralise.
+
+**The 2020-2026 single window is not an outlier.** Its −2.99pp CAGR gap vs. the S&P sits at the **31st percentile** of the 16 per-block gaps (5/16 blocks worse; per-block median −0.57pp, mean −2.10pp, sd 7.87, range [−19.91, +13.42]). Block 11 (2020-06→2021-09, the mega-cap melt-up: strategy 15.16% vs. S&P 35.07%, −19.91pp) is the genuine worst case, far more extreme than the full-window figure — the single-window result was not misleading, and treating it as established was justified.
+
+**Era decomposition.**
+
+| Era | Blocks | vs. C-zero-tr win rate | median gap | vs. A-pr win rate | median gap |
+|---|---|---|---|---|---|
+| 2007-2009 GFC | 2 | 0/2 | −7.35pp | 1/2 | +1.08pp |
+| 2010-2019 bull (dominant) | 9 | 5/9 (55.6%) | +2.83pp | 4/9 | −0.95pp |
+| 2020-2026 recent | 5 | 3/5 (60.0%) | +2.66pp | 2/5 | −6.73pp |
+
+The leg-C coin-flip holds in the dominant 2010-2019 era (5/9, +2.83pp median) — not an artefact of one atypical window — but fails outright in the GFC era, where the strategy loses both blocks to leg C by a wide margin (−7.35pp median), the same era the regime finding below implicates.
+
+**The strategy's apparent defensiveness is beta reduction, not skill — the single most informative result of this investigation.** Regime split by the sign of the S&P's own block return (3 falling blocks, 13 rising): against the index the defensive pattern is real — 2/3 falling blocks won (mean +5.20pp), only 5/13 rising blocks won (mean −3.78pp). Against leg C, which holds the *same drawdown* via cash rather than stock-picking, the pattern **inverts**: only 1/3 falling blocks won (mean −2.17 to −3.05pp across cash treatments), 7-8/13 rising blocks won (mean −0.13 to +0.33pp). Cash replicates the downside protection more cheaply than the strategy produces it; what edge the strategy has shows up in rising markets, not falling ones.
+
+**Caveats that materially affect interpretation.** (1) Leg C's weight is solved ex-post from the strategy's own realised drawdown — a deliberately hard test, so a narrow strategy win against it is stronger than it looks and a narrow loss weaker; the actual result here (50/50 block count, aggregate deficit) is neither. (2) Survivorship bias in the strategy leg, pre-existing and not introduced here, flatters early blocks: `price_data` holds only 509 of the 1,204 tickers `universe_membership` has ever known, with usable candidate coverage running from 52.5% (block 1) to 99.4% (block 15) — the benchmark legs carry no such bias, so the true comparison is likely somewhat worse for the strategy than reported. (3) Block 0 is momentum-warm-up-crippled (zero tickers had usable momentum at its start; 59 trades vs. 228-303 in every other block) — excluding it changes little (leg C win rates 8→8 and 9→9 of 15; leg A 7/16→7/15). (4) Two excluded costs run in opposite directions and roughly offset: FX conversion (~1.28pp of CAGR) falls mostly on the strategy and flatters it if excluded; uncredited interest on the strategy's ~50% idle cash (order of 1pp of CAGR) penalises it if excluded — net bias small, sign uncertain. (5) The strategy trades on `close`, not `adj_close` (read by nothing in the codebase); CLAUDE.md records the resulting understatement at 2.32% of returns on the full continuous-walk run — strategy-vs-benchmark-total-return is therefore the harshest treatment tested, price-return the closer-to-symmetric one, and leg C at w≈0.5 the most nearly symmetric comparison in the whole set.
+
+**Where a different reasonable assumption would flip the call.** C-real-tr's median gap of +0.09pp is thin enough that crediting the strategy's idle cash, a different cash series, or quarterly rather than monthly rebalancing could flip its sign — "indistinguishable from leg C on median" is the defensible statement, not "the strategy edges leg C." The aggregate (chained-CAGR) ordering is more robust: the strategy trails leg C by 0.34pp (C-zero) to 0.89pp (C-real), with the C-real figure likely surviving most reasonable perturbations and the C-zero figure too close to lean on alone. Correcting the survivorship bias would move every result further against the strategy — the largest unquantified term in this report.
+
+**Verdict: validated, not adopted — measurement only.** No strategy change was made or proposed; this was a comparison exercise, not a decision point. The finding to carry forward: the strategy's edge over a passive index holding is not "skill," it is a beta-reduction effect fully replicable by holding the same drawdown via cash — against that fair comparator the strategy is a coin flip on block count and loses on chained aggregate (7.20% vs. 7.54-8.09%). Full trade-level output (all 4,087 trades, block-tagged) preserved at `research/block_benchmark_comparison_2026-08-06/block_strategy_trades.csv`, per CLAUDE.md's standing requirement; complete per-block/per-leg figures in `block_comparison_wide.csv` and `per_block_per_leg.csv`, win-rate/gap distributions in `headline_win_rates.csv`, era and regime splits in `era_decomposition.csv`/`regime_conditioning.csv`, universe coverage in `universe_coverage_by_block.csv`, and the reproduction gate in `verify_single_window_2026-08-03.json`.
+
+## Crisis-conditional volatility veto — rejected (2026-08-06)
+
+Investigated whether a prior finding — a blanket submission-time volatility veto (vetoing entries with excessive stop distance) was wrong-direction in aggregate but had one real, significant exception confined to the 2007-2009 GFC era (`research/submission_risk_veto_2026-08-06`, n=71, p=0.0005) — held up under a condition a live system could actually compute in real time, rather than the hindsight "was this the GFC era" label the original finding depended on. Investigation only; no production files touched (`analysis/crisis.py`, `analysis/decision.py`, `brokers/trading212.py`, `config.yaml` all read-only throughout), nothing committed or pushed.
+
+**Stress indicator — one pre-specified definition, no threshold search:**
+```
+rolling_60d_high(t) = gspc_close.rolling(60).max()          -- no lookahead
+drawdown_pct(t)      = (gspc_close(t) / rolling_60d_high(t) - 1) * 100
+STRESS(t)             = drawdown_pct(t) <= -10.0             -- >=10% below trailing 60-day high
+```
+Chosen to capture a *sustained* stressed period rather than the existing crisis override's single-day ≥7% drop trigger (`analysis/crisis.py`); 60 trading days ≈ one quarter, −10% is the conventional "correction" threshold (distinct from a −20% bear market).
+
+**Redundancy check: genuinely new ground, not a restatement of the existing crisis override.** Of 4,925 trading days (2007-2026), 480 (9.7%) were stress-flagged versus 33 (0.67%) blocked by the existing crisis override (raw trigger fires on 7 days). All 33 crisis-override days are also stress-flagged (expected by construction), but 447 of 480 stress-flagged days (93.1%) fall entirely outside what the crisis override already covers, and zero crisis-override days fall outside the stress flag.
+
+**Candidate-specificity: confirmed structurally, not just by description.** Of 3,424 total trades, 419 (12.2%) had their next trading day inside a stress window; the prior blanket veto (stop-distance alone) flagged 343 trades (10.0%); the stress-*conditional* veto (stress AND excessive stop distance) flagged only 113 (3.3%). Of the 419 stress-window trades, 306 (73.0%) had a normal stop distance and would not be touched — a genuinely narrower, candidate-specific subset of the blanket veto, not a disguised blanket gate.
+
+**The pattern does not hold under the genuinely-computable condition.** Within the stress-flagged population (n=419, the actual test this investigation exists to run):
+
+| Group | n | mean pnl% | median pnl% | win rate |
+|---|---|---|---|---|
+| Would-be-vetoed (excessive stop distance) | 113 | +2.40% | −3.18% | 41.6% |
+| Rest (normal stop distance) | 306 | −0.10% | −4.61% | 37.3% |
+
+Mann-Whitney U=18,126.0, **p=0.447 — not significant, and the point estimate points the wrong way** (the would-be-vetoed group has the higher mean and higher win rate). Trimming the top/bottom 1% of `pnl_pct` within the stress-flagged population (outlier robustness): n_vetoed=108 mean +1.72% vs. n_rest=301 mean −0.25%, **p=0.548 — still not significant, same wrong direction.** For context, outside the stress window (n=3,005): vetoed mean +1.26% vs. rest mean +1.07%, **p=0.00068 — "significant," still wrong direction** — this is where the bulk of the prior investigation's wrong-direction aggregate result actually comes from, since 87.8% of all trades fall outside the stress window.
+
+**Why the earlier GFC-era finding doesn't survive this test.** The stress-flagged population is genuinely spread across all three eras (38.7% GFC, 32.5% 2010-2019, 28.9% 2020-2026 — versus 13.1% GFC for the whole trade population), so the stress indicator is doing real, broad work rather than silently collapsing into an era proxy. The most direct evidenced explanation: the prior GFC finding (n=71, p=0.0005) was very likely driven by a small number of extreme days clustered tightly around September-December 2008, adjacent to the crisis override's own trigger days — not by the broader ~14-month "elevated volatility" concept a sustained-drawdown indicator captures. A 60-day-trailing-drawdown flag stays elevated for extended stretches around those extreme days and pulls in many calmer trades from the same window and from two other eras, diluting whatever narrow, extreme-event-specific signal existed. The earlier finding was real for its own narrow slice; it does not generalize to a condition a live system could actually compute and act on continuously.
+
+**Step 1 gate decision: NOT WARRANTED — no Step 2 built or run.** Per the task's own gating rule: the redundancy check was favorable (93.1% new ground) and candidate-specificity was structurally confirmed, but neither matters once the core pattern itself doesn't hold (p=0.447, wrong direction, surviving outlier trimming at p=0.548, still wrong direction) — and n=113 vs. 306 is a reasonable comparison size, not a thin slice merely lacking power. No submission-time code was added to `brokers/trading212.py`, no reset-at-boundary sweep, no 16-block validation, and the direct/capacity-turnover split (CLAUDE.md's standing requirement) was not exercised, since Step 1 itself doesn't support building the mechanism.
+
+**Verdict: rejected.** A crisis-conditional volatility veto, combining a real-time-computable sustained-drawdown stress indicator with the already-established excessive-stop-distance threshold, does not show a real, usable pattern once tested on genuinely computable terms rather than a hindsight era label. `config.yaml`, `analysis/decision.py`, `analysis/crisis.py`, and `brokers/trading212.py` remain unchanged. Caveat stated plainly in the source report: this tests exactly one pre-specified stress indicator (60-day, −10% trailing drawdown) combined with one pre-specified stop-distance threshold (90th percentile, 10.95%, reused unchanged from the prior investigation) — it does not rule out every conceivable stress definition (a narrower −20% threshold or a shorter window, or trailing realized volatility, might behave differently), but per the task's own instruction no open search across stress indicators was run, and per this project's standing discipline a rejected proposal is not grounds to keep tuning parameters without a fresh, explicitly-scoped reason. Full trade-level output (all 3,424 trades with the stress flag and both veto variants attached) preserved at `research/crisis_conditional_veto_2026-08-06/trades_with_stress_flag.csv`; comparison summary in `stress_conditional_comparison.csv`.
+
+## Submission-time "excessive risk" veto — researched, not adopted (2026-08-06)
+
+Tested a proposed final, pre-trade veto at submission time — architecturally the same category as the existing `is_submission_price_move_blocked()` price-sanity check, but re-checking volatility (and therefore stop distance, 2.0×ATR(14)) rather than price, since stop distance can shift overnight in a way the EOD decision never sees.
+
+**Approximation used, stated explicitly.** The backtest engine has no decide-then-submit time gap at all (confirmed directly from `analysis/decision.py:492`'s own comment); for each of the corrected engine's already-admitted trades, stop distance was recomputed using that ticker's own next trading day's close and ATR(14) as the closest available daily-bar proxy. Faithfulness verified: recomputing each trade's own decision-day stop distance from decision-day ATR/entry-price reproduced the trade's recorded `stop_distance_pct` exactly for all 3,424/3,424 trades checked (0 mismatches), before trusting the next-day recomputation built on top of it. Population: the corrected engine's real 3,436-trade output (post-realistic-stop-fill-correction); 3,424/3,436 had a usable next trading day.
+
+**Overnight divergence is real but small on average.** n=3,424: mean delta_pct=+0.046pp, std=0.428pp, min=-1.818pp, max=+5.649pp, median=-0.039pp. 42.6% widened overnight, 57.4% narrowed. Even at the 99th percentile, stop distance only grows ~19% relative to its decision-day value (delta_ratio 99th pct=1.192).
+
+**Threshold: 90th percentile of next-day-recomputed `stop_distance_pct` across the whole 3,436-trade population = 10.95%**, capturing 343 trades (10.0%) as designed — a fixed historical threshold, the same design convention as the existing (fixed 3%) price-sanity check.
+
+**The decisive finding, and it points the wrong way.** Would-be-vetoed candidates (n=343): mean pnl **+1.63%**, median -3.18%, win rate 43.1%. Rest of population (n=3,081): mean pnl **+0.95%**, median -2.45%, win rate 45.0%. Mann-Whitney U=478,247.0, **p=0.0039** — statistically significant, but in the wrong direction for a risk veto: the candidates this veto would block have a *higher* mean realized return than the rest, not lower. A plausible read, stated as interpretation not proof: high next-day-recomputed stop distance is largely a marker of high volatility, and high-volatility, high-momentum names are exactly what this strategy is designed to chase hardest.
+
+**Regime confounding.** The only regime where "excessive next-day stop distance" is genuinely, significantly associated with worse outcomes is the small 2007-2009 GFC window (n=71, 20.7% of the vetoed population, mean pnl -3.43% vetoed vs -0.64% rest, p=0.0005 — driven by genuine Lehman-collapse-era volatility spikes, e.g. NTRS -18.8%, CF -18.3%/-14.5%). In the two much larger eras — 79.3% of the vetoed population combined — there is no significant effect and the point estimate trends in the opposite (better-performing) direction: 2010-2019 bull (+2.79% vetoed vs +1.12% rest, p=0.8393), 2020-2026 recent (+2.99% vetoed vs +1.25% rest, p=0.2727). (This GFC-specific exception was tested directly as a real-time-computable stress-conditional veto in the following investigation, "Crisis-conditional volatility veto" above, and did not survive that test.)
+
+**Step 1 gate decision: NOT WARRANTED — no Step 2 run.** No submission-time code was added to `brokers/trading212.py`, no reset-at-boundary sweep, no 16-block validation.
+
+**Recommendation: researched, not adopted.** `config.yaml`, `analysis/decision.py`, `brokers/trading212.py` all unchanged. This does not rule out every refinement (a per-day pool-relative threshold, a narrower crisis-conditional trigger the GFC finding might support on its own terms, a different volatility measure) — none of those were tested. Full trade-level output preserved at `research/submission_risk_veto_2026-08-06/` (`trades_with_next_day_stop_distance.csv`, `vetoed_vs_rest_comparison.csv`, `regime_decomposition.csv`).
+
+## Seasonal entry timing vs. exit-reason mix — researched, not adopted (2026-08-06)
+
+Followed up the exploratory hypothesis pass's strongest-ranked candidate: December-entry trades survive to the 30-day `MAX_HOLDING` cap at 66.1% vs. 45.8% for July-entry trades — a ~20pp gap, with a structural rationale (Santa Claus rally/January effect vs. "sell in May"/summer thin liquidity). That prior pass explicitly labeled itself "not a finding" (a read-only exploratory pass). December and July are the two most extreme months out of twelve, a genuine multiple-comparisons risk — this investigation deliberately did **not** re-test that specific pair, testing instead the literature-grounded, pre-specified grouping the rationale actually implies: entry month ∈ {Nov, Dec, Jan} vs. entry month ∈ {Jun, Jul, Aug}.
+
+**Backtest convention: continuous walk** (per CLAUDE.md's "Two backtest conventions" — a retrospective read of one already-computed real trade population, not a variant comparison). Trade population reused directly from `simulate_portfolio_compounding_mtm()` (mark-to-market, live universe, 2007-01-01→2026-08-03), reproduced and asserted exactly: 3,161 total trades, MAX_HOLDING 1,796, STOP_LOSS 1,169, SIGNAL_OFF 131, CRISIS_EXIT 35, END_OF_DATA 30.
+
+**This investigation was researched on the pre-correction backtest engine and is listed in the 18-item re-verification queue raised by the 2026-08-06 realistic-intraday-touch STOP_LOSS fill correction** (its 3,161-trade reproduction is the pre-correction convention; see "Realistic (intraday-touch) STOP_LOSS fill made the permanent default" above).
+
+**Pre-specified confirmatory test result: not significant.** n(NovJan)=788, n(JunAug)=823. MAX_HOLDING (survival) rate NovJan=58.0% vs JunAug=54.3%, a 3.7pp gap — an order of magnitude smaller than the 20pp Dec-vs-Jul gap, directly confirming the multiple-comparisons risk was real. Exact test statistics:
+```
+Chi-squared (3-bucket season x exit-reason): chi2=2.743  p=0.2538  dof=2
+Chi-squared (2x2, MAX_HOLDING/STOP_LOSS only): chi2=1.350  p=0.2452  dof=1
+Fisher's exact test (2x2): odds ratio=0.880  p=0.2281
+```
+None reach conventional significance (p<0.05). Era-controlled logistic regression (`survived_to_cap ~ season_NovJan + era_dummies`, n=1,611) gave `season_NovJan` coef=0.1747, z=1.719, **p=0.086** — directionally consistent with the hypothesis, closer than the raw chi-squared, but still short of p<0.05. Era terms were highly significant (p<0.001 both), meaning most of what the naive test explains is market regime, not season.
+
+**Regime confounding check, era by era**: 2007-2009 GFC (n=120/101) reverses the hypothesized direction (35.0% vs 45.5%, gap -10.5pp, p=0.258); 2010-2019 bull (n=387/410) shows +7.5pp gap, p=0.026; 2020-2026 recent (n=281/312) shows +5.3pp gap, p<0.001. The two larger, more "normal" eras (86% of the season-eligible population) both show the hypothesized direction — a materially better regime-robustness profile than sibling investigations this session — but the pre-specified pooled test across all eras is the one that must clear the gate, and it does not. An ad hoc post-hoc pool of just the two non-GFC eras narrows the gap to 6.6pp, chi² p=0.088 — still short of 0.05, and explicitly not part of the pre-specified test.
+
+Composition-not-magnitude check: mean P&L within each exit type is statistically indistinguishable by season (MAX_HOLDING p=0.203, STOP_LOSS p=0.590, both Mann-Whitney) — whatever seasonal signal exists is in which exit fires, not the magnitude once it does.
+
+**Step 2 prerequisite, answered regardless of gate outcome**: does stop distance feed into VaR sizing anywhere? Traced directly — no. `_resolve_entry_stop()` and `_var_position_size_core()` (both in `analysis/volatility.py`) are invoked sequentially at every entry point but independently; `_var_position_size_core()`'s `holding_days` argument is the configured `stock_max_holding_days` cap, not the ATR-derived stop distance. A seasonal stop-distance adjustment, had one been warranted, would have been an isolated change to `_resolve_entry_stop()` only.
+
+**Recommendation: researched, not adopted.** The pre-specified, literature-grounded grouping does not show statistical significance on its designated confirmatory test (chi-squared p≈0.25, Fisher's exact p≈0.23); the era-controlled logistic regression is closer (p=0.086) but does not cross p<0.05. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, `brokers/trading212.py` all unchanged; no Step 2 mechanism was built or block-validated. Stated plainly as the closest call of the session's rejections: this does not prove there is no genuine seasonal effect — only that this specific, honestly pre-specified test on this sample does not clear the bar. Full output preserved at `research/seasonal_stopout_2026-08-06/`.
+
+## Split-adjustment corruption — detection, production fix, and verification (2026-08-06)
+
+Audited `price_data` for stock-split adjustment "cliff artefacts": `pull_incremental()`'s rolling 10-day window silently discarded the overlap signal that would have caught a retroactive price restatement — yfinance retroactively adjusts `Close` for stock splits even under `auto_adjust=False`, so a split on an already-ingested ticker would leave a permanent phantom cliff in `price_data`, poisoning the 252-day momentum window and capable of firing a real `STOP_LOSS`/`CRISIS_EXIT` on a position that never actually moved.
+
+**Detection methodology, three independent checks against a fresh, freshly-verified `scp`'d production DB copy (2026-08-06 19:03 UTC, `price_data`: 2,455,916 rows, 540 tickers, 2007-01-01→2026-08-05).** Step 1: blanket consecutive-trading-day close-ratio scan, `close[t]/close[t-1]` flagged outside `[0.5, 2.0]` — 14 hits across 13 tickers. Step 2: classify each hit against real yfinance `.splits` history within a 30-calendar-day proximity window (a first-pass bug matching against *any* split anywhere in history, regardless of temporal distance, spuriously flagged 7 genuine market events — e.g. APA/OXY's March 2020 COVID crash matched a 2004 split — fixed by requiring temporal proximity); result: 13/14 hits classify as `real_market_move`, 1/14 (`EXPE`, 2011-12-21) as `genuine_split_correctly_reflected`, **zero cliff artefacts**. Step 3: an independent walk of every real split regardless of Step 1's ratio threshold, via `analysis.universe.get_all_known_stock_tickers()` (1,205 tickers) cross-referenced against real yfinance `.splits` events inside each ticker's own DB coverage window — 296 real split events found and checked, all 296 showing `observed_ratio` within 15% of 1.0 (range 0.927–1.180, the signature of a *correctly* split-adjusted series), zero matching the raw unadjusted split factor (the actual cliff-artefact signature). (A first run of this step had an inverted classification label, producing a misleading "247 NOT correctly reflected" figure that was actually 247 correctly-adjusted splits; fixed in `detect_cliffs.py` before this report, `observed_ratio` numbers unaffected.)
+
+**Verdict: no cliff artefact currently exists anywhere in `price_data`.** The mechanism was real and live in production code but has never actually fired, because no ticker in the tracked universe has split since its own history was first ingested. Status: confirmed latent, not manifest — matching, and now giving direct evidence for, the claim already on record.
+
+**Production fix, shipped regardless of the null result (commit `59138df`, "Fix split-adjustment corruption in pull_incremental(); correct momentum docstrings").** `data/ingestion.py:_find_retroactive_restatement(df, ticker, tolerance=0.01)` compares every incoming row's close against whatever is already stored for the same `(ticker, date)`, for every date the incoming pull overlaps — a signal `pull_incremental()`'s existing 10-day rolling window always had available but previously discarded before the upsert. Tolerance: 1% relative divergence, chosen to comfortably clear ordinary vendor-revision noise (observed sub-cent rounding, well under 0.1%) while comfortably catching even the smallest common split ratios (5:4 changes the ratio by 20%, 3:2 by 33%, 2:1 by 50% — all at least 20x the tolerance). On divergence: logs a `WARNING` naming the ticker/hit count/example, triggers a full-history re-fetch (`start=history_start_date, end=now`), and replaces via the existing idempotent `_upsert_price_rows()` upsert-on-`(ticker, date)` semantics. Deliberately not gated on yfinance's `.splits` metadata as the trigger (used only as corroboration during detection) — the overlap comparison catches any retroactive restatement (reverse splits, spin-off adjustments, vendor corrections), not just an ordinary forward split. `data/ingestion.py:detect_price_cliffs()` (the production version of Step 1's scan, no yfinance calls) now runs every EOD job as a recurring backstop, own try/except so it cannot block the rest of the job; `output/briefing.py:send_price_cliff_alert()` emails on any hit using the project's standard content-based-dedup alert pattern. `analysis/signals.py`'s docstrings were also corrected in the same commit: the momentum signal is trailing 12-month **price** return, not total return — it excludes dividends, since ingestion fetches with `auto_adjust=False` and only `close` (not the dividend-adjusted `adj_close`, which is stored but read by nothing) feeds the signal.
+
+**Repair (Task A3): empty scope.** No ticker was found corrupted by any of the three detection methods, so there was nothing to re-fetch and replace.
+
+**Verification.** New regression tests (`tests/test_ingestion.py`): `_find_retroactive_restatement()` unit tests (empty overlap, within-tolerance, split-sized divergence, mixed dates) plus two end-to-end `pull_incremental()` tests (a full retroactive restatement triggers a full re-fetch that replaces the entire stored history; the ordinary no-restatement case still takes the cheap single-fetch path) — all pass. Full suite: 913 passed, 0 failed, run twice. One test-hygiene issue found and fixed along the way: several pre-existing `_eod_job()` tests didn't mock `get_engine()`, and adding the O(2.4M-row) `detect_price_cliffs()` scan to `_eod_job()` made that pre-existing gap 3x more expensive (58s→20s once fixed) and briefly ran the new scan against a real, locally-copied 527MB production DB — fixed by explicitly mocking `data.ingestion.detect_price_cliffs` at 11 call sites plus the shared `_mock_eod_dependencies()` helper.
+
+**Caveats stated.** This audit covers only the currently-tracked universe (1,205 tickers) — a ticker that split during a gap in its own ingestion history (see CLAUDE.md's universe coverage remediation: 701 of 1,204 ever-known constituents have no `price_data` at all) cannot be checked, since there is no data to check. This confirms the *current* state is clean and the fix prevents *future* recurrence; it says nothing about whether a past, now-corrected vendor-side data revision could have transiently affected historical backtest figures already published in this file before self-correcting — out of scope for this investigation.
+
+**Status: adopted, deployed.** This is a production change, shipped in commit `59138df` (`data/ingestion.py`, `data/scheduler.py`, `output/briefing.py`, `analysis/signals.py`, plus test changes). Full detection evidence preserved at `research/split_adjustment_audit_2026-08-06/` (`detect_cliffs.py`, `step1_ratio_breaks_raw.csv`, `step2_classified_ratio_breaks.csv`, `step3_all_known_splits_checked.csv`, `run_log.txt`).
+
+## Trailing exit to replace/augment the 30-day MAX_HOLDING cap — rejected (2026-08-06)
+
+Tested the hypothesis that the 30-day `MAX_HOLDING` cap truncates a valuable right tail (1,723 baseline trades exiting on the cap at +8.5% mean, 86% win rate; 357 still at their running peak at +16.1%) and that a trailing exit reacting to realized price action could recover part of it, with the largest expected effect in melt-up regimes. Three pre-specified variants, no open parameter search: **T1** — Chandelier exit, 3.0×ATR(14) below the highest high since entry (cap disabled entirely via `max_holding_days=None`); **T2** — the same at 2.5×ATR(14); **T3** — the 30-day cap retained but its exit deferred while close > MA_14, to a hard 60-calendar-day ceiling.
+
+**Verification methodology — a novel, reusable fidelity-gate pattern worth recording.** `trailing/variant_engine.py` was *generated* from the real `analysis/backtest.py:simulate_portfolio_compounding_mtm()` (lines 1174-1668) by `build_variant_engine.py`, applying exactly five asserted, auditable string replacements — nothing else differs. With `variant="baseline"` it reproduces the production engine's full trade list **byte-identically**: SHA-256 hashes of the complete ordered trade list matched exactly across three blocks spanning a crash, an ordinary bull block, and the acid-test melt-up block (block 1: 268 trades, `12fcbbd29eb4b732` both sides; block 6: 236 trades, `3b4bbf7ba499eb86`; block 11: 261 trades, `e841e6613719ae76`), also proving the extended precompute (adding `high`/`ma14` columns) is inert. Decision-engine parity: every exit still routes through the shared `analysis/decision.py:evaluate_exit_reason()`; T1/T2 disable the cap via that function's own documented `None`-tolerant input, not a local reimplementation; the trailing stop occupies MAX_HOLDING's slot at the end of the priority chain, so CRISIS_EXIT/STOP_LOSS/SIGNAL_OFF keep strict precedence.
+
+**Conventions**: reset-at-boundary, £50,000 fresh per block, zero positions, 16 blocks, 2007-01-01→2026-08-03, corrected engine (mark-to-market, 2026-08-06 intraday-touch STOP_LOSS fill as permanent default — this investigation is post-correction, not in the re-verification queue). Trailing-stop fill uses the identical intraday-touch convention as STOP_LOSS: trigger on the day's low, fill at min(trail_price, that day's open); non-look-ahead by construction (trailing level built from yesterday's highest high/ATR, ratcheted only after today's exit check, then tested against today's low).
+
+**Headline: rejected on its own premise, not merely on capacity grounds.** Every variant loses to baseline on chained aggregate CAGR: baseline **7.20%** → T3 **6.77%**, T1 **5.65%**, T2 **4.64%**. All three also move further from the passive reference legs (leg C-zero-tr 7.54%, leg D 60/40 8.00%, leg C-real-tr 8.09%). Per-block win rate vs baseline: T1 3/16 (median gap -0.98pp), T2 3/16 (-1.84pp), T3 8/16 (-0.31pp, still negative median).
+
+**The pre-specified acid test fails.** Block 11's -19.91pp gap vs. the S&P becomes -23.95pp (T1) and -26.58pp (T2) — materially worse — and -19.16pp (T3), closing only 0.75pp of the 19.91pp gap (3.8% of it).
+
+**The premise itself is false, shown like-for-like with capacity excluded by construction.** Following the *same* trades (same ticker, same entry date) through each variant, the baseline MAX_HOLDING trades that exited still at their running peak — the exact population the hypothesis rests on — get worse under T1 (n=125, +14.48%→+13.17%, Δ-1.31pp, 34% improved) and T2 (n=113, +13.82%→+8.91%, Δ**-4.91pp**, 22% improved), and barely move under T3 (n=153, +13.92%→+14.07%, Δ+0.15pp, 41% improved). Mechanism: baseline MAX_HOLDING exits average +8.32%; the TRAILING_STOP exits replacing them average +4.91% (T1) and +2.86% (T2) — a trailing stop must wait for a 2.5-3.0×ATR pullback before it fires, and that giveback consistently exceeds the extra upside captured. The cap is harvesting winners near a local peak, not truncating them.
+
+**Capacity-turnover split** (exact decomposition, residual £0.00 across all 48 variant-blocks): T1 direct effect **+£330**, sizing -£228, turnover **-£16,185**, net **-£16,083** — capacity reverses the direct effect ~50×. T2: direct -£4,333, sizing -£226, turnover -£21,169, net **-£25,729** — bad on every axis. T3: direct **+£2,442** (genuinely positive), sizing -£675, turnover **-£6,083**, net **-£4,316** — capacity swamps the direct effect ~2.8×; T3 would look like a modest improvement on any first-order per-trade analysis and is in fact a loss once fully re-simulated. Capacity reverses the direct effect for T1 and T3, exactly the failure mode flagged in advance.
+
+**Era decomposition kills the "largest effect in melt-ups" part of the hypothesis specifically**: in the dominant 2010-2019 bull era (9 blocks) every variant loses, T3 included (3/9, median -0.78pp); in the 2020-2026 recent era, T1 and T2 do their *worst* (medians -1.35pp and -5.68pp).
+
+**Recommendation: rejected.** This tests one mechanism family only (Chandelier trailing at 3.0×/2.5×ATR and trend-conditional 60-day cap release) — it does not show that no exit-timing rule can help, and no parameter search beyond the three pre-specified variants was run. Full trade-level output (all 15,698 trades across 4 variants × 16 blocks) preserved at `research/trailing_exit_2026-08-06/` (`variant_trades.csv.gz`, `capacity_decomposition.csv`, `fidelity_gate.txt`, `hypothesis_check_output.txt`). Run in an isolated git worktree against a copied production database; no production file modified.
+
+## Underwater time-cutoff (day-15) — rejected (2026-08-06)
+
+Tested an external, no-system-context claim: a day-15 underwater cutoff (force-exit any position still showing an unrealized loss 15 calendar days after entry) "cuts dead money without touching the winners," worth ~£127k. Per the task's own instruction, neither part of the claim was assumed true — both were checked directly against the real trade population and real daily price data.
+
+**This investigation was researched on the pre-correction backtest engine and is listed in the 18-item re-verification queue raised by the 2026-08-06 realistic-intraday-touch STOP_LOSS fill correction** (its 3,161-trade reproduction is the pre-correction convention; see "Realistic (intraday-touch) STOP_LOSS fill made the permanent default" above).
+
+**Reproduction and a first discrepancy, reported honestly.** Baseline reproduced exactly: 3,161 trades, 1,796 MAX_HOLDING (56.8%). The motivating claim's own headline count — "284 trades sat 20+ days before eventually being stopped out" — reproduces here as **314** (STOP_LOSS trades with holding_days ≥ 20), about 10.6% higher than cited; not reconciled further, flagged plainly. 2,318 of 3,161 trades reached the day-15 checkpoint (843 resolved earlier and could never be touched by this rule). Of those 2,318: **690 (29.8%) were genuinely underwater at day 15** — the exact population the rule would act on.
+
+**Check 1 — does the rule spare winners? No, and by a substantial margin.** Of the 690 underwater-at-day-15 trades, under the real system's actual eventual outcome: **216 (31.3%) eventually WIN anyway**, all 216 via MAX_HOLDING (real positions underwater at day 15 that survived to the 30-day cap as winners); 474 (68.7%) eventually lose (breakdown: STOP_LOSS 329, MAX_HOLDING-still-negative 130, SIGNAL_OFF 12, END_OF_DATA 2, CRISIS_EXIT 1). Nearly one in three of the positions this rule would force-exit are real future winners under the current system — the "without touching the winners" framing does not hold.
+
+**The decisive test — net £ impact.** `delta_gbp = (position_gbp_at_entry × day15_pnl_pct) − real_pnl_gbp`, computed trade by trade across all 690 underwater-at-day-15 trades:
+```
+Total NET delta:  -£41,365.17
+  Cost inflicted on the 216 eventual winners (cut early):  -£110,353.26
+  Benefit from the 474 eventual losers (cut earlier):       +£68,988.09
+```
+**The rule, applied exactly as proposed, would have made the system net worse by £41,365.17 over the full 19-year history** — the harm to real future winners (£110,353.26 forgone) more than outweighs the benefit of cutting real future losers early (£68,988.09 saved), a difference of more than 1.5×.
+
+**Check 2 — mostly redundant with the existing stop-loss.** For the 314 slow-bleed trades (STOP_LOSS, holding_days ≥ 20), stop-proximity at their own day-15 checkpoint: mean 7.12%, median 5.98% of room remaining above the stop; 39.8% already within 5% of their own stop, **79.3% already within 10%**; mean days from day-15 checkpoint to the real eventual STOP_LOSS exit: 9.35 (median 9). The large majority of this specific population was already close to the existing ATR-based stop by day 15 — the real incremental value of a new rule for this subgroup is "catch it about 9 days sooner," not new protection. Reconciling the cited ~£127k figure: computed narrowly (incremental £ lost between day-15 checkpoint and real eventual STOP_LOSS exit, slow-bleed population only) gives **£139,096.32**, in the right ballpark of the cited figure — but this exposes the flaw directly: that gross figure was never netted against the £110,353.26 cost the same rule inflicts on real winners elsewhere in the underwater population.
+
+**Regime confounding — no dominant-regime rescue.** 2007-2009 GFC (n=90): recovery 20.0%, net delta **+£1,413.86** (near breakeven, not genuinely positive). 2010-2019 bull (n=349, dominant): recovery **34.4%** (highest of the three), net delta **-£11,222.02**. 2020-2026 recent (n=251): recovery 31.1%, net delta **-£31,557.01**. The rule is net-negative in both eras that matter, and the dominant era shows the *highest* recovery rate — making the "spares winners" problem worse, not better, exactly where it matters most.
+
+**Step 1 gate decision: NOT WARRANTED — no Step 2 run.** No exit-priority-chain modification, no reset-at-boundary sweep, no 16-block validation.
+
+**Recommendation: rejected.** A blanket day-15 underwater cutoff, exactly as proposed, would have made this system's historical results worse, not better, once properly netted against its cost to real future winners — the opposite of the claimed benefit. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, `brokers/trading212.py` all unchanged. Does not rule out every refinement (a later threshold, a rule requiring proximity to the existing stop, a rule combined with a momentum-decay signal) — none tested here. Full trade-level output preserved at `research/underwater_time_cutoff_2026-08-06/` (`day15_checkpoint_trades.csv`, `net_pnl_impact.csv`, `slow_bleed_284_stop_proximity.csv`, `regime_decomposition.csv`).
+
+## MAX_HOLDING cap sweep — rejected (2026-08-06)
+
+Swept `stock_max_holding_days` (currently 30, fixed in production) against four wider alternatives — 40, 50, 60, 90 — motivated by an observation that winning trades' profit is tail-concentrated and appear to keep running past the current 30-day cap. Descriptive check only, as scoped: no mechanism built, no 16-block validation run, no adoption decision.
+
+**Backtest convention: reset-at-boundary, correctly applied for a full-history multi-variant comparison** — each of the 5 variants is its own complete, independent 2007-2026 walk starting at the identical point (2007-01-01, £50,000, empty portfolio), via the real, unmodified `simulate_portfolio_compounding_mtm()`, varying only `trading212_invest.stock_max_holding_days` in a deep-copied config dict — no monkeypatch, no custom candidate pool. Isolation proven directly: the cap=30 run was asserted byte-identical to the established, corrected baseline (`total_trades=3,436`, `MAX_HOLDING=1,723`, `total_pnl_gbp=£127,167.80` — all confirmed exact).
+
+**Headline: the hypothesis is rejected, decisively.** The 30-day baseline has the **highest CAGR and highest total P&L of all five variants, in aggregate and in every one of the three eras checked, with no exception**:
+
+| Cap | Trades | CAGR | Total P&L | Win rate | DD (peak-rel) |
+|---|---|---|---|---|---|
+| 30 (baseline) | 3,436 | **7.05%** | **£127,167.80** | **44.64%** | −34.48% |
+| 40 | 3,085 | 5.92% | £95,597.10 | 39.55% | −36.25% |
+| 50 | 2,837 | 5.82% | £92,964.40 | 37.57% | −33.39% |
+| 60 | 2,660 | 6.55% | £112,457.19 | 35.64% | −33.44% |
+| 90 | 2,390 | 6.43% | £109,165.26 | 31.84% | −32.49% |
+
+**Mechanism: win rate falls monotonically as the cap widens** (44.64% → 31.84%, a 12.8pp decline), driven by exit-reason mix shifting — `STOP_LOSS` share rises monotonically from 44.41% (cap=30) to 58.24% (cap=90), while `MAX_HOLDING` share falls from 50.15% to 30.21%. The right-tail metrics genuinely do improve monotonically with a wider cap (mean win% 10.06%→20.75%, p99 35.67%→61.87%, max winner 80.66%→239.72%, Top50 profit share 18.6%→30.1% from cap 30 to 90) — confirming the motivating observation directly — but this is fully cancelled by the falling win rate: the extra time a wider cap grants isn't free, it's extra exposure to a stop-out before the larger, later reward can materialize. `SIGNAL_OFF` share also more than doubles (3.64%→7.99%), a real but secondary effect next to the `STOP_LOSS` shift.
+
+**Era decomposition — decisive, not just aggregate.** cap=30 has the highest CAGR in **every era with no exception**: 2008-2013 (3.59% vs. 1.77%/0.02%/1.39%/1.26% for 40/50/60/90), 2014-2019 (6.85% vs. 4.80%/6.31%/5.85%/5.01%), 2020-2026 (17.00% vs. 14.78%/14.30%/16.57%/16.63%). No era, atypical or dominant, shows a benefit to widening.
+
+**Capacity-turnover reporting, direct and capacity effects kept strictly separate, per this project's standing requirement:**
+
+*Direct effect* — matching the same `(ticker, entry_date)` pairs across variants: of the 1,723 baseline `MAX_HOLDING` trades, only 11.5%–14.9% are even admitted under a wider cap at all (capacity cascade). For those matched positions, mean pnl% looks better at the wider cap in every row, but total £ is flat-to-negative at 3 of 4 caps and `n_worsened > n_improved` in every row:
+
+| Cap | n matched | Total Δ£ (matched) | n improved | n worsened |
+|---|---|---|---|---|
+| 40 | 251 | −£2,108.33 | 109 | 142 |
+| 50 | 256 | −£12,997.05 | 115 | 141 |
+| 60 | 250 | +£20.67 | 113 | 137 |
+| 90 | 199 | −£13,313.53 | 78 | 121 |
+
+*Capacity effect* — trade count falls monotonically and substantially as the cap widens: −351 (cap 40), −599 (cap 50), −776 (cap 60), and **−1,046 (−30.4%) at cap 90** (3,436 → 2,390). Of the displaced positions, 920–1,091 per variant are confirmed directly from each variant's own `REJECTED_CAPACITY` log to have been explicitly turned away for lack of capacity, and these foregone candidates had a real, positive expected 30-day forward return (+1.8% to +2.1% across all four wider caps) — genuine positive-expectancy opportunities lost. Direct effect and capacity effect point the same (negative) direction and are consistent with each other and with the headline gap — no discrepancy that would itself be a red flag.
+
+**FX cost, explicitly not modelled per the task's own instruction, direction noted:** longer caps reduce turnover, so modelling FX cost would modestly narrow (not reverse) the already-negative gap between cap=30 and the wider variants — the CAGR/P&L gaps run into tens of thousands of pounds, against an FX-cost drag on the order of ~£4-8k/year system-wide per the FX audit's own figures.
+
+**The review-gate mechanism proposed by the motivating analysis is closed out without being built.** The motivating analysis found a day-30 review gate would extend roughly 80–88% of what it looks at — behaving close to a blanket longer fixed cap with extra machinery attached, not a genuinely selective filter. Since the plain fixed-cap widening fails decisively at every level tested, a gate that mostly just widens the cap for most candidates is very unlikely to be rescued by the small selective component it adds. This is an inference from the fixed-cap result, not a direct test of a built gate mechanism — stated plainly as such.
+
+**Recommendation: researched, not adopted — a clearly inverted result, not merely "no difference."** Widening `stock_max_holding_days` beyond 30 does not improve returns at any cap tested (40/50/60/90), in aggregate, in any era, on the direct effect for matched positions, or once capacity-turnover cost is accounted for. The current 30-day cap remains the best-supported choice among values tested. `config.yaml`, `analysis/decision.py`, `analysis/backtest.py`, and `brokers/trading212.py` are all unchanged; per the task's own instruction, no 16-block validation was run since the descriptive bar didn't clear. Caveat: tests only the five specified cap values, holding all else fixed — does not rule out a genuinely selective, momentum-re-check-based extension mechanism, though the 80-88% extension-rate figure suggests such a gate would behave similarly to the blanket widening rejected here. Full trade-level output for all 5 variants (`trades_cap{30,40,50,60,90}.csv`) and supporting metrics (`sweep_summary.json`, `direct_effect.csv`, `capacity_effect.csv`) preserved at `research/max_holding_sweep_2026-08-06/`.
+
+## Full 2007-2026 trade-history CSV export (2026-08-06)
+
+**Not a hypothesis test.** A data export for manual, personal exploration outside the usual experiment pipeline — a single CSV covering every trade the current, unmodified production logic would generate across the full 2007-2026 history. No variant comparison, no block validation.
+
+**Backtest convention: continuous walk** — one real trade sequence from 2007-01-01 to 2026-08-03, re-run fresh (not reused from any earlier saved trade JSON) via `analysis.backtest.simulate_portfolio_compounding_mtm()` through `analysis.validation.run_full_validation(CONFIG, start=2007-01-01, end=2026-08-03, mark_to_market=True, live_universe=True)`, unmodified, no monkeypatching, no custom candidate pool. Re-run was necessary because commit `d1a067a` ("Fix silent BRK.B/BF.B ticker bug and rolling-window start-date drift") landed partway through the session. Result matched the established baseline exactly: `total_trades=3161`, `MAX_HOLDING=1796` (56.8%), `STOP_LOSS=1169`, `SIGNAL_OFF=131`, `CRISIS_EXIT=35`, `END_OF_DATA=30` — confirmed unaffected by the BRK.B fix, since that fix changes live daily ingestion, not already-stored historical `price_data`.
+
+**FX-rate usage confirmed by code trace, not assumed.** Grepped `analysis/decision.py`, `analysis/backtest.py`, `analysis/signals.py`, `analysis/universe.py`, `analysis/crisis.py`, `analysis/volatility.py`, `analysis/validation.py` for `GBPUSD`/`EURUSD`/`_fx_rates`/`_to_gbp`: zero matches. Both FX rates are used only in `brokers/trading212.py` (`_fx_rates()`/`_to_gbp()`, for live position/fill-price GBP conversion) and `output/performance.py` (`_t212_ccy_to_gbp()`, Dashboard display) — reporting/currency-conversion only, never a trading-decision input. Included in the CSV regardless, labeled `entry_gbpusd_reporting_only`/`exit_gbpusd_reporting_only`/`entry_eurusd_reporting_only`/`exit_eurusd_reporting_only` to state this plainly in the column names. By contrast, S&P 500 level is a genuine decision input (the real crisis check reads `^GSPC`'s daily close directly, per `analysis/crisis.py`'s `gspc_close` parameter) — exported as `entry_sp500_level`/`exit_sp500_level` for that reason.
+
+**Honest limitation:** `price_data` is daily bars only — `entry_date`/`exit_date` are dates, not timestamps; no intraday time is fabricated. `holding_days` is calendar-day gap, matching the engine's own accounting.
+
+**The preserved file — exact locations, for a future reader.** Primary export: `research/full_trade_export_2026-08-06/full_trade_export_2007-2026.csv` (kept in-repo, not committed). **A second copy was written directly to `C:\Users\user\Downloads\sp500invest_full_trade_export_2007-2026.csv`** for direct manual opening in Excel/Numbers. 3,161 rows, 15 columns, zero nulls, verified directly: `ticker, win_loss, pnl_gbp, pnl_pct, entry_date, exit_date, holding_days, entry_sp500_level, exit_sp500_level, entry_gbpusd_reporting_only, exit_gbpusd_reporting_only, entry_eurusd_reporting_only, exit_eurusd_reporting_only, exit_reason, momentum_at_entry_pct`. Momentum-at-entry recovered for all 3,161 trades (0 missing) by rebuilding `precompute_ticker()`'s own frames for all 503 live candidate tickers. Sanity-checked: `win_loss` counts (1,555 WIN / 1,606 LOSS) sum to 3,161; exit-reason counts match baseline exactly; spot-checked entries (AAPL/AMZN entering 2008-01-03, `STOP_LOSS`'d within days of the early-2008 selloff).
+
+**Recommendation: not applicable — this is a data export, not a hypothesis test.** No production files modified, nothing committed. Preserved per this project's "preserve full trade-level output" standing requirement at the two paths stated above.
+
+## Enriched full 2007-2026 trade-history CSV export (2026-08-06)
+
+**Not a hypothesis test.** Follow-up to the same day's plain export — a richer version adding columns to help understand *why* individual trades won or lost, using the same 3,161-trade continuous-walk population. No variant comparison, no block validation.
+
+**Environment re-verified before running**: `git status --short` unchanged since the first export, latest commit unchanged (`32d6781`), `price_data` coverage unchanged (2007-01-01 → 2026-08-03, 540 tickers) — confirmed identical environment, not assumed.
+
+**Methodology for the engine-internal fields — monkeypatch-and-restore, `analysis/backtest.py` never edited on disk.** `simulate_portfolio_compounding_mtm()` does not expose `daily_var`/`holding_var`/ATR on its returned trade dicts. The script temporarily reassigns `analysis.backtest._resolve_entry_stop` and `analysis.backtest._var_position_size_core` (module-global bindings of the real, shared `analysis/volatility.py` functions) to thin recording wrappers that call straight through to the real implementation, inside a `try/finally` that restores the originals unconditionally. Confirmed behaviorally transparent: the run reproduced the exact baseline (`total_trades=3161`, `MAX_HOLDING=1796`, 56.8%) with the monkeypatch active, asserted programmatically. Captured records (977,530 stop/sizing calls across the full run, covering every evaluated candidate, not just the 3,161 real trades) were joined back to the engine's own final trade list via an exact-match `(entry_price, stop_distance_pct)` composite key. 402 join-key collisions occurred among the 977,530 candidate evaluations (expected at this volume); **all 3,161 real trades matched to a captured record (100%)**, and independently re-verified by recomputing `stop_distance_pct` from each trade's own captured `atr_at_entry` via the exact production formula (`round(atr_stop_multiplier * atr / price * 100, 4)`, `atr_stop_multiplier=2.0`) — reproduced exactly for all 3,161 rows, zero mismatches. 0/3,161 trades used the flat-sizing fallback, so VaR fields are populated for all 3,161.
+
+**Re-run fresh, same engine, result matched baseline exactly** (`total_trades=3161`, `MAX_HOLDING=1796` 56.8%, `STOP_LOSS=1169`, `SIGNAL_OFF=131`, `CRISIS_EXIT=35`, `END_OF_DATA=30`, asserted programmatically).
+
+**Column provenance, stated plainly per the task's own request:**
+- Genuinely captured from real engine internal state via the monkeypatch: `atr_at_entry`, `daily_var_at_entry`, `holding_var_at_entry`.
+- Already on the engine's own emitted trade record, unchanged: `position_gbp_at_entry`, `stop_distance_pct`, `entry_price`, `exit_price`, `pnl_gbp`, `pnl_pct`, `holding_days`, `exit_reason`, `win_loss`.
+- Trivial deterministic unit conversion of engine-provided numbers: `stop_distance_gbp = position_gbp_at_entry × stop_distance_pct / 100`.
+- Listed in the task brief as "engine-internal" but corrected as not actually engine state: `momentum_strength_band_at_entry` (display-only reconstruction via `main.py`'s own `_compute_momentum_strength_bands()`, reused byte-identical) and `already_peaked_at_exit` (purely retrospective, same definition `momentum_horizon` used) — the engine itself has no such concepts. `momentum_at_entry_pct` recovered via a parallel `precompute_ticker()`-style frame build, not read off the trade dict.
+- Genuinely new, not used anywhere in current decision logic: `ma_14/30/50_at_entry` and at exit (rolling means of stored close); `volume_at_entry`/`volume_at_exit` (noted: exit-point volume was already formally tested against outcome and rejected in `momentum_volume_reeval_cap_2026-08-06` — included here for descriptive completeness only, not an open question); `sector`/`industry` (fresh `yfinance.Ticker(t).info` pull for all 331 unique traded tickers, succeeded for all 331, 0 failures — Yahoo's own GICS-based taxonomy, genuinely external context since the system has no sector-aware logic anywhere).
+
+**The preserved file — exact locations.** Primary export: `research/full_trade_export_enriched_2026-08-06/full_trade_export_enriched_2007-2026.csv` (kept in-repo, not committed). **A second copy was written directly to `C:\Users\user\Downloads\sp500invest_full_trade_export_enriched_2007-2026.csv`.** 3,161 rows, 35 columns, zero nulls in every column, verified directly. Full column list: `ticker, win_loss, pnl_gbp, pnl_pct, entry_date, exit_date, holding_days, entry_price, exit_price, entry_sp500_level, exit_sp500_level, entry_gbpusd_reporting_only, exit_gbpusd_reporting_only, entry_eurusd_reporting_only, exit_eurusd_reporting_only, exit_reason, momentum_at_entry_pct, momentum_strength_band_at_entry, position_gbp_at_entry, stop_distance_pct, stop_distance_gbp, atr_at_entry, daily_var_at_entry, holding_var_at_entry, already_peaked_at_exit, volume_at_entry, volume_at_exit, ma_14_at_entry, ma_30_at_entry, ma_50_at_entry, ma_14_at_exit, ma_30_at_exit, ma_50_at_exit, sector, industry`. Sanity-checked: momentum-band distribution (Very Strong 2,685 / Strong 185 / Moderate 184 / Weak 98 / "-" 9) matches earlier band investigations' shape; sector distribution looks sane (Technology 841, Consumer Cyclical 553, Healthcare 338, Industrials 313, Energy 268); spot-checked AAPL's 2008-01-03 entry — a `STOP_LOSS` exit the next day with `stop_distance_gbp` (£151.98) landing almost exactly on realized `pnl_gbp` (−£151.98).
+
+**Recommendation: not applicable — this is a data export, not a hypothesis test.** `analysis/backtest.py` confirmed unmodified on disk (`git diff` zero changes) — the monkeypatch operates only at runtime, inside the export script's own process, restored before exit. Nothing committed. Preserved per this project's "preserve full trade-level output" standing requirement at the two paths stated above.
