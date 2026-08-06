@@ -1,0 +1,40 @@
+{
+  "baseline": {
+    "n_trades": 3161,
+    "n_distinct_tickers": 331,
+    "total_pnl_gbp": 484476.39,
+    "win_rate": 0.4919,
+    "profit_factor": 1.65,
+    "sharpe_ratio": 0.607,
+    "max_drawdown_pct_fixed_denominator": -88.77,
+    "max_drawdown_pct_peak_relative": -28.53,
+    "cagr_pct": 13.6,
+    "total_return_pct": 968.95,
+    "exit_reason_breakdown": {
+      "MAX_HOLDING": 1796,
+      "STOP_LOSS": 1169,
+      "SIGNAL_OFF": 131,
+      "CRISIS_EXIT": 35,
+      "END_OF_DATA": 30
+    }
+  },
+  "corrected": {
+    "n_trades": 3436,
+    "n_distinct_tickers": 341,
+    "total_pnl_gbp": 127167.8,
+    "win_rate": 0.4464,
+    "profit_factor": 1.29,
+    "sharpe_ratio": 0.331,
+    "max_drawdown_pct_fixed_denominator": -50.38,
+    "max_drawdown_pct_peak_relative": -34.48,
+    "cagr_pct": 7.05,
+    "total_return_pct": 254.34,
+    "exit_reason_breakdown": {
+      "MAX_HOLDING": 1723,
+      "STOP_LOSS": 1526,
+      "SIGNAL_OFF": 125,
+      "CRISIS_EXIT": 34,
+      "END_OF_DATA": 28
+    }
+  }
+}
