@@ -1,0 +1,46 @@
+{
+  "source_trade_file": "research/concentration_risk_2026-08-05/results/full_trades_continuous.json",
+  "backtest_convention": "continuous_walk",
+  "n_trades": 3161,
+  "reported_total_pnl_gbp": 484476.39,
+  "reported_avg_return_pct": 1.892,
+  "exdiv_rel_threshold": 1e-05,
+  "fill_convention": {
+    "trades_checked": 3161,
+    "entry_price_equals_same_day_close": 3161,
+    "entry_price_equals_same_day_open": 14,
+    "exit_price_equals_same_day_close": 1991
+  },
+  "exdiv_events_detected": 16746,
+  "dividends": {
+    "trades_analysed": 3161,
+    "trades_crossing_exdiv": 429,
+    "pct_crossing": 13.57,
+    "mean_div_return_pct_all": 0.0579,
+    "mean_div_return_pct_crossing": 0.4265,
+    "aggregate_understatement_gbp": 11230.5,
+    "pct_of_reported_pnl": 2.32,
+    "avg_return_pct_corrected": 1.95
+  },
+  "stop_contamination": {
+    "stop_loss_trades": 1169,
+    "contaminated": 24,
+    "pct_of_stops": 2.05,
+    "pct_of_all_trades": 0.76,
+    "recorded_pnl_on_contaminated_gbp": -10022.64
+  },
+  "stop_gap_through": {
+    "stop_loss_trades": 1169,
+    "gapped_through": 281,
+    "pct_of_stops": 24.04,
+    "unachievable_gain_assumed_gbp": 45799.68,
+    "pct_of_reported_pnl": 9.45
+  },
+  "stop_late_trigger": {
+    "trades_touching_stop_before_exit_day": 751,
+    "pct_of_all_trades": 23.76,
+    "delta_gbp_if_intraday_stop_fired": -166467.79,
+    "sign_convention": "negative => intraday stop yields less => backtest OVERSTATES",
+    "pct_of_reported_pnl": 34.36
+  }
+}
