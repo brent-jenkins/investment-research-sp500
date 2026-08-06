@@ -856,6 +856,25 @@ def _eod_job() -> None:
             details["pending_orders_purged"] = n_purged
         except Exception as exc:
             logger.warning("pending_orders purge failed: %s", exc)
+
+        try:
+            # Recurring backstop for the split-adjustment cliff class of bug
+            # (2026-08-06, see CLAUDE.md's "Split-adjustment corruption"
+            # section) -- pull_incremental()'s own ingest-time restatement
+            # check (_find_retroactive_restatement()) is the primary
+            # defense and should make this near-zero-hit in practice; this
+            # is a full-table backstop scan catching anything that slips
+            # through a different write path (backfill_price_history(), a
+            # manual script) or a future bug in the ingest-time guard
+            # itself. Own try/except so a monitoring failure never blocks
+            # anything else in this job.
+            from data.ingestion import detect_price_cliffs  # noqa: PLC0415
+            from output.briefing import send_price_cliff_alert  # noqa: PLC0415
+            cliff_hits = detect_price_cliffs()
+            details["price_cliff_hits"] = len(cliff_hits)
+            send_price_cliff_alert(cliff_hits, config)
+        except Exception as exc:
+            logger.warning("Price cliff monitoring check failed: %s", exc)
     except Exception as exc:
         logger.error("EOD job failed with an unhandled exception: %s", exc, exc_info=True)
         _record_eod_completion("FAILED", today_utc, error=str(exc), **details)

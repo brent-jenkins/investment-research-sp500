@@ -17,6 +17,7 @@ from output.briefing import (
     send_instrument_resolution_failure_alert,
     send_membership_staleness_alert,
     send_position_reconciliation_alert,
+    send_price_cliff_alert,
     send_stop_health_alert,
     send_weekly_summary_email,
 )
@@ -963,6 +964,152 @@ def test_stop_health_alert_uses_its_own_dedup_key_not_shared_with_others(db_engi
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
     sent, _ = send_stop_health_alert([_unhealthy_row()], _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# send_price_cliff_alert() (2026-08-06) -- alerts when
+# data.ingestion.detect_price_cliffs() finds a consecutive-trading-day close
+# ratio break outside [0.5, 2.0] in price_data (the split-adjustment cliff
+# artefact signature -- see CLAUDE.md's "Split-adjustment corruption"
+# section). Same content-based dedup shape as send_stop_health_alert() /
+# send_instrument_resolution_failure_alert() above, its own dedup key.
+# ---------------------------------------------------------------------------
+
+_PRICE_CLIFF_KEY = "price_cliff_last_hits"
+
+
+def _cliff_hit(ticker="APA", date="2020-03-09", date_prev="2020-03-06",
+               close=9.55, close_prev=20.70, ratio=0.4614):
+    return {
+        "ticker": ticker, "date": date, "date_prev": date_prev,
+        "close": close, "close_prev": close_prev, "ratio": ratio,
+    }
+
+
+def test_price_cliff_alert_empty_list_never_sends(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, detail = send_price_cliff_alert([], _config())
+
+    assert sent is False
+    assert "no price cliffs" in detail.lower()
+    smtp_cls.assert_not_called()
+
+
+def test_price_cliff_alert_disabled_skips_cleanly(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, _ = send_price_cliff_alert([_cliff_hit()], _config(enabled=False))
+
+    assert sent is False
+    smtp_cls.assert_not_called()
+
+
+def test_price_cliff_alert_sends_on_first_occurrence(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_price_cliff_alert([_cliff_hit()], _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_price_cliff_alert_names_the_ticker_and_ratio(db_engine, mocker):
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    send_price_cliff_alert([_cliff_hit(ticker="PCG", ratio=0.4764)], _config())
+
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = _email_pkg.message_from_string(raw)
+    combined = " ".join(
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    )
+    assert "PCG" in combined
+    assert "0.4764" in combined
+    assert "not auto-remediated" in combined.lower() or "Not auto-remediated" in combined
+
+
+def test_price_cliff_alert_unchanged_set_does_not_resend(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_price_cliff_alert([_cliff_hit()], cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, detail = send_price_cliff_alert([_cliff_hit()], cfg)
+
+    assert sent is False
+    assert "unchanged" in detail.lower()
+    mock_server.sendmail.assert_not_called()
+
+
+def test_price_cliff_alert_a_second_different_hit_sends_immediately(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_price_cliff_alert([_cliff_hit(ticker="APA")], cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, _ = send_price_cliff_alert(
+        [_cliff_hit(ticker="APA"), _cliff_hit(ticker="PCG", date="2019-01-14")], cfg,
+    )
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_price_cliff_alert_resolution_then_new_hit_sends_fresh_alert(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_price_cliff_alert([_cliff_hit(ticker="APA")], cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, _ = send_price_cliff_alert([], cfg)
+    assert sent is False
+    mock_server.sendmail.assert_not_called()
+
+    sent, _ = send_price_cliff_alert([_cliff_hit(ticker="APA")], cfg)
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_price_cliff_alert_disabled_does_not_record_hit_set(db_engine, mocker):
+    mocker.patch("output.briefing.smtplib.SMTP")
+
+    send_price_cliff_alert([_cliff_hit()], _config(enabled=False))
+
+    from data.database import get_metadata_str
+    assert get_metadata_str(_PRICE_CLIFF_KEY) is None
+
+
+def test_price_cliff_alert_uses_its_own_dedup_key_not_shared_with_others(db_engine, mocker):
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
+    set_metadata(_MEMBERSHIP_STALENESS_KEY, datetime.utcnow().isoformat())
+    set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_KEY, datetime.utcnow().isoformat())
+    set_metadata(_POSITION_RECONCILIATION_KEY, datetime.utcnow().isoformat())
+    set_metadata(_STOP_HEALTH_KEY, datetime.utcnow().isoformat())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_price_cliff_alert([_cliff_hit()], _config())
 
     assert sent is True
     mock_server.sendmail.assert_called_once()
