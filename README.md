@@ -213,7 +213,7 @@ backtest:
 trading212_invest:
   enabled: true
   live: false            # NEVER set true -- place_market_order() blocks it in code regardless
-  max_total_deployed: 0.5
+  max_total_deployed: 0.8
   per_trade_pct: 0.05     # % of the account's CURRENT total value -- the VaR sizing ceiling
   absolute_max_position_gbp: 1000000   # rarely-binding safety ceiling
   var_confidence: 0.95
