@@ -1,0 +1,2 @@
+n_slow_bleed_checkpointed,mean_stop_proximity_pct,median_stop_proximity_pct,mean_days_checkpoint_to_exit,median_days_checkpoint_to_exit,n_within_5pct_of_stop,n_within_10pct_of_stop
+314,7.123366059476829,5.978259915424367,9.353503184713375,9.0,125,249
