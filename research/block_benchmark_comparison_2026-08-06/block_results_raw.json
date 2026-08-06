@@ -1,0 +1,1970 @@
+[
+  {
+    "block": 0,
+    "start": "2007-01-01",
+    "end": "2008-03-23",
+    "era": "2007-2009_GFC",
+    "years": 1.21,
+    "n_candidates": 495,
+    "strat_n_trades": 59,
+    "strat_cagr_pct": -5.3,
+    "strat_cagr_tradespan_pct": -26.84,
+    "strat_total_return_pct": -6.38,
+    "strat_dd_peak_pct": -9.34,
+    "strat_dd_fixed_pct": -9.34,
+    "strat_profit_factor": 0.47,
+    "strat_ending_gbp": 46811.96,
+    "strat_return_per_unit_dd": -0.567,
+    "implied_sp_div_yield_pct": 1.938,
+    "implied_ndx_div_yield_pct": 0.311,
+    "legA_pr": {
+      "cagr_pct": -5.11,
+      "total_return_pct": -6.15,
+      "max_dd_peak_relative_pct": -18.64,
+      "max_dd_fixed_pct": -10.11,
+      "ending_balance_gbp": 46926.09,
+      "return_per_unit_dd": -0.274
+    },
+    "legA_tr": {
+      "cagr_pct": -3.27,
+      "total_return_pct": -3.94,
+      "max_dd_peak_relative_pct": -18.21,
+      "max_dd_fixed_pct": -8.45,
+      "ending_balance_gbp": 48028.65,
+      "return_per_unit_dd": -0.18
+    },
+    "legB_pr": {
+      "cagr_pct": -0.35,
+      "total_return_pct": -0.42,
+      "max_dd_peak_relative_pct": -25.28,
+      "max_dd_fixed_pct": -4.91,
+      "ending_balance_gbp": 49790.27,
+      "return_per_unit_dd": -0.014
+    },
+    "legB_tr": {
+      "cagr_pct": -0.04,
+      "total_return_pct": -0.04,
+      "max_dd_peak_relative_pct": -25.2,
+      "max_dd_fixed_pct": -4.62,
+      "ending_balance_gbp": 49977.54,
+      "return_per_unit_dd": -0.001
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.4806,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.35,
+          "total_return_pct": -2.83,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -4.81,
+          "ending_balance_gbp": 48582.96,
+          "return_per_unit_dd": -0.251
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4933,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.48,
+          "total_return_pct": -1.79,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -4.07,
+          "ending_balance_gbp": 49104.92,
+          "return_per_unit_dd": -0.159
+        }
+      },
+      "real_pr": {
+        "weight": 0.5097,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -0.59,
+          "total_return_pct": -0.71,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -2.86,
+          "ending_balance_gbp": 49643.4,
+          "return_per_unit_dd": -0.063
+        }
+      },
+      "real_tr": {
+        "weight": 0.5223,
+        "realised_dd": -9.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 0.3,
+          "total_return_pct": 0.36,
+          "max_dd_peak_relative_pct": -9.34,
+          "max_dd_fixed_pct": -2.12,
+          "ending_balance_gbp": 50179.64,
+          "return_per_unit_dd": 0.032
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 0.08,
+        "total_return_pct": 0.1,
+        "max_dd_peak_relative_pct": -9.83,
+        "max_dd_fixed_pct": -2.92,
+        "ending_balance_gbp": 50050.12,
+        "return_per_unit_dd": 0.008
+      },
+      "tr": {
+        "cagr_pct": 1.24,
+        "total_return_pct": 1.51,
+        "max_dd_peak_relative_pct": -9.54,
+        "max_dd_fixed_pct": -1.85,
+        "ending_balance_gbp": 50753.45,
+        "return_per_unit_dd": 0.13
+      }
+    }
+  },
+  {
+    "block": 1,
+    "start": "2008-03-23",
+    "end": "2009-06-13",
+    "era": "2007-2009_GFC",
+    "years": 1.218,
+    "n_candidates": 499,
+    "strat_n_trades": 268,
+    "strat_cagr_pct": -22.94,
+    "strat_cagr_tradespan_pct": -22.94,
+    "strat_total_return_pct": -27.2,
+    "strat_dd_peak_pct": -30.46,
+    "strat_dd_fixed_pct": -31.77,
+    "strat_profit_factor": 0.36,
+    "strat_ending_gbp": 36400.64,
+    "strat_return_per_unit_dd": -0.753,
+    "implied_sp_div_yield_pct": 2.155,
+    "implied_ndx_div_yield_pct": 0.368,
+    "legA_pr": {
+      "cagr_pct": -25.3,
+      "total_return_pct": -29.9,
+      "max_dd_peak_relative_pct": -52.58,
+      "max_dd_fixed_pct": -49.88,
+      "ending_balance_gbp": 35047.93,
+      "return_per_unit_dd": -0.481
+    },
+    "legA_tr": {
+      "cagr_pct": -23.69,
+      "total_return_pct": -28.06,
+      "max_dd_peak_relative_pct": -51.68,
+      "max_dd_fixed_pct": -48.93,
+      "ending_balance_gbp": 35970.32,
+      "return_per_unit_dd": -0.458
+    },
+    "legB_pr": {
+      "cagr_pct": -14.93,
+      "total_return_pct": -17.88,
+      "max_dd_peak_relative_pct": -49.56,
+      "max_dd_fixed_pct": -42.87,
+      "ending_balance_gbp": 41059.58,
+      "return_per_unit_dd": -0.301
+    },
+    "legB_tr": {
+      "cagr_pct": -14.62,
+      "total_return_pct": -17.51,
+      "max_dd_peak_relative_pct": -49.5,
+      "max_dd_fixed_pct": -42.79,
+      "ending_balance_gbp": 41243.71,
+      "return_per_unit_dd": -0.295
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5012,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -12.7,
+          "total_return_pct": -15.25,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.47,
+          "ending_balance_gbp": 42372.51,
+          "return_per_unit_dd": -0.417
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5139,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -12.07,
+          "total_return_pct": -14.51,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.42,
+          "ending_balance_gbp": 42745.81,
+          "return_per_unit_dd": -0.396
+        }
+      },
+      "real_pr": {
+        "weight": 0.5059,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -12.48,
+          "total_return_pct": -14.99,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.38,
+          "ending_balance_gbp": 42503.08,
+          "return_per_unit_dd": -0.41
+        }
+      },
+      "real_tr": {
+        "weight": 0.5186,
+        "realised_dd": -30.46,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -11.85,
+          "total_return_pct": -14.25,
+          "max_dd_peak_relative_pct": -30.46,
+          "max_dd_fixed_pct": -28.33,
+          "ending_balance_gbp": 42877.2,
+          "return_per_unit_dd": -0.389
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": -14.26,
+        "total_return_pct": -17.1,
+        "max_dd_peak_relative_pct": -35.03,
+        "max_dd_fixed_pct": -32.77,
+        "ending_balance_gbp": 41451.35,
+        "return_per_unit_dd": -0.407
+      },
+      "tr": {
+        "cagr_pct": -13.17,
+        "total_return_pct": -15.81,
+        "max_dd_peak_relative_pct": -34.31,
+        "max_dd_fixed_pct": -32.02,
+        "ending_balance_gbp": 42094.78,
+        "return_per_unit_dd": -0.384
+      }
+    }
+  },
+  {
+    "block": 2,
+    "start": "2009-06-13",
+    "end": "2010-09-03",
+    "era": "2010-2019_bull",
+    "years": 1.218,
+    "n_candidates": 497,
+    "strat_n_trades": 290,
+    "strat_cagr_pct": 16.22,
+    "strat_cagr_tradespan_pct": 16.22,
+    "strat_total_return_pct": 20.1,
+    "strat_dd_peak_pct": -7.83,
+    "strat_dd_fixed_pct": -9.59,
+    "strat_profit_factor": 1.71,
+    "strat_ending_gbp": 60050.46,
+    "strat_return_per_unit_dd": 2.072,
+    "implied_sp_div_yield_pct": 2.041,
+    "implied_ndx_div_yield_pct": 0.724,
+    "legA_pr": {
+      "cagr_pct": 15.8,
+      "total_return_pct": 19.57,
+      "max_dd_peak_relative_pct": -15.99,
+      "max_dd_fixed_pct": -4.83,
+      "ending_balance_gbp": 59785.98,
+      "return_per_unit_dd": 0.988
+    },
+    "legA_tr": {
+      "cagr_pct": 18.17,
+      "total_return_pct": 22.55,
+      "max_dd_peak_relative_pct": -15.6,
+      "max_dd_fixed_pct": -4.29,
+      "ending_balance_gbp": 61275.58,
+      "return_per_unit_dd": 1.165
+    },
+    "legB_pr": {
+      "cagr_pct": 22.75,
+      "total_return_pct": 28.37,
+      "max_dd_peak_relative_pct": -15.91,
+      "max_dd_fixed_pct": -3.58,
+      "ending_balance_gbp": 64185.36,
+      "return_per_unit_dd": 1.43
+    },
+    "legB_tr": {
+      "cagr_pct": 23.64,
+      "total_return_pct": 29.5,
+      "max_dd_peak_relative_pct": -15.58,
+      "max_dd_fixed_pct": -3.46,
+      "ending_balance_gbp": 64751.94,
+      "return_per_unit_dd": 1.517
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.4743,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.61,
+          "total_return_pct": 9.35,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.29,
+          "ending_balance_gbp": 54673.91,
+          "return_per_unit_dd": 0.972
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4872,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 8.89,
+          "total_return_pct": 10.93,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.09,
+          "ending_balance_gbp": 55465.35,
+          "return_per_unit_dd": 1.135
+        }
+      },
+      "real_pr": {
+        "weight": 0.4751,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.69,
+          "total_return_pct": 9.44,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.29,
+          "ending_balance_gbp": 54721.75,
+          "return_per_unit_dd": 0.982
+        }
+      },
+      "real_tr": {
+        "weight": 0.488,
+        "realised_dd": -7.83,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 8.97,
+          "total_return_pct": 11.03,
+          "max_dd_peak_relative_pct": -7.83,
+          "max_dd_fixed_pct": -2.09,
+          "ending_balance_gbp": 55513.92,
+          "return_per_unit_dd": 1.145
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 13.72,
+        "total_return_pct": 16.96,
+        "max_dd_peak_relative_pct": -8.6,
+        "max_dd_fixed_pct": -2.23,
+        "ending_balance_gbp": 58479.31,
+        "return_per_unit_dd": 1.595
+      },
+      "tr": {
+        "cagr_pct": 15.11,
+        "total_return_pct": 18.7,
+        "max_dd_peak_relative_pct": -8.35,
+        "max_dd_fixed_pct": -1.9,
+        "ending_balance_gbp": 59351.69,
+        "return_per_unit_dd": 1.81
+      }
+    }
+  },
+  {
+    "block": 3,
+    "start": "2010-09-03",
+    "end": "2011-11-24",
+    "era": "2010-2019_bull",
+    "years": 1.21,
+    "n_candidates": 497,
+    "strat_n_trades": 260,
+    "strat_cagr_pct": 6.91,
+    "strat_cagr_tradespan_pct": 6.91,
+    "strat_total_return_pct": 8.42,
+    "strat_dd_peak_pct": -9.71,
+    "strat_dd_fixed_pct": -11.07,
+    "strat_profit_factor": 1.4,
+    "strat_ending_gbp": 54208.87,
+    "strat_return_per_unit_dd": 0.711,
+    "implied_sp_div_yield_pct": 2.09,
+    "implied_ndx_div_yield_pct": 0.815,
+    "legA_pr": {
+      "cagr_pct": 5.27,
+      "total_return_pct": 6.41,
+      "max_dd_peak_relative_pct": -19.39,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 53203.31,
+      "return_per_unit_dd": 0.272
+    },
+    "legA_tr": {
+      "cagr_pct": 7.46,
+      "total_return_pct": 9.1,
+      "max_dd_peak_relative_pct": -18.57,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 54551.54,
+      "return_per_unit_dd": 0.402
+    },
+    "legB_pr": {
+      "cagr_pct": 13.61,
+      "total_return_pct": 16.7,
+      "max_dd_peak_relative_pct": -16.11,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 58350.12,
+      "return_per_unit_dd": 0.845
+    },
+    "legB_tr": {
+      "cagr_pct": 14.54,
+      "total_return_pct": 17.85,
+      "max_dd_peak_relative_pct": -16.11,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 58926.1,
+      "return_per_unit_dd": 0.903
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.4802,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.87,
+          "total_return_pct": 3.49,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 51743.61,
+          "return_per_unit_dd": 0.296
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5033,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.08,
+          "total_return_pct": 4.95,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 52476.96,
+          "return_per_unit_dd": 0.42
+        }
+      },
+      "real_pr": {
+        "weight": 0.4804,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.91,
+          "total_return_pct": 3.53,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 51766.71,
+          "return_per_unit_dd": 0.3
+        }
+      },
+      "real_tr": {
+        "weight": 0.5035,
+        "realised_dd": -9.71,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.11,
+          "total_return_pct": 5.0,
+          "max_dd_peak_relative_pct": -9.71,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 52499.6,
+          "return_per_unit_dd": 0.424
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 5.39,
+        "total_return_pct": 6.56,
+        "max_dd_peak_relative_pct": -10.14,
+        "max_dd_fixed_pct": 0.0,
+        "ending_balance_gbp": 53277.72,
+        "return_per_unit_dd": 0.532
+      },
+      "tr": {
+        "cagr_pct": 6.71,
+        "total_return_pct": 8.17,
+        "max_dd_peak_relative_pct": -9.82,
+        "max_dd_fixed_pct": 0.0,
+        "ending_balance_gbp": 54085.75,
+        "return_per_unit_dd": 0.683
+      }
+    }
+  },
+  {
+    "block": 4,
+    "start": "2011-11-24",
+    "end": "2013-02-13",
+    "era": "2010-2019_bull",
+    "years": 1.221,
+    "n_candidates": 496,
+    "strat_n_trades": 228,
+    "strat_cagr_pct": 22.97,
+    "strat_cagr_tradespan_pct": 22.97,
+    "strat_total_return_pct": 28.72,
+    "strat_dd_peak_pct": -2.7,
+    "strat_dd_fixed_pct": -3.01,
+    "strat_profit_factor": 2.86,
+    "strat_ending_gbp": 64358.87,
+    "strat_return_per_unit_dd": 8.506,
+    "implied_sp_div_yield_pct": 2.341,
+    "implied_ndx_div_yield_pct": 1.337,
+    "legA_pr": {
+      "cagr_pct": 24.92,
+      "total_return_pct": 31.21,
+      "max_dd_peak_relative_pct": -9.94,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 65606.68,
+      "return_per_unit_dd": 2.508
+    },
+    "legA_tr": {
+      "cagr_pct": 27.84,
+      "total_return_pct": 34.97,
+      "max_dd_peak_relative_pct": -9.94,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 67486.78,
+      "return_per_unit_dd": 2.802
+    },
+    "legB_pr": {
+      "cagr_pct": 23.16,
+      "total_return_pct": 28.96,
+      "max_dd_peak_relative_pct": -11.86,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 64479.89,
+      "return_per_unit_dd": 1.952
+    },
+    "legB_tr": {
+      "cagr_pct": 24.8,
+      "total_return_pct": 31.07,
+      "max_dd_peak_relative_pct": -11.79,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 65533.83,
+      "return_per_unit_dd": 2.104
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.266,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 6.26,
+          "total_return_pct": 7.7,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53851.0,
+          "return_per_unit_dd": 2.32
+        }
+      },
+      "zero_tr": {
+        "weight": 0.266,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 6.93,
+          "total_return_pct": 8.53,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 54264.16,
+          "return_per_unit_dd": 2.567
+        }
+      },
+      "real_pr": {
+        "weight": 0.2669,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 6.34,
+          "total_return_pct": 7.8,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 53898.11,
+          "return_per_unit_dd": 2.349
+        }
+      },
+      "real_tr": {
+        "weight": 0.2669,
+        "realised_dd": -2.7,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.01,
+          "total_return_pct": 8.63,
+          "max_dd_peak_relative_pct": -2.7,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 54313.01,
+          "return_per_unit_dd": 2.597
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 16.06,
+        "total_return_pct": 19.94,
+        "max_dd_peak_relative_pct": -5.26,
+        "max_dd_fixed_pct": 0.0,
+        "ending_balance_gbp": 59972.4,
+        "return_per_unit_dd": 3.054
+      },
+      "tr": {
+        "cagr_pct": 17.7,
+        "total_return_pct": 22.01,
+        "max_dd_peak_relative_pct": -5.26,
+        "max_dd_fixed_pct": 0.0,
+        "ending_balance_gbp": 61006.39,
+        "return_per_unit_dd": 3.365
+      }
+    }
+  },
+  {
+    "block": 5,
+    "start": "2013-02-13",
+    "end": "2014-05-06",
+    "era": "2010-2019_bull",
+    "years": 1.221,
+    "n_candidates": 498,
+    "strat_n_trades": 264,
+    "strat_cagr_pct": 10.32,
+    "strat_cagr_tradespan_pct": 10.32,
+    "strat_total_return_pct": 12.74,
+    "strat_dd_peak_pct": -5.64,
+    "strat_dd_fixed_pct": -6.6,
+    "strat_profit_factor": 1.52,
+    "strat_ending_gbp": 56367.86,
+    "strat_return_per_unit_dd": 1.829,
+    "implied_sp_div_yield_pct": 2.018,
+    "implied_ndx_div_yield_pct": 1.491,
+    "legA_pr": {
+      "cagr_pct": 18.29,
+      "total_return_pct": 22.76,
+      "max_dd_peak_relative_pct": -5.76,
+      "max_dd_fixed_pct": -2.2,
+      "ending_balance_gbp": 61382.43,
+      "return_per_unit_dd": 3.175
+    },
+    "legA_tr": {
+      "cagr_pct": 20.68,
+      "total_return_pct": 25.8,
+      "max_dd_peak_relative_pct": -5.76,
+      "max_dd_fixed_pct": -2.2,
+      "ending_balance_gbp": 62898.32,
+      "return_per_unit_dd": 3.589
+    },
+    "legB_pr": {
+      "cagr_pct": 22.66,
+      "total_return_pct": 28.33,
+      "max_dd_peak_relative_pct": -7.52,
+      "max_dd_fixed_pct": -2.54,
+      "ending_balance_gbp": 64163.81,
+      "return_per_unit_dd": 3.013
+    },
+    "legB_tr": {
+      "cagr_pct": 24.49,
+      "total_return_pct": 30.67,
+      "max_dd_peak_relative_pct": -7.31,
+      "max_dd_fixed_pct": -2.54,
+      "ending_balance_gbp": 65333.55,
+      "return_per_unit_dd": 3.35
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 17.88,
+          "total_return_pct": 22.25,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 61123.02,
+          "return_per_unit_dd": 3.17
+        }
+      },
+      "zero_tr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 20.21,
+          "total_return_pct": 25.2,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 62600.53,
+          "return_per_unit_dd": 3.583
+        }
+      },
+      "real_pr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 17.88,
+          "total_return_pct": 22.25,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 61123.68,
+          "return_per_unit_dd": 3.17
+        }
+      },
+      "real_tr": {
+        "weight": 0.9787,
+        "realised_dd": -5.64,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 20.21,
+          "total_return_pct": 25.2,
+          "max_dd_peak_relative_pct": -5.64,
+          "max_dd_fixed_pct": -2.16,
+          "ending_balance_gbp": 62601.21,
+          "return_per_unit_dd": 3.583
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 11.27,
+        "total_return_pct": 13.93,
+        "max_dd_peak_relative_pct": -4.89,
+        "max_dd_fixed_pct": -1.14,
+        "ending_balance_gbp": 56966.74,
+        "return_per_unit_dd": 2.304
+      },
+      "tr": {
+        "cagr_pct": 12.63,
+        "total_return_pct": 15.63,
+        "max_dd_peak_relative_pct": -4.59,
+        "max_dd_fixed_pct": -1.14,
+        "ending_balance_gbp": 57813.61,
+        "return_per_unit_dd": 2.749
+      }
+    }
+  },
+  {
+    "block": 6,
+    "start": "2014-05-06",
+    "end": "2015-07-27",
+    "era": "2010-2019_bull",
+    "years": 1.221,
+    "n_candidates": 499,
+    "strat_n_trades": 236,
+    "strat_cagr_pct": 13.59,
+    "strat_cagr_tradespan_pct": 13.59,
+    "strat_total_return_pct": 16.83,
+    "strat_dd_peak_pct": -5.34,
+    "strat_dd_fixed_pct": -5.64,
+    "strat_profit_factor": 1.93,
+    "strat_ending_gbp": 58415.21,
+    "strat_return_per_unit_dd": 2.544,
+    "implied_sp_div_yield_pct": 2.006,
+    "implied_ndx_div_yield_pct": 1.101,
+    "legA_pr": {
+      "cagr_pct": 8.19,
+      "total_return_pct": 10.09,
+      "max_dd_peak_relative_pct": -7.4,
+      "max_dd_fixed_pct": -0.84,
+      "ending_balance_gbp": 55042.83,
+      "return_per_unit_dd": 1.106
+    },
+    "legA_tr": {
+      "cagr_pct": 10.36,
+      "total_return_pct": 12.79,
+      "max_dd_peak_relative_pct": -7.36,
+      "max_dd_fixed_pct": -0.39,
+      "ending_balance_gbp": 56394.16,
+      "return_per_unit_dd": 1.408
+    },
+    "legB_pr": {
+      "cagr_pct": 21.95,
+      "total_return_pct": 27.43,
+      "max_dd_peak_relative_pct": -8.23,
+      "max_dd_fixed_pct": -0.17,
+      "ending_balance_gbp": 63712.51,
+      "return_per_unit_dd": 2.667
+    },
+    "legB_tr": {
+      "cagr_pct": 23.3,
+      "total_return_pct": 29.14,
+      "max_dd_peak_relative_pct": -8.17,
+      "max_dd_fixed_pct": -0.17,
+      "ending_balance_gbp": 64570.27,
+      "return_per_unit_dd": 2.853
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7183,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 5.89,
+          "total_return_pct": 7.24,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.54,
+          "ending_balance_gbp": 53619.89,
+          "return_per_unit_dd": 1.103
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7225,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.45,
+          "total_return_pct": 9.18,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.28,
+          "ending_balance_gbp": 54587.95,
+          "return_per_unit_dd": 1.396
+        }
+      },
+      "real_pr": {
+        "weight": 0.7183,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 5.9,
+          "total_return_pct": 7.25,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.54,
+          "ending_balance_gbp": 53622.51,
+          "return_per_unit_dd": 1.104
+        }
+      },
+      "real_tr": {
+        "weight": 0.7226,
+        "realised_dd": -5.34,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 7.46,
+          "total_return_pct": 9.18,
+          "max_dd_peak_relative_pct": -5.34,
+          "max_dd_fixed_pct": -0.28,
+          "ending_balance_gbp": 54591.23,
+          "return_per_unit_dd": 1.397
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 6.06,
+        "total_return_pct": 7.44,
+        "max_dd_peak_relative_pct": -3.83,
+        "max_dd_fixed_pct": -0.06,
+        "ending_balance_gbp": 53721.77,
+        "return_per_unit_dd": 1.579
+      },
+      "tr": {
+        "cagr_pct": 7.33,
+        "total_return_pct": 9.02,
+        "max_dd_peak_relative_pct": -3.65,
+        "max_dd_fixed_pct": -0.06,
+        "ending_balance_gbp": 54508.37,
+        "return_per_unit_dd": 2.006
+      }
+    }
+  },
+  {
+    "block": 7,
+    "start": "2015-07-27",
+    "end": "2016-10-17",
+    "era": "2010-2019_bull",
+    "years": 1.224,
+    "n_candidates": 506,
+    "strat_n_trades": 283,
+    "strat_cagr_pct": 0.35,
+    "strat_cagr_tradespan_pct": 0.35,
+    "strat_total_return_pct": 0.43,
+    "strat_dd_peak_pct": -9.68,
+    "strat_dd_fixed_pct": -9.68,
+    "strat_profit_factor": 0.99,
+    "strat_ending_gbp": 50212.79,
+    "strat_return_per_unit_dd": 0.036,
+    "implied_sp_div_yield_pct": 2.188,
+    "implied_ndx_div_yield_pct": 1.118,
+    "legA_pr": {
+      "cagr_pct": 1.3,
+      "total_return_pct": 1.59,
+      "max_dd_peak_relative_pct": -13.31,
+      "max_dd_fixed_pct": -12.62,
+      "ending_balance_gbp": 50794.22,
+      "return_per_unit_dd": 0.097
+    },
+    "legA_tr": {
+      "cagr_pct": 3.51,
+      "total_return_pct": 4.32,
+      "max_dd_peak_relative_pct": -12.79,
+      "max_dd_fixed_pct": -11.64,
+      "ending_balance_gbp": 52157.69,
+      "return_per_unit_dd": 0.275
+    },
+    "legB_pr": {
+      "cagr_pct": 4.21,
+      "total_return_pct": 5.17,
+      "max_dd_peak_relative_pct": -16.34,
+      "max_dd_fixed_pct": -13.43,
+      "ending_balance_gbp": 52586.93,
+      "return_per_unit_dd": 0.257
+    },
+    "legB_tr": {
+      "cagr_pct": 5.37,
+      "total_return_pct": 6.61,
+      "max_dd_peak_relative_pct": -16.09,
+      "max_dd_fixed_pct": -12.95,
+      "ending_balance_gbp": 53307.2,
+      "return_per_unit_dd": 0.334
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.7176,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.1,
+          "total_return_pct": 1.34,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -9.06,
+          "ending_balance_gbp": 50672.22,
+          "return_per_unit_dd": 0.113
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7483,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.78,
+          "total_return_pct": 3.41,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -8.7,
+          "ending_balance_gbp": 51705.6,
+          "return_per_unit_dd": 0.287
+        }
+      },
+      "real_pr": {
+        "weight": 0.7187,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.15,
+          "total_return_pct": 1.42,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -9.06,
+          "ending_balance_gbp": 50707.57,
+          "return_per_unit_dd": 0.119
+        }
+      },
+      "real_tr": {
+        "weight": 0.7493,
+        "realised_dd": -9.68,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.83,
+          "total_return_pct": 3.48,
+          "max_dd_peak_relative_pct": -9.68,
+          "max_dd_fixed_pct": -8.69,
+          "ending_balance_gbp": 51739.04,
+          "return_per_unit_dd": 0.293
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 2.72,
+        "total_return_pct": 3.34,
+        "max_dd_peak_relative_pct": -7.41,
+        "max_dd_fixed_pct": -6.67,
+        "ending_balance_gbp": 51671.35,
+        "return_per_unit_dd": 0.367
+      },
+      "tr": {
+        "cagr_pct": 4.07,
+        "total_return_pct": 5.0,
+        "max_dd_peak_relative_pct": -7.09,
+        "max_dd_fixed_pct": -6.27,
+        "ending_balance_gbp": 52498.82,
+        "return_per_unit_dd": 0.574
+      }
+    }
+  },
+  {
+    "block": 8,
+    "start": "2016-10-17",
+    "end": "2018-01-07",
+    "era": "2010-2019_bull",
+    "years": 1.218,
+    "n_candidates": 506,
+    "strat_n_trades": 259,
+    "strat_cagr_pct": 9.1,
+    "strat_cagr_tradespan_pct": 9.1,
+    "strat_total_return_pct": 11.2,
+    "strat_dd_peak_pct": -3.91,
+    "strat_dd_fixed_pct": -4.08,
+    "strat_profit_factor": 1.49,
+    "strat_ending_gbp": 55600.12,
+    "strat_return_per_unit_dd": 2.329,
+    "implied_sp_div_yield_pct": 2.084,
+    "implied_ndx_div_yield_pct": 0.992,
+    "legA_pr": {
+      "cagr_pct": 23.24,
+      "total_return_pct": 29.0,
+      "max_dd_peak_relative_pct": -3.07,
+      "max_dd_fixed_pct": -1.94,
+      "ending_balance_gbp": 64499.17,
+      "return_per_unit_dd": 7.559
+    },
+    "legA_tr": {
+      "cagr_pct": 25.81,
+      "total_return_pct": 32.28,
+      "max_dd_peak_relative_pct": -3.07,
+      "max_dd_fixed_pct": -1.94,
+      "ending_balance_gbp": 66140.68,
+      "return_per_unit_dd": 8.395
+    },
+    "legB_pr": {
+      "cagr_pct": 30.82,
+      "total_return_pct": 38.72,
+      "max_dd_peak_relative_pct": -5.08,
+      "max_dd_fixed_pct": -2.83,
+      "ending_balance_gbp": 69360.45,
+      "return_per_unit_dd": 6.065
+    },
+    "legB_tr": {
+      "cagr_pct": 32.12,
+      "total_return_pct": 40.4,
+      "max_dd_peak_relative_pct": -5.08,
+      "max_dd_fixed_pct": -2.83,
+      "ending_balance_gbp": 70199.66,
+      "return_per_unit_dd": 6.32
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.68,
+          "return_per_unit_dd": 8.395
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.24,
+          "total_return_pct": 29.0,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 64499.17,
+          "return_per_unit_dd": 7.559
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -3.07,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 25.81,
+          "total_return_pct": 32.28,
+          "max_dd_peak_relative_pct": -3.07,
+          "max_dd_fixed_pct": -1.94,
+          "ending_balance_gbp": 66140.68,
+          "return_per_unit_dd": 8.395
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 13.69,
+        "total_return_pct": 16.92,
+        "max_dd_peak_relative_pct": -1.93,
+        "max_dd_fixed_pct": -1.2,
+        "ending_balance_gbp": 58460.57,
+        "return_per_unit_dd": 7.107
+      },
+      "tr": {
+        "cagr_pct": 15.11,
+        "total_return_pct": 18.71,
+        "max_dd_peak_relative_pct": -1.93,
+        "max_dd_fixed_pct": -1.2,
+        "ending_balance_gbp": 59353.44,
+        "return_per_unit_dd": 7.846
+      }
+    }
+  },
+  {
+    "block": 9,
+    "start": "2018-01-07",
+    "end": "2019-03-30",
+    "era": "2010-2019_bull",
+    "years": 1.218,
+    "n_candidates": 504,
+    "strat_n_trades": 283,
+    "strat_cagr_pct": 0.61,
+    "strat_cagr_tradespan_pct": 0.61,
+    "strat_total_return_pct": 0.75,
+    "strat_dd_peak_pct": -13.76,
+    "strat_dd_fixed_pct": -14.39,
+    "strat_profit_factor": 1.05,
+    "strat_ending_gbp": 50373.55,
+    "strat_return_per_unit_dd": 0.045,
+    "implied_sp_div_yield_pct": 1.923,
+    "implied_ndx_div_yield_pct": 0.843,
+    "legA_pr": {
+      "cagr_pct": 2.58,
+      "total_return_pct": 3.15,
+      "max_dd_peak_relative_pct": -19.78,
+      "max_dd_fixed_pct": -14.43,
+      "ending_balance_gbp": 51577.49,
+      "return_per_unit_dd": 0.131
+    },
+    "legA_tr": {
+      "cagr_pct": 4.56,
+      "total_return_pct": 5.58,
+      "max_dd_peak_relative_pct": -19.28,
+      "max_dd_fixed_pct": -12.81,
+      "ending_balance_gbp": 52788.7,
+      "return_per_unit_dd": 0.236
+    },
+    "legB_pr": {
+      "cagr_pct": 8.55,
+      "total_return_pct": 10.52,
+      "max_dd_peak_relative_pct": -22.99,
+      "max_dd_fixed_pct": -11.64,
+      "ending_balance_gbp": 55258.19,
+      "return_per_unit_dd": 0.372
+    },
+    "legB_tr": {
+      "cagr_pct": 9.47,
+      "total_return_pct": 11.65,
+      "max_dd_peak_relative_pct": -22.63,
+      "max_dd_fixed_pct": -10.9,
+      "ending_balance_gbp": 55826.52,
+      "return_per_unit_dd": 0.418
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.6872,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.01,
+          "total_return_pct": 2.46,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -9.8,
+          "ending_balance_gbp": 51229.82,
+          "return_per_unit_dd": 0.146
+        }
+      },
+      "zero_tr": {
+        "weight": 0.7056,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.43,
+          "total_return_pct": 4.19,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -8.88,
+          "ending_balance_gbp": 52094.95,
+          "return_per_unit_dd": 0.249
+        }
+      },
+      "real_pr": {
+        "weight": 0.6955,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.66,
+          "total_return_pct": 3.25,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -9.41,
+          "ending_balance_gbp": 51625.77,
+          "return_per_unit_dd": 0.193
+        }
+      },
+      "real_tr": {
+        "weight": 0.7136,
+        "realised_dd": -13.76,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 4.06,
+          "total_return_pct": 4.97,
+          "max_dd_peak_relative_pct": -13.76,
+          "max_dd_fixed_pct": -8.5,
+          "ending_balance_gbp": 52483.03,
+          "return_per_unit_dd": 0.295
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 3.02,
+        "total_return_pct": 3.69,
+        "max_dd_peak_relative_pct": -11.45,
+        "max_dd_fixed_pct": -8.47,
+        "ending_balance_gbp": 51843.99,
+        "return_per_unit_dd": 0.263
+      },
+      "tr": {
+        "cagr_pct": 4.19,
+        "total_return_pct": 5.12,
+        "max_dd_peak_relative_pct": -11.16,
+        "max_dd_fixed_pct": -7.45,
+        "ending_balance_gbp": 52562.08,
+        "return_per_unit_dd": 0.375
+      }
+    }
+  },
+  {
+    "block": 10,
+    "start": "2019-03-30",
+    "end": "2020-06-19",
+    "era": "2010-2019_bull",
+    "years": 1.218,
+    "n_candidates": 502,
+    "strat_n_trades": 250,
+    "strat_cagr_pct": 6.62,
+    "strat_cagr_tradespan_pct": 6.62,
+    "strat_total_return_pct": 8.12,
+    "strat_dd_peak_pct": -8.43,
+    "strat_dd_fixed_pct": -9.13,
+    "strat_profit_factor": 1.39,
+    "strat_ending_gbp": 54061.61,
+    "strat_return_per_unit_dd": 0.785,
+    "implied_sp_div_yield_pct": 2.041,
+    "implied_ndx_div_yield_pct": 0.702,
+    "legA_pr": {
+      "cagr_pct": 6.55,
+      "total_return_pct": 8.04,
+      "max_dd_peak_relative_pct": -33.92,
+      "max_dd_fixed_pct": -21.97,
+      "ending_balance_gbp": 54020.49,
+      "return_per_unit_dd": 0.193
+    },
+    "legA_tr": {
+      "cagr_pct": 8.73,
+      "total_return_pct": 10.73,
+      "max_dd_peak_relative_pct": -33.54,
+      "max_dd_fixed_pct": -20.37,
+      "ending_balance_gbp": 55366.86,
+      "return_per_unit_dd": 0.26
+    },
+    "legB_pr": {
+      "cagr_pct": 27.02,
+      "total_return_pct": 33.83,
+      "max_dd_peak_relative_pct": -28.03,
+      "max_dd_fixed_pct": -6.69,
+      "ending_balance_gbp": 66916.81,
+      "return_per_unit_dd": 0.964
+    },
+    "legB_tr": {
+      "cagr_pct": 27.91,
+      "total_return_pct": 34.98,
+      "max_dd_peak_relative_pct": -28.03,
+      "max_dd_fixed_pct": -6.69,
+      "ending_balance_gbp": 67489.21,
+      "return_per_unit_dd": 0.996
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.2293,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 1.87,
+          "total_return_pct": 2.28,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -4.74,
+          "ending_balance_gbp": 51141.74,
+          "return_per_unit_dd": 0.222
+        }
+      },
+      "zero_tr": {
+        "weight": 0.2321,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 2.37,
+          "total_return_pct": 2.89,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -4.37,
+          "ending_balance_gbp": 51447.41,
+          "return_per_unit_dd": 0.281
+        }
+      },
+      "real_pr": {
+        "weight": 0.2307,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.02,
+          "total_return_pct": 3.69,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -3.5,
+          "ending_balance_gbp": 51842.68,
+          "return_per_unit_dd": 0.358
+        }
+      },
+      "real_tr": {
+        "weight": 0.2335,
+        "realised_dd": -8.43,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 3.52,
+          "total_return_pct": 4.3,
+          "max_dd_peak_relative_pct": -8.43,
+          "max_dd_fixed_pct": -3.12,
+          "ending_balance_gbp": 52151.54,
+          "return_per_unit_dd": 0.417
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 8.45,
+        "total_return_pct": 10.39,
+        "max_dd_peak_relative_pct": -21.77,
+        "max_dd_fixed_pct": -10.65,
+        "ending_balance_gbp": 55194.06,
+        "return_per_unit_dd": 0.388
+      },
+      "tr": {
+        "cagr_pct": 9.77,
+        "total_return_pct": 12.03,
+        "max_dd_peak_relative_pct": -21.52,
+        "max_dd_fixed_pct": -9.58,
+        "ending_balance_gbp": 56013.73,
+        "return_per_unit_dd": 0.454
+      }
+    }
+  },
+  {
+    "block": 11,
+    "start": "2020-06-19",
+    "end": "2021-09-09",
+    "era": "2020-2026_recent",
+    "years": 1.216,
+    "n_candidates": 502,
+    "strat_n_trades": 261,
+    "strat_cagr_pct": 15.16,
+    "strat_cagr_tradespan_pct": 15.16,
+    "strat_total_return_pct": 18.72,
+    "strat_dd_peak_pct": -3.21,
+    "strat_dd_fixed_pct": -3.44,
+    "strat_profit_factor": 1.65,
+    "strat_ending_gbp": 59359.94,
+    "strat_return_per_unit_dd": 4.723,
+    "implied_sp_div_yield_pct": 1.224,
+    "implied_ndx_div_yield_pct": 0.349,
+    "legA_pr": {
+      "cagr_pct": 35.07,
+      "total_return_pct": 44.11,
+      "max_dd_peak_relative_pct": -9.6,
+      "max_dd_fixed_pct": -3.49,
+      "ending_balance_gbp": 72057.11,
+      "return_per_unit_dd": 3.651
+    },
+    "legA_tr": {
+      "cagr_pct": 36.72,
+      "total_return_pct": 46.26,
+      "max_dd_peak_relative_pct": -9.24,
+      "max_dd_fixed_pct": -3.49,
+      "ending_balance_gbp": 73130.37,
+      "return_per_unit_dd": 3.973
+    },
+    "legB_pr": {
+      "cagr_pct": 42.35,
+      "total_return_pct": 53.61,
+      "max_dd_peak_relative_pct": -12.78,
+      "max_dd_fixed_pct": -2.77,
+      "ending_balance_gbp": 76804.26,
+      "return_per_unit_dd": 3.314
+    },
+    "legB_tr": {
+      "cagr_pct": 42.84,
+      "total_return_pct": 54.26,
+      "max_dd_peak_relative_pct": -12.78,
+      "max_dd_fixed_pct": -2.77,
+      "ending_balance_gbp": 77130.01,
+      "return_per_unit_dd": 3.353
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.3292,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 10.69,
+          "total_return_pct": 13.14,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.15,
+          "ending_balance_gbp": 56571.74,
+          "return_per_unit_dd": 3.331
+        }
+      },
+      "zero_tr": {
+        "weight": 0.3422,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.6,
+          "total_return_pct": 14.27,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.19,
+          "ending_balance_gbp": 57135.87,
+          "return_per_unit_dd": 3.613
+        }
+      },
+      "real_pr": {
+        "weight": 0.3296,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 10.75,
+          "total_return_pct": 13.21,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.15,
+          "ending_balance_gbp": 56606.57,
+          "return_per_unit_dd": 3.348
+        }
+      },
+      "real_tr": {
+        "weight": 0.3426,
+        "realised_dd": -3.21,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.66,
+          "total_return_pct": 14.34,
+          "max_dd_peak_relative_pct": -3.21,
+          "max_dd_fixed_pct": -1.19,
+          "ending_balance_gbp": 57170.84,
+          "return_per_unit_dd": 3.631
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 20.44,
+        "total_return_pct": 25.37,
+        "max_dd_peak_relative_pct": -6.0,
+        "max_dd_fixed_pct": -2.01,
+        "ending_balance_gbp": 62685.5,
+        "return_per_unit_dd": 3.408
+      },
+      "tr": {
+        "cagr_pct": 21.33,
+        "total_return_pct": 26.5,
+        "max_dd_peak_relative_pct": -5.78,
+        "max_dd_fixed_pct": -2.01,
+        "ending_balance_gbp": 63247.68,
+        "return_per_unit_dd": 3.69
+      }
+    }
+  },
+  {
+    "block": 12,
+    "start": "2021-09-09",
+    "end": "2022-11-30",
+    "era": "2020-2026_recent",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 303,
+    "strat_cagr_pct": 6.41,
+    "strat_cagr_tradespan_pct": 6.41,
+    "strat_total_return_pct": 7.88,
+    "strat_dd_peak_pct": -10.29,
+    "strat_dd_fixed_pct": -10.99,
+    "strat_profit_factor": 1.16,
+    "strat_ending_gbp": 53940.41,
+    "strat_return_per_unit_dd": 0.623,
+    "implied_sp_div_yield_pct": 1.503,
+    "implied_ndx_div_yield_pct": 0.603,
+    "legA_pr": {
+      "cagr_pct": -7.01,
+      "total_return_pct": -8.49,
+      "max_dd_peak_relative_pct": -25.43,
+      "max_dd_fixed_pct": -19.77,
+      "ending_balance_gbp": 45755.71,
+      "return_per_unit_dd": -0.276
+    },
+    "legA_tr": {
+      "cagr_pct": -5.61,
+      "total_return_pct": -6.81,
+      "max_dd_peak_relative_pct": -24.56,
+      "max_dd_fixed_pct": -18.3,
+      "ending_balance_gbp": 46596.88,
+      "return_per_unit_dd": -0.228
+    },
+    "legB_pr": {
+      "cagr_pct": -18.49,
+      "total_return_pct": -22.09,
+      "max_dd_peak_relative_pct": -35.5,
+      "max_dd_fixed_pct": -30.76,
+      "ending_balance_gbp": 38955.55,
+      "return_per_unit_dd": -0.521
+    },
+    "legB_tr": {
+      "cagr_pct": -18.0,
+      "total_return_pct": -21.52,
+      "max_dd_peak_relative_pct": -35.15,
+      "max_dd_fixed_pct": -30.25,
+      "ending_balance_gbp": 39242.38,
+      "return_per_unit_dd": -0.512
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.3864,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -2.23,
+          "total_return_pct": -2.72,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.64,
+          "ending_balance_gbp": 48640.11,
+          "return_per_unit_dd": -0.217
+        }
+      },
+      "zero_tr": {
+        "weight": 0.4019,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.76,
+          "total_return_pct": -2.14,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.28,
+          "ending_balance_gbp": 48927.88,
+          "return_per_unit_dd": -0.171
+        }
+      },
+      "real_pr": {
+        "weight": 0.4086,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.61,
+          "total_return_pct": -1.96,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.48,
+          "ending_balance_gbp": 49017.53,
+          "return_per_unit_dd": -0.157
+        }
+      },
+      "real_tr": {
+        "weight": 0.4243,
+        "realised_dd": -10.29,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": -1.13,
+          "total_return_pct": -1.37,
+          "max_dd_peak_relative_pct": -10.29,
+          "max_dd_fixed_pct": -7.11,
+          "ending_balance_gbp": 49313.0,
+          "return_per_unit_dd": -0.109
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": -8.25,
+        "total_return_pct": -9.98,
+        "max_dd_peak_relative_pct": -21.4,
+        "max_dd_fixed_pct": -18.13,
+        "ending_balance_gbp": 45009.1,
+        "return_per_unit_dd": -0.386
+      },
+      "tr": {
+        "cagr_pct": -7.43,
+        "total_return_pct": -9.0,
+        "max_dd_peak_relative_pct": -20.86,
+        "max_dd_fixed_pct": -17.23,
+        "ending_balance_gbp": 45501.22,
+        "return_per_unit_dd": -0.356
+      }
+    }
+  },
+  {
+    "block": 13,
+    "start": "2022-11-30",
+    "end": "2024-02-20",
+    "era": "2020-2026_recent",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 263,
+    "strat_cagr_pct": 11.0,
+    "strat_cagr_tradespan_pct": 11.0,
+    "strat_total_return_pct": 13.59,
+    "strat_dd_peak_pct": -6.0,
+    "strat_dd_fixed_pct": -6.0,
+    "strat_profit_factor": 1.3,
+    "strat_ending_gbp": 56793.6,
+    "strat_return_per_unit_dd": 1.833,
+    "implied_sp_div_yield_pct": 1.624,
+    "implied_ndx_div_yield_pct": 0.763,
+    "legA_pr": {
+      "cagr_pct": 17.73,
+      "total_return_pct": 22.05,
+      "max_dd_peak_relative_pct": -10.28,
+      "max_dd_fixed_pct": -7.2,
+      "ending_balance_gbp": 61025.69,
+      "return_per_unit_dd": 1.725
+    },
+    "legA_tr": {
+      "cagr_pct": 19.64,
+      "total_return_pct": 24.48,
+      "max_dd_peak_relative_pct": -9.96,
+      "max_dd_fixed_pct": -6.77,
+      "ending_balance_gbp": 62237.68,
+      "return_per_unit_dd": 1.972
+    },
+    "legB_pr": {
+      "cagr_pct": 36.11,
+      "total_return_pct": 45.71,
+      "max_dd_peak_relative_pct": -11.32,
+      "max_dd_fixed_pct": -11.32,
+      "ending_balance_gbp": 72854.43,
+      "return_per_unit_dd": 3.191
+    },
+    "legB_tr": {
+      "cagr_pct": 37.15,
+      "total_return_pct": 47.07,
+      "max_dd_peak_relative_pct": -11.1,
+      "max_dd_fixed_pct": -11.1,
+      "ending_balance_gbp": 73533.41,
+      "return_per_unit_dd": 3.346
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.5756,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 10.15,
+          "total_return_pct": 12.53,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.14,
+          "ending_balance_gbp": 56265.82,
+          "return_per_unit_dd": 1.692
+        }
+      },
+      "zero_tr": {
+        "weight": 0.5945,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.55,
+          "total_return_pct": 14.28,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.02,
+          "ending_balance_gbp": 57141.39,
+          "return_per_unit_dd": 1.926
+        }
+      },
+      "real_pr": {
+        "weight": 0.6211,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.07,
+          "total_return_pct": 16.18,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.35,
+          "ending_balance_gbp": 58090.36,
+          "return_per_unit_dd": 2.178
+        }
+      },
+      "real_tr": {
+        "weight": 0.6393,
+        "realised_dd": -6.0,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 14.47,
+          "total_return_pct": 17.94,
+          "max_dd_peak_relative_pct": -6.0,
+          "max_dd_fixed_pct": -4.22,
+          "ending_balance_gbp": 58970.34,
+          "return_per_unit_dd": 2.411
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 11.15,
+        "total_return_pct": 13.78,
+        "max_dd_peak_relative_pct": -7.97,
+        "max_dd_fixed_pct": -4.95,
+        "ending_balance_gbp": 56889.58,
+        "return_per_unit_dd": 1.399
+      },
+      "tr": {
+        "cagr_pct": 12.23,
+        "total_return_pct": 15.13,
+        "max_dd_peak_relative_pct": -7.78,
+        "max_dd_fixed_pct": -4.7,
+        "ending_balance_gbp": 57565.69,
+        "return_per_unit_dd": 1.573
+      }
+    }
+  },
+  {
+    "block": 14,
+    "start": "2024-02-20",
+    "end": "2025-05-12",
+    "era": "2020-2026_recent",
+    "years": 1.221,
+    "n_candidates": 502,
+    "strat_n_trades": 296,
+    "strat_cagr_pct": 6.81,
+    "strat_cagr_tradespan_pct": 6.81,
+    "strat_total_return_pct": 8.37,
+    "strat_dd_peak_pct": -15.85,
+    "strat_dd_fixed_pct": -18.44,
+    "strat_profit_factor": 1.23,
+    "strat_ending_gbp": 54186.62,
+    "strat_return_per_unit_dd": 0.429,
+    "implied_sp_div_yield_pct": 1.298,
+    "implied_ndx_div_yield_pct": 0.609,
+    "legA_pr": {
+      "cagr_pct": 13.97,
+      "total_return_pct": 17.31,
+      "max_dd_peak_relative_pct": -18.9,
+      "max_dd_fixed_pct": -0.29,
+      "ending_balance_gbp": 58655.41,
+      "return_per_unit_dd": 0.739
+    },
+    "legA_tr": {
+      "cagr_pct": 15.45,
+      "total_return_pct": 19.17,
+      "max_dd_peak_relative_pct": -18.66,
+      "max_dd_fixed_pct": 0.0,
+      "ending_balance_gbp": 59586.51,
+      "return_per_unit_dd": 0.828
+    },
+    "legB_pr": {
+      "cagr_pct": 15.62,
+      "total_return_pct": 19.39,
+      "max_dd_peak_relative_pct": -22.93,
+      "max_dd_fixed_pct": -2.52,
+      "ending_balance_gbp": 59695.23,
+      "return_per_unit_dd": 0.681
+    },
+    "legB_tr": {
+      "cagr_pct": 16.32,
+      "total_return_pct": 20.28,
+      "max_dd_peak_relative_pct": -22.82,
+      "max_dd_fixed_pct": -2.4,
+      "ending_balance_gbp": 60139.53,
+      "return_per_unit_dd": 0.715
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 0.8297,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 11.58,
+          "total_return_pct": 14.31,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": -0.21,
+          "ending_balance_gbp": 57155.79,
+          "return_per_unit_dd": 0.73
+        }
+      },
+      "zero_tr": {
+        "weight": 0.8413,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.96,
+          "total_return_pct": 16.04,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58021.54,
+          "return_per_unit_dd": 0.818
+        }
+      },
+      "real_pr": {
+        "weight": 0.8342,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 12.51,
+          "total_return_pct": 15.48,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": -0.07,
+          "ending_balance_gbp": 57740.2,
+          "return_per_unit_dd": 0.789
+        }
+      },
+      "real_tr": {
+        "weight": 0.8456,
+        "realised_dd": -15.85,
+        "matched": true,
+        "metrics": {
+          "cagr_pct": 13.85,
+          "total_return_pct": 17.16,
+          "max_dd_peak_relative_pct": -15.85,
+          "max_dd_fixed_pct": 0.0,
+          "ending_balance_gbp": 58578.22,
+          "return_per_unit_dd": 0.874
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 10.19,
+        "total_return_pct": 12.58,
+        "max_dd_peak_relative_pct": -11.32,
+        "max_dd_fixed_pct": -0.55,
+        "ending_balance_gbp": 56288.76,
+        "return_per_unit_dd": 0.9
+      },
+      "tr": {
+        "cagr_pct": 11.04,
+        "total_return_pct": 13.65,
+        "max_dd_peak_relative_pct": -11.17,
+        "max_dd_fixed_pct": -0.36,
+        "ending_balance_gbp": 56823.02,
+        "return_per_unit_dd": 0.989
+      }
+    }
+  },
+  {
+    "block": 15,
+    "start": "2025-05-12",
+    "end": "2026-08-03",
+    "era": "2020-2026_recent",
+    "years": 1.224,
+    "n_candidates": 503,
+    "strat_n_trades": 284,
+    "strat_cagr_pct": 27.3,
+    "strat_cagr_tradespan_pct": 27.3,
+    "strat_total_return_pct": 34.36,
+    "strat_dd_peak_pct": -9.65,
+    "strat_dd_fixed_pct": -13.88,
+    "strat_profit_factor": 1.69,
+    "strat_ending_gbp": 67181.93,
+    "strat_return_per_unit_dd": 2.829,
+    "implied_sp_div_yield_pct": 1.148,
+    "implied_ndx_div_yield_pct": 0.485,
+    "legA_pr": {
+      "cagr_pct": 23.22,
+      "total_return_pct": 29.12,
+      "max_dd_peak_relative_pct": -9.1,
+      "max_dd_fixed_pct": -1.42,
+      "ending_balance_gbp": 64558.19,
+      "return_per_unit_dd": 2.552
+    },
+    "legA_tr": {
+      "cagr_pct": 24.64,
+      "total_return_pct": 30.93,
+      "max_dd_peak_relative_pct": -8.85,
+      "max_dd_fixed_pct": -1.42,
+      "ending_balance_gbp": 65466.47,
+      "return_per_unit_dd": 2.784
+    },
+    "legB_pr": {
+      "cagr_pct": 28.37,
+      "total_return_pct": 35.75,
+      "max_dd_peak_relative_pct": -12.12,
+      "max_dd_fixed_pct": -1.33,
+      "ending_balance_gbp": 67877.18,
+      "return_per_unit_dd": 2.34
+    },
+    "legB_tr": {
+      "cagr_pct": 29.0,
+      "total_return_pct": 36.56,
+      "max_dd_peak_relative_pct": -11.9,
+      "max_dd_fixed_pct": -1.33,
+      "ending_balance_gbp": 68280.68,
+      "return_per_unit_dd": 2.437
+    },
+    "legC": {
+      "zero_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "zero_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      },
+      "real_pr": {
+        "weight": 1.0,
+        "realised_dd": -9.1,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 23.22,
+          "total_return_pct": 29.12,
+          "max_dd_peak_relative_pct": -9.1,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 64558.19,
+          "return_per_unit_dd": 2.552
+        }
+      },
+      "real_tr": {
+        "weight": 1.0,
+        "realised_dd": -8.85,
+        "matched": false,
+        "metrics": {
+          "cagr_pct": 24.64,
+          "total_return_pct": 30.93,
+          "max_dd_peak_relative_pct": -8.85,
+          "max_dd_fixed_pct": -1.42,
+          "ending_balance_gbp": 65466.47,
+          "return_per_unit_dd": 2.784
+        }
+      }
+    },
+    "legD": {
+      "pr": {
+        "cagr_pct": 15.36,
+        "total_return_pct": 19.11,
+        "max_dd_peak_relative_pct": -5.89,
+        "max_dd_fixed_pct": -0.89,
+        "ending_balance_gbp": 59553.25,
+        "return_per_unit_dd": 2.609
+      },
+      "tr": {
+        "cagr_pct": 16.15,
+        "total_return_pct": 20.11,
+        "max_dd_peak_relative_pct": -5.74,
+        "max_dd_fixed_pct": -0.89,
+        "ending_balance_gbp": 60055.48,
+        "return_per_unit_dd": 2.815
+      }
+    }
+  }
+]
