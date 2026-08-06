@@ -1,0 +1,7 @@
+signal,elevated,n,2007-2009_GFC,2010-2019_bull,2020_covid,2021-2026_recent
+momentum,True,1694,114,909,106,565
+momentum,False,102,44,35,4,19
+volume,True,450,55,245,24,126
+volume,False,1346,103,699,86,458
+both,True,428,45,236,23,124
+both,False,1368,113,708,87,460
