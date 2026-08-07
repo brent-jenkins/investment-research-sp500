@@ -14,6 +14,7 @@ from output.briefing import (
     _smtp_send,
     _weekly_summary_html,
     _weekly_summary_text,
+    send_data_quality_scan_alert,
     send_instrument_resolution_failure_alert,
     send_membership_staleness_alert,
     send_position_reconciliation_alert,
@@ -1110,6 +1111,139 @@ def test_price_cliff_alert_uses_its_own_dedup_key_not_shared_with_others(db_engi
     mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
 
     sent, _ = send_price_cliff_alert([_cliff_hit()], _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# send_data_quality_scan_alert() (2026-08-07) -- alerts when data.ingestion.
+# scan_unverified_tickers() finds newly-QUARANTINED or newly-NEEDS_REVIEW
+# tickers (recycled-ticker-symbol corruption -- see research/recycled_
+# ticker_investigation_2026-08-07/REPORT.md). Same content-based dedup
+# shape as send_price_cliff_alert() immediately above, its own dedup key.
+# ---------------------------------------------------------------------------
+
+_DATA_QUALITY_SCAN_KEY = "data_quality_scan_last_hits"
+
+
+def _scan_result(quarantined=("BADCO",), needs_review=(), checked=1, errors=()):
+    return {
+        "checked": checked, "newly_quarantined": list(quarantined),
+        "newly_needs_review": list(needs_review), "errors": list(errors),
+    }
+
+
+def test_data_quality_scan_alert_empty_result_never_sends(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, detail = send_data_quality_scan_alert(_scan_result(quarantined=(), checked=0), _config())
+
+    assert sent is False
+    assert "no newly-flagged" in detail.lower()
+    smtp_cls.assert_not_called()
+
+
+def test_data_quality_scan_alert_disabled_skips_cleanly(db_engine, mocker):
+    smtp_cls = mocker.patch("output.briefing.smtplib.SMTP")
+
+    sent, _ = send_data_quality_scan_alert(_scan_result(), _config(enabled=False))
+
+    assert sent is False
+    smtp_cls.assert_not_called()
+
+
+def test_data_quality_scan_alert_sends_on_first_occurrence(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_data_quality_scan_alert(_scan_result(), _config())
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_data_quality_scan_alert_names_quarantined_and_needs_review_tickers(db_engine, mocker):
+    import email as _email_pkg
+
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    send_data_quality_scan_alert(_scan_result(quarantined=("PALM",), needs_review=("FNMA",)), _config())
+
+    raw = mock_server.sendmail.call_args[0][2]
+    msg = _email_pkg.message_from_string(raw)
+    combined = " ".join(
+        part.get_payload(decode=True).decode("utf-8")
+        for part in msg.walk() if part.get_content_maintype() == "text"
+    )
+    assert "PALM" in combined
+    assert "FNMA" in combined
+
+
+def test_data_quality_scan_alert_unchanged_set_does_not_resend(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_data_quality_scan_alert(_scan_result(), cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, detail = send_data_quality_scan_alert(_scan_result(), cfg)
+
+    assert sent is False
+    assert "unchanged" in detail.lower()
+    mock_server.sendmail.assert_not_called()
+
+
+def test_data_quality_scan_alert_a_second_different_hit_sends_immediately(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_data_quality_scan_alert(_scan_result(quarantined=("BADCO",)), cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, _ = send_data_quality_scan_alert(_scan_result(quarantined=("BADCO", "WORSECO")), cfg)
+
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_data_quality_scan_alert_resolution_then_new_hit_sends_fresh_alert(db_engine, mocker):
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    cfg = _config()
+    send_data_quality_scan_alert(_scan_result(quarantined=("BADCO",)), cfg)
+    mock_server.sendmail.reset_mock()
+
+    sent, _ = send_data_quality_scan_alert(_scan_result(quarantined=(), checked=0), cfg)
+    assert sent is False
+    mock_server.sendmail.assert_not_called()
+
+    sent, _ = send_data_quality_scan_alert(_scan_result(quarantined=("BADCO",)), cfg)
+    assert sent is True
+    mock_server.sendmail.assert_called_once()
+
+
+def test_data_quality_scan_alert_uses_its_own_dedup_key_not_shared_with_others(db_engine, mocker):
+    set_metadata("t212_error_email_last_sent", datetime.utcnow().isoformat())
+    set_metadata(_MEMBERSHIP_STALENESS_KEY, datetime.utcnow().isoformat())
+    set_metadata(_INSTRUMENT_RESOLUTION_FAILURE_KEY, datetime.utcnow().isoformat())
+    set_metadata(_POSITION_RECONCILIATION_KEY, datetime.utcnow().isoformat())
+    set_metadata(_STOP_HEALTH_KEY, datetime.utcnow().isoformat())
+    set_metadata(_PRICE_CLIFF_KEY, datetime.utcnow().isoformat())
+    mock_server = mocker.MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    mocker.patch("output.briefing.smtplib.SMTP", return_value=mock_server)
+
+    sent, _ = send_data_quality_scan_alert(_scan_result(), _config())
 
     assert sent is True
     mock_server.sendmail.assert_called_once()

@@ -18,6 +18,7 @@ from sqlalchemy import (
     create_engine,
     text,
 )
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -272,6 +273,62 @@ class InstrumentResolution(Base):
     resolved_at         = Column(DateTime)
 
 
+class TickerDataQuality(Base):
+    """Per-ticker identity-verification verdict for the historical/delisted
+    stock population (2026-08-07) -- see research/recycled_ticker_
+    investigation_2026-08-07/REPORT.md for the finding this exists to
+    remediate: 22 of the 408 tickers added by the 2026-08-06 survivorship-
+    bias remediation are recycled-ticker-symbol corruption (an unrelated
+    entity's price history under a delisted company's old symbol), with a
+    further 17 flagged-but-unconfirmed by a reversal-based classifier later
+    proven to have a real blind spot (PALM: monotone, so classified as a
+    genuine corporate action, but its entire stored history postdates the
+    real company's 2010 delisting).
+
+    Written by analysis.ingestion.verify_ticker_identity() (the ONE shared
+    identity check -- called by the one-off remediation script, the
+    ingestion-time screen on any newly-backfilled ticker, and the periodic
+    backstop scan; never re-implemented at a second call site) via
+    write_data_quality_status() below.
+
+    status:
+      QUARANTINED  -- excluded from research/backtest candidacy via
+                      analysis/universe.py:get_research_stock_candidates().
+                      Fired whenever the date-coverage check alone fails
+                      (stored price_data extends >90 days past the
+                      ticker's last real index-membership end_date -- a
+                      positive proof of impossibility, sufficient on its
+                      own) or both checks fail together. Rows are NEVER
+                      deleted -- flag, not repair; the bad rows are the
+                      evidence base for validating the detector and
+                      justifying each exclusion.
+      CLEAN        -- both checks passed (or the quoteType check passed
+                      and the date-coverage check does not apply, i.e. the
+                      ticker's membership window never closed). Eligible
+                      for research/backtest candidacy.
+      NEEDS_REVIEW -- the date-coverage check passed (or does not apply)
+                      but the quoteType check alone failed, or yfinance
+                      .info was unavailable/errored -- corroborating-only
+                      evidence, deliberately NOT sufficient on its own to
+                      quarantine. Stays un-quarantined until a human
+                      adjudicates.
+
+    Does NOT affect get_live_stock_candidates()/get_all_known_stock_
+    tickers() -- confirmed via the investigation that zero quarantined
+    tickers are, or can be, reachable via the live candidate path today
+    (every quarantined ticker is delisted-before-today by construction),
+    so this table is consulted only by the research-only gate.
+    """
+
+    __tablename__ = "ticker_data_quality"
+
+    ticker      = Column(String(20), primary_key=True)
+    status      = Column(String(16), nullable=False)  # QUARANTINED | CLEAN | NEEDS_REVIEW
+    reason      = Column(Text)
+    evidence    = Column(Text)  # JSON: quote_type, exchange, long_name, date_overrun_days, prior reversal classification, regime summary
+    detected_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PositionReconciliation(Base):
     """A discrepancy found between what this system's own order history
     implies is open and what T212's real, live positions list actually
@@ -478,6 +535,47 @@ def clear_metadata(key: str) -> None:
         pass
 
 
+def write_data_quality_status(ticker: str, status: str, reason: str, evidence: str) -> None:
+    """Upsert a ticker_data_quality row -- same sqlite_insert(...).
+    on_conflict_do_update(...) primitive _upsert_price_rows() uses. A
+    re-check overwrites status/reason/evidence/detected_at for the same
+    ticker; the row itself is never deleted (flag, not repair -- see
+    TickerDataQuality's own docstring)."""
+    engine = get_engine()
+    stmt = sqlite_insert(TickerDataQuality).values(
+        ticker=ticker, status=status, reason=reason, evidence=evidence,
+        detected_at=datetime.utcnow(),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["ticker"],
+        set_={
+            "status": stmt.excluded.status,
+            "reason": stmt.excluded.reason,
+            "evidence": stmt.excluded.evidence,
+            "detected_at": stmt.excluded.detected_at,
+        },
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt)
+
+
+def get_data_quality_status(ticker: str) -> "dict | None":
+    """Return {"status", "reason", "evidence", "detected_at"} for *ticker*,
+    or None if it has never been checked."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT status, reason, evidence, detected_at FROM ticker_data_quality "
+                "WHERE ticker = :t"
+            ),
+            {"t": ticker},
+        ).fetchone()
+    if row is None:
+        return None
+    return {"status": row[0], "reason": row[1], "evidence": row[2], "detected_at": row[3]}
+
+
 def get_metadata(key: str) -> "datetime | None":
     """Return the value stored for *key* as a datetime, or None if not set."""
     engine = get_engine()
@@ -659,6 +757,7 @@ def init_db() -> None:
         Pnl,
         PendingOrder,
         InstrumentResolution,
+        TickerDataQuality,
         AccountValueHistory,
         User,
         SystemMetadata,

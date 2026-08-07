@@ -300,6 +300,49 @@ def get_live_stock_candidates(as_of: Optional[date] = None) -> list[str]:
     return sorted(t for t in get_all_known_stock_tickers() if is_member(t, as_of))
 
 
+def get_quarantined_tickers() -> set[str]:
+    """Every ticker with status='QUARANTINED' in ticker_data_quality (see
+    data/database.py:TickerDataQuality) -- confirmed recycled-ticker-
+    symbol corruption or a real date-coverage impossibility (see
+    data/ingestion.py:verify_ticker_identity()). Read fresh on every call,
+    no caching (unlike get_membership_windows() above) -- this table is
+    small and infrequently written, and staleness here would silently let
+    a newly-quarantined ticker back into a research candidate pool."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT ticker FROM ticker_data_quality WHERE status = 'QUARANTINED'")
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def get_research_stock_candidates() -> set[str]:
+    """get_all_known_stock_tickers() with quarantined tickers excluded --
+    the single admission gate for research/backtest candidate-pool
+    construction (2026-08-07, see research/recycled_ticker_investigation_
+    2026-08-07/REPORT.md and its follow-on remediation).
+
+    Deliberately NOT wired into get_all_known_stock_tickers() or
+    get_live_stock_candidates() above -- neither existing function is
+    modified by this addition. The investigation confirmed zero
+    quarantined tickers are, or can be, reachable via
+    get_live_stock_candidates() today (every quarantined ticker is
+    delisted-before-today by construction, since the corruption this
+    guards against was only ever found in the historical/delisted
+    population added by the 2026-08-06 survivorship-bias remediation), so
+    there is nothing for a live-path gate to protect against -- leaving
+    both functions completely untouched keeps this a strictly additive,
+    zero-blast-radius change to live order placement. ALL_TICKERS/
+    STOCK_MEMBERSHIP (the frozen research universe) are structurally
+    unrelated to this too -- confirmed neither function reads them.
+
+    Any research/backtest driver building a full historical candidate
+    pool (as opposed to today's live-eligible subset) should call this
+    instead of get_all_known_stock_tickers() directly.
+    """
+    return get_all_known_stock_tickers() - get_quarantined_tickers()
+
+
 def get_max_holding_days(ticker: str, config: dict) -> int:
     """Return the max holding days for *ticker*, matching live automation limits.
 

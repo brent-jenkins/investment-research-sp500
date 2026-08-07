@@ -1323,6 +1323,9 @@ def _mock_eod_dependencies(mocker):
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mock_pull = mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mock_pipeline = mocker.patch("data.scheduler._run_analysis_pipeline")
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
@@ -1596,6 +1599,9 @@ def test_eod_job_passes_record_history_true_to_snapshot_call(monkeypatch, mocker
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1645,6 +1651,9 @@ def test_eod_job_records_completed_on_the_normal_path(db_engine, monkeypatch, mo
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1684,6 +1693,9 @@ def test_eod_job_records_failed_when_pull_incremental_raises(db_engine, monkeypa
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", side_effect=RuntimeError("yfinance is down"))
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mock_pipeline = mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1706,6 +1718,9 @@ def test_eod_job_records_failed_when_order_pipeline_raises(db_engine, monkeypatc
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline", side_effect=RuntimeError("boom"))
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1730,6 +1745,9 @@ def test_eod_job_completed_even_when_only_the_snapshot_step_fails(db_engine, mon
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot", side_effect=RuntimeError("t212 api down"))
@@ -1755,6 +1773,9 @@ def test_eod_job_calls_the_real_pending_orders_purge(db_engine, monkeypatch, moc
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1776,6 +1797,9 @@ def test_eod_job_completed_even_when_purge_fails(db_engine, monkeypatch, mocker)
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1810,6 +1834,9 @@ def test_eod_job_calls_price_cliff_monitor_and_records_hit_count(db_engine, monk
         return_value=[{"ticker": "X", "date": "2026-01-02", "date_prev": "2026-01-01",
                         "close": 1.0, "close_prev": 4.0, "ratio": 0.25}],
     )
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["X"])
     mocker.patch("brokers.trading212.get_held_research_tickers", return_value=[])
     mock_alert = mocker.patch("output.briefing.send_price_cliff_alert", return_value=(False, "disabled"))
@@ -1849,6 +1876,9 @@ def test_eod_job_price_cliff_alert_excludes_non_live_non_held_tickers(db_engine,
              "close": 1.0, "close_prev": 4.0, "ratio": 0.25},
         ],
     )
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["LIVE"])
     mocker.patch("brokers.trading212.get_held_research_tickers", return_value=[])
     mock_alert = mocker.patch("output.briefing.send_price_cliff_alert", return_value=(False, "disabled"))
@@ -1875,6 +1905,9 @@ def test_eod_job_completed_even_when_price_cliff_monitor_fails(db_engine, monkey
     mocker.patch("data.scheduler._fetch_t212_snapshot")
     mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
     mocker.patch("data.ingestion.detect_price_cliffs", side_effect=RuntimeError("boom"))
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
 
     scheduler._eod_job()
 
@@ -1882,6 +1915,64 @@ def test_eod_job_completed_even_when_price_cliff_monitor_fails(db_engine, monkey
     assert status["status"] == "COMPLETED"
     assert status["order_pipeline_ran"] is True
     assert "price_cliff_hits" not in status
+
+
+# ---------------------------------------------------------------------------
+# Ticker data-quality backstop scan (2026-08-07) -- data.ingestion.
+# scan_unverified_tickers() / output.briefing.send_data_quality_scan_alert()
+# run every EOD job, in their own try/except immediately after the price-
+# cliff backstop above, matching its exact isolation pattern -- a
+# monitoring failure must never block anything else in this job.
+# ---------------------------------------------------------------------------
+
+def test_eod_job_calls_data_quality_scan_and_records_counts(db_engine, monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mock_scan = mocker.patch(
+        "data.ingestion.scan_unverified_tickers",
+        return_value={"checked": 3, "newly_quarantined": ["BADCO"], "newly_needs_review": ["MAYBECO"], "errors": []},
+    )
+    mock_alert = mocker.patch("output.briefing.send_data_quality_scan_alert", return_value=(False, "disabled"))
+
+    scheduler._eod_job()
+
+    mock_scan.assert_called_once()
+    mock_alert.assert_called_once()
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["data_quality_checked"] == 3
+    assert status["data_quality_newly_quarantined"] == 1
+    assert status["data_quality_newly_needs_review"] == 1
+
+
+def test_eod_job_completed_even_when_data_quality_scan_fails(db_engine, monkeypatch, mocker):
+    """A monitoring failure is not trading-relevant -- it must never turn
+    an otherwise-successful EOD run into a FAILED verdict, same as the
+    price-cliff monitor and purge failures above."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", side_effect=RuntimeError("boom"))
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert status["status"] == "COMPLETED"
+    assert status["order_pipeline_ran"] is True
+    assert "data_quality_checked" not in status
 
 
 # ---------------------------------------------------------------------------
@@ -1953,6 +2044,9 @@ def test_eod_job_marks_in_progress_before_the_price_pull(db_engine, monkeypatch,
 
     mocker.patch("data.scheduler.pull_incremental", side_effect=fake_pull)
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1970,6 +2064,9 @@ def test_eod_job_clears_in_progress_marker_on_success(db_engine, monkeypatch, mo
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")
@@ -1990,6 +2087,9 @@ def test_eod_job_clears_in_progress_marker_on_failure(db_engine, monkeypatch, mo
     mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
     mocker.patch("data.scheduler.pull_incremental", side_effect=RuntimeError("yfinance is down"))
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
     mocker.patch("data.scheduler._run_analysis_pipeline")
     mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
     mocker.patch("data.scheduler._fetch_t212_snapshot")

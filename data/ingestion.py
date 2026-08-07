@@ -1,5 +1,6 @@
 """Fetch daily OHLCV data from yfinance and persist it to SQLite."""
 
+import json
 import logging
 import math
 import time
@@ -387,6 +388,302 @@ def _find_retroactive_restatement(
     return diverging
 
 
+_DATE_OVERRUN_TOLERANCE_DAYS = 90
+
+
+def verify_ticker_identity(ticker: str, config: Optional[dict] = None) -> dict:
+    """The ONE shared identity check for the historical/delisted stock
+    population (2026-08-07) -- see research/recycled_ticker_investigation_
+    2026-08-07/REPORT.md. Called identically by the one-off remediation
+    script, the ingestion-time screen (backfill_price_history()/
+    pull_incremental()'s first-time-download paths, below), and the
+    periodic backstop scan (scan_unverified_tickers(), below) -- never
+    re-implemented at a second call site.
+
+    Two checks, deliberately NOT symmetric evidence (corrected during
+    review of the investigation's own PALM spot-check, which the naive
+    both-must-agree version would have missed):
+
+    Check B (date-coverage overrun) -- the PRIMARY, discovering signal,
+    not corroboration. Compares price_data's own stored MAX(date) for
+    *ticker* against its last real index-membership end_date
+    (analysis.universe.get_membership_windows()) -- excluding the
+    _SENTINEL_END (2099-12-31) case, which means "still believed active,
+    nothing to compare, Check A alone decides." Fails if stored data
+    extends more than _DATE_OVERRUN_TOLERANCE_DAYS (90) past the real
+    end_date -- a deliberate buffer for settlement/reporting noise, not
+    swept (PALM's real overrun was ~4 years, never a close call). This is
+    a positive proof of impossibility: if data exists years past a
+    company's real delisting, those rows cannot be that company's,
+    regardless of what .info currently says.
+
+    Check A (quoteType) -- corroborating, not authoritative. yfinance
+    .info's quote_type/exchange/long_name. Fails if quote_type != "EQUITY",
+    or exchange == "YHD", or long_name is falsy. Can fail for benign
+    reasons alone (a genuinely-delisted ticker whose .info is simply
+    sparse today), so it is never sufficient on its own to quarantine.
+
+    Verdict:
+      - Check B fails, and Check A does NOT affirmatively confirm a real,
+        named equity (quote_type == "EQUITY" AND a real, non-"YHD"
+        exchange AND a non-empty long_name) -> QUARANTINED. This is the
+        PALM case: Check A gives nothing to rescue it with.
+      - Check B fails, but Check A DOES affirmatively confirm a real,
+        named equity -> NEEDS_REVIEW, not an automatic QUARANTINE.
+        Discovered directly during implementation testing (not
+        theoretical): "left the S&P 500 index" and "stopped trading
+        entirely" are different events, and Check B's own signal (index-
+        membership end_date, the only delisting-adjacent date this DB
+        has) conflates them. FNMA is the concrete counter-example --
+        real S&P 500 membership ended 2008-09-08 (real conservatorship),
+        but Fannie Mae kept trading OTC continuously under its own name
+        for the ~18 years since. A naive "Check B fails -> QUARANTINED,
+        full stop" would have quarantined a ticker this project's own
+        investigation already confirmed genuine. The override is narrow
+        and directional: it only ever moves a verdict FROM QUARANTINED TO
+        NEEDS_REVIEW when Check A's evidence is unambiguously positive --
+        it never touches the PALM-shaped case (Check A gives nothing to
+        rescue it with there), and it never promotes anything all the way
+        to CLEAN on its own.
+      - Check B passes, Check A fails -> NEEDS_REVIEW (stays
+        un-quarantined, needs a human).
+      - Both pass -> CLEAN.
+      - _SENTINEL_END case (Check B not applicable) -> decided by Check A
+        alone: QUARANTINED if it fails, CLEAN if it passes. Reported
+        separately by callers as a real coverage blind spot -- a ticker
+        whose membership window never closed can only ever be judged by
+        the weaker, corroborating-only check.
+      - .info unavailable/errored after retries -> NEEDS_REVIEW.
+
+    Never raises -- returns a dict with an "error" key on failure instead,
+    matching this file's "one bad symbol doesn't block the rest of the
+    batch" convention.
+
+    Returns: {"ticker", "status", "reason", "evidence" (dict, not yet
+    JSON-serialised -- callers decide that), "sentinel_case" (bool)}.
+    """
+    from analysis.universe import _SENTINEL_END, get_membership_windows  # noqa: PLC0415
+
+    config = config or _load_config()
+    rate_limit = config["data"]["rate_limit_seconds"]
+    max_retries = config["data"]["max_retries"]
+
+    # Check B: date-coverage overrun.
+    windows = get_membership_windows(ticker)
+    last_end = max((e for _, e in windows), default=None)
+    sentinel_case = last_end == _SENTINEL_END
+
+    with get_engine().connect() as conn:
+        max_date_str = conn.execute(
+            text("SELECT MAX(date) FROM price_data WHERE ticker = :t"), {"t": ticker}
+        ).scalar()
+
+    overrun_days = None
+    boundary_gap_days = None
+    check_b_applicable = last_end is not None and not sentinel_case and max_date_str is not None
+    check_b_failed = False
+    if check_b_applicable:
+        stored_max = pd.to_datetime(max_date_str, format="mixed").date()
+        overrun_days = (stored_max - last_end).days
+        check_b_failed = overrun_days > _DATE_OVERRUN_TOLERANCE_DAYS
+        if check_b_failed:
+            # Contiguity across the membership-end boundary -- NOT used to
+            # decide the verdict (that would be a third, unvalidated check
+            # invented after the fact); recorded purely as adjudication
+            # evidence for the NEEDS_REVIEW pile per the user's own
+            # observation that FNMA's continuous-OTC-trading shape and a
+            # genuine recycled-symbol's gap-then-different-series shape
+            # look identical to the overrun boolean alone. A small gap
+            # (normal weekend/holiday cadence) is consistent with the SAME
+            # entity trading straight through the index-removal date
+            # (the FNMA shape); a large gap is consistent with a genuine
+            # pause followed by an unrelated series resuming under the
+            # recycled symbol. Left unvalidated as a hypothesis for a
+            # possible future Check C, not acted on here.
+            with get_engine().connect() as conn:
+                boundary_row = conn.execute(
+                    text(
+                        "SELECT date FROM price_data WHERE ticker = :t AND date <= :d "
+                        "ORDER BY date DESC LIMIT 1"
+                    ),
+                    {"t": ticker, "d": datetime.combine(last_end, datetime.max.time())},
+                ).scalar()
+                next_row = conn.execute(
+                    text(
+                        "SELECT date FROM price_data WHERE ticker = :t AND date > :d "
+                        "ORDER BY date ASC LIMIT 1"
+                    ),
+                    {"t": ticker, "d": datetime.combine(last_end, datetime.max.time())},
+                ).scalar()
+            if boundary_row is not None and next_row is not None:
+                before_d = pd.to_datetime(boundary_row, format="mixed").date()
+                after_d = pd.to_datetime(next_row, format="mixed").date()
+                boundary_gap_days = (after_d - before_d).days
+
+    # Check A: quoteType, via yfinance .info -- rate-limited/retried like
+    # every other yfinance call in this file.
+    quote_type = exchange = long_name = None
+    info_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            info = yf.Ticker(_yf_symbol(ticker)).info
+            quote_type = info.get("quoteType")
+            exchange = info.get("exchange")
+            long_name = info.get("longName")
+            info_error = None
+            break
+        except Exception as exc:
+            info_error = str(exc)
+            time.sleep(rate_limit * attempt)
+    time.sleep(rate_limit)
+
+    check_a_failed = None if info_error else (
+        quote_type != "EQUITY" or exchange == "YHD" or not long_name
+    )
+    # Affirmative confirmation is a STRICTER bar than "Check A passed" --
+    # it's what's allowed to override a Check B failure (see the FNMA
+    # case in this function's own docstring), so it's spelled out
+    # separately rather than reusing check_a_failed's inverse.
+    check_a_affirms_real_equity = bool(
+        not info_error and quote_type == "EQUITY" and exchange and exchange != "YHD" and long_name
+    )
+
+    # Verdict.
+    if info_error:
+        status = "NEEDS_REVIEW"
+        reason = f"yfinance .info unavailable after {max_retries} attempts: {info_error}"
+    elif check_b_applicable and check_b_failed and not check_a_affirms_real_equity:
+        status = "QUARANTINED"
+        reason = (
+            f"price_data extends {overrun_days}d past real membership end_date "
+            f"({last_end.isoformat()}) -- data cannot be this company's, and "
+            "quoteType gives no affirmative real-equity identity to override it "
+            f"(quote_type={quote_type!r}, exchange={exchange!r}, long_name={long_name!r})."
+        )
+    elif check_b_applicable and check_b_failed and check_a_affirms_real_equity:
+        status = "NEEDS_REVIEW"
+        reason = (
+            f"price_data extends {overrun_days}d past real membership end_date "
+            f"({last_end.isoformat()}), BUT quoteType affirmatively confirms a real, "
+            f"named equity (quote_type={quote_type!r}, exchange={exchange!r}, "
+            f"long_name={long_name!r}) -- plausibly a company that left the index "
+            "without stopping trading (the FNMA case), not necessarily corruption. "
+            "Needs a human."
+        )
+    elif not check_b_applicable:
+        # Sentinel case (or no membership windows at all) -- Check A alone decides.
+        status = "QUARANTINED" if check_a_failed else "CLEAN"
+        reason = (
+            "membership window never closed (or unknown) -- Check B not applicable, "
+            f"decided by Check A alone (quote_type={quote_type!r}, exchange={exchange!r}, "
+            f"long_name={long_name!r})"
+        )
+    elif check_a_failed:
+        status = "NEEDS_REVIEW"
+        reason = (
+            f"quoteType check failed (quote_type={quote_type!r}, exchange={exchange!r}, "
+            f"long_name={long_name!r}) but date-coverage check passed -- corroborating "
+            "evidence only, needs a human."
+        )
+    else:
+        status = "CLEAN"
+        reason = "both checks passed"
+
+    return {
+        "ticker": ticker,
+        "status": status,
+        "reason": reason,
+        "sentinel_case": sentinel_case,
+        "evidence": {
+            "quote_type": quote_type, "exchange": exchange, "long_name": long_name,
+            "info_error": info_error,
+            "date_overrun_days": overrun_days, "check_b_applicable": check_b_applicable,
+            "last_membership_end": last_end.isoformat() if last_end else None,
+            "boundary_gap_days": boundary_gap_days,
+        },
+    }
+
+
+def _screen_newly_backfilled_ticker(ticker: str, config: dict) -> None:
+    """Ingestion-time screen (2026-08-07) -- the permanent fix for the root
+    cause research/recycled_ticker_investigation_2026-08-07/REPORT.md
+    identified: the 2026-08-06 survivorship-bias remediation's own
+    identity cross-check covered only a 28-ticker sample of the 331 it
+    backfilled. Called from both backfill_price_history() and
+    pull_incremental()'s first-time-download paths (below) the moment a
+    ticker with NO prior price_data rows gets its first history stored --
+    calls the exact same verify_ticker_identity() the one-off remediation
+    script and the periodic backstop scan (scan_unverified_tickers())
+    use, never a second implementation. Never raises -- a screening
+    failure must not block ingestion itself; the ticker simply stays
+    unscreened until the next backstop scan picks it up."""
+    try:
+        result = verify_ticker_identity(ticker, config)
+        from data.database import write_data_quality_status  # noqa: PLC0415
+        write_data_quality_status(
+            ticker, result["status"], result["reason"], json.dumps(result["evidence"]),
+        )
+        if result["status"] != "CLEAN":
+            logger.warning(
+                "Newly-backfilled ticker %s flagged %s at ingestion time: %s",
+                ticker, result["status"], result["reason"],
+            )
+    except Exception as exc:
+        logger.warning("Identity screen failed for newly-backfilled %s (will retry via the "
+                        "periodic backstop scan): %s", ticker, exc)
+
+
+def scan_unverified_tickers(config: Optional[dict] = None) -> dict:
+    """Periodic backstop scan (2026-08-07) -- finds every ticker with
+    price_data rows but no ticker_data_quality row yet, and runs the same
+    verify_ticker_identity() the one-off remediation script and the
+    ingestion-time screen use. Covers (a) the 408-ticker population that
+    predates this remediation shipping -- the one-off research/
+    data_quality_remediation_2026-08-07/step1_verify_identity.py script
+    handles the initial catch-up; this is what keeps it clean afterward
+    -- and (b) any future ticker whose data lands outside backfill_price_
+    history()/pull_incremental()'s own screened first-time-download
+    paths. Never raises per-ticker, matching this file's "one bad symbol
+    doesn't block the rest of the batch" convention.
+
+    Same role as detect_price_cliffs() in this file: a full-table
+    backstop, not the primary defense -- expected near-zero work on
+    ordinary days once the initial catch-up has run, since the primary
+    defense (the ingestion-time screen) already covers every genuinely
+    new ticker going forward.
+
+    Returns {"checked", "newly_quarantined": [...], "newly_needs_review":
+    [...], "errors": [...]}, matching refresh_membership_from_source()'s
+    contract shape.
+    """
+    config = config or _load_config()
+    from data.database import write_data_quality_status  # noqa: PLC0415
+
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT p.ticker FROM price_data p "
+                "LEFT JOIN ticker_data_quality q ON p.ticker = q.ticker "
+                "WHERE q.ticker IS NULL"
+            )
+        ).fetchall()
+    unverified = [r[0] for r in rows]
+
+    result: dict = {"checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": []}
+    for ticker in unverified:
+        try:
+            v = verify_ticker_identity(ticker, config)
+            write_data_quality_status(ticker, v["status"], v["reason"], json.dumps(v["evidence"]))
+            result["checked"] += 1
+            if v["status"] == "QUARANTINED":
+                result["newly_quarantined"].append(ticker)
+            elif v["status"] == "NEEDS_REVIEW":
+                result["newly_needs_review"].append(ticker)
+        except Exception as exc:
+            result["errors"].append(f"{ticker}: {exc}")
+    return result
+
+
 def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     """Backfill recent price data for each ticker using a rolling 10-day window.
 
@@ -522,6 +819,7 @@ def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
                 count = _upsert_price_rows(df, ticker)
                 results[ticker] = count
                 logger.info("  %s: upserted %d rows.", ticker, count)
+                _screen_newly_backfilled_ticker(ticker, config)
             else:
                 results[ticker] = 0
                 logger.warning(
@@ -612,8 +910,10 @@ def backfill_price_history(
                 results[ticker] = 0
                 continue
             fetch_end = min_date - timedelta(days=1)
+            is_new_ticker = False
         else:
             fetch_end = datetime.utcnow()
+            is_new_ticker = True
 
         logger.info("Backfilling %s: %s -> %s", ticker, start_dt.date(), fetch_end.date())
         df = _fetch_ticker(ticker, start=start_dt, end=fetch_end, max_retries=max_retries, rate_limit=rate_limit)
@@ -623,6 +923,16 @@ def backfill_price_history(
             count = _upsert_price_rows(df, ticker)
             results[ticker] = count
             logger.info("  %s: backfilled %d rows.", ticker, count)
+            if is_new_ticker:
+                # Ingestion-time identity screen (2026-08-07) -- only for a
+                # ticker with NO prior price_data rows (the exact shape of
+                # the 2026-08-06 survivorship-bias remediation's own
+                # backfill, and the root cause this closes). A ticker that
+                # already had data and is merely being extended further
+                # back was already screened, if at all, when it was first
+                # added -- re-screening here would just re-run the same
+                # check against unchanged evidence.
+                _screen_newly_backfilled_ticker(ticker, config)
         else:
             results[ticker] = 0
             logger.info("  No data available for %s that far back.", ticker)

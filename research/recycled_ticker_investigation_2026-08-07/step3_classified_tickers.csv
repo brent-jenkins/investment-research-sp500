@@ -1,0 +1,40 @@
+ticker,n_unexplained_transitions,classification,reason,n_regimes
+BMC,31,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,32
+BOL,158,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,159
+CBE,331,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,332
+CFC,132,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,133
+CIN,52,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,53
+CNG,6,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,7
+COMS,12,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,13
+CPWR,15,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,16
+DEC,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+DIGI,3,LIKELY_CORPORATE_ACTION,"every regime is a distinct, never-revisited level -- monotone sequence",4
+EP,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+EQ,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+FMCC,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+FNMA,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+FSH,2,LIKELY_CORPORATE_ACTION,"every regime is a distinct, never-revisited level -- monotone sequence",3
+GDW,7,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,8
+GLK,3,LIKELY_CORPORATE_ACTION,"every regime is a distinct, never-revisited level -- monotone sequence",4
+HET,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+HM,76,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,77
+HPC,18,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,19
+KRI,468,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,469
+MCIC,11,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,12
+MEE,91,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,92
+MI,2,LIKELY_CORPORATE_ACTION,"every regime is a distinct, never-revisited level -- monotone sequence",3
+MII,31,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,32
+NCC,99,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,100
+ORX,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+PALM,2,LIKELY_CORPORATE_ACTION,"every regime is a distinct, never-revisited level -- monotone sequence",3
+PBG,42,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,43
+PDG,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+POM,2,LIKELY_CORPORATE_ACTION,"every regime is a distinct, never-revisited level -- monotone sequence",3
+PTV,5,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,6
+RX,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+SRR,15,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,16
+TIE,197,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,198
+TNB,1241,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,1242
+UCM,371,LIKELY_RECYCLED,series revisits a price level it had already departed from -- reversal pattern,372
+USBC,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2
+UVN,1,LIKELY_CORPORATE_ACTION,"single unexplained transition -- monotone by construction, nothing to test a reversal against",2

@@ -896,6 +896,31 @@ def _eod_job() -> None:
             send_price_cliff_alert(live_cliff_hits, config)
         except Exception as exc:
             logger.warning("Price cliff monitoring check failed: %s", exc)
+
+        try:
+            # Recurring backstop for recycled-ticker-symbol corruption
+            # (2026-08-07, see research/recycled_ticker_investigation_
+            # 2026-08-07/REPORT.md and its follow-on remediation) -- the
+            # ingestion-time screen (backfill_price_history()/
+            # pull_incremental()'s first-time-download paths) is the
+            # primary defense and should make this near-zero-hit in
+            # practice once the one-off catch-up scan
+            # (research/data_quality_remediation_2026-08-07/step1_verify_
+            # identity.py) has processed the historical population that
+            # predates this remediation shipping. This scan catches
+            # anything that slipped through a different write path, same
+            # role detect_price_cliffs() plays immediately above. Own
+            # try/except so a monitoring failure never blocks anything
+            # else in this job.
+            from data.ingestion import scan_unverified_tickers  # noqa: PLC0415
+            from output.briefing import send_data_quality_scan_alert  # noqa: PLC0415
+            dq_result = scan_unverified_tickers(config)
+            details["data_quality_checked"] = dq_result["checked"]
+            details["data_quality_newly_quarantined"] = len(dq_result["newly_quarantined"])
+            details["data_quality_newly_needs_review"] = len(dq_result["newly_needs_review"])
+            send_data_quality_scan_alert(dq_result, config)
+        except Exception as exc:
+            logger.warning("Ticker data-quality backstop scan failed: %s", exc)
     except Exception as exc:
         logger.error("EOD job failed with an unhandled exception: %s", exc, exc_info=True)
         _record_eod_completion("FAILED", today_utc, error=str(exc), **details)

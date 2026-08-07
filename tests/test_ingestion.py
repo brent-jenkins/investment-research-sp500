@@ -13,12 +13,15 @@ import pytest
 from sqlalchemy import text
 
 from data.ingestion import (
+    _DATE_OVERRUN_TOLERANCE_DAYS,
     _fetch_ticker,
     _find_retroactive_restatement,
     _upsert_price_rows,
     _yf_symbol,
     backfill_price_history,
     detect_price_cliffs,
+    scan_unverified_tickers,
+    verify_ticker_identity,
 )
 
 _BASE_DATE = datetime(2026, 1, 1)
@@ -551,3 +554,241 @@ def test_init_db_does_not_delete_non_watchlist_ticker_price_data(db_engine):
     init_db()
 
     assert _stored_closes(db_engine, "NOTINWATCHLIST") == [42.0, 43.0]
+
+
+# ---------------------------------------------------------------------------
+# verify_ticker_identity() (2026-08-07) -- see research/recycled_ticker_
+# investigation_2026-08-07/REPORT.md and its follow-on remediation. Two
+# checks, NOT symmetric evidence: Check B (date-coverage overrun) is
+# authoritative on its own UNLESS Check A affirmatively confirms a real,
+# named equity (the FNMA fix -- see verify_ticker_identity()'s own
+# docstring for why the naive "Check B alone is always sufficient" version
+# was wrong, discovered directly against FNMA during implementation).
+# ---------------------------------------------------------------------------
+
+_CONFIG = {"data": {"rate_limit_seconds": 0, "max_retries": 1, "history_start_date": "2007-01-01"}}
+
+
+def _insert_membership_window(engine, ticker: str, start, end) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO universe_membership (ticker, start_date, end_date, source, fetched_at) "
+                "VALUES (:t, :s, :e, 'test', :fa)"
+            ),
+            {"t": ticker, "s": start.isoformat(), "e": end.isoformat(), "fa": datetime.utcnow().isoformat()},
+        )
+
+
+def _mock_yf_info(mocker, quote_type, exchange, long_name, raises=False):
+    """Mock yf.Ticker(...).info -- matches the .info-lookup shape
+    verify_ticker_identity() actually calls."""
+    if raises:
+        mocker.patch("data.ingestion.yf.Ticker", side_effect=RuntimeError("possibly delisted"))
+        return
+    mock_ticker = mocker.Mock()
+    mock_ticker.info = {"quoteType": quote_type, "exchange": exchange, "longName": long_name}
+    mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+
+def test_verify_identity_clean_when_both_checks_pass(db_engine, mocker):
+    """Real equity, membership window never closed (still an active
+    candidate) -- Check B not applicable, Check A passes -> CLEAN."""
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "GOODCO", datetime(2007, 1, 1).date(), _SENTINEL_END)
+    _mock_yf_info(mocker, "EQUITY", "NMS", "Good Company Inc.")
+
+    result = verify_ticker_identity("GOODCO", _CONFIG)
+
+    assert result["status"] == "CLEAN"
+    assert result["sentinel_case"] is True
+
+
+def test_verify_identity_palm_shape_quarantined(db_engine, mocker):
+    """PALM's real shape: stored price_data extends years past the real
+    membership end_date, AND quoteType gives nothing to rescue it with
+    (MUTUALFUND/YHD/None) -- QUARANTINED, exactly the case this whole
+    mechanism exists to catch."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "PALMLIKE", datetime(2000, 1, 1).date(), datetime(2002, 8, 9).date())
+    _insert_rows(db_engine, "PALMLIKE", {datetime(2014, 12, 22): 500.0, datetime(2020, 1, 8): 0.15})
+    _mock_yf_info(mocker, "MUTUALFUND", "YHD", None)
+
+    result = verify_ticker_identity("PALMLIKE", _CONFIG)
+
+    assert result["status"] == "QUARANTINED"
+    assert result["evidence"]["date_overrun_days"] > _DATE_OVERRUN_TOLERANCE_DAYS
+    assert result["evidence"]["boundary_gap_days"] is None  # no data at all near the real boundary
+
+
+def test_verify_identity_fnma_shape_needs_review_not_quarantined(db_engine, mocker):
+    """FNMA's real shape: stored price_data extends years past the real
+    membership end_date (real conservatorship, real index removal), BUT
+    quoteType affirmatively confirms a real, named equity still trading
+    (continuous OTC trading under its own name) -- NEEDS_REVIEW, not an
+    automatic QUARANTINE. This is the exact case that was wrong before the
+    override was added (discovered by testing the rule against a ticker it
+    should NOT fire on -- see verify_ticker_identity()'s own docstring)."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "FNMALIKE", datetime(2000, 1, 1).date(), datetime(2008, 9, 8).date())
+    _insert_rows(db_engine, "FNMALIKE", {
+        datetime(2008, 9, 8): 1.0,
+        datetime(2008, 9, 9): 1.5,  # trading continues right through the boundary -- boundary_gap_days=1
+        datetime(2026, 8, 6): 1.54,
+    })
+    _mock_yf_info(mocker, "EQUITY", "OQB", "Federal National Mortgage Association")
+
+    result = verify_ticker_identity("FNMALIKE", _CONFIG)
+
+    assert result["status"] == "NEEDS_REVIEW"
+    assert result["evidence"]["date_overrun_days"] > _DATE_OVERRUN_TOLERANCE_DAYS
+    assert result["evidence"]["boundary_gap_days"] == 1  # continuous trading through the boundary
+
+
+def test_verify_identity_date_overrun_boundary_inclusive_at_90_days(db_engine, mocker):
+    """Exactly 90 days overrun does not fail Check B; 91 does. Check A is
+    held constant (failing, MUTUALFUND/YHD/None -- no affirmative-equity
+    override available) throughout so the status transition
+    (NEEDS_REVIEW vs QUARANTINED) isolates Check B's own boundary rather
+    than being muddied by the FNMA-override interacting with it too."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _mock_yf_info(mocker, "MUTUALFUND", "YHD", None)
+
+    _insert_membership_window(db_engine, "EXACTLY90", datetime(2000, 1, 1).date(), datetime(2020, 1, 1).date())
+    _insert_rows(db_engine, "EXACTLY90", {datetime(2020, 4, 1): 10.0})  # exactly 91 calendar days later
+    result_91 = verify_ticker_identity("EXACTLY90", _CONFIG)
+    assert result_91["evidence"]["date_overrun_days"] == 91
+    assert result_91["status"] == "QUARANTINED"  # Check B fails -> QUARANTINED (Check A affirms nothing)
+
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "EXACTLY89", datetime(2000, 1, 1).date(), datetime(2020, 1, 1).date())
+    _insert_rows(db_engine, "EXACTLY89", {datetime(2020, 3, 31): 10.0})  # exactly 90 calendar days later
+    result_90 = verify_ticker_identity("EXACTLY89", _CONFIG)
+    assert result_90["evidence"]["date_overrun_days"] == 90
+    assert result_90["status"] == "NEEDS_REVIEW"  # Check B passes (90 not > 90); Check A alone (failing) -> NEEDS_REVIEW, not QUARANTINED
+
+
+def test_verify_identity_sentinel_case_decided_by_check_a_alone(db_engine, mocker):
+    """A membership window that never closed -- Check B genuinely does not
+    apply (nothing to compare against), so a bad quoteType alone is
+    sufficient to quarantine even with zero date-overrun evidence."""
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "STILLACTIVE", datetime(2007, 1, 1).date(), _SENTINEL_END)
+    _mock_yf_info(mocker, "MUTUALFUND", "YHD", None)
+
+    result = verify_ticker_identity("STILLACTIVE", _CONFIG)
+
+    assert result["sentinel_case"] is True
+    assert result["evidence"]["check_b_applicable"] is False
+    assert result["status"] == "QUARANTINED"
+
+
+def test_verify_identity_info_unavailable_is_needs_review_not_quarantined(db_engine, mocker):
+    """yfinance failing outright must never auto-quarantine a ticker --
+    an operational failure is not evidence of corruption."""
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "APIFAIL", datetime(2007, 1, 1).date(), _SENTINEL_END)
+    _mock_yf_info(mocker, None, None, None, raises=True)
+
+    result = verify_ticker_identity("APIFAIL", _CONFIG)
+
+    assert result["status"] == "NEEDS_REVIEW"
+
+
+def test_verify_identity_never_re_implemented_elsewhere():
+    """Structural guard, matching this project's 'never a second
+    implementation of the same threshold' discipline: backfill_price_
+    history(), pull_incremental(), and scan_unverified_tickers() must all
+    call verify_ticker_identity() itself, not re-derive the checks."""
+    import inspect
+    import data.ingestion as ing
+    for fn in (ing._screen_newly_backfilled_ticker, ing.scan_unverified_tickers):
+        src = inspect.getsource(fn)
+        assert "verify_ticker_identity(" in src
+
+
+# ---------------------------------------------------------------------------
+# Ingestion-time screen -- backfill_price_history()'s no-prior-data branch
+# and pull_incremental()'s first-time-download branch both call
+# _screen_newly_backfilled_ticker() the moment a genuinely NEW ticker's
+# full history is stored for the first time.
+# ---------------------------------------------------------------------------
+
+def test_backfill_screens_a_newly_added_ticker_and_quarantines_it(db_engine, mocker):
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value=_CONFIG)
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "NEWBAD", datetime(2000, 1, 1).date(), datetime(2010, 1, 1).date())
+    df = _ohlcv_df({datetime(2007, 1, 3): 10.0, datetime(2026, 1, 1): 12.0})
+    mocker.patch("data.ingestion._fetch_ticker", return_value=df)
+    _mock_yf_info(mocker, "MUTUALFUND", "YHD", None)
+
+    backfill_price_history(tickers=["NEWBAD"], start_date="2007-01-01")
+
+    with db_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT status FROM ticker_data_quality WHERE ticker = 'NEWBAD'")
+        ).fetchone()
+    assert row is not None and row[0] == "QUARANTINED"
+
+
+def test_backfill_does_not_screen_a_ticker_that_already_had_data(db_engine, mocker):
+    """Extending an already-tracked ticker's history further back is a
+    different case from a genuinely new ticker -- must not re-screen (and
+    must not require yfinance .info to be mocked at all, since it's never
+    called)."""
+    mocker.patch("data.ingestion.init_db")
+    mocker.patch("data.ingestion._load_config", return_value=_CONFIG)
+    _insert_rows(db_engine, "EXTEND", {datetime(2016, 6, 15): 100.0})
+    df = _ohlcv_df({datetime(2007, 1, 3): 10.0})
+    mocker.patch("data.ingestion._fetch_ticker", return_value=df)
+
+    backfill_price_history(tickers=["EXTEND"], start_date="2007-01-01")
+
+    with db_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT status FROM ticker_data_quality WHERE ticker = 'EXTEND'")
+        ).fetchone()
+    assert row is None
+
+
+# ---------------------------------------------------------------------------
+# scan_unverified_tickers() -- the periodic backstop, folded into the eod
+# job. Finds any ticker with price_data but no ticker_data_quality row.
+# ---------------------------------------------------------------------------
+
+def test_scan_unverified_tickers_checks_only_unscreened_tickers(db_engine, mocker):
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
+    _insert_rows(db_engine, "UNSCREENED", {datetime(2020, 1, 1): 10.0})
+    _insert_membership_window(db_engine, "UNSCREENED", datetime(2007, 1, 1).date(), _SENTINEL_END)
+    _insert_rows(db_engine, "ALREADYSCREENED", {datetime(2020, 1, 1): 10.0})
+    from data.database import write_data_quality_status
+    write_data_quality_status("ALREADYSCREENED", "CLEAN", "already checked", "{}")
+    _mock_yf_info(mocker, "MUTUALFUND", "YHD", None)
+
+    result = scan_unverified_tickers(_CONFIG)
+
+    assert result["checked"] == 1  # only UNSCREENED, not ALREADYSCREENED
+    assert "UNSCREENED" in result["newly_quarantined"]
+    assert "ALREADYSCREENED" not in result["newly_quarantined"]
+
+
+def test_scan_unverified_tickers_never_raises_on_a_single_ticker_error(db_engine, mocker):
+    _insert_rows(db_engine, "BROKEN", {datetime(2020, 1, 1): 10.0})
+    mocker.patch("data.ingestion.yf.Ticker", side_effect=RuntimeError("boom"))
+
+    result = scan_unverified_tickers(_CONFIG)
+
+    # An .info error resolves to NEEDS_REVIEW inside verify_ticker_identity()
+    # itself (not an exception this function needs to catch) -- but confirm
+    # the batch completes regardless and the ticker is accounted for either
+    # way, never silently dropped.
+    assert result["checked"] == 1 or "BROKEN" in [e.split(":")[0] for e in result["errors"]]

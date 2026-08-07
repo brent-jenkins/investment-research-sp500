@@ -26,6 +26,7 @@ _INSTRUMENT_RESOLUTION_FAILURE_LAST_TICKERS_KEY = "instrument_resolution_failure
 _POSITION_RECONCILIATION_EMAIL_LAST_SENT_KEY = "position_reconciliation_email_last_sent"
 _STOP_HEALTH_LAST_UNHEALTHY_KEY = "stop_health_last_unhealthy_tickers"
 _PRICE_CLIFF_LAST_HITS_KEY = "price_cliff_last_hits"
+_DATA_QUALITY_SCAN_LAST_HITS_KEY = "data_quality_scan_last_hits"
 
 
 def _smtp_send(subject: str, text_body: str, html_body: str, config: dict) -> tuple[bool, str]:
@@ -856,4 +857,82 @@ def send_price_cliff_alert(hits: list[dict], config: dict) -> tuple[bool, str]:
             set_metadata(_PRICE_CLIFF_LAST_HITS_KEY, current_set_key)
         except Exception as exc:
             logger.warning("Could not record price_cliff_last_hits: %s", exc)
+    return sent, detail
+
+
+def send_data_quality_scan_alert(result: dict, config: dict) -> tuple[bool, str]:
+    """Alert that data/ingestion.py:scan_unverified_tickers() (or the
+    ingestion-time screen it backstops) found one or more newly-
+    QUARANTINED or newly-NEEDS_REVIEW tickers -- see research/recycled_
+    ticker_investigation_2026-08-07/REPORT.md for the finding this
+    monitors: recycled-ticker-symbol corruption in the historical/
+    delisted stock population, invisible to production's existing price-
+    cliff alerting because that alert is deliberately scoped to live-
+    tradeable + currently-held tickers only (correctly -- see
+    send_price_cliff_alert()'s own docstring). This is the second,
+    quieter channel that scoping decision left open: without it, a newly-
+    discovered corrupted ticker in the historical population would never
+    be surfaced to anyone.
+
+    `result` is scan_unverified_tickers()'s own return shape:
+    {"checked", "newly_quarantined": [...], "newly_needs_review": [...],
+    "errors": [...]}. Content-based deduplication on the sorted
+    newly_quarantined + newly_needs_review ticker set, same reasoning and
+    same skip-when-unchanged / clear-on-empty mechanics as
+    send_price_cliff_alert() immediately above -- a shared time cooldown
+    could silently suppress a second, different finding landing inside an
+    earlier finding's cooldown window. Flag, don't auto-remediate --
+    quarantine already excludes these from research candidacy the moment
+    the row is written; this email is purely "a human should look," same
+    as every other alert in this module.
+    """
+    from data.database import get_metadata_str, set_metadata
+
+    affected = sorted(set(result.get("newly_quarantined", [])) | set(result.get("newly_needs_review", [])))
+    if not affected:
+        try:
+            set_metadata(_DATA_QUALITY_SCAN_LAST_HITS_KEY, "")
+        except Exception as exc:
+            logger.warning("Could not clear data_quality_scan_last_hits: %s", exc)
+        return False, "no newly-flagged tickers"
+
+    current_set_key = json.dumps(affected)
+    last_sent_set_key = get_metadata_str(_DATA_QUALITY_SCAN_LAST_HITS_KEY)
+    if last_sent_set_key == current_set_key:
+        logger.info(
+            "Data quality scan email skipped — affected-ticker set unchanged since last alert (%s)",
+            affected,
+        )
+        return False, "unchanged affected-ticker set"
+
+    n_q = len(result.get("newly_quarantined", []))
+    n_r = len(result.get("newly_needs_review", []))
+    subject = f"SP500INVEST: {n_q} newly quarantined, {n_r} newly needing review (ticker data quality)"
+    quarantined_lines = "\n".join(f"  - {t}" for t in sorted(result.get("newly_quarantined", [])))
+    review_lines = "\n".join(f"  - {t}" for t in sorted(result.get("newly_needs_review", [])))
+    text_body = (
+        f"data/ingestion.py:verify_ticker_identity() found {n_q} newly-QUARANTINED and "
+        f"{n_r} newly-NEEDS_REVIEW ticker(s) in the historical/delisted stock population "
+        f"({result.get('checked', 0)} checked this run). Not auto-remediated -- rows are "
+        "flagged, never deleted or repaired.\n\n"
+        f"Newly quarantined (excluded from research/backtest candidacy):\n{quarantined_lines or '  (none)'}\n\n"
+        f"Newly needing review (stays un-quarantined, needs a human):\n{review_lines or '  (none)'}\n\n"
+        "See ticker_data_quality for the full reason/evidence per ticker."
+    )
+    q_rows_html = "".join(f"<li>{html.escape(t)}</li>" for t in sorted(result.get("newly_quarantined", [])))
+    r_rows_html = "".join(f"<li>{html.escape(t)}</li>" for t in sorted(result.get("newly_needs_review", [])))
+    html_body = (
+        f'<p style="color:#dc2626;font-weight:bold">{n_q} newly quarantined, {n_r} newly '
+        "needing review (ticker data quality)</p>"
+        "<p>Rows are flagged, never deleted or repaired. Quarantined tickers are already "
+        "excluded from research/backtest candidacy.</p>"
+        f"<p><b>Newly quarantined:</b></p><ul>{q_rows_html or '<li>(none)</li>'}</ul>"
+        f"<p><b>Newly needing review:</b></p><ul>{r_rows_html or '<li>(none)</li>'}</ul>"
+    )
+    sent, detail = _smtp_send(subject, text_body, html_body, config)
+    if sent:
+        try:
+            set_metadata(_DATA_QUALITY_SCAN_LAST_HITS_KEY, current_set_key)
+        except Exception as exc:
+            logger.warning("Could not record data_quality_scan_last_hits: %s", exc)
     return sent, detail

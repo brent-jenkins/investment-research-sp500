@@ -483,3 +483,76 @@ def test_check_wikipedia_lag_persists_result_to_metadata(db_engine, mocker):
     parsed = json.loads(stored)
     assert parsed["checked"] == 1
     assert parsed["disagreements"] == []
+
+
+# ---------------------------------------------------------------------------
+# get_quarantined_tickers() / get_research_stock_candidates() (2026-08-07) --
+# the single admission gate for research/backtest candidate-pool
+# construction, per research/recycled_ticker_investigation_2026-08-07/
+# REPORT.md and its follow-on remediation. Deliberately does NOT touch
+# get_all_known_stock_tickers()/get_live_stock_candidates() themselves --
+# the tests below prove that directly, not just by inspection.
+# ---------------------------------------------------------------------------
+
+def _seed_quarantine_row(engine, ticker: str, status: str = "QUARANTINED") -> None:
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ticker_data_quality (ticker, status, reason, evidence, detected_at) "
+                "VALUES (:t, :s, 'test', '{}', :ts)"
+            ),
+            {"t": ticker, "s": status, "ts": datetime.utcnow().isoformat()},
+        )
+
+
+def test_get_quarantined_tickers_returns_only_quarantined_status(db_engine):
+    _seed_quarantine_row(db_engine, "BADCO", "QUARANTINED")
+    _seed_quarantine_row(db_engine, "OKCO", "CLEAN")
+    _seed_quarantine_row(db_engine, "MAYBECO", "NEEDS_REVIEW")
+
+    quarantined = v2u.get_quarantined_tickers()
+
+    assert quarantined == {"BADCO"}
+
+
+def test_get_research_stock_candidates_excludes_quarantined_only(db_engine):
+    v2u.seed_baseline_membership()
+    known = v2u.get_all_known_stock_tickers()
+    a_known_ticker = sorted(known)[0]
+    _seed_quarantine_row(db_engine, a_known_ticker, "QUARANTINED")
+
+    research_candidates = v2u.get_research_stock_candidates()
+
+    assert a_known_ticker not in research_candidates
+    assert research_candidates == known - {a_known_ticker}
+
+
+def test_quarantine_does_not_affect_get_all_known_stock_tickers_or_live_candidates(db_engine):
+    """The core safety property this whole design hinges on: quarantining
+    a ticker that is (hypothetically) still is_member()-eligible today
+    must NOT remove it from get_all_known_stock_tickers() or
+    get_live_stock_candidates() -- neither function reads
+    ticker_data_quality at all. Only get_research_stock_candidates()
+    (a separate, additive function) is gated."""
+    v2u.seed_baseline_membership()
+    as_of = date(2026, 7, 30)
+    live_before = set(v2u.get_live_stock_candidates(as_of=as_of))
+    known_before = v2u.get_all_known_stock_tickers()
+    assert live_before, "fixture sanity check -- must have at least one live candidate to test against"
+    a_live_ticker = sorted(live_before)[0]
+
+    _seed_quarantine_row(db_engine, a_live_ticker, "QUARANTINED")
+
+    live_after = set(v2u.get_live_stock_candidates(as_of=as_of))
+    known_after = v2u.get_all_known_stock_tickers()
+
+    assert live_after == live_before  # byte-identical -- quarantine changed nothing here
+    assert known_after == known_before
+    assert a_live_ticker in live_after  # still present despite being quarantined
+    # ...but it IS excluded from the research-only gate:
+    assert a_live_ticker not in v2u.get_research_stock_candidates()
+
+
+def test_get_quarantined_tickers_empty_table_returns_empty_set(db_engine):
+    assert v2u.get_quarantined_tickers() == set()
