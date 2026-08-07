@@ -1892,6 +1892,46 @@ def test_eod_job_price_cliff_alert_excludes_non_live_non_held_tickers(db_engine,
     assert status["price_cliff_hits_total"] == 2
 
 
+def test_eod_job_price_cliff_alert_excludes_known_exceptions(db_engine, monkeypatch, mocker):
+    """A hit matching one of the 14 individually-classified (ticker, date)
+    pairs from research/split_cliff_remediation_2026-08-08/ (2026-08-08)
+    must not reach send_price_cliff_alert(), even though it's both live-
+    scoped and a genuine detector hit -- and the suppressed count must be
+    recorded separately from price_cliff_hits, not silently folded in."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("brokers.trading212.purge_old_pending_orders", return_value=0)
+    mocker.patch(
+        "data.ingestion.detect_price_cliffs",
+        return_value=[
+            {"ticker": "AIG", "date": "2008-09-15", "date_prev": "2008-09-12",
+             "close": 95.20, "close_prev": 242.80, "ratio": 0.392},  # known exception
+            {"ticker": "NEWCO", "date": "2026-01-02", "date_prev": "2026-01-01",
+             "close": 1.0, "close_prev": 4.0, "ratio": 0.25},  # not a known exception
+        ],
+    )
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    })
+    mocker.patch("analysis.universe.get_live_stock_candidates", return_value=["AIG", "NEWCO"])
+    mocker.patch("brokers.trading212.get_held_research_tickers", return_value=[])
+    mock_alert = mocker.patch("output.briefing.send_price_cliff_alert", return_value=(False, "disabled"))
+
+    scheduler._eod_job()
+
+    alerted_hits = mock_alert.call_args[0][0]
+    assert [h["ticker"] for h in alerted_hits] == ["NEWCO"]
+    status = scheduler.get_eod_completion_status()
+    assert status["price_cliff_hits"] == 2  # live-scoped count, unaffected by exception suppression
+    assert status["price_cliff_hits_total"] == 2
+    assert status["price_cliff_hits_known_exceptions"] == 1
+
+
 def test_eod_job_completed_even_when_price_cliff_monitor_fails(db_engine, monkeypatch, mocker):
     """A monitoring failure is not trading-relevant -- it must never turn
     an otherwise-successful EOD run into a FAILED verdict, same as a purge

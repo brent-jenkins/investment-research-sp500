@@ -1115,6 +1115,161 @@ def detect_price_cliffs(
     return hits
 
 
+# Known, individually-classified price-cliff exceptions (2026-08-08) -- see
+# research/split_cliff_remediation_2026-08-08/REPORT.md for the full
+# per-ticker evidence. Deliberately NOT a change to detect_price_cliffs()'s
+# own thresholds or to its (or the EOD job's) live scoping -- this is a
+# separate, explicit suppression list applied by the caller (data/
+# scheduler.py's EOD job) AFTER live-scoping and BEFORE alerting, so a
+# specific already-investigated (ticker, date) pair stops re-firing the
+# email every day while the detector itself, and everything upstream of
+# this filter, stays exactly as it was. Keyed on (ticker, the "date" field
+# -- the later day of the flagged pair, matching how each cliff was
+# reported and investigated).
+#
+# Four categories, not a flat "safe to ignore" bucket -- the classification
+# and evidence are attached so a future reader (or an eventual repair
+# effort) does not have to re-derive them:
+#   GENUINE_MARKET_MOVE          -- close and adj_close moved in lockstep;
+#                                    a real, dated market event, not an
+#                                    adjustment issue at all.
+#   CORPORATE_ACTION_UNREPAIRABLE -- a confirmed real corporate action
+#                                    (adj_close smooth, close jumps), but a
+#                                    fresh yfinance pull reproduces the
+#                                    identical cliff -- yfinance
+#                                    retroactively smooths ORDINARY STOCK
+#                                    SPLITS in `close` over time, but never
+#                                    smooths mergers/spinoffs/special
+#                                    dividends in `close`, only in
+#                                    `adj_close`. Re-fetch-and-replace
+#                                    (this project's only existing repair
+#                                    mechanism, _find_retroactive_
+#                                    restatement()) cannot fix this class --
+#                                    confirmed directly, not assumed; see
+#                                    CLAUDE.md's "close vs adj_close
+#                                    smoothing" standing fact. Deliberately
+#                                    NOT repaired -- see the REPORT.md's
+#                                    "decision, based on the Phase 1
+#                                    finding" for the full reasoning
+#                                    (fabrication risk, adj_close already
+#                                    holds the corrected series, and every
+#                                    affected event is 2007-2018, far
+#                                    outside any current momentum window).
+#   PARTIALLY_RESOLVED            -- a real corporate action where `close`
+#                                    already appears to correctly reflect
+#                                    what happened, just not cleanly
+#                                    smooth in `adj_close` either (yfinance
+#                                    handles a combined split+spinoff
+#                                    inconsistently) -- not a repair
+#                                    candidate.
+#   UNRESOLVED                    -- a real yfinance event exists near the
+#                                    date but does not explain the observed
+#                                    move, and the underlying cause was not
+#                                    identified. Recorded as genuinely
+#                                    unresolved, not forced into a bucket.
+_KNOWN_PRICE_CLIFF_EXCEPTIONS: dict[tuple[str, str], dict] = {
+    ("AIG", "2008-09-15"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "Lehman Brothers collapse weekend; AIG's own near-collapse and Fed bailout. "
+                    "close_ratio=adj_close_ratio=0.392 (moved in lockstep, no split match).",
+    },
+    ("APA", "2020-03-09"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "COVID/Saudi-Russia oil price war crash. close_ratio=adj_close_ratio=0.461 "
+                    "(moved in lockstep, no split match).",
+    },
+    ("GL", "2024-04-11"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "Fuzzy Panda Research short-seller report alleging insurance fraud; shares "
+                    "closed down ~53% that session (confirmed via CNBC/Hedgeweek reporting, not "
+                    "assumed). close_ratio=adj_close_ratio=0.469 (moved in lockstep, no split "
+                    "match) -- contradicts the prior assumption this was a corporate action.",
+    },
+    ("HIG", "2008-10-30"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "2008 banking-crisis volatility (Hartford Financial). close_ratio="
+                    "adj_close_ratio=0.484 (moved in lockstep, no split match).",
+    },
+    ("HIG", "2008-12-05"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "2008 banking-crisis volatility (Hartford Financial); an extreme 2.024x "
+                    "overnight move, checked with particular care given the magnitude. "
+                    "close_ratio=adj_close_ratio=2.024 (moved in lockstep, no split match) -- the "
+                    "specific catalyst for this exact date was not independently pinned down, but "
+                    "adj_close agreement is strong evidence against an adjustment artefact.",
+    },
+    ("OXY", "2020-03-09"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "COVID/Saudi-Russia oil price war crash. close_ratio=0.466, "
+                    "adj_close_ratio=0.480 (moved together, no split match).",
+    },
+    ("PCG", "2019-01-14"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "PG&E wildfire-liability bankruptcy filing. close_ratio=adj_close_ratio=0.476 "
+                    "(moved in lockstep, no split match).",
+    },
+    ("STT", "2009-01-20"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "2008-09 banking-crisis volatility (State Street). close_ratio="
+                    "adj_close_ratio=0.410 (moved in lockstep, no split match).",
+    },
+    ("TRGP", "2020-03-09"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "COVID/Saudi-Russia oil price war crash. close_ratio=adj_close_ratio=0.471 "
+                    "(moved in lockstep, no split match).",
+    },
+    ("KDP", "2018-07-10"): {
+        "classification": "CORPORATE_ACTION_UNREPAIRABLE",
+        "evidence": "Keurig/Dr Pepper Snapple merger. adj_close smooth (ratio 1.115) while close "
+                    "jumps (ratio 0.179) -- confirmed genuine corporate action. A fresh yfinance "
+                    "pull reproduces the identical cliff (checked directly, not assumed): yfinance "
+                    "never retroactively smooths a merger in `close`, only in `adj_close`.",
+    },
+    ("MO", "2008-03-31"): {
+        "classification": "CORPORATE_ACTION_UNREPAIRABLE",
+        "evidence": "Philip Morris International spinoff. adj_close smooth (ratio 0.975) while "
+                    "close jumps (ratio 0.301) -- confirmed genuine corporate action. A fresh "
+                    "yfinance pull reproduces the identical cliff: yfinance never retroactively "
+                    "smooths a spinoff in `close`, only in `adj_close`.",
+    },
+    ("WY", "2010-07-20"): {
+        "classification": "CORPORATE_ACTION_UNREPAIRABLE",
+        "evidence": "REIT-conversion special dividend (Weyerhaeuser). adj_close smooth (ratio "
+                    "1.034) while close jumps (ratio 0.381) -- confirmed genuine corporate action. "
+                    "A fresh yfinance pull reproduces the identical cliff: yfinance never "
+                    "retroactively smooths a special dividend in `close`, only in `adj_close`.",
+    },
+    ("EXPE", "2011-12-21"): {
+        "classification": "PARTIALLY_RESOLVED",
+        "evidence": "TripAdvisor spinoff plus a same-day 1-for-2 stock split (confirmed via "
+                    "TechCrunch reporting). close_ratio=0.488 closely matches the real reported "
+                    "price action; adj_close is not smooth (ratio 0.664), but that reflects "
+                    "yfinance's inconsistent handling of a combined split+spinoff, not an error in "
+                    "close. close appears to already correctly reflect what happened.",
+    },
+    ("JCI", "2007-07-02"): {
+        "classification": "UNRESOLVED",
+        "evidence": "A real yfinance split event exists on this exact date (factor 0.25) but its "
+                    "direction (should raise price ~4x under a reverse-split reading) contradicts "
+                    "the observed ~60% drop. The underlying corporate event was not identified via "
+                    "research. A fresh pull reproduces the identical cliff (same class as the "
+                    "confirmed corporate actions), but the classification is not forced.",
+    },
+}
+
+
+def filter_known_price_cliff_exceptions(hits: list[dict]) -> list[dict]:
+    """Remove any hit matching a known, individually-classified (ticker,
+    date) pair in _KNOWN_PRICE_CLIFF_EXCEPTIONS -- called by the EOD job
+    after live-scoping and before alerting, so an already-investigated
+    cliff stops re-triggering the daily email. Does not modify
+    detect_price_cliffs() itself or the live-scoping filter -- a hit for
+    the same ticker on a DIFFERENT date, or a new ticker entirely, is
+    unaffected and still alerts normally. Never raises; an unrecognised
+    hit shape is passed through unfiltered rather than dropped silently."""
+    return [h for h in hits if (h.get("ticker"), h.get("date")) not in _KNOWN_PRICE_CLIFF_EXCEPTIONS]
+
+
 def get_last_update_timestamp() -> Optional[datetime]:
     """Return the most recent date for which any price data exists in the DB."""
     session = get_session()

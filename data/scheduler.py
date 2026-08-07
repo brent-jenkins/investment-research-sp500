@@ -884,16 +884,24 @@ def _eod_job() -> None:
             # (a poisoned momentum window on a position that can actually
             # be traded) -- the full raw count is still recorded below for
             # visibility, just not emailed about.
-            from data.ingestion import detect_price_cliffs  # noqa: PLC0415
+            from data.ingestion import detect_price_cliffs, filter_known_price_cliff_exceptions  # noqa: PLC0415
             from output.briefing import send_price_cliff_alert  # noqa: PLC0415
             from analysis.universe import get_live_stock_candidates  # noqa: PLC0415
             from brokers.trading212 import get_held_research_tickers  # noqa: PLC0415
             cliff_hits = detect_price_cliffs()
             _relevant = set(get_live_stock_candidates()) | set(get_held_research_tickers())
             live_cliff_hits = [h for h in cliff_hits if h["ticker"] in _relevant]
+            # Known, individually-classified exceptions (2026-08-08, see
+            # research/split_cliff_remediation_2026-08-08/REPORT.md) are
+            # filtered out here specifically -- AFTER live-scoping, BEFORE
+            # alerting -- so an already-investigated cliff stops re-firing
+            # the daily email. detect_price_cliffs() itself and the live-
+            # scoping filter immediately above are both untouched.
+            alertable_cliff_hits = filter_known_price_cliff_exceptions(live_cliff_hits)
             details["price_cliff_hits_total"] = len(cliff_hits)
             details["price_cliff_hits"] = len(live_cliff_hits)
-            send_price_cliff_alert(live_cliff_hits, config)
+            details["price_cliff_hits_known_exceptions"] = len(live_cliff_hits) - len(alertable_cliff_hits)
+            send_price_cliff_alert(alertable_cliff_hits, config)
         except Exception as exc:
             logger.warning("Price cliff monitoring check failed: %s", exc)
 

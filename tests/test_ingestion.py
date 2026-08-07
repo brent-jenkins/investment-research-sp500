@@ -21,6 +21,7 @@ from data.ingestion import (
     backfill_price_history,
     check_boundary_contiguity,
     detect_price_cliffs,
+    filter_known_price_cliff_exceptions,
     scan_unverified_tickers,
     verify_ticker_identity,
 )
@@ -538,6 +539,68 @@ def test_detect_price_cliffs_scans_across_multiple_tickers_independently(db_engi
     _insert_rows(db_engine, "DIRTY", {datetime(2026, 1, 1): 200.0, datetime(2026, 1, 2): 50.0})
     hits = detect_price_cliffs()
     assert [h["ticker"] for h in hits] == ["DIRTY"]
+
+
+# ---------------------------------------------------------------------------
+# filter_known_price_cliff_exceptions() (2026-08-08) -- suppresses the 14
+# individually-classified (ticker, date) pairs from research/split_cliff_
+# remediation_2026-08-08/ so an already-investigated cliff stops re-firing
+# the daily alert. Does NOT touch detect_price_cliffs() itself or the
+# live-scoping filter -- called by the EOD job strictly after both.
+# ---------------------------------------------------------------------------
+
+def test_filter_known_exceptions_removes_a_known_pair():
+    hits = [{"ticker": "AIG", "date_prev": "2008-09-12", "date": "2008-09-15",
+             "close_prev": 242.80, "close": 95.20, "ratio": 0.392}]
+    assert filter_known_price_cliff_exceptions(hits) == []
+
+
+def test_filter_known_exceptions_covers_all_four_categories():
+    """One representative from each of the four classification buckets --
+    all four must be suppressed, not just the largest bucket."""
+    hits = [
+        {"ticker": "AIG", "date": "2008-09-15"},          # GENUINE_MARKET_MOVE
+        {"ticker": "KDP", "date": "2018-07-10"},           # CORPORATE_ACTION_UNREPAIRABLE
+        {"ticker": "EXPE", "date": "2011-12-21"},          # PARTIALLY_RESOLVED
+        {"ticker": "JCI", "date": "2007-07-02"},           # UNRESOLVED
+    ]
+    assert filter_known_price_cliff_exceptions(hits) == []
+
+
+def test_filter_known_exceptions_leaves_unrelated_hits_untouched():
+    """A hit for a known ticker on a DIFFERENT date, or an entirely
+    different ticker, must still alert normally -- the suppression is
+    scoped to the exact (ticker, date) pair, not the whole ticker."""
+    hits = [
+        {"ticker": "AIG", "date": "2008-09-15"},   # known exception -- suppressed
+        {"ticker": "AIG", "date": "2026-01-05"},   # same ticker, different date -- NOT suppressed
+        {"ticker": "NEWCO", "date": "2026-01-05"},  # unrelated ticker -- NOT suppressed
+    ]
+    result = filter_known_price_cliff_exceptions(hits)
+    assert result == [
+        {"ticker": "AIG", "date": "2026-01-05"},
+        {"ticker": "NEWCO", "date": "2026-01-05"},
+    ]
+
+
+def test_filter_known_exceptions_all_14_are_present():
+    """Every ticker+date from the Phase 1 classification is actually
+    registered -- guards against a typo silently leaving one of the 14
+    still alerting."""
+    expected = {
+        ("AIG", "2008-09-15"), ("APA", "2020-03-09"), ("GL", "2024-04-11"),
+        ("HIG", "2008-10-30"), ("HIG", "2008-12-05"), ("OXY", "2020-03-09"),
+        ("PCG", "2019-01-14"), ("STT", "2009-01-20"), ("TRGP", "2020-03-09"),
+        ("KDP", "2018-07-10"), ("MO", "2008-03-31"), ("WY", "2010-07-20"),
+        ("EXPE", "2011-12-21"), ("JCI", "2007-07-02"),
+    }
+    hits = [{"ticker": t, "date": d} for t, d in expected]
+    assert filter_known_price_cliff_exceptions(hits) == []
+    assert len(expected) == 14
+
+
+def test_filter_known_exceptions_empty_input_returns_empty():
+    assert filter_known_price_cliff_exceptions([]) == []
 
 
 def test_init_db_does_not_delete_non_watchlist_ticker_price_data(db_engine):
