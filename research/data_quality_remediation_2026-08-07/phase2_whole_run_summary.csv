@@ -1,0 +1,5 @@
+variant,n_trades,n_distinct_tickers,total_pnl_gbp,n_blocks_pass,n_blocks_total
+cap05_phase1_after,3651,393,52841.47,11,16
+cap05_phase2,3651,393,52841.47,11,16
+cap07_phase1_after,4958,444,116748.91,9,16
+cap07_phase2,4958,444,116748.91,9,16

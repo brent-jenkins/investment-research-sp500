@@ -19,6 +19,7 @@ from data.ingestion import (
     _upsert_price_rows,
     _yf_symbol,
     backfill_price_history,
+    check_boundary_contiguity,
     detect_price_cliffs,
     scan_unverified_tickers,
     verify_ticker_identity,
@@ -711,6 +712,89 @@ def test_verify_identity_never_re_implemented_elsewhere():
     for fn in (ing._screen_newly_backfilled_ticker, ing.scan_unverified_tickers):
         src = inspect.getsource(fn)
         assert "verify_ticker_identity(" in src
+
+
+# ---------------------------------------------------------------------------
+# check_boundary_contiguity() (2026-08-07) -- Check C, NEEDS_REVIEW
+# adjudication. Only meaningful for tickers verify_ticker_identity() has
+# already routed to NEEDS_REVIEW (the FNMA pattern); see
+# research/data_quality_remediation_2026-08-07/PHASE1_CONTIGUITY_REPORT.md
+# for the full distribution and control validation this threshold (100
+# missing NYSE trading days) came from.
+# ---------------------------------------------------------------------------
+
+def test_boundary_contiguity_fnma_shape_does_not_exceed_threshold(db_engine):
+    """FNMA's real shape: trading continues right through the membership
+    end_date (a 2008 conservatorship, not a stoppage) -- gap is tiny,
+    must NOT exceed the threshold. This is the must-not-false-positive
+    control the whole rule was validated against before being proposed."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "FNMALIKE", datetime(2000, 1, 1).date(), datetime(2008, 9, 8).date())
+    _insert_rows(db_engine, "FNMALIKE", {
+        datetime(2008, 9, 8): 1.0,
+        datetime(2008, 9, 9): 1.5,  # trading continues the very next session
+        datetime(2026, 8, 6): 1.54,
+    })
+
+    result = check_boundary_contiguity("FNMALIKE")
+
+    assert result["applicable"] is True
+    assert result["gap_exceeds_threshold"] is False
+    assert result["no_data_before_end_date_at_all"] is False
+
+
+def test_boundary_contiguity_palm_shape_exceeds_threshold(db_engine):
+    """PALM's real shape: the entire stored history postdates the real
+    membership end_date by ~12 years -- no row at/before end_date exists
+    at all. Must exceed the threshold; this is the must-catch control."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "PALMLIKE", datetime(2000, 1, 1).date(), datetime(2002, 8, 9).date())
+    _insert_rows(db_engine, "PALMLIKE", {datetime(2014, 12, 22): 500.0, datetime(2020, 1, 8): 0.15})
+
+    result = check_boundary_contiguity("PALMLIKE")
+
+    assert result["applicable"] is True
+    assert result["gap_exceeds_threshold"] is True
+    assert result["no_data_before_end_date_at_all"] is True
+    assert result["gap_missing_trading_days"] > 100
+
+
+def test_boundary_contiguity_not_applicable_when_no_data_after_end_date(db_engine):
+    """A ticker with no price_data after its own membership end_date at
+    all (nothing to compare the boundary against) -- not applicable, no
+    verdict forced."""
+    result = check_boundary_contiguity("NEVERINGESTED", "2010-01-01")
+    assert result["applicable"] is False
+    assert result["gap_exceeds_threshold"] is None
+
+
+def test_boundary_contiguity_accepts_last_membership_end_directly(db_engine):
+    """Callers (the Phase 2 adjudication script) pass the already-known
+    last_membership_end from the existing evidence JSON rather than
+    re-deriving it -- confirms the parameter is actually honoured, not
+    silently ignored in favour of a fresh universe lookup."""
+    _insert_rows(db_engine, "DIRECTARG", {datetime(2014, 12, 22): 500.0})
+    result = check_boundary_contiguity("DIRECTARG", last_membership_end="2002-08-09")
+    assert result["applicable"] is True
+    assert result["last_membership_end"] == "2002-08-09"
+
+
+def test_boundary_contiguity_never_writes_to_the_db(db_engine):
+    """Pure read function -- callers decide what to do with the verdict
+    (the Phase 2 script writes via write_data_quality_status() itself);
+    this function must never touch ticker_data_quality directly."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "READONLY", datetime(2000, 1, 1).date(), datetime(2002, 8, 9).date())
+    _insert_rows(db_engine, "READONLY", {datetime(2014, 12, 22): 500.0})
+
+    check_boundary_contiguity("READONLY")
+
+    with db_engine.connect() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM ticker_data_quality WHERE ticker = 'READONLY'")).scalar()
+    assert count == 0
 
 
 # ---------------------------------------------------------------------------

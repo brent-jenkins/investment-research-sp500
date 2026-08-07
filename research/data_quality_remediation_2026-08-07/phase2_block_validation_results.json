@@ -1,0 +1,478 @@
+{
+  "cap05_phase1_after": {
+    "label": "cap05_phase1_after",
+    "n_blocks_pass": 11,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 54,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 288,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 356,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 228,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 191,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 207,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 192,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 220,
+        "passed": true
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 212,
+        "passed": false
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 227,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 205,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 266,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 253,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 228,
+        "passed": true
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 234,
+        "passed": true
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 290,
+        "passed": false
+      }
+    ]
+  },
+  "cap05_phase2": {
+    "label": "cap05_phase2",
+    "n_blocks_pass": 11,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 54,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 288,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 356,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 228,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 191,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 207,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 192,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 220,
+        "passed": true
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 212,
+        "passed": false
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 227,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 205,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 266,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 253,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 228,
+        "passed": true
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 234,
+        "passed": true
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 290,
+        "passed": false
+      }
+    ]
+  },
+  "cap07_phase1_after": {
+    "label": "cap07_phase1_after",
+    "n_blocks_pass": 9,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 64,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 353,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 475,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 309,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 267,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 297,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 276,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 312,
+        "passed": false
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 283,
+        "passed": true
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 315,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 280,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 350,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 346,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 305,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 330,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 396,
+        "passed": false
+      }
+    ]
+  },
+  "cap07_phase2": {
+    "label": "cap07_phase2",
+    "n_blocks_pass": 9,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 64,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 353,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 475,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 309,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 267,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 297,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 276,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 312,
+        "passed": false
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 283,
+        "passed": true
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 315,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 280,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 350,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 346,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 305,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 330,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 396,
+        "passed": false
+      }
+    ]
+  }
+}

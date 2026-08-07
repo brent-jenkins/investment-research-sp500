@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import pandas_market_calendars as mcal
 import yaml
 import yfinance as yf
 from sqlalchemy import text
@@ -601,6 +602,124 @@ def verify_ticker_identity(ticker: str, config: Optional[dict] = None) -> dict:
             "last_membership_end": last_end.isoformat() if last_end else None,
             "boundary_gap_days": boundary_gap_days,
         },
+    }
+
+
+_CONTIGUITY_GAP_THRESHOLD_TRADING_DAYS = 100
+_CONTIGUITY_MIN_GAP_CALENDAR_DAYS = 4  # below this, can never contain a full missing NYSE trading day -- not worth a calendar lookup
+
+
+def check_boundary_contiguity(ticker: str, last_membership_end: Optional[str] = None) -> dict:
+    """Check C (2026-08-07) -- NEEDS_REVIEW adjudication, not a first-pass
+    identity check. Only meaningful for a ticker already sitting in
+    NEEDS_REVIEW because verify_ticker_identity()'s Check B found
+    price_data extending suspiciously past the ticker's real S&P
+    membership end_date but Check A affirmatively confirmed a real, named
+    equity (the FNMA pattern) -- this function is what actually tests
+    whether that equity's OWN trading history reaches back across the
+    boundary, or whether it only starts sometime after.
+
+    Methodology, validated against controls before ANY threshold was
+    chosen (research/data_quality_remediation_2026-08-07/
+    PHASE1_CONTIGUITY_REPORT.md has the full distribution and control
+    table -- summarised here):
+
+    Searches price_data UNBOUNDED (the ticker's entire stored history, not
+    a fixed window) for the nearest row at/before last_membership_end and
+    the nearest row after it -- an earlier version capped the search to a
+    fixed +/-window and silently mis-scored PALM and a confirmed-recycled
+    control (NCC) as "insufficient data", because their real gaps (PALM:
+    ~12 years; NCC: ~3.3 years) are simply bigger than any reasonable
+    fixed window. The gap between those two rows, in NYSE trading days
+    (pandas_market_calendars -- ordinary weekends/holidays never count),
+    is the discriminating signal.
+
+    >= _CONTIGUITY_GAP_THRESHOLD_TRADING_DAYS (100) -- large, structural
+    gap. 100 is not fitted to the data; the observed distribution across
+    the real 209-ticker NEEDS_REVIEW population is sharply bimodal (129
+    tickers at exactly 0, one at 37, then a real void until the next value
+    at 107) -- 100 sits in that empty [38,106] range, so anywhere in it
+    produces an identical split. Validated with ZERO false positives
+    against FNMA (gap=0, correctly never flagged) and PALM (gap=3,114,
+    correctly flagged); of the 19 confirmed LIKELY_RECYCLED QUARANTINED
+    controls, 10/19 show gap>=100 (all correctly flagged, zero
+    contradictions) and 9/19 show gap<100 (indistinguishable from genuine
+    continuity by this signal -- a real, reported limitation, not silently
+    hidden).
+
+    < 100 (including exactly 0) -- inconclusive, NOT evidence of
+    genuineness. 9 of the 19 confirmed-recycled controls also land here.
+    Callers must NOT treat this as grounds to promote a ticker to CLEAN --
+    only to leave it exactly where it already was.
+
+    Price-scale continuity (median close before/after the boundary) was
+    tested as a second candidate signal and explicitly REJECTED: FNMA's
+    own scale_ratio is 0.134 (a real ~7.5x apparent "collapse", driven by
+    the genuine 2008 conservatorship price decline, not corruption) --
+    using it would have false-positived the one control that mattered
+    most. Not implemented here for that reason, not merely left out.
+
+    Returns: {"ticker", "applicable" (bool -- False if no membership
+    end_date or no price_data after it exists to compare), "last_
+    membership_end", "gap_calendar_days", "gap_missing_trading_days",
+    "no_data_before_end_date_at_all" (bool), "gap_exceeds_threshold"
+    (bool or None if not applicable) -- callers decide what to do with a
+    True/False verdict; this function never writes to the DB itself.
+    """
+    from analysis.universe import get_membership_windows  # noqa: PLC0415
+
+    if last_membership_end is not None:
+        last_end = pd.Timestamp(last_membership_end).date()
+    else:
+        windows = get_membership_windows(ticker)
+        last_end = max((e for _, e in windows), default=None)
+    if last_end is None:
+        return {
+            "ticker": ticker, "applicable": False, "last_membership_end": None,
+            "gap_calendar_days": None, "gap_missing_trading_days": None,
+            "no_data_before_end_date_at_all": None, "gap_exceeds_threshold": None,
+        }
+
+    boundary_dt = datetime.combine(last_end, datetime.max.time())
+    with get_engine().connect() as conn:
+        before_row = conn.execute(
+            text("SELECT date FROM price_data WHERE ticker = :t AND date <= :d ORDER BY date DESC LIMIT 1"),
+            {"t": ticker, "d": boundary_dt},
+        ).scalar()
+        after_row = conn.execute(
+            text("SELECT date FROM price_data WHERE ticker = :t AND date > :d ORDER BY date ASC LIMIT 1"),
+            {"t": ticker, "d": boundary_dt},
+        ).scalar()
+
+    no_data_before = before_row is None
+    if after_row is None:
+        return {
+            "ticker": ticker, "applicable": False, "last_membership_end": last_end.isoformat(),
+            "gap_calendar_days": None, "gap_missing_trading_days": None,
+            "no_data_before_end_date_at_all": no_data_before, "gap_exceeds_threshold": None,
+        }
+
+    d1 = pd.to_datetime(after_row, format="mixed").date()
+    # No row at/before end_date anywhere in this ticker's stored history --
+    # the gap is at minimum "end_date to first known row" (a lower bound;
+    # matches step5_contiguity_analysis.py's convention).
+    d0 = pd.to_datetime(before_row, format="mixed").date() if before_row is not None else last_end
+
+    gap_calendar_days = (d1 - d0).days
+    if gap_calendar_days >= _CONTIGUITY_MIN_GAP_CALENDAR_DAYS:
+        cal = mcal.get_calendar("NYSE")
+        expected = cal.valid_days(
+            start_date=(d0 + timedelta(days=1)).isoformat(), end_date=(d1 - timedelta(days=1)).isoformat()
+        )
+        gap_missing_trading_days = len(expected)
+    else:
+        gap_missing_trading_days = 0
+
+    return {
+        "ticker": ticker, "applicable": True, "last_membership_end": last_end.isoformat(),
+        "gap_calendar_days": gap_calendar_days, "gap_missing_trading_days": gap_missing_trading_days,
+        "no_data_before_end_date_at_all": no_data_before,
+        "gap_exceeds_threshold": gap_missing_trading_days >= _CONTIGUITY_GAP_THRESHOLD_TRADING_DAYS,
     }
 
 
