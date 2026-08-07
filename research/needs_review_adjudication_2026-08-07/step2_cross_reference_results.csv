@@ -1,0 +1,131 @@
+ticker,last_membership_end,long_name,quote_type,exchange,date_overrun_days,gap_missing_trading_days,wiki_match_found,wiki_removed_date,wiki_date_diff_days,wiki_removed_name,wiki_reason,verdict
+AAL,2024-07-08,American Airlines Group Inc.,EQUITY,NMS,759,0.0,True,2024-09-23,77.0,American Airlines Group,Market capitalization change.,PROPOSED_CLEAN
+AAP,2023-07-10,"Advance Auto Parts, Inc.",EQUITY,NYQ,1123,0.0,True,2023-08-25,46.0,Advance Auto Parts,S&P 500 and S&P 100 constituent Johnson & Johnson offered to exchange the shares of Kenvue held for shares of Johnson & Johnson in a split-off exchange offer.,PROPOSED_CLEAN
+AET,2018-11-28,Aetna Inc.,MUTUALFUND,YHD,1,0.0,True,2018-12-03,5.0,Aetna,CVS acquired Aetna,PROPOSED_CLEAN
+AIV,2020-11-17,Apartment Investment and Management Company,EQUITY,NYQ,2088,0.0,True,2020-12-21,34.0,Apartment Investment & Management,Apartment Investment and Management (Aimco) spun off Apartment Income REIT.,STILL_AMBIGUOUS
+ALK,2023-10-18,"Alaska Air Group, Inc.",EQUITY,NYQ,1023,0.0,True,2023-12-18,61.0,Alaska Air Group,Market capitalization change.,PROPOSED_CLEAN
+AMG,2019-12-10,"Affiliated Managers Group, Inc.",EQUITY,NYQ,2431,0.0,True,2019-12-23,13.0,Affiliated Managers Group,Market capitalization change.,PROPOSED_CLEAN
+AMTM,2024-11-26,"Amentum Holdings, Inc.",EQUITY,NYQ,618,0.0,True,2024-12-23,27.0,Amentum,Market capitalization change.,PROPOSED_CLEAN
+AN,2017-08-07,"AutoNation, Inc.",EQUITY,NYQ,3286,0.0,True,2017-08-08,1.0,AutoNation,"BHF replaced AN, MET spun off BHF",PROPOSED_CLEAN
+ANDV,2018-09-24,Andeavor,MUTUALFUND,YHD,7,0.0,True,2018-10-01,7.0,Andeavor,ANDV acquired by Marathon Petroleum.,PROPOSED_CLEAN
+ANF,2013-12-18,Abercrombie & Fitch Co.,EQUITY,NYQ,4614,0.0,True,2013-12-23,5.0,Abercrombie & Fitch,Market capitalization changes.,PROPOSED_CLEAN
+ASH,2008-11-13,Ashland Inc.,EQUITY,NYQ,6475,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+ATI,2015-07-01,ATI Inc.,EQUITY,NYQ,4054,0.0,True,2015-07-02,1.0,Allegheny Technologies,Spin off of Columbia Pipeline.,PROPOSED_QUARANTINED
+AYI,2018-06-15,Acuity Inc.,EQUITY,NYQ,2974,0.0,True,2018-06-18,3.0,Acuity Brands,Market capitalization change.,PROPOSED_CLEAN
+BBBY,2017-07-25,"Bed Bath & Beyond, Inc.",EQUITY,NYQ,3299,0.0,True,2017-07-26,1.0,Bed Bath & Beyond,Market capitalization change.,PROPOSED_CLEAN
+BBT,2019-12-05,Beacon Financial Corporation,EQUITY,NYQ,2436,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+BBWI,2024-09-30,"Bath & Body Works, Inc.",EQUITY,NYQ,675,0.0,True,2024-10-01,1.0,"Bath & Body Works, Inc.",Market capitalization change.,PROPOSED_CLEAN
+BC,2008-06-18,Brunswick Corporation,EQUITY,NYQ,6623,0.0,True,2008-06-23,5.0,Brunswick,Market capitalization change.,PROPOSED_CLEAN
+BHF,2019-02-27,"Brighthouse Financial, Inc.",EQUITY,NMS,2717,0.0,True,2019-04-02,34.0,Brighthouse Financial,DOW spun off from DWDP,PROPOSED_CLEAN
+BIO,2024-07-08,"Bio-Rad Laboratories, Inc.",EQUITY,NYQ,759,0.0,True,2024-09-23,77.0,Bio-Rad Laboratories,Market capitalization change.,PROPOSED_CLEAN
+BMS,2014-12-04,"Bemis Company, Inc.",EQUITY,NYQ,1649,0.0,True,2014-12-05,1.0,Bemis Company,Market cap changes,PROPOSED_CLEAN
+BWA,2024-12-23,BorgWarner Inc.,EQUITY,NYQ,591,0.0,True,2025-03-24,91.0,BorgWarner,Market capitalization change.,PROPOSED_CLEAN
+CCEP,2016-05-24,Coca-Cola Europacific Partners PLC,EQUITY,NMS,3726,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+CCU,2008-07-29,Compañía Cervecerías Unidas S.A.,EQUITY,NYQ,6582,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+CE,2024-12-23,Celanese Corporation,EQUITY,NYQ,591,0.0,True,2025-03-24,91.0,Celanese,Market capitalization change.,PROPOSED_CLEAN
+CLF,2014-04-01,Cleveland-Cliffs Inc.,EQUITY,NYQ,4510,0.0,True,2014-04-02,1.0,Cliffs Natural Resources,Market capitalization changes,PROPOSED_QUARANTINED
+CNX,2016-03-03,CNX Resources Corporation,EQUITY,NYQ,3808,0.0,True,2016-03-04,1.0,Consol Energy,AWK replaces CNX,PROPOSED_QUARANTINED
+COTY,2020-09-18,Coty Inc.,EQUITY,NYQ,2148,0.0,True,2020-09-21,3.0,Coty,Market capitalization change.,PROPOSED_CLEAN
+CPRI,2020-04-06,Capri Holdings Limited,EQUITY,NYQ,2313,0.0,True,2020-05-12,36.0,Capri Holdings,Market capitalization change.,PROPOSED_CLEAN
+CPWR,2011-12-30,Ocean Thermal Energy Corporation,EQUITY,OID,5332,0.0,True,2011-12-31,1.0,Compuware,Market capitalization changes,PROPOSED_QUARANTINED
+CSRA,2018-04-02,,MUTUALFUND,YHD,1,0.0,True,2018-04-04,2.0,CSRA,S&P 500 constituent General Dynamics (NYSE: GD) acquired CSRA.,STILL_AMBIGUOUS
+CZR,2025-08-28,"Caesars Entertainment, Inc.",EQUITY,NMS,343,0.0,True,2025-09-22,25.0,Caesars Entertainment,Market capitalization change.,PROPOSED_CLEAN
+DDS,2008-10-16,"Dillard's, Inc.",EQUITY,NYQ,6503,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+DXC,2023-09-18,DXC Technology Company,EQUITY,NYQ,1053,0.0,True,2023-10-03,15.0,DXC Technology,Market capitalization change.,PROPOSED_CLEAN
+EMN,2025-11-03,Eastman Chemical Company,EQUITY,NYQ,276,0.0,True,2025-11-04,1.0,Eastman Chemical Co.,Market capitalization change.,PROPOSED_CLEAN
+ENPH,2025-08-28,"Enphase Energy, Inc.",EQUITY,NGM,343,0.0,True,2025-09-22,25.0,Enphase Energy,Market capitalization change.,PROPOSED_CLEAN
+EP,2012-05-23,Empire Petroleum Corporation,EQUITY,ASE,5188,0.0,True,2012-05-17,6.0,El Paso Corporation,Acquired by Kinder Morgan (KMI)<ref>{{cite web|url=http://www.standardandpoors.com/indices/articles/en/us/?assetID=1245333799368,PROPOSED_QUARANTINED
+ESRX,2018-12-19,Express Scripts Holding Company,MUTUALFUND,YHD,2,0.0,True,2018-12-24,5.0,Express Scripts,S&P 500 constituent Cigna (NYSE: CI) acquired ESRX,PROPOSED_CLEAN
+ETSY,2024-07-08,"Etsy, Inc.",EQUITY,NYQ,759,0.0,True,2024-09-23,77.0,Etsy,Market capitalization change.,PROPOSED_CLEAN
+EVHC,2018-10-10,Envision Healthcare Corporation,MUTUALFUND,YHD,0,,True,2018-10-11,1.0,Envision Healthcare,EVHC acquired by KKR.,PROPOSED_CLEAN
+FCPT,2015-11-10,"Four Corners Property Trust, Inc.",EQUITY,NYQ,3922,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+FHN,2013-06-19,First Horizon Corporation,EQUITY,NYQ,4796,0.0,True,2013-06-21,2.0,First Horizon,Zoetis spun off by Pfizer,PROPOSED_CLEAN
+FLR,2019-06-01,Fluor Corporation,EQUITY,NYQ,2623,0.0,True,2019-06-03,2.0,Fluor Corporation,CTVA spun off from DWDP (which then changed symbol to DD),PROPOSED_CLEAN
+FLS,2021-02-12,Flowserve Corporation,EQUITY,NYQ,2001,0.0,True,2021-03-22,38.0,Flowserve,Market capitalization change.,PROPOSED_CLEAN
+FMC,2024-12-23,FMC Corporation,EQUITY,NYQ,591,0.0,True,2025-03-24,91.0,FMC Corporation,Market capitalization change.,PROPOSED_CLEAN
+FMCC,2008-09-08,Federal Home Loan Mortgage Corporation,EQUITY,OQB,6541,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+FNMA,2008-09-08,Federal National Mortgage Association,EQUITY,OQB,6541,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+FOSL,2016-01-04,"Fossil Group, Inc.",EQUITY,NMS,3867,0.0,True,2016-01-05,1.0,Fossil Group,WSH merges with TW (and renames to WLTW),PROPOSED_CLEAN
+FTI,2021-01-21,TechnipFMC plc,EQUITY,NYQ,2023,0.0,True,2021-02-12,22.0,TechnipFMC,TechnipFMC was removed from the S&P 500 in anticipation of its announced spin-off of Technip Energies.,PROPOSED_CLEAN
+GENZ,2011-04-01,VanEck Digital Native Economy ETF,EQUITY,NGM,5606,0.0,True,2011-04-01,0.0,Genzyme,Acquired by Sanofi Aventis (SNY),PROPOSED_QUARANTINED
+GHC,2014-09-19,Graham Holdings Company,EQUITY,NYQ,4339,0.0,True,2014-09-20,1.0,Graham Holdings,Market cap changes,PROPOSED_CLEAN
+GME,2016-04-20,GameStop Corp.,EQUITY,NYQ,3760,0.0,True,2016-04-25,5.0,GameStop,Global Payments is acquiring Heartland Payment Systems,PROPOSED_CLEAN
+GNW,2015-11-17,"Genworth Financial, Inc.",EQUITY,NYQ,3915,0.0,True,2015-11-18,1.0,Genworth Financial,GE spinning off Synchrony Financial,PROPOSED_CLEAN
+GT,2019-02-15,The Goodyear Tire & Rubber Company,EQUITY,NMS,2729,0.0,True,2019-02-27,12.0,The Goodyear Tire & Rubber Company,WAB acquired GE transportation business,PROPOSED_CLEAN
+HOG,2020-05-22,"Harley-Davidson, Inc.",EQUITY,NYQ,2267,0.0,True,2020-06-22,31.0,Harley-Davidson,Market capitalization change.,PROPOSED_CLEAN
+HP,2020-05-12,"Helmerich & Payne, Inc.",EQUITY,NYQ,2277,0.0,True,2020-05-22,10.0,Helmerich & Payne,Market capitalization change.,PROPOSED_CLEAN
+HRB,2020-09-18,"H&R Block, Inc.",EQUITY,NYQ,2148,0.0,True,2020-09-21,3.0,H&R Block,Market capitalization change.,PROPOSED_CLEAN
+ILMN,2024-05-08,"Illumina, Inc.",EQUITY,NMS,820,0.0,True,2024-06-24,47.0,"Illumina, Inc.",Market capitalization change.,PROPOSED_CLEAN
+IPGP,2022-06-09,IPG Photonics Corporation,EQUITY,NMS,1519,0.0,True,2022-06-21,12.0,IPG Photonics,Market capitalization change.,PROPOSED_CLEAN
+ITT,2011-10-31,ITT Inc.,EQUITY,NYQ,5393,0.0,True,2011-10-31,0.0,ITT,Spun off from ITT Corp.,PROPOSED_CLEAN
+JEF,2019-09-23,Jefferies Financial Group Inc.,EQUITY,NYQ,2509,0.0,True,2019-09-26,3.0,Jefferies Financial Group,JEF spun off SPB.,PROPOSED_CLEAN
+KBH,2009-12-17,KB Home,EQUITY,NYQ,6076,0.0,True,2009-12-18,1.0,KB Home,Market capitalization change.{{cn|date=April 2025}},PROPOSED_CLEAN
+KG,2010-12-17,Kestrel Group Ltd,EQUITY,NCM,5711,0.0,True,2010-12-17,0.0,King Pharmaceuticals,Acquired by Pfizer.,PROPOSED_QUARANTINED
+KMX,2025-10-30,"CarMax, Inc.",EQUITY,NYQ,280,0.0,True,2025-10-31,1.0,CarMax,Market capitalization change.,PROPOSED_CLEAN
+KSS,2020-09-18,Kohl's Corporation,EQUITY,NYQ,2148,0.0,True,2020-09-21,3.0,Kohl's,Market capitalization change.,PROPOSED_CLEAN
+LEG,2021-12-14,"Leggett & Platt, Incorporated",EQUITY,NYQ,1696,0.0,True,2021-12-20,6.0,Leggett & Platt,Market capitalization change.,PROPOSED_CLEAN
+LKQ,2025-12-11,LKQ Corporation,EQUITY,NMS,238,0.0,True,2025-12-22,11.0,LKQ Corporation,Market capitalization change.,PROPOSED_CLEAN
+LNC,2023-08-30,Lincoln National Corporation,EQUITY,NYQ,1072,0.0,True,2023-09-18,19.0,Lincoln National Corporation,Market capitalization change.,PROPOSED_CLEAN
+LPX,2006-11-07,Louisiana-Pacific Corporation,EQUITY,NYQ,7212,36.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+LUMN,2023-03-15,"Lumen Technologies, Inc.",EQUITY,NYQ,1240,0.0,True,2023-03-20,5.0,Lumen Technologies,Market capitalization change.,PROPOSED_CLEAN
+LW,2026-02-09,"Lamb Weston Holdings, Inc.",EQUITY,NYQ,178,0.0,True,2026-03-23,42.0,Lamb Weston,Market capitalization change.,PROPOSED_CLEAN
+M,2020-04-03,"Macy's, Inc.",EQUITY,NYQ,2316,0.0,True,2020-04-06,3.0,Macy's,Market capitalization change.,PROPOSED_CLEAN
+MAC,2019-12-10,The Macerich Company,EQUITY,NYQ,2431,0.0,True,2019-12-23,13.0,Macerich,Market capitalization change.,PROPOSED_CLEAN
+MAT,2019-06-03,"Mattel, Inc.",EQUITY,NMS,2621,0.0,True,2019-06-07,4.0,Mattel,Pending merger of Bemis and Amcor; Bemis treated as the surviving entity.,PROPOSED_CLEAN
+MBI,2009-12-17,MBIA Inc.,EQUITY,NYQ,6076,0.0,True,2009-12-18,1.0,MBIA,Market capitalization change.{{cn|date=April 2025}},PROPOSED_CLEAN
+MHK,2025-12-11,"Mohawk Industries, Inc.",EQUITY,NYQ,238,0.0,True,2025-12-22,11.0,Mohawk Industries,Market capitalization change.,PROPOSED_CLEAN
+MKTX,2025-08-28,MarketAxess Holdings Inc.,EQUITY,NMS,343,0.0,True,2025-09-22,25.0,MarketAxess,Market capitalization change.,PROPOSED_CLEAN
+MOH,2026-02-09,"Molina Healthcare, Inc.",EQUITY,NYQ,178,0.0,True,2026-03-23,42.0,Molina Healthcare,Market capitalization change.,PROPOSED_CLEAN
+MOLX,2013-12-03,,MUTUALFUND,YHD,6,0.0,True,2013-12-10,7.0,Molex,MOLX acquired by Koch Industries.,STILL_AMBIGUOUS
+MTCH,2026-02-09,"Match Group, Inc.",EQUITY,NMS,178,0.0,True,2026-03-23,42.0,Match Group,Market capitalization change.,PROPOSED_CLEAN
+MTG,2008-10-28,MGIC Investment Corporation,EQUITY,NYQ,6491,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+MTW,2009-08-31,"The Manitowoc Company, Inc.",EQUITY,NYQ,6184,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+MUR,2017-07-25,Murphy Oil Corporation,EQUITY,NYQ,3299,0.0,True,2017-07-26,1.0,Murphy Oil,Market capitalization change.,PROPOSED_CLEAN
+NAVI,2018-06-01,Navient Corporation,EQUITY,NMS,2988,0.0,True,2018-06-05,4.0,Navient,Westar Energy (NYSE: WR) acquired Great Plains Energy (NYSE: GXP) and changed name to Evergy.,PROPOSED_CLEAN
+NBR,2015-03-19,Nabors Industries Ltd.,EQUITY,NYQ,4158,0.0,True,2015-03-23,4.0,Nabors Industries,Market Capitalization Changes.,PROPOSED_CLEAN
+NKTR,2019-09-26,Nektar Therapeutics,EQUITY,NCM,2506,0.0,True,2019-10-03,7.0,Nektar Therapeutics,Market capitalization change.,PROPOSED_CLEAN
+NOV,2021-08-30,NOV Inc.,EQUITY,NYQ,1802,0.0,True,2021-09-20,21.0,Nov,Market capitalization change.,PROPOSED_CLEAN
+NWL,2023-08-30,Newell Brands Inc.,EQUITY,NMS,1072,0.0,True,2023-09-18,19.0,Newell Brands,Market capitalization change.,PROPOSED_CLEAN
+NYT,2010-12-17,The New York Times Company,EQUITY,NYQ,5711,0.0,True,2010-12-17,0.0,The New York Times Company,Market Cap changes.,PROPOSED_CLEAN
+OGN,2023-10-02,Organon & Co.,EQUITY,NYQ,1039,0.0,True,2023-10-18,16.0,Organon & Co.,Market capitalization change.,PROPOSED_CLEAN
+OI,2016-11-29,"O-I Glass, Inc.",EQUITY,NYQ,3537,0.0,True,2016-12-02,3.0,Owens-Illinois,Market capitalization change.,PROPOSED_QUARANTINED
+PAYC,2026-02-09,"Paycom Software, Inc.",EQUITY,NYQ,178,0.0,True,2026-03-23,42.0,Paycom,Market capitalization change.,PROPOSED_CLEAN
+PBI,2017-02-28,Pitney Bowes Inc.,EQUITY,NYQ,3446,0.0,True,2017-03-01,1.0,Pitney Bowes,CBOE acquires BATS,PROPOSED_CLEAN
+PENN,2022-06-28,"PENN Entertainment, Inc.",EQUITY,NMS,1500,0.0,True,2022-09-19,83.0,Penn Entertainment,Market capitalization change.,PROPOSED_CLEAN
+PRGO,2021-08-30,Perrigo Company plc,EQUITY,NYQ,1802,0.0,True,2021-09-20,21.0,Perrigo,Market capitalization change.,PROPOSED_CLEAN
+PVH,2022-06-28,PVH Corp.,EQUITY,NYQ,1500,0.0,True,2022-09-19,83.0,PVH,Market capitalization change.,PROPOSED_CLEAN
+QRVO,2024-11-26,"Qorvo, Inc.",EQUITY,NMS,618,0.0,True,2024-12-23,27.0,Qorvo,Market capitalization change.,PROPOSED_CLEAN
+R,2017-06-16,"Ryder System, Inc.",EQUITY,NYQ,3338,0.0,True,2017-06-19,3.0,Ryder System,Market capitalization changes.,PROPOSED_CLEAN
+RHI,2024-05-08,Robert Half Inc.,EQUITY,NYQ,820,0.0,True,2024-06-24,47.0,Robert Half,Market capitalization change.,PROPOSED_CLEAN
+RIG,2017-07-25,Transocean Ltd.,EQUITY,NYQ,3299,0.0,True,2017-07-26,1.0,Transocean,Market capitalization change.,PROPOSED_CLEAN
+RRC,2018-06-15,Range Resources Corporation,EQUITY,NYQ,2974,0.0,True,2018-06-18,3.0,Range Resources,Market capitalization change.,PROPOSED_CLEAN
+SANM,2007-06-26,Sanmina Corporation,EQUITY,NMS,6981,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+SCG,2018-12-24,SCANA Corporation,MUTUALFUND,YHD,7,0.0,True,2019-01-02,9.0,SCANA,Dominion Energy acquired SCANA Corporation,PROPOSED_CLEAN
+SEDG,2023-10-18,"SolarEdge Technologies, Inc.",EQUITY,NMS,1023,0.0,True,2023-12-18,61.0,SolarEdge,Market capitalization change.,PROPOSED_CLEAN
+SIG,2018-03-16,Signet Jewelers Limited,EQUITY,NYQ,3065,0.0,True,2018-03-19,3.0,Signet Jewelers,Market capitalization change.,PROPOSED_CLEAN
+SII,2010-08-19,Sprott Inc.,EQUITY,NYQ,5831,0.0,True,2010-08-26,7.0,Smith International,Acquired by Schlumberger (SLB),PROPOSED_QUARANTINED
+SLG,2021-02-12,SL Green Realty Corp.,EQUITY,NYQ,2001,0.0,True,2021-03-22,38.0,SL Green Realty,Market capitalization change.,PROPOSED_CLEAN
+SLM,2014-04-22,SLM Corporation,EQUITY,NMS,4489,0.0,True,2014-05-01,9.0,SLM Corporation,Navient Spun off from SLM,PROPOSED_CLEAN
+SSP,2008-06-30,The E.W. Scripps Company,EQUITY,NMS,6611,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+SUN,2012-10-04,Sunoco LP,EQUITY,NYQ,5054,0.0,True,2012-10-10,6.0,Sunoco,Acquired by Energy Transfer Partners (ETP)<ref>{{cite web|url=http://www.standardandpoors.com/indices/articles/en/us/?assetID=1245341391586,PROPOSED_CLEAN
+TDC,2017-06-16,Teradata Corporation,EQUITY,NYQ,3338,0.0,True,2017-06-19,3.0,Teradata,Market capitalization changes.,PROPOSED_CLEAN
+TEX,2008-11-05,Terex Corporation,EQUITY,NYQ,6483,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+TFX,2024-12-23,Teleflex Incorporated,EQUITY,NYQ,591,0.0,True,2025-03-24,91.0,Teleflex,Market capitalization change.,PROPOSED_CLEAN
+THC,2016-04-15,Tenet Healthcare Corporation,EQUITY,NYQ,3765,0.0,True,2016-04-18,3.0,Tenet Healthcare,Ulta replaces Tenet,PROPOSED_CLEAN
+TRIP,2019-12-10,"Tripadvisor, Inc.",EQUITY,NMS,2431,0.0,True,2019-12-23,13.0,TripAdvisor,Market capitalization change.,PROPOSED_CLEAN
+TWX,2018-06-14,,MUTUALFUND,YHD,1,0.0,True,2018-06-20,6.0,Time Warner,AT&T acquired Time Warner.,STILL_AMBIGUOUS
+UA,2022-06-09,"Under Armour, Inc.",EQUITY,NYQ,1519,0.0,True,2022-06-21,12.0,Under Armour (Class C),Market capitalization change.,STILL_AMBIGUOUS
+UAA,2022-06-09,"Under Armour, Inc.",EQUITY,NYQ,1519,0.0,True,2022-06-21,12.0,Under Armour (Class A),Market capitalization change.,STILL_AMBIGUOUS
+UIS,2008-11-07,Unisys Corporation,EQUITY,NYQ,6481,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+UNM,2021-08-30,Unum Group,EQUITY,NYQ,1802,0.0,True,2021-09-20,21.0,Unum,Market capitalization change.,PROPOSED_CLEAN
+URBN,2017-03-17,"Urban Outfitters, Inc.",EQUITY,NMS,3429,0.0,True,2017-03-20,3.0,Urban Outfitters,Market capitalization change.,PROPOSED_CLEAN
+VFC,2024-03-25,V.F. Corporation,EQUITY,NYQ,864,0.0,True,2024-04-03,9.0,VF Corporation,Market capitalization change.,STILL_AMBIGUOUS
+VIAV,2013-12-18,Viavi Solutions Inc.,EQUITY,NMS,4614,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+VNO,2022-12-22,Vornado Realty Trust,EQUITY,NYQ,1323,0.0,True,2023-01-05,14.0,Vornado Realty Trust,Market capitalization change.,PROPOSED_CLEAN
+VNT,2021-02-12,Vontier Corporation,EQUITY,NYQ,2001,0.0,True,2021-03-22,38.0,Vontier,Market capitalization change.,PROPOSED_CLEAN
+WEN,2008-09-26,The Wendy's Company,EQUITY,NMS,6523,0.0,False,,,,,NOT_IN_WIKIPEDIA_TABLE
+WHR,2024-03-04,Whirlpool Corporation,EQUITY,NYQ,885,0.0,True,2024-03-18,14.0,Whirlpool Corporation,Market capitalization change.,PROPOSED_CLEAN
+WU,2021-12-14,The Western Union Company,EQUITY,NYQ,1696,0.0,True,2021-12-20,6.0,Western Union,Market capitalization change.,PROPOSED_CLEAN
+XRAY,2024-04-01,DENTSPLY SIRONA Inc.,EQUITY,NMS,857,0.0,True,2024-04-03,2.0,Dentsply Sirona,Market capitalization change.,PROPOSED_CLEAN
+XRX,2021-02-12,Xerox Holdings Corporation,EQUITY,NMS,2001,0.0,True,2021-03-22,38.0,Xerox,Market capitalization change.,PROPOSED_CLEAN
+ZION,2024-03-04,"Zions Bancorporation, National Association",EQUITY,NMS,885,0.0,True,2024-03-18,14.0,Zions Bancorporation,Market capitalization change.,PROPOSED_CLEAN
