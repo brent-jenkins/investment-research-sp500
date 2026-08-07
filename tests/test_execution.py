@@ -4556,9 +4556,17 @@ def test_reconcile_stop_loss_closure_labeled_precisely_not_broker_closed_no_sell
         days_ago=3, is_etf=False, stop_order_id="stop-order-recon-1", stop_order_status="PLACED",
     )
     v2_mocks.get_positions.return_value = []  # T212 no longer shows it held
+    # filledAt must sort after the seeded entry's filled_at (utcnow() - 3
+    # days) in _reconstruct_pnl()'s `ORDER BY filled_at ASC` string
+    # comparison -- a hardcoded past date here previously collided with
+    # the entry's time-of-day depending on when the suite happened to run
+    # (e.g. entry at 13:34 vs. a hardcoded "10:00:00" exit sorted the SELL
+    # BEFORE the BUY, silently breaking FIFO pairing and producing no pnl
+    # row). Anchoring to utcnow() guarantees it's always after the entry.
+    exit_filled_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
     v2_mocks.get_order_history.return_value = [{
         "order": {"id": "stop-order-recon-1", "status": "FILLED"},
-        "fill": {"price": 89.5, "quantity": -10.0, "filledAt": "2026-08-04T10:00:00.000Z"},
+        "fill": {"price": 89.5, "quantity": -10.0, "filledAt": exit_filled_at},
     }]
     mock_alert = mocker.patch("output.briefing.send_position_reconciliation_alert")
 
