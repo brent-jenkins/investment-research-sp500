@@ -87,7 +87,7 @@ trading212_invest:
   # every decide/submit call) that may be deployed at once. Read
   # identically by live order placement and the backtest engine's default
   # simulation -- one shared key, one shared meaning.
-  max_total_deployed: 0.8
+  max_total_deployed: 0.7
   # VaR sizing ceiling for a single new entry, as a percentage of the
   # account's current total value rather than a fixed GBP figure.
   # Position count is an emergent consequence of this and
