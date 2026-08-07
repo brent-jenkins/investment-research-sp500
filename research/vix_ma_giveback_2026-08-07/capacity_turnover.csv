@@ -1,0 +1,8 @@
+variant,n_removed,n_added,n_unchanged,n_same_day_swap_dates,n_trades_variant,n_trades_baseline
+vix_only,3409,4185,1988,1418,6173,5397
+ma_only,4208,3187,1189,1056,4376,5397
+dd_only,3714,4102,1683,1451,5785,5397
+vix_ma,4219,3523,1178,1052,4701,5397
+vix_dd,3744,4897,1653,1492,6550,5397
+ma_dd,4323,3571,1074,1071,4645,5397
+combined,4283,3850,1114,1060,4964,5397
