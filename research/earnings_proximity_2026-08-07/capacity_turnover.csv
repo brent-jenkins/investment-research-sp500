@@ -1,0 +1,5 @@
+shrink_variant,base_variant,n_removed,n_added,n_unchanged,n_same_day_swap_dates,n_trades_shrink,n_trades_base
+earnings_shrink,baseline,3466,4224,1931,1522,6155,5397
+cap05_shrink,cap05_baseline,2280,2921,1157,1050,4078,3437
+cap06_shrink,cap06_baseline,2755,3445,1366,1245,4811,4121
+cap07_shrink,cap07_baseline,3070,3805,1679,1373,5484,4749
