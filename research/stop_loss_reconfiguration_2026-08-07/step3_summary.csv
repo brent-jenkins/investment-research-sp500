@@ -1,0 +1,9 @@
+pool,arm,label,n_trades,n_distinct_tickers,total_pnl_gbp,blocks_pass,blocks_total,continuous_cagr_pct,continuous_ending_equity_gbp,continuous_peak_relative_max_dd_pct,continuous_total_return_pct,continuous_pf,continuous_win_rate
+pool1,A,pool1_A,4749,370,240360.75,7,16,9.39,290360.75,-41.94,480.72,1.31,0.4437
+pool1,C1,pool1_C1,4096,368,216277.69,6,16,8.91,266277.69,-43.18,432.56,1.32,0.5178
+pool1,C2,pool1_C2,3822,360,240528.15,8,16,9.4,290528.15,-39.42,481.06,1.37,0.5364
+pool1,B,pool1_B,3500,379,226286.64,9,16,9.12,276286.64,-43.46,452.57,1.4,0.5363
+pool2,A,pool2_A,4958,444,116748.91,9,16,6.34,166748.91,-50.21,233.5,1.18,0.4304
+pool2,C1,pool2_C1,4250,428,124319.72,9,16,6.58,174319.72,-47.49,248.64,1.21,0.4922
+pool2,C2,pool2_C2,3973,433,87969.61,9,16,5.32,137969.61,-46.86,175.94,1.19,0.5074
+pool2,B,pool2_B,3633,449,126156.65,10,16,6.64,176156.65,-44.92,252.31,1.25,0.5194

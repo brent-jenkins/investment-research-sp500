@@ -1178,6 +1178,7 @@ def simulate_portfolio_compounding_mtm(
     per_trade_pct: float,
     max_deployed_pct: float,
     collect_rejections: bool = False,
+    disable_stop_loss: bool = False,
 ):
     """Mark-to-market variant of simulate_portfolio_compounding() — added
     2026-08-01 after confirming (see CLAUDE.md's "Live/backtest deployment-
@@ -1318,6 +1319,22 @@ def simulate_portfolio_compounding_mtm(
     going forward (by actually capturing intraday data from here on),
     never something a backtest correction can fix for the past. Treat
     this fix as "much closer to reality," not "now identical to it."
+
+    **`disable_stop_loss` (2026-08-07, TEMPORARY, research-only) — re-added
+    for research/stop_loss_reconfiguration_2026-08-07/, following the exact
+    precedent of research/no_stop_loss_2026-08-06/'s own additive, marked,
+    reverted-after-use modification (that investigation's own conclusion,
+    "researched, not adopted," is what makes this a legitimate re-run under
+    a different, wider study rather than re-litigating a settled result).
+    When True, an entry's stop_price is stored as None instead of the
+    resolved ATR stop; evaluate_exit_reason()'s own STOP_LOSS branch
+    requires a non-None stop_price, so this falls through cleanly to
+    SIGNAL_OFF/MAX_HOLDING (CRISIS_EXIT is checked first regardless and is
+    completely unaffected). evaluate_exit_reason() itself is NOT modified —
+    still the identical shared function live and every other engine call.
+    Default False -- every existing caller/test is byte-identical to
+    before this parameter existed. Intended to be reverted once this
+    study's data collection is complete, exactly as the precedent was.
     """
     var_cfg = config.get("trading212_invest", {})
     starting_capital = float(config.get("backtest", {}).get("starting_capital_gbp", 10000))
@@ -1453,6 +1470,8 @@ def simulate_portfolio_compounding_mtm(
             price = float(row["close"])
             atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0
             stop, stop_distance_pct = _resolve_entry_stop("LONG", price, atr, config)
+            if disable_stop_loss:
+                stop = None
 
             dynamic_max_position_gbp = resolve_dynamic_max_position_gbp(
                 current_balance, per_trade_pct, absolute_max_position_gbp,

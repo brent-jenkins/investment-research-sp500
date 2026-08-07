@@ -1,0 +1,82 @@
+{
+  "pool2_A": {
+    "worst_episode": {
+      "peak_date": "2008-01-03",
+      "trough_date": "2009-07-10",
+      "n_open_during_episode": 462,
+      "n_needs_review": 158,
+      "n_clean_or_quarantined_universe": 304,
+      "needs_review_pnl_gbp": -9003.7,
+      "clean_pnl_gbp": -14587.0,
+      "needs_review_tickers_involved": [
+        "AN",
+        "BBBY",
+        "BBT",
+        "BMS",
+        "CNX",
+        "CPWR",
+        "EP",
+        "ESRX",
+        "FHN",
+        "FLR",
+        "GME",
+        "HRB",
+        "JEF",
+        "KG",
+        "KSS",
+        "MBI",
+        "MTW",
+        "MUR",
+        "NBR",
+        "NOV",
+        "R",
+        "RRC",
+        "TDC",
+        "THC",
+        "WU"
+      ]
+    },
+    "full_population_peak_dd_pct": -50.21,
+    "clean_only_peak_dd_pct": -31.45,
+    "delta_pp": 18.76
+  },
+  "pool2_B": {
+    "worst_episode": {
+      "peak_date": "2008-06-09",
+      "trough_date": "2009-07-10",
+      "n_open_during_episode": 271,
+      "n_needs_review": 76,
+      "n_clean_or_quarantined_universe": 195,
+      "needs_review_pnl_gbp": -5980.8,
+      "clean_pnl_gbp": -15352.48,
+      "needs_review_tickers_involved": [
+        "AN",
+        "BBBY",
+        "BBT",
+        "BMS",
+        "CNX",
+        "CPWR",
+        "EP",
+        "ESRX",
+        "FHN",
+        "FLR",
+        "HRB",
+        "JEF",
+        "KG",
+        "KSS",
+        "MBI",
+        "MUR",
+        "NBR",
+        "NOV",
+        "R",
+        "RRC",
+        "TDC",
+        "THC",
+        "WU"
+      ]
+    },
+    "full_population_peak_dd_pct": -44.92,
+    "clean_only_peak_dd_pct": -33.77,
+    "delta_pp": 11.15
+  }
+}

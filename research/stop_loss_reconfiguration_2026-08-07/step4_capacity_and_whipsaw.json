@@ -1,0 +1,52 @@
+{
+  "capacity_turnover": {
+    "pool1": {
+      "pool": "pool1",
+      "n_trades_a": 4749,
+      "n_trades_b": 3500,
+      "trade_count_delta": -1249,
+      "trade_count_delta_pct": -26.3,
+      "admitted_a_only": 4231,
+      "admitted_b_only": 2982,
+      "admitted_both": 518,
+      "b_capacity_rejections_total": 955707,
+      "b_capacity_rejections_of_a_only_candidates": 1699
+    },
+    "pool2": {
+      "pool": "pool2",
+      "n_trades_a": 4958,
+      "n_trades_b": 3633,
+      "trade_count_delta": -1325,
+      "trade_count_delta_pct": -26.72,
+      "admitted_a_only": 4405,
+      "admitted_b_only": 3080,
+      "admitted_both": 553,
+      "b_capacity_rejections_total": 1066234,
+      "b_capacity_rejections_of_a_only_candidates": 1789
+    }
+  },
+  "whipsaw": {
+    "pool1": {
+      "pool": "pool1",
+      "n_stop_loss_exits": 2127,
+      "n_reentered_within_30d": 1456,
+      "pct_reentered_within_30d": 68.45,
+      "total_stop_pnl_of_reentered_gbp": -462014.99,
+      "total_reentry_pnl_gbp": 101666.94,
+      "total_combined_pnl_gbp": -360348.05,
+      "n_combined_pairs_net_positive": 429,
+      "n_combined_pairs_net_negative": 1027
+    },
+    "pool2": {
+      "pool": "pool2",
+      "n_stop_loss_exits": 2283,
+      "n_reentered_within_30d": 1553,
+      "pct_reentered_within_30d": 68.02,
+      "total_stop_pnl_of_reentered_gbp": -347997.3,
+      "total_reentry_pnl_gbp": 50100.03,
+      "total_combined_pnl_gbp": -297897.27,
+      "n_combined_pairs_net_positive": 433,
+      "n_combined_pairs_net_negative": 1120
+    }
+  }
+}
