@@ -1,0 +1,1 @@
+run06_drop_TDY	drop_ticker	TDY	2007-01-01	1041

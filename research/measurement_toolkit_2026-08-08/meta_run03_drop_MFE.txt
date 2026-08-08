@@ -1,0 +1,1 @@
+run03_drop_MFE	drop_ticker	MFE	2007-01-01	1041

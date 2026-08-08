@@ -1,0 +1,23 @@
+{
+  "label_x": "stopA",
+  "label_y": "stopB",
+  "n_total_x": 4922,
+  "n_total_y": 3599,
+  "n_shared_pairs": 528,
+  "shared_as_pct_of_x": 10.7,
+  "shared_as_pct_of_y": 14.7,
+  "n_identical_outcome": 360,
+  "n_differing_outcome": 168,
+  "win_rate_stopB_over_stopA_pct_of_differing": 45.8,
+  "mean_pnl_pct_diff": -0.0016,
+  "median_pnl_pct_diff": 0.0,
+  "std_pnl_pct_diff": 0.0502,
+  "total_pnl_gbp_diff": 3528.68,
+  "pnl_pct_diff_percentiles": {
+    "5": -0.0656,
+    "25": 0.0,
+    "50": 0.0,
+    "75": 0.0,
+    "95": 0.0743
+  }
+}

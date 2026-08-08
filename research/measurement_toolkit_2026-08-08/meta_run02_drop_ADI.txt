@@ -1,0 +1,1 @@
+run02_drop_ADI	drop_ticker	ADI	2007-01-01	1041
