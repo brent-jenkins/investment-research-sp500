@@ -282,6 +282,78 @@ a slot empty when nothing clears a quality bar, deliberately out of scope for th
 need to isolate deployment level from selection quality from the start, not inherit a clean bill of
 health from this result.
 
+## Derived state living in one place while work happens in another — a single generalisation, not three incidents (2026-08-08)
+
+**The same failure shape hit three times in one day, each with a different surface.** (1) The
+Wikipedia-adjudication commit wrote 105 `write_data_quality_status()` calls to the *local* research
+database only; CLAUDE.md asserted the result as current fact for a full day before an audit caught
+that production still held the pre-refinement state (see "A research script whose output is a
+database mutation needs an explicit, separate production-apply step" above). (2) The admission-
+redesign study's sanity gate failed on a stray `VTRS` trade, tracing to a P&L reference figure
+computed against a database snapshot from a since-deleted worktree — the figure decayed the moment
+ingestion moved on, with nothing to signal that it had (see "Data-quality backstop" above, meta-
+lesson 1). (3) The very next study's setup found the *main checkout's own* local database was still
+on the pre-fix state (220/25/163) — the correction from (2)'s own fix had landed in a since-deleted
+worktree's copy and on production, never back into the checkout every future worktree gets created
+from.
+
+**The generalisation**: any derived or mutable state — a database, a quality/status table, a
+computed reference figure, a cache — can exist in more than one independently-evolving copy at once
+(a worktree, production, a research artifact, the main checkout), and fixing or updating one copy
+does nothing to the others by default. "I already fixed this" is a claim about *whichever copy the
+fix actually ran against*, never a claim about every other copy that happens to share the same name
+or nominally represent "the same" state. This is not a database-specific lesson — it is the same
+shape as the webhook-vs-native-deploy duplication this project already removed structurally (see
+"GitHub Actions as the real test gate" below) and the five independent live/backtest decision-logic
+divergences documented earlier still ("There is exactly one implementation of any given trading
+decision") — anywhere the same fact needs to be true in two places, it will silently stop being true
+in one of them eventually, and "eventually" has so far meant "same day, three times."
+
+**The rule.** Before trusting any derived state — a quality table's current counts, a P&L reference
+figure, a cache, a database file — in a new worktree, a new session, or after any fix, **query it
+directly, fresh, in the place it's about to be used**, rather than inferring it from "I fixed this
+earlier," "this is the main copy," or "this matches what I last saw." A new worktree's own copy of
+`database/investment_research.db` is not guaranteed current just because *a* copy somewhere was
+fixed — confirm the specific file this session will actually read from.
+
+## Gate-width (momentum shortlist) study — pre-registered, tested, NOT adopted (2026-08-08/09)
+
+**Isolated one variable the admission-redesign study above couldn't**: restricting daily candidacy
+to the top N by momentum among gate-passers (N ∈ {100, 50, 25} vs. the current ~330-candidate gate),
+with entries staying on the continuous daily clock throughout — explicitly not a rebalancing test.
+Full pre-registration and results: `research/gatewidth_prereg_2026-08-08/PREREGISTRATION.md` /
+`REPORT.md`.
+
+**An interior optimum does appear on the decisive pool (Pool 2 CLEAN) — cost-adjusted CAGR rises
+from 3.395% (baseline) to a peak of 4.043% at Top-50, then falls back to 3.418% at Top-25 — but the
+largest gap (+0.65pp) sits inside the measured ~1.08pp noise floor and never reaches the
+pre-registered +1.5pp bar.** Not adopted on that basis alone. Two further findings, both surfaced by
+instruments built specifically to catch a false positive here: **the deployment guard passed
+cleanly** (mean deployment moves ≤0.5pp across every arm in both pools — gate width, unlike monthly
+batching, genuinely does not change deployment behaviour, confirming the mechanism this study
+targeted). **The pre-registered overlap prediction was wrong, and reported as such rather than
+smoothed over**: exact `(ticker, entry_date)` overlap between baseline and every shortlist arm was
+predicted high (per Part 4's timing-driven-admission finding) but measured 40.6–44.8% — explained on
+investigation as capacity-cascade amplification (the same mechanism behind `CPWR`'s two-block flip
+and the adj_close study's own low overlap), not a sign the shortlist changes admission timing in a
+way that breaks the deployment-guard finding, which was independently confirmed via the panel data
+directly, not inferred from the overlap number.
+
+**The one arm that looked most interesting in isolation disagreed sharply between pools — read as a
+reason for caution, not resolved.** Top-100 shows +0.51pp on Pool 2 CLEAN but **−2.10pp on Pool 1**
+— opposite sign, both outside noise on their own pool. Per this project's dual-provenance standing
+requirement, reported as a genuine, unreconciled cross-pool disagreement (a plausible but unconfirmed
+hypothesis: Pool 1's maximal survivorship bias makes it a structurally different universe at rank
+100, not merely a smaller one) rather than picking whichever pool told the more convenient story.
+
+**Same-day repeat of the derived-state lesson above, twice more.** The sanity gate against this
+morning's already-fresh reference found two small (~0.3%), fully row-diagnosed discrepancies in
+both pools — the same 7 `END_OF_DATA`-exit trades revised by a boundary-date price update, plus (Pool
+2 CLEAN) `VTRS`'s own admission outcome shifting with one more day of data. Neither is a bug; both
+are the same "a reference figure decays the moment ingestion moves on" phenomenon, caught by
+comparing trade sets rather than totals, per the standing rule two sections above — now confirmed
+live, same day, a second time.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
