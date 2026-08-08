@@ -9533,7 +9533,7 @@ A double-check of the production close-out above found two pieces of work still 
 
 **Cap 0.50 re-baseline: 11/16 → 9/16, the same ±2-block delta as cap 0.70's already-known 9/16 → 7/16 move.** See CLAUDE.md's worked-example addition to the resolution-floor section for the full pair — the two caps moved by an identical block-count delta but in **opposite P&L directions** (0.50-cap P&L rose 38.3%, 0.70-cap P&L fell 1.2%), about as clean a demonstration as exists that the block delta carries no reliable sign, let alone magnitude. Capacity-turnover, reported separately per standing requirement: removing `CPWR`'s 18 trades reshuffled 1,375-1,750 trades (removed + newly admitted) out of ~4,900-5,000 total at each cap — 35-38% of the entire trade population changed identity from one ticker's removal.
 
-**Stop-loss study's Pool 2 headline finding (B > C1 > A ≈ C2 on cost-adjusted CAGR) re-run against the current, fully-adjudicated pool — ranking unchanged, gap widened.** Rebuilt Pool 2's cache fresh and re-ran all four arms at the study's own fixed `MAX_DEPLOYED_PCT=0.70`. Cost-adjusted CAGR: A=3.38%, C1=4.45%, C2=3.35%, B=5.32% (was A=3.42%, C1=4.19%, C2=3.14%, B=4.68% on the stale pool) — same ranking, B-minus-A gap widened from 1.26pp to 1.94pp. The staleness flagged during close-out did not overturn or weaken the study's conclusion; if anything the finding is now slightly more decisive. **This reopens C1-vs-B as a live comparison rather than a settled one** (the gap that made B the clear winner was itself computed on stale data) — re-examined and B still leads by a comfortable margin on the current pool, so the standing position is unchanged: B's cost-adjusted advantage is real, but removing the only bounded-loss mechanism, on a system that still trails passive equity after costs, is not adopted yet.
+**Stop-loss study's Pool 2 headline finding (B > C1 > A ≈ C2 on cost-adjusted CAGR) re-run against the current, fully-adjudicated pool — ranking unchanged, gap widened.** Rebuilt Pool 2's cache fresh and re-ran all four arms at the study's own fixed `MAX_DEPLOYED_PCT=0.70`. Cost-adjusted CAGR: A=3.38%, C1=4.45%, C2=3.35%, B=5.32% (was A=3.42%, C1=4.19%, C2=3.14%, B=4.68% on the stale pool) — same ranking, B-minus-A gap widened from 1.26pp to 1.94pp. The staleness flagged during close-out did not overturn or weaken the study's conclusion; if anything the finding is now slightly more decisive. **This reopens C1-vs-B as a live comparison rather than a settled one** (the gap that made B the clear winner was itself computed on stale data) — re-examined and B still leads by a comfortable margin on the current pool, so the standing position is unchanged: B's cost-adjusted advantage is real, but removing the only bounded-loss mechanism, on a system that still trails passive equity after costs, is not adopted yet. **Update, 2026-08-08 (same day): this 1.94pp gap was then checked against a capacity-free instrument and found to be substantially inflated — see "Measurement toolkit" below.** The portfolio-level magnitude does not survive that check; the directional conclusion (B still ahead, not adopted) does.
 
 Full write-up: `research/production_closeout_revalidation_2026-08-08/REPORT.md`. Trade-level output preserved for all runs (`trades_pool2_final_{A,C1,C2,B}.csv`, `trades_baseline_revalidation_cap05.csv`).
 
@@ -9548,3 +9548,66 @@ Pre-registered comparison (criterion agreed before any run, per this project's r
 **None of the four pre-registered decisive criteria were met in any pool.** Best cost-adjusted CAGR gap (Pool 2 CLEAN, +0.43pp) fell short of the pre-registered +0.50pp floor; best block concordance (Pool 2 CLEAN, 8/16) was a coin flip against the 12/16 bar; Pool 1 and Pool 2 CLEAN disagreed outright on which arm wins after costs, failing the cross-pool-agreement criterion on its own. **This is recorded as closed, not merely inconclusive: the dividend-exclusion bias is real, mechanically confirmed end to end, and quantified as immaterial at this system's holding periods and cost structure** — a materially different holding period, cap, or cost regime would be a new question, not grounds to re-run this one with a looser threshold. `analysis/signals.py` not touched; not adopted.
 
 Full write-up, including the caveat that block concordance (criterion 2) should be read as corroborating rather than independently decisive, given its own exposure to the same capacity-cascade mechanism: `research/adj_close_momentum_2026-08-08/REPORT.md`. Trade-level output preserved for all 6 runs (`trades_{pool1,pool2_clean,pool2_all}_{A,B}.csv`).
+
+### Measurement toolkit — four instruments built and validated against two known results (2026-08-08)
+
+Whole-portfolio backtests are a high-variance instrument for small effects: changing one variable
+reshuffles momentum-ranked, capacity-constrained admission, which propagates through 19 years of
+compounding — the adj_close study's own ~33% admission overlap (Jaccard ~20%) between arms differing
+only in signal input was the concrete trigger for building a capacity-free (or at least
+capacity-quantified) alternative before trusting any more small-effect comparisons. See CLAUDE.md's
+"Capacity-cascade amplification" standing note for the toolkit's four instruments and where each one
+lives (`research/measurement_toolkit_2026-08-08/`) — not repeated here.
+
+**Instrument 1 (empirical noise floor), first real measurement.** 17 trivial perturbations (8
+single-ticker drops, 6 walk-start-date shifts of +1 to +10 days, 3 admission tie-break reorderings) of
+the standard baseline (`get_research_stock_candidates()`, cap 0.70) against an unperturbed run of the
+same. Cost-adjusted CAGR range across the 17: **1.08pp — wide, but bimodal, not diffuse.** 16 of 17
+land within ±0.13pp of the 3.380% baseline; the 18th (dropping `DHI` alone) landed at 4.401%,
+entirely responsible for the range. 5 of 8 ticker drops were exact no-ops (2 tickers weren't even in
+the usable-history subset; 3 more were usable but never won a capacity-relevant admission slot in
+this specific run) — the noise floor is "mostly true zero, occasionally large," not uniformly noisy.
+Block-pass range across the same 17 draws: **3 blocks (6-9)** — reinforces, and modestly widens, the
+existing ±2 resolution-floor standing note (CPWR alone gave ±2; this independent 17-draw sample shows
+3). Drawdown (0.17pp range) and trade count (16-trade range, 0.3%) are both far steadier than CAGR or
+block count — worth treating as the more robust metrics if a future comparison needs one.
+
+**Validation (a) — adj_close vs. close: the toolkit AGREES with the portfolio-level "no decisive
+winner" finding, reinforcing rather than reversing it.** Uncapped admission overlap jumped from the
+capped run's ~33%/Jaccard ~20% to **72.5%/68.8%** — direct, quantified proof most of the capped
+disagreement was cascade noise, not genuine signal disagreement. The disaggregated per-decision
+comparison (5,333 close-only vs. 6,370 adj_close-only uncapped admissions) showed nearly identical
+outcomes — mean pnl_pct 0.0020 vs. 0.0024, **identical medians** (−0.0115 both), win rates 41.1% vs.
+41.9%. The aggregate £ gap that does exist traces to compounding-path/position-sizing divergence
+between the two arms' diverging account trajectories, not to one signal picking better trades.
+
+**Validation (b) — stop Arm A vs. B: the toolkit does NOT support the portfolio-level 1.94pp
+cost-adjusted CAGR headline's magnitude — reported as a genuine contradiction, not reconciled, per
+standing instruction.** Paired comparison on the existing capped trades found only 528/4,922 shared
+positions (10.7%) — too few (168 differing) for a confident read on its own. The uncapped instrument
+gave a much larger, cleaner sample: total P&L nearly **identical** with a stop (£246,480.69, 59,886
+trades) vs. without (£245,463.95, 40,297 trades) — 0.4% apart despite 48.6% more trades under A. The
+paired comparison on this uncapped sample (6,712 shared, **2,444 differing** — 14x the capped sample)
+showed B winning only **51.4%** of differing decisions (95% CI ≈ [49.4%, 53.4%], right at the edge of
+distinguishable from a coin flip). Checked against Instrument 1's noise floor: the portfolio-level
+1.94pp is larger than the single largest noise-floor draw (+1.02pp, the `DHI` case) — real, not pure
+noise — but only by a factor of ~1.9x on a 17-draw sample, not overwhelming. **Read together: the
+1.94pp portfolio-level number substantially overstates B's true per-decision advantage** — likely the
+same capacity-cascade mechanism documented throughout this file (a stop-loss exit frees capacity
+earlier, letting a different downstream trade sequence unfold for the rest of the 19-year walk). B
+still wins directionally on every instrument tested (51.4% paired win rate, positive shared-subset
+P&L both capped and uncapped) — this does not reverse the "not adopted yet" position — but "1.94pp,
+decisively ahead" should be read as "a small, real edge, mostly amplified by portfolio mechanics," not
+as the size of the actual decision-level advantage.
+
+**Instrument 4 (benchmark-relative reporting vs. `^SP500TR`)** built and sanity-checked (coverage
+confirmed complete, 2006-01-03 through 2026-08-07) but not run against every arm in this pass, since
+neither validation needed it — available for reuse. Sanity-check figure: the standard baseline's
+cost-adjusted CAGR trails `^SP500TR` by −7.75pp, beating it in 5/16 blocks — sobering, consistent with
+this project's own repeatedly-stated context.
+
+17 perturbations, not 20 — a time/resource constraint (another active session was sharing this
+machine's CPU throughout), stated plainly rather than padded to the round number. No production code,
+config, or signal changes; nothing adopted. Full write-up: `research/measurement_toolkit_2026-08-08/
+REPORT.md`. Trade-level output preserved for every run (18 perturbation runs, 4 uncapped diagnostic
+runs, all paired-comparison outputs).

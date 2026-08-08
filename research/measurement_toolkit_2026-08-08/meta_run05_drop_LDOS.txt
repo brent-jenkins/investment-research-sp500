@@ -1,0 +1,1 @@
+run05_drop_LDOS	drop_ticker	LDOS	2007-01-01	1041

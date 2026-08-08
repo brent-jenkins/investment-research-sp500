@@ -1,0 +1,1 @@
+run01_drop_SNI	drop_ticker	SNI	2007-01-01	1041

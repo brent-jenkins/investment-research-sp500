@@ -1,0 +1,1 @@
+run08_drop_DHI	drop_ticker	DHI	2007-01-01	1041

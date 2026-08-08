@@ -1,0 +1,1 @@
+run07_drop_EQIX	drop_ticker	EQIX	2007-01-01	1041
