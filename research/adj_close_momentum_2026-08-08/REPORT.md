@@ -1,9 +1,17 @@
 # Should the momentum signal read `adj_close` instead of `close`?
 
-**Verdict: no decisive winner. The mechanism is real and confirmed working exactly as theorized —
-adj_close-based momentum does preferentially admit dividend-paying names — but the aggregate
-economic effect is small, inconsistent in direction across pools, and does not clear the
-pre-registered bar in any pool.** Not adopted. Full trade-level output preserved for all 6 runs.
+**Verdict: closed, not merely inconclusive. Confirmed present, quantified, below the adoption
+threshold.** The dividend-exclusion bias in `close`-based momentum is real — three independent
+checks (positive control, decision-engine parity, sector tilt) confirm `adj_close`-based momentum
+mechanically corrects it exactly as theorized. But the pre-registered, four-part decisive criterion
+was agreed before this ran, and three of its four legs failed independently: the aggregate
+cost-adjusted CAGR gap (+0.43pp, Pool 2 CLEAN) falls short of the +0.50pp floor; block concordance
+(8/16, Pool 2 CLEAN) is a coin flip against the 12/16 bar; and Pool 1 and Pool 2 CLEAN disagree
+outright on which arm wins after costs. This is not "tested, inconclusive, revisit later" — it is
+"confirmed present, quantified, immaterial at these holding periods." Not adopted, and this specific
+question does not need re-opening with a looser threshold; a materially different holding period,
+cap, or cost regime would be a new question, not a re-run of this one. Full trade-level output
+preserved for all 6 runs.
 
 ## Pre-registered criterion (recap)
 
@@ -91,11 +99,20 @@ reported alongside for context only, per standing requirement to state both).
 | 3. Winning-arm peak DD ≤3pp worse | B worse by 2.90pp (passes, moot) | B *better* by 4.53pp (passes, moot) | B worse by 4.37pp (fails, moot) |
 | 4. Holds independently, both pools | **FAIL** — Pool 1 and Pool 2 CLEAN disagree on direction | | |
 
-**No criterion is met in any pool. Criterion 4 fails outright on its own** — Pool 1 favors Arm A
+**No criterion is met in any pool. Criteria 1 and 4 decide this on their own** — Pool 1 favors Arm A
 (−1.21pp) while Pool 2 CLEAN favors Arm B (+0.43pp, itself below the decisive floor). This is not a
 borderline pass being denied on a technicality: even the single best number across all three pools
-(Pool 2 CLEAN's +0.43pp) falls short of the pre-registered +0.50pp floor, and no pool comes close to
-the 12/16 block-concordance bar (best is 8/16, a coin flip).
+(Pool 2 CLEAN's +0.43pp) falls short of the pre-registered +0.50pp floor.
+
+**Criterion 2 (block concordance) should be read as corroborating, not as one of four co-equal
+gates — the table above overstates its independence.** It partitions the same capacity-cascade-
+sensitive trade sequences the admission-overlap check (above) shows reshuffle heavily between arms
+for reasons unrelated to the per-name effect being tested — a real, modest, consistently-signed
+tilt (which the sector-tilt check did confirm) can still fail to produce block concordance purely
+because cascade reshuffling scrambles which block a given trade's date lands in. Criterion 2 is
+therefore not fully independent evidence from criterion 1, and plausibly biased toward "no" for
+exactly this study's kind of effect. It didn't change the verdict here — criteria 1 and 4 already
+settle it — but it should not be weighted as if it were separately decisive.
 
 ## Capacity-turnover (per standing requirement, reported separately)
 
