@@ -1,0 +1,50 @@
+{
+  "pool2_final_A": {
+    "arm": "A",
+    "total_notional_traded_gbp": 14946544.53,
+    "total_fx_cost_gbp": 44839.63,
+    "fx_drag_pct_per_year": 3.365,
+    "mean_deployed_pct": 69.63,
+    "mean_idle_pct": 30.37,
+    "idle_credit_pct_per_year": 0.463,
+    "net_adjustment_pct_per_year": -2.902,
+    "reported_cagr_pct": 6.28,
+    "cost_adjusted_cagr_pct": 3.38
+  },
+  "pool2_final_C1": {
+    "arm": "C1",
+    "total_notional_traded_gbp": 12464827.53,
+    "total_fx_cost_gbp": 37394.48,
+    "fx_drag_pct_per_year": 2.85,
+    "mean_deployed_pct": 69.24,
+    "mean_idle_pct": 30.76,
+    "idle_credit_pct_per_year": 0.469,
+    "net_adjustment_pct_per_year": -2.381,
+    "reported_cagr_pct": 6.83,
+    "cost_adjusted_cagr_pct": 4.45
+  },
+  "pool2_final_C2": {
+    "arm": "C2",
+    "total_notional_traded_gbp": 10640720.43,
+    "total_fx_cost_gbp": 31922.16,
+    "fx_drag_pct_per_year": 2.643,
+    "mean_deployed_pct": 69.26,
+    "mean_idle_pct": 30.74,
+    "idle_credit_pct_per_year": 0.469,
+    "net_adjustment_pct_per_year": -2.175,
+    "reported_cagr_pct": 5.52,
+    "cost_adjusted_cagr_pct": 3.35
+  },
+  "pool2_final_B": {
+    "arm": "B",
+    "total_notional_traded_gbp": 11811150.33,
+    "total_fx_cost_gbp": 35433.45,
+    "fx_drag_pct_per_year": 2.426,
+    "mean_deployed_pct": 68.96,
+    "mean_idle_pct": 31.04,
+    "idle_credit_pct_per_year": 0.473,
+    "net_adjustment_pct_per_year": -1.953,
+    "reported_cagr_pct": 7.27,
+    "cost_adjusted_cagr_pct": 5.32
+  }
+}
