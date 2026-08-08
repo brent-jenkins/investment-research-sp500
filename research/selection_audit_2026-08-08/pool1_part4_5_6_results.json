@@ -1,0 +1,284 @@
+{
+  "pool": "pool1",
+  "part4": {
+    "n_admitted_trades_with_rank_data": 4749,
+    "pct_outside_top_quartile_at_admission": 0.07412086755106338,
+    "pct_admitted_via_freed_capacity": 0.9284059802063592,
+    "rank_at_admission_percentile_distribution": {
+      "count": 4749.0,
+      "mean": 0.06896785151475986,
+      "std": 0.18874372692089317,
+      "min": 0.0025906735751295338,
+      "10%": 0.00390625,
+      "25%": 0.004975124378109453,
+      "50%": 0.010033444816053512,
+      "75%": 0.023622047244094488,
+      "90%": 0.12368663594470043,
+      "max": 1.0
+    },
+    "outcomes_top_quartile_rank": {
+      "n": 4397,
+      "win_rate": 0.45167159426881964,
+      "mean_pnl_pct": 0.01145798279137235,
+      "median_pnl_pct": -0.0222201778001739,
+      "mean_pnl_gbp": 55.0325818368063
+    },
+    "outcomes_below_top_quartile_rank": {
+      "n": 352,
+      "win_rate": 0.34375,
+      "mean_pnl_pct": -0.005684796958028721,
+      "median_pnl_pct": -0.0280076169417179,
+      "mean_pnl_gbp": -4.595202082157974
+    },
+    "outcomes_admitted_via_freed_capacity": {
+      "n": 4409,
+      "win_rate": 0.4527103651621683,
+      "mean_pnl_pct": 0.011755883678665464,
+      "median_pnl_pct": -0.020833354819316,
+      "mean_pnl_gbp": 54.71309731821129
+    },
+    "outcomes_admitted_normal_capacity": {
+      "n": 340,
+      "win_rate": 0.3264705882352941,
+      "mean_pnl_pct": -0.010152909808229133,
+      "median_pnl_pct": -0.0364722027246887,
+      "mean_pnl_gbp": -2.5567496249291466
+    }
+  },
+  "part5": {
+    "n_rejected_capacity_events": 955000,
+    "rejected_counterfactual": {
+      "n_population": 955000,
+      "n_sampled": 2997,
+      "win_rate": 0.44744744744744747,
+      "mean_pnl_pct": 0.005384679007866407,
+      "median_pnl_pct": -0.015645238850991117,
+      "mean_holding_days": 21.06106106106106,
+      "exit_reason_counts": {
+        "MAX_HOLDING": 1470,
+        "STOP_LOSS": 1310,
+        "SIGNAL_OFF": 195,
+        "END_OF_DATA": 16,
+        "CRISIS_EXIT": 6
+      }
+    },
+    "admitted_actual": {
+      "n": 4749,
+      "win_rate": 0.44367235207412087,
+      "mean_pnl_pct": 0.010187345084109942,
+      "median_pnl_pct": -0.023372487859865,
+      "mean_pnl_gbp": 50.61291876258532
+    }
+  },
+  "part6": {
+    "n_gate_fail_events_total": 1253495,
+    "n_floor_band_0_2pct": 50149,
+    "n_below_zero_momentum": 725027,
+    "floor_band_counterfactual": {
+      "n_population": 50149,
+      "n_sampled": 2999,
+      "win_rate": 0.3764588196065355,
+      "mean_pnl_pct": 0.0030699858995674157,
+      "median_pnl_pct": -0.005751823696416551,
+      "mean_holding_days": 10.581527175725242,
+      "exit_reason_counts": {
+        "SIGNAL_OFF": 2094,
+        "MAX_HOLDING": 551,
+        "STOP_LOSS": 336,
+        "END_OF_DATA": 9,
+        "CRISIS_EXIT": 9
+      }
+    },
+    "all_gate_fail_counterfactual": {
+      "n_population": 1127495,
+      "n_sampled": 2999,
+      "win_rate": 0.49083027675891966,
+      "mean_pnl_pct": 0.0037952506683190165,
+      "median_pnl_pct": -0.00020956448805418452,
+      "mean_holding_days": 8.157719239746582,
+      "exit_reason_counts": {
+        "SIGNAL_OFF": 2068,
+        "MAX_HOLDING": 506,
+        "STOP_LOSS": 414,
+        "CRISIS_EXIT": 10,
+        "END_OF_DATA": 1
+      }
+    },
+    "below_zero_deciles": [
+      {
+        "decile": 1,
+        "momentum_min": -0.9921542256173208,
+        "momentum_max": -0.4051376482762328,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.5525,
+        "mean_pnl_pct": 0.0016157029020557494,
+        "median_pnl_pct": 0.006335677273548062,
+        "mean_holding_days": 1.5,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 393,
+          "CRISIS_EXIT": 7
+        }
+      },
+      {
+        "decile": 2,
+        "momentum_min": -0.4051337862244711,
+        "momentum_max": -0.2993657656443447,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.5,
+        "mean_pnl_pct": 0.002351972046568423,
+        "median_pnl_pct": 0.00013357554216539708,
+        "mean_holding_days": 1.4575,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 393,
+          "STOP_LOSS": 4,
+          "CRISIS_EXIT": 3
+        }
+      },
+      {
+        "decile": 3,
+        "momentum_min": -0.2993651133827072,
+        "momentum_max": -0.2333685066953738,
+        "n_in_bucket": 72502,
+        "n_population": 400,
+        "n_sampled": 399,
+        "win_rate": 0.49373433583959897,
+        "mean_pnl_pct": -0.00019927490374825716,
+        "median_pnl_pct": -0.0002506473222909529,
+        "mean_holding_days": 1.418546365914787,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 393,
+          "STOP_LOSS": 6
+        }
+      },
+      {
+        "decile": 4,
+        "momentum_min": -0.2333681220497399,
+        "momentum_max": -0.1850811528005282,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.49,
+        "mean_pnl_pct": 0.0022677607160312484,
+        "median_pnl_pct": 0.0,
+        "mean_holding_days": 1.42,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 393,
+          "STOP_LOSS": 6,
+          "CRISIS_EXIT": 1
+        }
+      },
+      {
+        "decile": 5,
+        "momentum_min": -0.1850811452455361,
+        "momentum_max": -0.1450495145797913,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.4925,
+        "mean_pnl_pct": -0.0016049289105624254,
+        "median_pnl_pct": -1.972455704126915e-05,
+        "mean_holding_days": 1.42,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 393,
+          "STOP_LOSS": 6,
+          "CRISIS_EXIT": 1
+        }
+      },
+      {
+        "decile": 6,
+        "momentum_min": -0.1450492580256677,
+        "momentum_max": -0.1101338849571835,
+        "n_in_bucket": 72502,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.535,
+        "mean_pnl_pct": 0.0021560665056040186,
+        "median_pnl_pct": 0.0014094365597058026,
+        "mean_holding_days": 1.4025,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 396,
+          "STOP_LOSS": 4
+        }
+      },
+      {
+        "decile": 7,
+        "momentum_min": -0.1101333038838203,
+        "momentum_max": -0.078897308038991,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.5,
+        "mean_pnl_pct": -0.0006853654386420343,
+        "median_pnl_pct": 0.0001856819741903945,
+        "mean_holding_days": 1.4425,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 391,
+          "STOP_LOSS": 8,
+          "CRISIS_EXIT": 1
+        }
+      },
+      {
+        "decile": 8,
+        "momentum_min": -0.0788968740809705,
+        "momentum_max": -0.050822028570704,
+        "n_in_bucket": 72502,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.555,
+        "mean_pnl_pct": 0.0014703628765941562,
+        "median_pnl_pct": 0.0015325429222861017,
+        "mean_holding_days": 1.475,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 393,
+          "STOP_LOSS": 6,
+          "CRISIS_EXIT": 1
+        }
+      },
+      {
+        "decile": 9,
+        "momentum_min": -0.050821971736488,
+        "momentum_max": -0.0245410518373612,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.505,
+        "mean_pnl_pct": 0.0004968675051657528,
+        "median_pnl_pct": 0.00019422277747781387,
+        "mean_holding_days": 2.3775,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 385,
+          "STOP_LOSS": 8,
+          "MAX_HOLDING": 7
+        }
+      },
+      {
+        "decile": 10,
+        "momentum_min": -0.0245408475782592,
+        "momentum_max": -8.732945590561592e-06,
+        "n_in_bucket": 72503,
+        "n_population": 400,
+        "n_sampled": 400,
+        "win_rate": 0.455,
+        "mean_pnl_pct": 0.0011081853137161835,
+        "median_pnl_pct": -0.0011556913008227124,
+        "mean_holding_days": 4.435,
+        "exit_reason_counts": {
+          "SIGNAL_OFF": 357,
+          "MAX_HOLDING": 27,
+          "STOP_LOSS": 16
+        }
+      }
+    ],
+    "admitted_actual_for_comparison": {
+      "n": 4749,
+      "win_rate": 0.44367235207412087,
+      "mean_pnl_pct": 0.010187345084109942,
+      "median_pnl_pct": -0.023372487859865,
+      "mean_pnl_gbp": 50.61291876258532
+    }
+  }
+}

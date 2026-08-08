@@ -1,0 +1,323 @@
+{
+  "n_trades": 3436,
+  "total_pnl_gbp": 127167.54,
+  "part1_concentration": {
+    "top_10_trades_share_of_total_pnl": 0.2622335070726382,
+    "top_1pct_n": 34,
+    "top_1pct_share_of_total_pnl": 0.608814560696857,
+    "top_decile_n": 344,
+    "top_decile_share_of_total_pnl": 2.5715290238373725,
+    "top_10_trades_share_of_GROSS_PROFIT": 0.06124710880357202,
+    "distribution": {
+      "pnl_gbp": {
+        "mean": 37.010343422584405,
+        "median": -50.290000000000006,
+        "std": 429.2828046738475,
+        "skew": 2.5134437257283158,
+        "min": -1436.14,
+        "max": 5022.2,
+        "p5": -444.0725,
+        "p25": -184.1775,
+        "p75": 187.4075,
+        "p95": 763.005
+      },
+      "pnl_pct": {
+        "mean": 1.0150736030267753,
+        "median": -2.44005,
+        "std": 10.584229474690773,
+        "skew": 1.5211837881824593,
+        "min": -31.5275,
+        "max": 80.6556
+      },
+      "win_rate": 0.44644935972060534,
+      "n_winners": 1534,
+      "n_losers": 1902,
+      "gross_profit_gbp": 544476.15,
+      "gross_loss_gbp": -417308.61000000004,
+      "profit_factor": 1.3047326054451645
+    },
+    "decile_breakdown_by_pnl_rank": [
+      {
+        "decile_by_pnl_rank": 1,
+        "n": 343,
+        "pnl_gbp_sum": 326546.29,
+        "share_of_total_pnl": 2.5678430989543397
+      },
+      {
+        "decile_by_pnl_rank": 2,
+        "n": 344,
+        "pnl_gbp_sum": 118661.46,
+        "share_of_total_pnl": 0.9331112326305911
+      },
+      {
+        "decile_by_pnl_rank": 3,
+        "n": 343,
+        "pnl_gbp_sum": 65086.94000000001,
+        "share_of_total_pnl": 0.5118203906437131
+      },
+      {
+        "decile_by_pnl_rank": 4,
+        "n": 344,
+        "pnl_gbp_sum": 30830.399999999998,
+        "share_of_total_pnl": 0.24243922623650654
+      },
+      {
+        "decile_by_pnl_rank": 5,
+        "n": 344,
+        "pnl_gbp_sum": -1415.3399999999992,
+        "share_of_total_pnl": -0.011129726972779367
+      },
+      {
+        "decile_by_pnl_rank": 6,
+        "n": 343,
+        "pnl_gbp_sum": -30015.609999999997,
+        "share_of_total_pnl": -0.2360320094263048
+      },
+      {
+        "decile_by_pnl_rank": 7,
+        "n": 344,
+        "pnl_gbp_sum": -47866.619999999995,
+        "share_of_total_pnl": -0.3764059602002208
+      },
+      {
+        "decile_by_pnl_rank": 8,
+        "n": 343,
+        "pnl_gbp_sum": -64165.94,
+        "share_of_total_pnl": -0.5045779764238578
+      },
+      {
+        "decile_by_pnl_rank": 9,
+        "n": 344,
+        "pnl_gbp_sum": -91658.83,
+        "share_of_total_pnl": -0.7207722190741442
+      },
+      {
+        "decile_by_pnl_rank": 10,
+        "n": 344,
+        "pnl_gbp_sum": -178835.21,
+        "share_of_total_pnl": -1.4062960563678435
+      }
+    ],
+    "top_10_trades": [
+      {
+        "ticker": "PLTR",
+        "entry_date": "2025-01-13",
+        "exit_date": "2025-02-12",
+        "pnl_gbp": 5022.2,
+        "pnl_pct": 80.6556,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "VST",
+        "entry_date": "2024-09-03",
+        "exit_date": "2024-10-03",
+        "pnl_gbp": 3973.1,
+        "pnl_pct": 74.8746,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "AMD",
+        "entry_date": "2026-04-29",
+        "exit_date": "2026-05-29",
+        "pnl_gbp": 3894.39,
+        "pnl_pct": 53.0954,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "STX",
+        "entry_date": "2026-04-06",
+        "exit_date": "2026-05-06",
+        "pnl_gbp": 3454.13,
+        "pnl_pct": 73.4878,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "MU",
+        "entry_date": "2026-03-30",
+        "exit_date": "2026-04-29",
+        "pnl_gbp": 3355.37,
+        "pnl_pct": 61.1125,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "WDC",
+        "entry_date": "2026-05-18",
+        "exit_date": "2026-06-17",
+        "pnl_gbp": 3328.49,
+        "pnl_pct": 55.2564,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "WDC",
+        "entry_date": "2026-01-02",
+        "exit_date": "2026-02-02",
+        "pnl_gbp": 2696.32,
+        "pnl_pct": 43.9691,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 31
+      },
+      {
+        "ticker": "STX",
+        "entry_date": "2026-05-19",
+        "exit_date": "2026-06-18",
+        "pnl_gbp": 2570.29,
+        "pnl_pct": 45.9371,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "INTC",
+        "entry_date": "2026-04-27",
+        "exit_date": "2026-05-27",
+        "pnl_gbp": 2567.09,
+        "pnl_pct": 43.2757,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 30
+      },
+      {
+        "ticker": "SNDK",
+        "entry_date": "2026-05-15",
+        "exit_date": "2026-06-15",
+        "pnl_gbp": 2486.21,
+        "pnl_pct": 49.7475,
+        "exit_reason": "MAX_HOLDING",
+        "holding_days": 31
+      }
+    ]
+  },
+  "part2_momentum_predictiveness": {
+    "n_with_momentum": 3436,
+    "spearman_corr_momentum_vs_pnl_pct": -0.03274032275328658,
+    "pearson_corr_momentum_vs_pnl_pct": 0.05710698205900131,
+    "decile_rank_vs_decile_mean_return_spearman": 0.22424242424242422,
+    "decile_rank_vs_decile_winrate_spearman": -0.17629260766721871,
+    "deciles": [
+      {
+        "decile": 1,
+        "n": 344,
+        "momentum_min": 2.0875,
+        "momentum_max": 28.4061,
+        "momentum_mean": 12.721481104651163,
+        "win_rate": 0.3633720930232558,
+        "mean_pnl_pct": -0.5703898255813953,
+        "median_pnl_pct": -2.86365,
+        "mean_holding_days": 16.49418604651163,
+        "mean_pnl_gbp": -11.865029069767443
+      },
+      {
+        "decile": 2,
+        "n": 344,
+        "momentum_min": 28.5384,
+        "momentum_max": 45.8321,
+        "momentum_mean": 38.51401802325581,
+        "win_rate": 0.5319767441860465,
+        "mean_pnl_pct": 2.250123837209302,
+        "median_pnl_pct": 1.02765,
+        "mean_holding_days": 22.781976744186046,
+        "mean_pnl_gbp": 73.59686046511628
+      },
+      {
+        "decile": 3,
+        "n": 343,
+        "momentum_min": 45.8706,
+        "momentum_max": 55.9028,
+        "momentum_mean": 50.9882696793003,
+        "win_rate": 0.43731778425655976,
+        "mean_pnl_pct": 0.6829819241982509,
+        "median_pnl_pct": -2.4273,
+        "mean_holding_days": 21.099125364431487,
+        "mean_pnl_gbp": 20.326005830903792
+      },
+      {
+        "decile": 4,
+        "n": 344,
+        "momentum_min": 55.9132,
+        "momentum_max": 65.8829,
+        "momentum_mean": 61.023422383720934,
+        "win_rate": 0.49127906976744184,
+        "mean_pnl_pct": 1.1780479651162792,
+        "median_pnl_pct": -0.21915,
+        "mean_holding_days": 21.22093023255814,
+        "mean_pnl_gbp": 43.29293604651163
+      },
+      {
+        "decile": 5,
+        "n": 343,
+        "momentum_min": 65.8836,
+        "momentum_max": 76.2036,
+        "momentum_mean": 70.90354868804664,
+        "win_rate": 0.47230320699708456,
+        "mean_pnl_pct": 0.3355962099125365,
+        "median_pnl_pct": -1.1078,
+        "mean_holding_days": 22.693877551020407,
+        "mean_pnl_gbp": 7.057084548104953
+      },
+      {
+        "decile": 6,
+        "n": 344,
+        "momentum_min": 76.2118,
+        "momentum_max": 87.8345,
+        "momentum_mean": 82.06078255813954,
+        "win_rate": 0.45348837209302323,
+        "mean_pnl_pct": 1.1802488372093023,
+        "median_pnl_pct": -2.59255,
+        "mean_holding_days": 22.072674418604652,
+        "mean_pnl_gbp": 39.02372093023256
+      },
+      {
+        "decile": 7,
+        "n": 343,
+        "momentum_min": 87.8748,
+        "momentum_max": 100.9285,
+        "momentum_mean": 94.01339329446063,
+        "win_rate": 0.46647230320699706,
+        "mean_pnl_pct": 1.294968804664723,
+        "median_pnl_pct": -3.1716,
+        "mean_holding_days": 21.472303206997086,
+        "mean_pnl_gbp": 58.05241982507288
+      },
+      {
+        "decile": 8,
+        "n": 344,
+        "momentum_min": 100.9727,
+        "momentum_max": 122.8306,
+        "momentum_mean": 110.56863313953488,
+        "win_rate": 0.4273255813953488,
+        "mean_pnl_pct": 0.612129941860465,
+        "median_pnl_pct": -3.4179500000000003,
+        "mean_holding_days": 21.197674418604652,
+        "mean_pnl_gbp": 20.467936046511635
+      },
+      {
+        "decile": 9,
+        "n": 343,
+        "momentum_min": 122.8469,
+        "momentum_max": 176.8433,
+        "momentum_mean": 144.55790087463555,
+        "win_rate": 0.3673469387755102,
+        "mean_pnl_pct": 0.1720708454810496,
+        "median_pnl_pct": -4.7837,
+        "mean_holding_days": 20.067055393586006,
+        "mean_pnl_gbp": -0.7952769679300311
+      },
+      {
+        "decile": 10,
+        "n": 344,
+        "momentum_min": 177.2487,
+        "momentum_max": 4330.672,
+        "momentum_mean": 347.02596889534885,
+        "win_rate": 0.45348837209302323,
+        "mean_pnl_pct": 3.010379941860465,
+        "median_pnl_pct": -1.9495,
+        "mean_holding_days": 22.055232558139537,
+        "mean_pnl_gbp": 120.76247093023257
+      }
+    ]
+  }
+}

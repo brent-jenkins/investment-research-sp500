@@ -1,0 +1,64 @@
+{
+  "SPY": {
+    "description": "S&P 500 (large-cap benchmark)",
+    "n_trades": 111,
+    "cagr_pct": 0.34,
+    "max_drawdown_pct": -1.2,
+    "win_rate": 0.3964,
+    "profit_factor": 1.79,
+    "exit_reason_counts": {
+      "STOP_LOSS": 57,
+      "MAX_HOLDING": 40,
+      "SIGNAL_OFF": 12,
+      "CRISIS_EXIT": 1,
+      "END_OF_DATA": 1
+    },
+    "total_pnl_gbp": 3250.04
+  },
+  "QQQ": {
+    "description": "Nasdaq-100 (tech-heavy, high volatility)",
+    "n_trades": 130,
+    "cagr_pct": 0.48,
+    "max_drawdown_pct": -1.32,
+    "win_rate": 0.3769,
+    "profit_factor": 1.84,
+    "exit_reason_counts": {
+      "STOP_LOSS": 69,
+      "MAX_HOLDING": 41,
+      "SIGNAL_OFF": 18,
+      "CRISIS_EXIT": 1,
+      "END_OF_DATA": 1
+    },
+    "total_pnl_gbp": 4694.71
+  },
+  "MDY": {
+    "description": "S&P MidCap 400 (broader, mid-cap)",
+    "n_trades": 112,
+    "cagr_pct": 0.21,
+    "max_drawdown_pct": -1.77,
+    "win_rate": 0.375,
+    "profit_factor": 1.58,
+    "exit_reason_counts": {
+      "STOP_LOSS": 51,
+      "MAX_HOLDING": 31,
+      "SIGNAL_OFF": 29,
+      "END_OF_DATA": 1
+    },
+    "total_pnl_gbp": 2007.01
+  },
+  "IJR": {
+    "description": "S&P SmallCap 600 (broader, small-cap, most volatile)",
+    "n_trades": 110,
+    "cagr_pct": 0.17,
+    "max_drawdown_pct": -1.65,
+    "win_rate": 0.3727,
+    "profit_factor": 1.38,
+    "exit_reason_counts": {
+      "STOP_LOSS": 49,
+      "SIGNAL_OFF": 31,
+      "MAX_HOLDING": 29,
+      "END_OF_DATA": 1
+    },
+    "total_pnl_gbp": 1470.84
+  }
+}
