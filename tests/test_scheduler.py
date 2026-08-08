@@ -1977,7 +1977,10 @@ def test_eod_job_calls_data_quality_scan_and_records_counts(db_engine, monkeypat
     mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
     mock_scan = mocker.patch(
         "data.ingestion.scan_unverified_tickers",
-        return_value={"checked": 3, "newly_quarantined": ["BADCO"], "newly_needs_review": ["MAYBECO"], "errors": []},
+        return_value={
+            "checked": 3, "remaining": 457,
+            "newly_quarantined": ["BADCO"], "newly_needs_review": ["MAYBECO"], "errors": [],
+        },
     )
     mock_alert = mocker.patch("output.briefing.send_data_quality_scan_alert", return_value=(False, "disabled"))
 
@@ -1988,6 +1991,7 @@ def test_eod_job_calls_data_quality_scan_and_records_counts(db_engine, monkeypat
     status = scheduler.get_eod_completion_status()
     assert status["status"] == "COMPLETED"
     assert status["data_quality_checked"] == 3
+    assert status["data_quality_remaining"] == 457
     assert status["data_quality_newly_quarantined"] == 1
     assert status["data_quality_newly_needs_review"] == 1
 
@@ -2013,6 +2017,12 @@ def test_eod_job_completed_even_when_data_quality_scan_fails(db_engine, monkeypa
     assert status["status"] == "COMPLETED"
     assert status["order_pipeline_ran"] is True
     assert "data_quality_checked" not in status
+    # 2026-08-08 fix: a scan failure must now be VISIBLE in the completion
+    # record, not merely absent from it -- absence-on-failure and absence-
+    # because-it-never-ran-at-all were indistinguishable before this,
+    # which is exactly how the real backstop's own silent failure went
+    # undetected for two full EOD cycles in production.
+    assert status["data_quality_scan_error"] == "boom"
 
 
 # ---------------------------------------------------------------------------

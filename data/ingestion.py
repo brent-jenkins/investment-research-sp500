@@ -538,6 +538,21 @@ def verify_ticker_identity(ticker: str, config: Optional[dict] = None) -> dict:
             time.sleep(rate_limit * attempt)
     time.sleep(rate_limit)
 
+    # A gracefully-handled not-found lookup (yfinance logs its own HTTP 404
+    # internally and returns an EMPTY dict rather than raising) is evidence-
+    # free -- it is not the same thing as "quoteType affirmatively returned
+    # a non-equity classification" (quote_type populated as 'ETF'/
+    # 'MUTUALFUND'/etc, which IS a real, if degenerate, response). Conflating
+    # the two meant a 404 was scored identically to positive evidence of a
+    # different identity, and quarantined on no evidence at all (found via
+    # IAC, 2026-08-08 -- all three fields None, info_error None, yet routed
+    # to QUARANTINED before this fix). Only ALL THREE fields being empty
+    # counts as "empty" -- a real response with a populated quote_type but a
+    # placeholder exchange/name (PALM/PDG/RX's own already-validated
+    # MUTUALFUND/YHD/None shape) is still positive evidence, not silence,
+    # and must keep quarantining exactly as before.
+    info_empty = not info_error and quote_type is None and exchange is None and not long_name
+
     check_a_failed = None if info_error else (
         quote_type != "EQUITY" or exchange == "YHD" or not long_name
     )
@@ -550,9 +565,16 @@ def verify_ticker_identity(ticker: str, config: Optional[dict] = None) -> dict:
     )
 
     # Verdict.
-    if info_error:
+    if info_error or info_empty:
         status = "NEEDS_REVIEW"
-        reason = f"yfinance .info unavailable after {max_retries} attempts: {info_error}"
+        reason = (
+            f"yfinance .info unavailable after {max_retries} attempts: {info_error}"
+            if info_error else
+            "yfinance .info returned no data at all (quote_type/exchange/long_name all "
+            "empty, no exception raised -- a gracefully-handled not-found lookup, not "
+            "positive evidence of a different identity) -- treated the same as an "
+            "unavailable/errored response, not scored as a quarantine."
+        )
     elif check_b_applicable and check_b_failed and not check_a_affirms_real_equity:
         status = "QUARANTINED"
         reason = (
@@ -752,32 +774,71 @@ def _screen_newly_backfilled_ticker(ticker: str, config: dict) -> None:
                         "periodic backstop scan): %s", ticker, exc)
 
 
+_SCAN_UNVERIFIED_BATCH_SIZE = 50  # ~2.5s/ticker rate limit -> ~2min/batch, safely inside an EOD cycle
+
+
 def scan_unverified_tickers(config: Optional[dict] = None) -> dict:
-    """Periodic backstop scan (2026-08-07) -- finds every ticker with
+    """Periodic backstop scan (2026-08-07, scoped/chunked/logged 2026-08-08
+    after being found to have never completed successfully since deploy --
+    see CLAUDE.md's backstop-fix entry) -- finds stock tickers with
     price_data rows but no ticker_data_quality row yet, and runs the same
     verify_ticker_identity() the one-off remediation script and the
-    ingestion-time screen use. Covers (a) the 408-ticker population that
-    predates this remediation shipping -- the one-off research/
-    data_quality_remediation_2026-08-07/step1_verify_identity.py script
-    handles the initial catch-up; this is what keeps it clean afterward
-    -- and (b) any future ticker whose data lands outside backfill_price_
-    history()/pull_incremental()'s own screened first-time-download
-    paths. Never raises per-ticker, matching this file's "one bad symbol
-    doesn't block the rest of the batch" convention.
+    ingestion-time screen use. Covers (a) the pre-existing ~540-ticker
+    "live" population that predated the identity-verification mechanism
+    entirely and was never actually screened (assumed clean by virtue of
+    being live-traded -- a reasonable heuristic, but "assumed clean" and
+    "verified clean" were behaviourally identical under
+    get_research_stock_candidates() until this ran), and (b) any future
+    ticker whose data lands outside backfill_price_history()/
+    pull_incremental()'s own screened first-time-download paths. Never
+    raises per-ticker, matching this file's "one bad symbol doesn't block
+    the rest of the batch" convention.
+
+    STOCK-ONLY SCOPE (2026-08-08 fix): the query is intersected with
+    analysis.universe.get_all_known_stock_tickers() -- verify_ticker_
+    identity()'s Check A can only ever affirm quote_type == "EQUITY", so
+    feeding it a non-stock ticker (an ETF, an FX pair, an index level
+    series) isn't a corner case it handles conservatively, it's a check
+    applied outside its own domain, and will always fail Check A by
+    construction. Found live: the first real run of this function (pre-
+    fix) wrote QUARANTINED for ^GSPC (the crisis-trigger reference series
+    itself), both FX reporting pairs, and ~33 ETF tickers -- inert today
+    only because nothing currently reads quarantine status on any of
+    those paths, which is a property of today's callers, not a property
+    of the data being safe to mislabel.
+
+    CHUNKED (2026-08-08 fix): processes at most
+    _SCAN_UNVERIFIED_BATCH_SIZE tickers per call rather than the full
+    backlog. A ~460-ticker backlog at this project's standard
+    rate_limit_seconds (2.5s/ticker) is a ~19-minute unbroken yfinance
+    loop -- confirmed, not assumed, to be long enough that this backstop
+    had not completed even once in the two EOD cycles since it was
+    deployed (2026-08-06, 2026-08-07 -- both runs' completion records are
+    missing this function's own results entirely, with no corresponding
+    failure warning either, consistent with the process being restarted
+    mid-loop rather than erroring). Chunking makes this self-healing
+    across days with no separate progress table needed: once a ticker is
+    written to ticker_data_quality (any status), it drops out of the
+    next call's own "WHERE q.ticker IS NULL" query, so an interrupted
+    scan resumes at the next unscreened ticker on its next invocation
+    rather than restarting the whole backlog. Returns "remaining" so a
+    caller (the EOD job, or a human) can see how much backlog is left.
 
     Same role as detect_price_cliffs() in this file: a full-table
     backstop, not the primary defense -- expected near-zero work on
-    ordinary days once the initial catch-up has run, since the primary
-    defense (the ingestion-time screen) already covers every genuinely
-    new ticker going forward.
+    ordinary days once the backlog has actually been drained, since the
+    primary defense (the ingestion-time screen) already covers every
+    genuinely new ticker going forward.
 
-    Returns {"checked", "newly_quarantined": [...], "newly_needs_review":
-    [...], "errors": [...]}, matching refresh_membership_from_source()'s
-    contract shape.
+    Returns {"checked", "remaining", "newly_quarantined": [...],
+    "newly_needs_review": [...], "errors": [...]}, matching
+    refresh_membership_from_source()'s contract shape plus "remaining".
     """
     config = config or _load_config()
     from data.database import write_data_quality_status  # noqa: PLC0415
+    from analysis.universe import get_all_known_stock_tickers  # noqa: PLC0415
 
+    stock_tickers = get_all_known_stock_tickers()
     with get_engine().connect() as conn:
         rows = conn.execute(
             text(
@@ -786,10 +847,14 @@ def scan_unverified_tickers(config: Optional[dict] = None) -> dict:
                 "WHERE q.ticker IS NULL"
             )
         ).fetchall()
-    unverified = [r[0] for r in rows]
+    unverified_stocks = sorted(r[0] for r in rows if r[0] in stock_tickers)
+    batch = unverified_stocks[:_SCAN_UNVERIFIED_BATCH_SIZE]
 
-    result: dict = {"checked": 0, "newly_quarantined": [], "newly_needs_review": [], "errors": []}
-    for ticker in unverified:
+    result: dict = {
+        "checked": 0, "remaining": max(0, len(unverified_stocks) - len(batch)),
+        "newly_quarantined": [], "newly_needs_review": [], "errors": [],
+    }
+    for ticker in batch:
         try:
             v = verify_ticker_identity(ticker, config)
             write_data_quality_status(ticker, v["status"], v["reason"], json.dumps(v["evidence"]))
@@ -800,6 +865,20 @@ def scan_unverified_tickers(config: Optional[dict] = None) -> dict:
                 result["newly_needs_review"].append(ticker)
         except Exception as exc:
             result["errors"].append(f"{ticker}: {exc}")
+
+    # Explicit completion log, success path -- previously this function had
+    # NO log output of its own at all on success, only a caller-side warning
+    # on failure; since the failure warning also never fired (see docstring
+    # above), the net effect was a backstop that could not be distinguished
+    # from "silently working" by anyone reading the logs. Logged whether
+    # checked is 0 or not, so "ran and found nothing to do" is visibly
+    # different from "did not run."
+    logger.info(
+        "Data-quality backstop scan: checked=%d quarantined=%d needs_review=%d "
+        "errors=%d remaining=%d",
+        result["checked"], len(result["newly_quarantined"]), len(result["newly_needs_review"]),
+        len(result["errors"]), result["remaining"],
+    )
     return result
 
 

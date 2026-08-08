@@ -765,6 +765,43 @@ def test_verify_identity_info_unavailable_is_needs_review_not_quarantined(db_eng
     assert result["status"] == "NEEDS_REVIEW"
 
 
+def test_verify_identity_empty_info_is_needs_review_not_quarantined(db_engine, mocker):
+    """2026-08-08 fix, found via IAC: yfinance gracefully handling a
+    not-found lookup (logging its own HTTP 404 internally, returning an
+    EMPTY dict rather than raising) must be treated the same as an
+    unavailable/errored .info call -- NOT scored as positive evidence of a
+    non-equity identity. Before this fix, quote_type/exchange/long_name
+    all being None (with info_error also None, since no exception was
+    raised) fell through to the same branch as a real, populated,
+    confirmed-different-entity response and auto-quarantined on zero
+    evidence."""
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "GONE404", datetime(2007, 1, 1).date(), _SENTINEL_END)
+    _mock_yf_info(mocker, None, None, None)  # empty dict, no exception -- the real IAC shape
+
+    result = verify_ticker_identity("GONE404", _CONFIG)
+
+    assert result["status"] == "NEEDS_REVIEW"
+    assert result["evidence"]["info_error"] is None  # confirms this is the no-exception path, not APIFAIL's
+
+
+def test_verify_identity_populated_non_equity_still_quarantines(db_engine, mocker):
+    """The info_empty fix must be narrow: a REAL, populated response with a
+    non-equity quote_type (PALM/PDG/RX's own already-validated MUTUALFUND/
+    YHD/None shape -- exchange='YHD' specifically, not None) is positive
+    evidence of a different identity, not silence, and must keep
+    quarantining exactly as before the fix."""
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
+    _insert_membership_window(db_engine, "RECYCLED", datetime(2007, 1, 1).date(), _SENTINEL_END)
+    _mock_yf_info(mocker, "MUTUALFUND", "YHD", None)
+
+    result = verify_ticker_identity("RECYCLED", _CONFIG)
+
+    assert result["status"] == "QUARANTINED"
+
+
 def test_verify_identity_never_re_implemented_elsewhere():
     """Structural guard, matching this project's 'never a second
     implementation of the same threshold' discipline: backfill_price_
@@ -928,8 +965,36 @@ def test_scan_unverified_tickers_checks_only_unscreened_tickers(db_engine, mocke
     assert "ALREADYSCREENED" not in result["newly_quarantined"]
 
 
+def test_scan_unverified_tickers_excludes_non_stock_tickers(db_engine, mocker):
+    """2026-08-08 fix: verify_ticker_identity()'s Check A can only ever
+    affirm quote_type == 'EQUITY', so an ETF/FX-pair/index ticker fails it
+    by construction -- feeding one through is applying the check outside
+    its domain, not a corner case it handles conservatively. Found live:
+    the first real run of the pre-fix scan wrote QUARANTINED for ^GSPC (the
+    crisis-trigger reference series) and ~33 ETF tickers. A ticker with no
+    universe_membership row at all (the real signature of a non-stock
+    ticker -- ETFs/FX/index series never get one) must be excluded from
+    the scan entirely, not merely scored leniently."""
+    from analysis.universe import clear_membership_cache
+    clear_membership_cache()
+    _insert_rows(db_engine, "^GSPC", {datetime(2020, 1, 1): 4000.0})  # no membership window -- not a stock
+    _mock_yf_info(mocker, "INDEX", None, None)
+
+    result = scan_unverified_tickers(_CONFIG)
+
+    assert result["checked"] == 0
+    with db_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT status FROM ticker_data_quality WHERE ticker = '^GSPC'")
+        ).fetchone()
+    assert row is None  # never written -- excluded before verify_ticker_identity() is ever called
+
+
 def test_scan_unverified_tickers_never_raises_on_a_single_ticker_error(db_engine, mocker):
+    from analysis.universe import clear_membership_cache, _SENTINEL_END
+    clear_membership_cache()
     _insert_rows(db_engine, "BROKEN", {datetime(2020, 1, 1): 10.0})
+    _insert_membership_window(db_engine, "BROKEN", datetime(2007, 1, 1).date(), _SENTINEL_END)
     mocker.patch("data.ingestion.yf.Ticker", side_effect=RuntimeError("boom"))
 
     result = scan_unverified_tickers(_CONFIG)
