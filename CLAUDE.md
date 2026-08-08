@@ -162,6 +162,126 @@ Validated against two known results before being trusted: adj_close (agreed with
 
 **The strategy trails broad-index benchmarks on raw CAGR over the full 2007-2026 window, with a milder drawdown.** Against `^SP500TR` (genuine total return, 11.13% CAGR), Nasdaq Composite (price-only, 12.95%), and dividend-adjusted MDY/IJR proxies for MidCap 400/SmallCap 600 (9.62%/9.44%), the strategy's own 7.05% trails all four — winning only 2-7 of 16 blocks depending on the index — while showing a milder max drawdown (−50.38% vs. −55% to −58% for the four benchmarks). Separately, single-instrument momentum tested on SPY/QQQ/MDY/IJR shows no monotonic relationship between universe breadth/volatility and momentum quality (QQQ best on profit factor, IJR — the broadest/smallest-cap — worst), arguing against "just trade a broader universe" as an obvious fix for the CAGR gap.
 
+## Data-quality backstop was silently broken since deploy; identity check had a scoping bug — both fixed (2026-08-08)
+
+**Found as a detour from the admission-redesign pre-registration below** (see
+`research/admission_redesign_prereg_2026-08-08/REPORT.md`'s own "Detour" section for the full
+narrative) — its sanity gate failed on one extra ticker (`VTRS`), which traced to a genuine,
+confirmed production defect, not a bug in that study.
+
+**Scale, confirmed not assumed.** `price_data` tickers with zero row in `ticker_data_quality`:
+**463**, identical on both the local research DB and production via direct SSH query — including
+`AAPL`/`MSFT`/`GOOGL`/`AMZN`/`TSLA`/`NVDA` and every ETF. The 408-ticker population documented
+above (220/163/25) was only ever the 2026-08-07 remediation's own newly-backfilled batch — the
+~540-ticker population that predates that remediation (every megacap, every ETF, every reference
+ticker) was never screened by anything at all, an assumption ("already live-traded, so probably
+fine") that was never actually verified until now.
+
+**Root cause of the backstop never closing this gap, confirmed via `journalctl`, not inferred.**
+`scan_unverified_tickers()` (deployed 2026-08-07 specifically to be this backstop) never logged
+either success or failure once in a full month of retained production logs, across both EOD cycles
+since deploy (2026-08-06, 2026-08-07). At `rate_limit_seconds=2.5`, a 463-ticker backlog is a
+~19-minute unbroken yfinance loop inside the EOD job — long enough not to survive whatever causes
+this service's own frequent restarts, most likely killed by signal rather than raising a catchable
+exception (consistent with zero warnings logged despite `logger.warning` demonstrably firing
+elsewhere in the same job, e.g. the instrument-resolution-failure warning).
+
+**A second, independent bug surfaced the moment the backlog was actually run for the first time.**
+`verify_ticker_identity()`'s Check A can only ever affirm `quote_type == "EQUITY"` — an ETF, an FX
+pair, or an index-level series fails it by construction, not as a corner case handled
+conservatively. `scan_unverified_tickers()`'s SQL had no stock restriction, so its first successful
+run wrote `QUARANTINED` for **`^GSPC` — the crisis-trigger reference series itself** — and ~33 ETF
+tickers. Inert today only because nothing currently reads quarantine status on the reference or ETF
+paths; that is a property of today's callers, not of the data, which is why the fix belongs in the
+scan's own scope, not in every future caller having to route around it. Separately, `IAC` exposed a
+real logic bug in `verify_ticker_identity()` itself: a gracefully-handled yfinance 404 (empty dict,
+no raised exception) was scored identically to a real, populated, confirmed-different-identity
+response and auto-quarantined on zero evidence.
+
+**Three fixes shipped to `scan_unverified_tickers()`** (`data/ingestion.py`, `data/scheduler.py`,
+commit `0a170ca`, 953 tests passing, including new regression coverage for every case below):
+(1) scoped to `analysis.universe.get_all_known_stock_tickers()` only; (2) chunked at 50
+tickers/call (~2min at the rate limit), self-resuming with no new progress table needed (a screened
+ticker drops out of the next call's own unscreened-ticker query); (3) explicit completion logging
+on both the success path (even `checked=0` now logs) and the failure path
+(`details["data_quality_scan_error"]` now populated in the EOD completion record, previously
+silently absent either way — this was the actual reason the original failure went undetected for
+two full days). `verify_ticker_identity()`'s empty-response case now routes to `NEEDS_REVIEW`,
+narrowly — confirmed directly, not assumed, that the already-validated `PALM`/`PDG`/`RX`
+populated-but-degenerate-response cases (a real, informative `quote_type` even with a placeholder
+exchange/name) still quarantine unchanged.
+
+**Applied and independently re-verified, local and production, both matching exactly.** 36
+non-stock rows deleted, `IAC` re-screened, the remaining 427 previously-unscreened stock tickers
+screened under the fixed code (427 = 463 − 36, confirmed identical on both databases: 25
+quarantined + 10 needs-review + 392 clean in both). **Final counts, current as of 2026-08-08,
+confirmed via direct SQL query on both databases, not either script's own summary: 612 CLEAN / 35
+NEEDS_REVIEW / 188 QUARANTINED / 835 total, zero non-stock rows remaining.** (This supersedes the
+220/163/25/408 figure above for "current total state" purposes — that figure remains an accurate
+historical record of the 2026-08-07 remediation batch specifically, not of the full table.) The
+FNMA-pattern override checked directly against real cases, not assumed: `SGP` (SpyGlass Pharma, a
+real *different equity*) → `NEEDS_REVIEW`; `MER`/`CAM`/`PCL`/`SPLS` (all resolve to real but
+*non-equity* replacement products — a fund or ETF — genuine recycled-symbol cases, not the FNMA
+pattern) → correctly `QUARANTINED`.
+
+**Not yet closed, stated plainly rather than assumed fixed.** The *scheduled* path (the EOD job's
+own chunked call, on the real scheduler, under real restart pressure) has not been observed
+completing successfully even once — today's application was a manual SSH invocation, proving the
+code is correct, not that it survives a real EOD cycle. 2026-08-08 is a Saturday; no EOD job fires
+regardless of any of this. **Monday 2026-08-10's real EOD completion record is the first
+opportunity to check for a populated `data_quality_checked` key** (or, if it fails again,
+`data_quality_scan_error` — now populated either way, which is itself the point of fix #3). Treat
+this backstop as unverified-in-production until that check is done, not as fixed-and-forgotten.
+
+**Meta-lessons, of standing relevance beyond this incident:**
+1. **A P&L reference figure carries an implicit database-state dependency that continuous
+   ingestion makes decay.** An exact-total sanity gate will eventually fail for a benign reason
+   (new data legitimately arrived), and that failure is not distinguishable from a real bug without
+   a trade-set diff, not just a total. This surfaced the whole incident above — worth designing
+   future gates to compare trade sets/counts alongside any single total from the start, or to pin
+   references to a snapshot explicitly.
+2. **A backstop that has not been *observed* completing successfully isn't a backstop**, no matter
+   how correct its own code looks on inspection. This one had a clean design, a clear docstring, and
+   its own try/except isolation — and still silently never ran to completion across every
+   opportunity it had, for two full days, with nothing anywhere flagging the gap until an unrelated
+   sanity gate happened to trip over one of its symptoms.
+3. **A check's validity domain must match its actual input population, not the population it was
+   originally designed and validated against.** `verify_ticker_identity()` was correct for the
+   stock-recycled-symbol problem it was built for; feeding it every ticker in `price_data` wasn't a
+   conservative extension, it was applying a domain-specific test outside its domain, and it
+   silently mis-scored the crisis-trigger series itself the first time it got the chance to run.
+
+## Monthly-shortlist admission redesign — pre-registered, tested, NOT adopted (2026-08-08)
+
+**Motivated directly by the selection audit above** (Part 7: ranking beats random at the 99th
+percentile; Part 4: 92-93% of admissions only happen because that day's own exits freed capacity).
+The arm: top-50-by-momentum shortlist, monthly rebalance (entries only — exits stayed continuous,
+unchanged), no forced slot-filling beyond the shortlist, freed capital waits for the next rebalance.
+Full pre-registration and results: `research/admission_redesign_prereg_2026-08-08/PREREGISTRATION.md`
+/ `REPORT.md`.
+
+**On the surface it looked like a clear win**: peak-relative drawdown roughly halved in both pools
+(Pool 2 CLEAN: −46.28% → −22.82%; Pool 1: −41.94% → −20.56%), and the pre-registered deciding metric
+(cost-adjusted CAGR ÷ |drawdown|) improved 1.5–2.4x. **It failed anyway, on two of the five
+pre-registered PASS conditions, either one alone sufficient per the walk-away sentence written
+before any run:** mean deployment fell ~24 percentage points below baseline in both pools (past the
+15pp floor — the redesign's smoother equity curve is substantially explained by holding much more
+cash on average, not better selection), and the month-level paired per-decision instrument (built
+specifically because exact-date pairing wasn't usable here, per the pre-registration's own §4)
+showed a **coin flip — 50.1–50.2% win rate, both pools** — when both arms independently held the
+same ticker around the same time, the redesign's own realized outcome was not better than
+baseline's. This is the identical shape of finding the measurement-toolkit's stop A/B validation
+already produced the same day: a large, attractive portfolio-level gap that does not survive
+contact with a capacity/cascade-uncontaminated, per-decision view.
+
+**Not a wasted result.** The pre-registration was built specifically to catch this shape of false
+positive before it could tempt adoption, and it did — cleanly, on criteria fixed in advance, not by
+post-hoc argument about which of several attractive numbers to trust. Selective admission (holding
+a slot empty when nothing clears a quality bar, deliberately out of scope for this arm per its own
+§0) remains a live, different, and now better-specified question — its own pre-registration would
+need to isolate deployment level from selection quality from the start, not inherit a clean bill of
+health from this result.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
