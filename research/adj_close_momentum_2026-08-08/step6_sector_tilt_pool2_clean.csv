@@ -1,0 +1,206 @@
+ticker,n_A,n_B,delta_B_minus_A,sector,is_dividend_sector
+AAL,26,23,-3,UNKNOWN,False
+AAP,22,22,0,UNKNOWN,False
+ABNB,6,6,0,Consumer Cyclical,False
+AEP,37,44,7,Utilities,True
+AET,57,56,-1,UNKNOWN,False
+AIV,32,37,5,UNKNOWN,False
+AJG,47,47,0,Financial Services,False
+ALK,8,8,0,UNKNOWN,False
+ALLE,21,17,-4,Industrials,False
+AMCR,1,2,1,Consumer Cyclical,False
+AME,24,20,-4,Industrials,False
+AMG,1,1,0,UNKNOWN,False
+AN,33,29,-4,UNKNOWN,False
+ANDV,75,68,-7,UNKNOWN,False
+ANF,20,21,1,UNKNOWN,False
+AOS,18,17,-1,Industrials,False
+APO,11,8,-3,Financial Services,False
+ARE,4,6,2,Real Estate,True
+ATI,25,21,-4,UNKNOWN,False
+ATO,19,20,1,Utilities,True
+AYI,8,7,-1,UNKNOWN,False
+BBBY,47,52,5,UNKNOWN,False
+BBWI,11,15,4,UNKNOWN,False
+BDX,32,27,-5,Healthcare,False
+BF.B,47,44,-3,,False
+BG,10,9,-1,Consumer Defensive,True
+BIO,11,10,-1,UNKNOWN,False
+BLK,32,29,-3,Financial Services,False
+BMS,6,10,4,UNKNOWN,False
+BRK.B,18,14,-4,,False
+BRO,29,25,-4,Financial Services,False
+BWA,34,32,-2,UNKNOWN,False
+BX,23,22,-1,Financial Services,False
+BXP,20,26,6,Real Estate,True
+CAG,32,38,6,UNKNOWN,False
+CASY,5,6,1,Consumer Cyclical,False
+CB,25,28,3,Financial Services,False
+CE,12,14,2,UNKNOWN,False
+CLF,26,25,-1,UNKNOWN,False
+COR,21,20,-1,Healthcare,False
+COTY,4,6,2,UNKNOWN,False
+CPAY,7,6,-1,Technology,False
+CPB,38,40,2,UNKNOWN,False
+CPRI,17,17,0,UNKNOWN,False
+CPT,6,6,0,Real Estate,True
+CRH,2,2,0,Basic Materials,False
+CSCO,52,51,-1,Technology,False
+CSGP,8,7,-1,Real Estate,True
+CZR,20,19,-1,UNKNOWN,False
+D,13,17,4,Utilities,True
+DOC,0,2,2,Real Estate,True
+DOV,28,30,2,Industrials,False
+DOW,8,9,1,Basic Materials,False
+DTE,20,24,4,Utilities,True
+DUK,13,19,6,Utilities,True
+DXC,48,44,-4,UNKNOWN,False
+EG,5,7,2,Financial Services,False
+EIX,30,37,7,Utilities,True
+ELV,11,10,-1,Healthcare,False
+EME,13,16,3,Industrials,False
+EMN,53,56,3,UNKNOWN,False
+EMR,29,31,2,Industrials,False
+ENPH,33,32,-1,UNKNOWN,False
+EPAM,7,4,-3,UNKNOWN,False
+ERIE,4,3,-1,Financial Services,False
+ES,20,27,7,Utilities,True
+ESRX,37,35,-2,UNKNOWN,False
+ETSY,21,19,-2,UNKNOWN,False
+EVRG,10,15,5,Utilities,True
+EXE,8,9,1,Energy,False
+FDS,7,9,2,Financial Services,False
+FHN,17,15,-2,UNKNOWN,False
+FLR,23,22,-1,UNKNOWN,False
+FLS,27,26,-1,UNKNOWN,False
+FMC,65,62,-3,UNKNOWN,False
+FOSL,6,9,3,UNKNOWN,False
+FRT,10,12,2,Real Estate,True
+FTI,25,22,-3,UNKNOWN,False
+FTV,13,8,-5,Technology,False
+GEHC,1,1,0,Healthcare,False
+GEN,11,11,0,Technology,False
+GHC,13,14,1,UNKNOWN,False
+GME,34,33,-1,UNKNOWN,False
+GNW,40,41,1,UNKNOWN,False
+GT,53,49,-4,UNKNOWN,False
+HLT,43,36,-7,Consumer Cyclical,False
+HOG,24,29,5,UNKNOWN,False
+HP,33,36,3,UNKNOWN,False
+HRB,27,33,6,UNKNOWN,False
+HSIC,18,14,-4,Healthcare,False
+IEX,3,3,0,Industrials,False
+IFF,21,21,0,Basic Materials,False
+ILMN,34,34,0,UNKNOWN,False
+IPGP,22,23,1,UNKNOWN,False
+ITT,1,0,-1,UNKNOWN,False
+J,8,6,-2,Industrials,False
+JCI,54,61,7,Industrials,False
+JEF,32,30,-2,UNKNOWN,False
+JKHY,17,14,-3,Technology,False
+JNJ,24,23,-1,Healthcare,False
+KBH,5,5,0,UNKNOWN,False
+KHC,7,9,2,Consumer Defensive,True
+KMB,20,24,4,Consumer Defensive,True
+KMX,49,44,-5,UNKNOWN,False
+KSS,30,30,0,UNKNOWN,False
+KVUE,0,1,1,Consumer Defensive,True
+L,20,12,-8,Financial Services,False
+LEG,29,35,6,UNKNOWN,False
+LH,22,15,-7,Healthcare,False
+LHX,19,21,2,Industrials,False
+LII,2,2,0,Industrials,False
+LIN,16,15,-1,Basic Materials,False
+LKQ,16,13,-3,UNKNOWN,False
+LNC,50,50,0,UNKNOWN,False
+LNT,11,13,2,Utilities,True
+LULU,7,6,-1,Consumer Cyclical,False
+LW,23,22,-1,UNKNOWN,False
+M,50,50,0,UNKNOWN,False
+MAC,11,11,0,UNKNOWN,False
+MAT,27,32,5,UNKNOWN,False
+MBI,3,3,0,UNKNOWN,False
+MDLZ,27,28,1,Consumer Defensive,True
+MDT,15,13,-2,Healthcare,False
+MHK,33,29,-4,UNKNOWN,False
+MKTX,24,24,0,UNKNOWN,False
+MOH,15,12,-3,UNKNOWN,False
+MTCH,1,0,-1,UNKNOWN,False
+MUR,21,20,-1,UNKNOWN,False
+NAVI,8,11,3,UNKNOWN,False
+NBR,30,29,-1,UNKNOWN,False
+NDSN,7,7,0,Industrials,False
+NKTR,14,11,-3,UNKNOWN,False
+NOV,45,41,-4,UNKNOWN,False
+NWL,42,43,1,UNKNOWN,False
+NXPI,24,28,4,Technology,False
+NYT,9,9,0,UNKNOWN,False
+OGN,2,3,1,UNKNOWN,False
+OI,13,11,-2,UNKNOWN,False
+OMC,11,14,3,Communication Services,False
+OTIS,3,1,-2,Industrials,False
+PAYC,23,24,1,UNKNOWN,False
+PAYX,19,21,2,Technology,False
+PBI,15,16,1,UNKNOWN,False
+PCAR,43,48,5,Industrials,False
+PENN,8,10,2,UNKNOWN,False
+PEP,19,20,1,Consumer Defensive,True
+PFE,25,31,6,Healthcare,False
+PKG,21,26,5,Consumer Cyclical,False
+PNR,37,37,0,Industrials,False
+POOL,12,12,0,UNKNOWN,False
+PRGO,18,15,-3,UNKNOWN,False
+PTC,25,22,-3,Technology,False
+PVH,29,19,-10,UNKNOWN,False
+QRVO,32,29,-3,UNKNOWN,False
+R,29,32,3,UNKNOWN,False
+REG,6,8,2,Real Estate,True
+RHI,42,42,0,UNKNOWN,False
+RIG,15,14,-1,UNKNOWN,False
+RJF,42,42,0,Financial Services,False
+RRC,42,38,-4,UNKNOWN,False
+RSG,48,48,0,Industrials,False
+RTX,31,32,1,Industrials,False
+RVTY,3,3,0,Healthcare,False
+SCG,5,5,0,UNKNOWN,False
+SEDG,16,15,-1,UNKNOWN,False
+SIG,3,3,0,UNKNOWN,False
+SLG,1,1,0,UNKNOWN,False
+SLM,23,25,2,UNKNOWN,False
+SO,37,49,12,Utilities,True
+SOLV,4,2,-2,Healthcare,False
+SRE,32,34,2,Utilities,True
+STE,14,14,0,Healthcare,False
+SW,11,9,-2,Consumer Cyclical,False
+SWK,31,30,-1,Industrials,False
+SYK,36,30,-6,Healthcare,False
+TDC,36,35,-1,UNKNOWN,False
+TDY,12,5,-7,Technology,False
+TEL,36,36,0,Technology,False
+TFC,7,11,4,Financial Services,False
+TFX,8,8,0,UNKNOWN,False
+THC,45,41,-4,UNKNOWN,False
+TRIP,39,38,-1,UNKNOWN,False
+UA,27,23,-4,UNKNOWN,False
+UAA,48,42,-6,UNKNOWN,False
+UDR,13,21,8,Real Estate,True
+UNM,32,31,-1,UNKNOWN,False
+UPS,14,16,2,Industrials,False
+URBN,19,19,0,UNKNOWN,False
+VFC,42,37,-5,UNKNOWN,False
+VICI,10,13,3,Real Estate,True
+VLTO,4,3,-1,Industrials,False
+VNO,12,14,2,UNKNOWN,False
+VRSK,46,41,-5,Industrials,False
+VZ,13,25,12,Communication Services,False
+WAB,34,30,-4,Industrials,False
+WHR,50,46,-4,UNKNOWN,False
+WSM,12,11,-1,Consumer Cyclical,False
+WTW,6,5,-1,Financial Services,False
+WU,20,20,0,UNKNOWN,False
+XEL,34,41,7,Utilities,True
+XRAY,16,14,-2,UNKNOWN,False
+XRX,20,30,10,UNKNOWN,False
+XYZ,11,10,-1,Technology,False
+ZBH,13,9,-4,Healthcare,False
+ZION,38,34,-4,UNKNOWN,False

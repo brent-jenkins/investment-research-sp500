@@ -1,0 +1,1004 @@
+{
+  "pool1_A": {
+    "label": "pool1_A",
+    "n_blocks_pass": 7,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 65,
+        "cagr_pct": -48.16,
+        "max_drawdown_pct": -14.27,
+        "profit_factor": 0.27,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 290,
+        "cagr_pct": -22.55,
+        "max_drawdown_pct": -37.25,
+        "profit_factor": 0.34,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 432,
+        "cagr_pct": 6.37,
+        "max_drawdown_pct": -8.21,
+        "profit_factor": 1.39,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 294,
+        "cagr_pct": 9.04,
+        "max_drawdown_pct": -12.01,
+        "profit_factor": 1.44,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 265,
+        "cagr_pct": 18.08,
+        "max_drawdown_pct": -5.11,
+        "profit_factor": 2.12,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 277,
+        "cagr_pct": 14.53,
+        "max_drawdown_pct": -7.63,
+        "profit_factor": 1.54,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 286,
+        "cagr_pct": 19.76,
+        "max_drawdown_pct": -11.87,
+        "profit_factor": 1.63,
+        "passed": false
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 297,
+        "cagr_pct": 1.5,
+        "max_drawdown_pct": -16.85,
+        "profit_factor": 1.06,
+        "passed": true
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 277,
+        "cagr_pct": 21.52,
+        "max_drawdown_pct": -7.1,
+        "profit_factor": 1.55,
+        "passed": false
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 301,
+        "cagr_pct": 8.98,
+        "max_drawdown_pct": -34.98,
+        "profit_factor": 1.18,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 279,
+        "cagr_pct": 13.74,
+        "max_drawdown_pct": -22.59,
+        "profit_factor": 1.33,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 334,
+        "cagr_pct": 28.07,
+        "max_drawdown_pct": -15.75,
+        "profit_factor": 1.45,
+        "passed": false
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 328,
+        "cagr_pct": 18.37,
+        "max_drawdown_pct": -32.22,
+        "profit_factor": 1.22,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 300,
+        "cagr_pct": 29.93,
+        "max_drawdown_pct": -25.7,
+        "profit_factor": 1.35,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 331,
+        "cagr_pct": 31.82,
+        "max_drawdown_pct": -75.15,
+        "profit_factor": 1.17,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 393,
+        "cagr_pct": 157.91,
+        "max_drawdown_pct": -91.72,
+        "profit_factor": 1.87,
+        "passed": false
+      }
+    ]
+  },
+  "pool1_B": {
+    "label": "pool1_B",
+    "n_blocks_pass": 8,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 62,
+        "cagr_pct": -45.36,
+        "max_drawdown_pct": -13.59,
+        "profit_factor": 0.28,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 322,
+        "cagr_pct": -26.08,
+        "max_drawdown_pct": -41.2,
+        "profit_factor": 0.33,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 430,
+        "cagr_pct": 6.79,
+        "max_drawdown_pct": -7.87,
+        "profit_factor": 1.43,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 303,
+        "cagr_pct": 10.1,
+        "max_drawdown_pct": -11.85,
+        "profit_factor": 1.45,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 265,
+        "cagr_pct": 16.26,
+        "max_drawdown_pct": -3.89,
+        "profit_factor": 1.97,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 285,
+        "cagr_pct": 14.3,
+        "max_drawdown_pct": -7.99,
+        "profit_factor": 1.51,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 276,
+        "cagr_pct": 19.78,
+        "max_drawdown_pct": -11.93,
+        "profit_factor": 1.69,
+        "passed": false
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 307,
+        "cagr_pct": 5.21,
+        "max_drawdown_pct": -16.57,
+        "profit_factor": 1.14,
+        "passed": true
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 282,
+        "cagr_pct": 20.36,
+        "max_drawdown_pct": -8.17,
+        "profit_factor": 1.48,
+        "passed": false
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 298,
+        "cagr_pct": 2.17,
+        "max_drawdown_pct": -34.18,
+        "profit_factor": 1.06,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 272,
+        "cagr_pct": 11.56,
+        "max_drawdown_pct": -20.54,
+        "profit_factor": 1.28,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 334,
+        "cagr_pct": 24.87,
+        "max_drawdown_pct": -11.0,
+        "profit_factor": 1.44,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 344,
+        "cagr_pct": 5.5,
+        "max_drawdown_pct": -34.62,
+        "profit_factor": 1.1,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 306,
+        "cagr_pct": 22.7,
+        "max_drawdown_pct": -19.62,
+        "profit_factor": 1.28,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 312,
+        "cagr_pct": 30.09,
+        "max_drawdown_pct": -54.22,
+        "profit_factor": 1.2,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 402,
+        "cagr_pct": 110.18,
+        "max_drawdown_pct": -85.27,
+        "profit_factor": 1.65,
+        "passed": false
+      }
+    ]
+  },
+  "pool2_clean_A": {
+    "label": "pool2_clean_A",
+    "n_blocks_pass": 7,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 74,
+        "cagr_pct": -51.52,
+        "max_drawdown_pct": -14.15,
+        "profit_factor": 0.24,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 188,
+        "cagr_pct": -7.29,
+        "max_drawdown_pct": -18.31,
+        "profit_factor": 0.61,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 363,
+        "cagr_pct": -0.61,
+        "max_drawdown_pct": -10.92,
+        "profit_factor": 1.02,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 301,
+        "cagr_pct": 5.13,
+        "max_drawdown_pct": -13.0,
+        "profit_factor": 1.23,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 267,
+        "cagr_pct": 13.84,
+        "max_drawdown_pct": -3.6,
+        "profit_factor": 1.78,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 281,
+        "cagr_pct": 11.17,
+        "max_drawdown_pct": -7.02,
+        "profit_factor": 1.38,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 271,
+        "cagr_pct": 2.96,
+        "max_drawdown_pct": -10.43,
+        "profit_factor": 1.12,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 307,
+        "cagr_pct": -11.16,
+        "max_drawdown_pct": -16.92,
+        "profit_factor": 0.69,
+        "passed": false
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 283,
+        "cagr_pct": 1.57,
+        "max_drawdown_pct": -7.82,
+        "profit_factor": 1.04,
+        "passed": false
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 301,
+        "cagr_pct": -7.09,
+        "max_drawdown_pct": -16.49,
+        "profit_factor": 0.79,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 283,
+        "cagr_pct": -1.3,
+        "max_drawdown_pct": -15.32,
+        "profit_factor": 1.0,
+        "passed": false
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 327,
+        "cagr_pct": 6.92,
+        "max_drawdown_pct": -6.11,
+        "profit_factor": 1.25,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 337,
+        "cagr_pct": -13.34,
+        "max_drawdown_pct": -26.52,
+        "profit_factor": 0.72,
+        "passed": false
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 301,
+        "cagr_pct": 0.6,
+        "max_drawdown_pct": -10.6,
+        "profit_factor": 0.96,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 296,
+        "cagr_pct": -4.69,
+        "max_drawdown_pct": -11.71,
+        "profit_factor": 0.81,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 302,
+        "cagr_pct": 6.74,
+        "max_drawdown_pct": -3.62,
+        "profit_factor": 1.28,
+        "passed": true
+      }
+    ]
+  },
+  "pool2_clean_B": {
+    "label": "pool2_clean_B",
+    "n_blocks_pass": 7,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 72,
+        "cagr_pct": -49.5,
+        "max_drawdown_pct": -13.41,
+        "profit_factor": 0.28,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 183,
+        "cagr_pct": -8.02,
+        "max_drawdown_pct": -20.39,
+        "profit_factor": 0.58,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 379,
+        "cagr_pct": 0.21,
+        "max_drawdown_pct": -11.68,
+        "profit_factor": 1.06,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 302,
+        "cagr_pct": 3.16,
+        "max_drawdown_pct": -13.33,
+        "profit_factor": 1.17,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 260,
+        "cagr_pct": 13.39,
+        "max_drawdown_pct": -3.63,
+        "profit_factor": 1.8,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 287,
+        "cagr_pct": 11.94,
+        "max_drawdown_pct": -7.94,
+        "profit_factor": 1.4,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 273,
+        "cagr_pct": 3.25,
+        "max_drawdown_pct": -9.57,
+        "profit_factor": 1.14,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 301,
+        "cagr_pct": -10.5,
+        "max_drawdown_pct": -14.84,
+        "profit_factor": 0.7,
+        "passed": false
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 273,
+        "cagr_pct": 4.97,
+        "max_drawdown_pct": -6.39,
+        "profit_factor": 1.14,
+        "passed": false
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 301,
+        "cagr_pct": -7.66,
+        "max_drawdown_pct": -17.51,
+        "profit_factor": 0.8,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 291,
+        "cagr_pct": -2.61,
+        "max_drawdown_pct": -14.97,
+        "profit_factor": 0.93,
+        "passed": false
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 322,
+        "cagr_pct": 11.91,
+        "max_drawdown_pct": -6.07,
+        "profit_factor": 1.42,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 346,
+        "cagr_pct": -15.69,
+        "max_drawdown_pct": -29.84,
+        "profit_factor": 0.71,
+        "passed": false
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 308,
+        "cagr_pct": -0.7,
+        "max_drawdown_pct": -11.43,
+        "profit_factor": 0.91,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 293,
+        "cagr_pct": 0.29,
+        "max_drawdown_pct": -7.51,
+        "profit_factor": 1.0,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 294,
+        "cagr_pct": 4.65,
+        "max_drawdown_pct": -2.97,
+        "profit_factor": 1.19,
+        "passed": true
+      }
+    ]
+  },
+  "pool2_all_A": {
+    "label": "pool2_all_A",
+    "n_blocks_pass": 7,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 64,
+        "cagr_pct": -47.4,
+        "max_drawdown_pct": -14.47,
+        "profit_factor": 0.33,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 341,
+        "cagr_pct": -27.68,
+        "max_drawdown_pct": -43.76,
+        "profit_factor": 0.29,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 458,
+        "cagr_pct": 7.25,
+        "max_drawdown_pct": -8.54,
+        "profit_factor": 1.48,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 306,
+        "cagr_pct": 9.18,
+        "max_drawdown_pct": -9.86,
+        "profit_factor": 1.31,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 274,
+        "cagr_pct": 18.23,
+        "max_drawdown_pct": -4.02,
+        "profit_factor": 2.12,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 286,
+        "cagr_pct": 11.76,
+        "max_drawdown_pct": -10.67,
+        "profit_factor": 1.37,
+        "passed": false
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 279,
+        "cagr_pct": 15.53,
+        "max_drawdown_pct": -11.4,
+        "profit_factor": 1.55,
+        "passed": false
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 302,
+        "cagr_pct": -3.57,
+        "max_drawdown_pct": -19.98,
+        "profit_factor": 0.95,
+        "passed": false
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 295,
+        "cagr_pct": 10.78,
+        "max_drawdown_pct": -3.95,
+        "profit_factor": 1.23,
+        "passed": true
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 312,
+        "cagr_pct": -8.2,
+        "max_drawdown_pct": -27.46,
+        "profit_factor": 0.89,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 278,
+        "cagr_pct": 4.81,
+        "max_drawdown_pct": -16.94,
+        "profit_factor": 1.21,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 350,
+        "cagr_pct": 21.9,
+        "max_drawdown_pct": -13.21,
+        "profit_factor": 1.41,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 346,
+        "cagr_pct": 7.61,
+        "max_drawdown_pct": -17.59,
+        "profit_factor": 1.15,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 305,
+        "cagr_pct": 11.39,
+        "max_drawdown_pct": -17.54,
+        "profit_factor": 1.15,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 330,
+        "cagr_pct": 20.35,
+        "max_drawdown_pct": -54.02,
+        "profit_factor": 1.15,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 396,
+        "cagr_pct": 78.1,
+        "max_drawdown_pct": -51.8,
+        "profit_factor": 1.69,
+        "passed": false
+      }
+    ]
+  },
+  "pool2_all_B": {
+    "label": "pool2_all_B",
+    "n_blocks_pass": 9,
+    "n_blocks_total": 16,
+    "blocks": [
+      {
+        "block": 0,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 64,
+        "cagr_pct": -50.83,
+        "max_drawdown_pct": -15.76,
+        "profit_factor": 0.27,
+        "passed": false
+      },
+      {
+        "block": 1,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 386,
+        "cagr_pct": -30.62,
+        "max_drawdown_pct": -47.58,
+        "profit_factor": 0.32,
+        "passed": false
+      },
+      {
+        "block": 2,
+        "start": "2009-06-13",
+        "end": "2010-09-03",
+        "n_trades": 461,
+        "cagr_pct": 4.32,
+        "max_drawdown_pct": -9.13,
+        "profit_factor": 1.36,
+        "passed": true
+      },
+      {
+        "block": 3,
+        "start": "2010-09-03",
+        "end": "2011-11-25",
+        "n_trades": 323,
+        "cagr_pct": 4.83,
+        "max_drawdown_pct": -9.71,
+        "profit_factor": 1.16,
+        "passed": true
+      },
+      {
+        "block": 4,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 275,
+        "cagr_pct": 10.94,
+        "max_drawdown_pct": -3.44,
+        "profit_factor": 1.79,
+        "passed": true
+      },
+      {
+        "block": 5,
+        "start": "2013-02-14",
+        "end": "2014-05-07",
+        "n_trades": 287,
+        "cagr_pct": 8.23,
+        "max_drawdown_pct": -5.57,
+        "profit_factor": 1.34,
+        "passed": true
+      },
+      {
+        "block": 6,
+        "start": "2014-05-07",
+        "end": "2015-07-29",
+        "n_trades": 281,
+        "cagr_pct": 8.73,
+        "max_drawdown_pct": -7.84,
+        "profit_factor": 1.4,
+        "passed": true
+      },
+      {
+        "block": 7,
+        "start": "2015-07-29",
+        "end": "2016-10-18",
+        "n_trades": 297,
+        "cagr_pct": -3.11,
+        "max_drawdown_pct": -14.68,
+        "profit_factor": 0.92,
+        "passed": false
+      },
+      {
+        "block": 8,
+        "start": "2016-10-18",
+        "end": "2018-01-08",
+        "n_trades": 284,
+        "cagr_pct": 10.37,
+        "max_drawdown_pct": -3.08,
+        "profit_factor": 1.39,
+        "passed": true
+      },
+      {
+        "block": 9,
+        "start": "2018-01-08",
+        "end": "2019-04-01",
+        "n_trades": 309,
+        "cagr_pct": -2.67,
+        "max_drawdown_pct": -20.51,
+        "profit_factor": 0.95,
+        "passed": false
+      },
+      {
+        "block": 10,
+        "start": "2019-04-01",
+        "end": "2020-06-21",
+        "n_trades": 278,
+        "cagr_pct": 7.32,
+        "max_drawdown_pct": -14.79,
+        "profit_factor": 1.33,
+        "passed": true
+      },
+      {
+        "block": 11,
+        "start": "2020-06-21",
+        "end": "2021-09-11",
+        "n_trades": 356,
+        "cagr_pct": 14.83,
+        "max_drawdown_pct": -12.5,
+        "profit_factor": 1.36,
+        "passed": true
+      },
+      {
+        "block": 12,
+        "start": "2021-09-11",
+        "end": "2022-12-03",
+        "n_trades": 343,
+        "cagr_pct": 13.59,
+        "max_drawdown_pct": -18.15,
+        "profit_factor": 1.27,
+        "passed": true
+      },
+      {
+        "block": 13,
+        "start": "2022-12-03",
+        "end": "2024-02-23",
+        "n_trades": 322,
+        "cagr_pct": 11.81,
+        "max_drawdown_pct": -15.53,
+        "profit_factor": 1.23,
+        "passed": false
+      },
+      {
+        "block": 14,
+        "start": "2024-02-23",
+        "end": "2025-05-15",
+        "n_trades": 328,
+        "cagr_pct": 25.88,
+        "max_drawdown_pct": -40.33,
+        "profit_factor": 1.29,
+        "passed": false
+      },
+      {
+        "block": 15,
+        "start": "2025-05-15",
+        "end": "2026-08-06",
+        "n_trades": 403,
+        "cagr_pct": 86.78,
+        "max_drawdown_pct": -50.74,
+        "profit_factor": 1.8,
+        "passed": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+pool,arm,label,n_trades,n_distinct_tickers,total_pnl_gbp,blocks_pass,blocks_total,continuous_cagr_pct,continuous_ending_equity_gbp,continuous_peak_relative_max_dd_pct,continuous_total_return_pct,continuous_pf,continuous_win_rate,mean_holding_days,median_holding_days,exit_reasons
+pool1,A,pool1_A,4749,370,239706.84,7,16,9.38,289706.84,-41.94,479.41,1.31,0.4437,21.1,30.0,"{""MAX_HOLDING"": 2370, ""STOP_LOSS"": 2127, ""SIGNAL_OFF"": 172, ""CRISIS_EXIT"": 43, ""END_OF_DATA"": 37}"
+pool1,B,pool1_B,4800,377,183496.02,8,16,8.18,233496.02,-44.84,366.99,1.26,0.4329,21.0,29.0,"{""MAX_HOLDING"": 2340, ""STOP_LOSS"": 2206, ""SIGNAL_OFF"": 171, ""CRISIS_EXIT"": 46, ""END_OF_DATA"": 37}"
+pool2_clean,A,pool2_clean_A,4482,203,-4423.22,7,16,-0.47,45576.78,-35.07,-8.85,1.0,0.415,20.6,27.0,"{""STOP_LOSS"": 2115, ""MAX_HOLDING"": 2102, ""SIGNAL_OFF"": 207, ""CRISIS_EXIT"": 29, ""END_OF_DATA"": 29}"
+pool2_clean,B,pool2_clean_B,4485,203,-329.14,7,16,-0.03,49670.86,-30.54,-0.66,1.01,0.4158,20.7,28.0,"{""MAX_HOLDING"": 2126, ""STOP_LOSS"": 2093, ""SIGNAL_OFF"": 205, ""CRISIS_EXIT"": 33, ""END_OF_DATA"": 28}"
+pool2_all,A,pool2_all_A,4922,442,114990.04,7,16,6.28,164990.04,-47.83,229.98,1.19,0.4307,20.8,28.0,"{""MAX_HOLDING"": 2375, ""STOP_LOSS"": 2261, ""SIGNAL_OFF"": 200, ""CRISIS_EXIT"": 49, ""END_OF_DATA"": 37}"
+pool2_all,B,pool2_all_B,4997,460,111992.16,9,16,6.18,161992.16,-52.2,223.98,1.19,0.4249,20.6,28.0,"{""MAX_HOLDING"": 2403, ""STOP_LOSS"": 2302, ""SIGNAL_OFF"": 203, ""CRISIS_EXIT"": 53, ""END_OF_DATA"": 36}"

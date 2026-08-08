@@ -1,0 +1,11 @@
+{
+  "pool": "pool2_all",
+  "n_trades_A": 4922,
+  "n_trades_B": 4997,
+  "n_shared_positions": 1649,
+  "n_A_only": 3273,
+  "n_B_only": 3348,
+  "overlap_pct_of_A": 33.5,
+  "overlap_pct_of_B": 33.0,
+  "jaccard_similarity_pct": 19.9
+}

@@ -1,0 +1,383 @@
+ticker,n_A,n_B,delta_B_minus_A,sector,is_dividend_sector
+A,1,2,1,Healthcare,False
+AAPL,54,51,-3,Technology,False
+ABBV,3,6,3,Healthcare,False
+ABT,4,3,-1,Healthcare,False
+ACGL,9,10,1,Financial Services,False
+ACN,1,2,1,Technology,False
+ADBE,22,19,-3,Technology,False
+ADI,1,1,0,Technology,False
+ADM,8,10,2,Consumer Defensive,True
+ADP,1,2,1,Technology,False
+ADSK,14,12,-2,Technology,False
+AEE,0,1,1,Utilities,True
+AES,8,8,0,Utilities,True
+AFL,8,9,1,Financial Services,False
+AIG,9,13,4,Financial Services,False
+AIZ,4,4,0,Financial Services,False
+AKAM,17,18,1,Technology,False
+ALB,35,40,5,Basic Materials,False
+ALGN,36,31,-5,Healthcare,False
+ALL,5,5,0,Financial Services,False
+AMAT,36,39,3,Technology,False
+AMD,86,84,-2,Technology,False
+AMGN,17,14,-3,Healthcare,False
+AMP,3,5,2,Financial Services,False
+AMT,6,5,-1,Real Estate,True
+AMZN,72,65,-7,Consumer Cyclical,False
+ANET,27,21,-6,Technology,False
+AON,1,2,1,Financial Services,False
+APA,38,40,2,Energy,False
+APD,5,5,0,Basic Materials,False
+APH,6,5,-1,Technology,False
+APP,8,9,1,Communication Services,False
+APTV,10,7,-3,Consumer Cyclical,False
+AVB,2,2,0,Real Estate,True
+AVGO,52,46,-6,Technology,False
+AVY,3,4,1,Consumer Cyclical,False
+AWK,8,9,1,Utilities,True
+AXON,21,19,-2,Industrials,False
+AXP,3,4,1,Financial Services,False
+AZO,39,35,-4,Consumer Cyclical,False
+BA,19,20,1,Industrials,False
+BAC,17,15,-2,Financial Services,False
+BAX,8,8,0,Healthcare,False
+BBY,17,20,3,Consumer Cyclical,False
+BEN,4,3,-1,Financial Services,False
+BIIB,32,27,-5,Healthcare,False
+BKNG,30,32,2,Consumer Cyclical,False
+BKR,5,5,0,Energy,False
+BLDR,7,4,-3,Industrials,False
+BMY,5,7,2,Healthcare,False
+BR,2,2,0,Technology,False
+BSX,16,16,0,Healthcare,False
+C,5,4,-1,Financial Services,False
+CAH,7,10,3,Healthcare,False
+CARR,2,1,-1,Industrials,False
+CAT,20,20,0,Industrials,False
+CBOE,4,4,0,Financial Services,False
+CBRE,20,17,-3,Real Estate,True
+CCI,5,5,0,Real Estate,True
+CCL,12,13,1,Consumer Cyclical,False
+CDNS,22,18,-4,Technology,False
+CDW,1,2,1,Technology,False
+CEG,23,23,0,Utilities,True
+CF,40,35,-5,Basic Materials,False
+CFG,3,3,0,Financial Services,False
+CHD,4,5,1,Consumer Defensive,True
+CHRW,8,8,0,Industrials,False
+CHTR,12,5,-7,Communication Services,False
+CI,17,18,1,Healthcare,False
+CIEN,11,10,-1,Technology,False
+CINF,8,10,2,Financial Services,False
+CL,1,1,0,Consumer Defensive,True
+CLX,3,4,1,Consumer Defensive,True
+CMCSA,5,5,0,Communication Services,False
+CME,0,2,2,Financial Services,False
+CMG,47,45,-2,Consumer Cyclical,False
+CMI,25,24,-1,Industrials,False
+CMS,2,2,0,Utilities,True
+CNC,11,9,-2,Healthcare,False
+COF,10,10,0,Financial Services,False
+COHR,5,6,1,Technology,False
+COIN,7,5,-2,Financial Services,False
+COP,18,21,3,Energy,False
+COST,4,6,2,Consumer Defensive,True
+CPRT,12,9,-3,Industrials,False
+CRL,2,0,-2,Healthcare,False
+CRM,29,31,2,Technology,False
+CRWD,5,4,-1,Technology,False
+CSX,23,23,0,Industrials,False
+CTAS,0,1,1,Industrials,False
+CTSH,19,12,-7,Technology,False
+CTVA,1,2,1,Basic Materials,False
+CVNA,4,3,-1,Consumer Cyclical,False
+CVS,1,2,1,Healthcare,False
+CVX,10,9,-1,Energy,False
+DAL,18,13,-5,Industrials,False
+DASH,5,5,0,Consumer Cyclical,False
+DD,4,7,3,Basic Materials,False
+DE,17,17,0,Industrials,False
+DECK,3,4,1,Consumer Cyclical,False
+DELL,7,7,0,Technology,False
+DG,8,6,-2,Consumer Defensive,True
+DGX,9,9,0,Healthcare,False
+DHI,27,30,3,Consumer Cyclical,False
+DHR,1,12,11,Healthcare,False
+DIS,0,1,1,Communication Services,False
+DLR,5,4,-1,Real Estate,True
+DLTR,22,18,-4,Consumer Defensive,True
+DPZ,2,2,0,Consumer Cyclical,False
+DRI,21,18,-3,Consumer Cyclical,False
+DVA,8,6,-2,Healthcare,False
+DVN,39,40,1,Energy,False
+DXCM,9,9,0,Healthcare,False
+EA,27,28,1,Communication Services,False
+EBAY,10,10,0,Consumer Cyclical,False
+ECHO,2,2,0,Communication Services,False
+ECL,1,1,0,Basic Materials,False
+ED,0,3,3,Utilities,True
+EFX,1,2,1,Industrials,False
+EIX,1,0,-1,Utilities,True
+EL,25,22,-3,Consumer Defensive,True
+EOG,30,33,3,Energy,False
+EQIX,8,12,4,Real Estate,True
+EQR,8,10,2,Real Estate,True
+EQT,12,14,2,Energy,False
+ESS,1,1,0,Real Estate,True
+ETN,3,5,2,Industrials,False
+ETR,2,4,2,Utilities,True
+EW,27,26,-1,Healthcare,False
+EXC,5,6,1,Utilities,True
+EXPD,1,1,0,Industrials,False
+EXPE,26,24,-2,Consumer Cyclical,False
+EXR,6,9,3,Real Estate,True
+F,29,31,2,Consumer Cyclical,False
+FANG,15,16,1,Energy,False
+FAST,8,9,1,Industrials,False
+FCX,55,55,0,Basic Materials,False
+FDX,7,7,0,Industrials,False
+FE,2,2,0,Utilities,True
+FFIV,12,10,-2,Technology,False
+FICO,19,17,-2,Technology,False
+FIS,3,3,0,Technology,False
+FITB,11,9,-2,Financial Services,False
+FIX,9,9,0,Industrials,False
+FLEX,2,2,0,Technology,False
+FOX,4,3,-1,Communication Services,False
+FOXA,3,3,0,Communication Services,False
+FSLR,39,41,2,Technology,False
+FTNT,26,26,0,Technology,False
+GD,2,2,0,Industrials,False
+GDDY,8,6,-2,Technology,False
+GE,21,16,-5,Industrials,False
+GEV,15,15,0,Industrials,False
+GILD,43,41,-2,Healthcare,False
+GIS,7,8,1,Consumer Defensive,True
+GLW,11,10,-1,Technology,False
+GM,7,6,-1,Consumer Cyclical,False
+GNRC,10,10,0,Industrials,False
+GOOG,4,5,1,Communication Services,False
+GOOGL,9,8,-1,Communication Services,False
+GPC,0,1,1,Consumer Cyclical,False
+GPN,9,6,-3,Industrials,False
+GRMN,8,8,0,Technology,False
+GS,6,7,1,Financial Services,False
+GWW,16,16,0,Industrials,False
+HAL,27,25,-2,Energy,False
+HAS,17,19,2,Consumer Cyclical,False
+HBAN,8,9,1,Financial Services,False
+HCA,12,13,1,Healthcare,False
+HD,13,12,-1,Consumer Cyclical,False
+HIG,11,12,1,Financial Services,False
+HII,3,4,1,Industrials,False
+HON,0,1,1,Industrials,False
+HOOD,10,11,1,Financial Services,False
+HPE,6,5,-1,Technology,False
+HPQ,8,8,0,Technology,False
+HRL,9,8,-1,Consumer Defensive,True
+HST,10,10,0,Real Estate,True
+HSY,11,8,-3,Consumer Defensive,True
+HUM,24,20,-4,Healthcare,False
+HWM,19,21,2,Industrials,False
+IBKR,2,2,0,Financial Services,False
+IBM,3,3,0,Technology,False
+ICE,7,6,-1,Financial Services,False
+IDXX,12,11,-1,Healthcare,False
+INCY,5,3,-2,Healthcare,False
+INTC,14,14,0,Technology,False
+INTU,12,10,-2,Technology,False
+IP,6,7,1,Consumer Cyclical,False
+IQV,2,2,0,Healthcare,False
+IR,1,1,0,Industrials,False
+IRM,12,14,2,Real Estate,True
+ISRG,34,29,-5,Healthcare,False
+IT,11,10,-1,Technology,False
+IVZ,9,10,1,Financial Services,False
+JBHT,1,1,0,Industrials,False
+JBL,21,27,6,Technology,False
+JPM,4,3,-1,Financial Services,False
+KDP,8,8,0,Consumer Defensive,True
+KEY,1,0,-1,Financial Services,False
+KEYS,14,11,-3,Technology,False
+KIM,1,1,0,Real Estate,True
+KKR,8,6,-2,Financial Services,False
+KLAC,27,32,5,Technology,False
+KMB,0,1,1,Consumer Defensive,True
+KMI,1,1,0,Energy,False
+KO,1,2,1,Consumer Defensive,True
+KR,18,22,4,Consumer Defensive,True
+LDOS,5,5,0,Technology,False
+LEN,26,31,5,Consumer Cyclical,False
+LITE,5,5,0,Technology,False
+LLY,31,28,-3,Healthcare,False
+LMT,5,6,1,Industrials,False
+LOW,9,7,-2,Consumer Cyclical,False
+LRCX,49,49,0,Technology,False
+LUV,23,24,1,Industrials,False
+LVS,7,8,1,Consumer Cyclical,False
+LYB,7,13,6,Basic Materials,False
+LYV,1,0,-1,Communication Services,False
+MA,23,20,-3,Financial Services,False
+MAA,1,1,0,Real Estate,True
+MAR,11,12,1,Consumer Cyclical,False
+MAS,12,18,6,Industrials,False
+MCD,8,16,8,Consumer Cyclical,False
+MCHP,3,2,-1,Technology,False
+MCK,15,16,1,Healthcare,False
+MCO,11,9,-2,Financial Services,False
+MDLZ,0,1,1,Consumer Defensive,True
+MET,1,1,0,Financial Services,False
+META,37,31,-6,Communication Services,False
+MGM,6,6,0,Consumer Cyclical,False
+MKC,7,8,1,Consumer Defensive,True
+MLM,4,3,-1,Basic Materials,False
+MMM,4,3,-1,Industrials,False
+MNST,18,16,-2,Consumer Defensive,True
+MO,1,2,1,Consumer Defensive,True
+MOS,24,20,-4,Basic Materials,False
+MPC,31,29,-2,Energy,False
+MPWR,11,16,5,Technology,False
+MRK,5,7,2,Healthcare,False
+MRNA,16,14,-2,Healthcare,False
+MRVL,3,3,0,Technology,False
+MS,14,16,2,Financial Services,False
+MSCI,10,13,3,Financial Services,False
+MSFT,5,5,0,Technology,False
+MSI,9,9,0,Technology,False
+MTB,1,2,1,Financial Services,False
+MTD,3,2,-1,Healthcare,False
+MU,81,78,-3,Technology,False
+NCLH,14,14,0,Consumer Cyclical,False
+NDAQ,2,1,-1,Financial Services,False
+NEM,37,35,-2,Basic Materials,False
+NFLX,90,94,4,Communication Services,False
+NI,6,7,1,Utilities,True
+NKE,4,4,0,Consumer Cyclical,False
+NOC,6,4,-2,Industrials,False
+NOW,10,10,0,Technology,False
+NRG,41,43,2,Utilities,True
+NSC,7,7,0,Industrials,False
+NTAP,26,27,1,Technology,False
+NTRS,2,1,-1,Financial Services,False
+NUE,16,18,2,Basic Materials,False
+NVDA,99,99,0,Technology,False
+NVR,3,3,0,Consumer Cyclical,False
+NWS,2,1,-1,Communication Services,False
+NWSA,3,2,-1,Communication Services,False
+O,4,6,2,Real Estate,True
+ODFL,7,4,-3,Industrials,False
+OKE,23,30,7,Energy,False
+ON,11,11,0,Technology,False
+ORCL,8,8,0,Technology,False
+ORLY,33,31,-2,Consumer Cyclical,False
+OXY,34,34,0,Energy,False
+PANW,3,4,1,Technology,False
+PCAR,0,2,2,Industrials,False
+PCG,7,10,3,Utilities,True
+PEG,2,2,0,Utilities,True
+PFG,6,6,0,Financial Services,False
+PG,4,6,2,Consumer Defensive,True
+PGR,3,3,0,Financial Services,False
+PH,1,1,0,Industrials,False
+PHM,38,44,6,Consumer Cyclical,False
+PLD,2,2,0,Real Estate,True
+PLTR,24,19,-5,Technology,False
+PM,6,8,2,Consumer Defensive,True
+PNC,1,2,1,Financial Services,False
+PNW,1,1,0,Utilities,True
+PODD,4,4,0,Healthcare,False
+PPG,2,2,0,Basic Materials,False
+PPL,2,2,0,Utilities,True
+PRU,7,9,2,Financial Services,False
+PSA,9,13,4,Real Estate,True
+PSX,4,6,2,Energy,False
+PWR,19,17,-2,Industrials,False
+PYPL,21,20,-1,Financial Services,False
+QCOM,12,14,2,Technology,False
+RCL,35,38,3,Consumer Cyclical,False
+REGN,25,26,1,Healthcare,False
+RF,15,16,1,Financial Services,False
+RJF,0,1,1,Financial Services,False
+RL,17,14,-3,Consumer Cyclical,False
+RMD,5,5,0,Healthcare,False
+ROK,4,6,2,Industrials,False
+ROL,2,4,2,Consumer Cyclical,False
+ROST,17,19,2,Consumer Cyclical,False
+SBAC,8,8,0,Real Estate,True
+SBUX,31,29,-2,Consumer Cyclical,False
+SCHW,5,6,1,Financial Services,False
+SHW,21,19,-2,Basic Materials,False
+SJM,2,6,4,Consumer Defensive,True
+SLB,17,19,2,Energy,False
+SMCI,18,18,0,Technology,False
+SNDK,7,7,0,Technology,False
+SNPS,8,7,-1,Technology,False
+SO,0,4,4,Utilities,True
+SPG,6,11,5,Real Estate,True
+SPGI,3,6,3,Financial Services,False
+STLD,5,7,2,Basic Materials,False
+STT,1,2,1,Financial Services,False
+STX,35,43,8,Technology,False
+STZ,33,28,-5,Consumer Defensive,True
+SWKS,20,18,-2,Technology,False
+SYF,4,5,1,Financial Services,False
+SYY,1,1,0,Consumer Defensive,True
+T,3,3,0,Communication Services,False
+TAP,5,8,3,Consumer Defensive,True
+TDG,5,8,3,Industrials,False
+TECH,1,1,0,Healthcare,False
+TER,24,22,-2,Technology,False
+TGT,8,8,0,Consumer Defensive,True
+TJX,15,13,-2,Consumer Cyclical,False
+TKO,2,2,0,Communication Services,False
+TMUS,16,15,-1,Communication Services,False
+TPL,9,8,-1,Energy,False
+TPR,34,38,4,Consumer Cyclical,False
+TRGP,11,10,-1,Energy,False
+TRMB,1,0,-1,Technology,False
+TROW,6,8,2,Financial Services,False
+TRV,3,2,-1,Financial Services,False
+TSCO,7,7,0,Consumer Cyclical,False
+TSLA,31,29,-2,Consumer Cyclical,False
+TSN,21,21,0,Consumer Defensive,True
+TT,2,4,2,Industrials,False
+TTWO,5,3,-2,Communication Services,False
+TXN,2,3,1,Technology,False
+TXT,7,7,0,Industrials,False
+TYL,1,1,0,Technology,False
+UAL,20,21,1,Industrials,False
+UBER,6,6,0,Technology,False
+UHS,2,4,2,Healthcare,False
+ULTA,15,12,-3,Consumer Cyclical,False
+UNH,10,11,1,Healthcare,False
+UNP,8,9,1,Industrials,False
+URI,35,26,-9,Industrials,False
+USB,1,1,0,Financial Services,False
+V,10,8,-2,Financial Services,False
+VLO,32,33,1,Energy,False
+VMC,7,8,1,Basic Materials,False
+VRSN,23,19,-4,Technology,False
+VRT,5,5,0,Industrials,False
+VRTX,31,32,1,Healthcare,False
+VST,19,19,0,Utilities,True
+VTR,1,3,2,Real Estate,True
+VTRS,1,1,0,Healthcare,False
+WAT,1,2,1,Healthcare,False
+WBD,12,13,1,Communication Services,False
+WDC,46,52,6,Technology,False
+WEC,3,3,0,Utilities,True
+WELL,4,9,5,Real Estate,True
+WFC,9,12,3,Financial Services,False
+WM,2,1,-1,Industrials,False
+WMB,14,20,6,Energy,False
+WMT,12,14,2,Consumer Defensive,True
+WRB,1,1,0,Financial Services,False
+WST,7,8,1,Healthcare,False
+WY,4,3,-1,Real Estate,True
+WYNN,49,49,0,Consumer Cyclical,False
+XOM,11,14,3,Energy,False
+XYL,5,4,-1,Industrials,False
+YUM,3,2,-1,Consumer Cyclical,False
+ZBRA,3,4,1,Technology,False
+ZTS,7,6,-1,Healthcare,False
