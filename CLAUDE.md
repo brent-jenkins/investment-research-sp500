@@ -613,6 +613,7 @@ live candidate pool is warm before anyone loads the Dashboard — without this, 
 position (and every live candidate) displays `"Uncategorized"` until either the pre-warm script runs
 or a future scheduled pre-warm is added (deliberately not built now, see above).
 
+<<<<<<< Updated upstream
 ## UI render-path blocking audit (2026-08-09)
 
 **Investigation-only survey of every Streamlit page for network/heavy-computation calls reachable
@@ -703,6 +704,65 @@ Streamlit version's `AppTest` harness (renders as an `UnknownElement`, no dedica
 verification reads `st.session_state` directly instead — the same underlying data the button
 consumes, an equally direct proof. Verified to actually fail against the reintroduced bug (via
 `git stash` on just this file, confirmed failing, then restored) before being trusted.
+=======
+## Position-count (concurrent-holdings target) study — pre-registered, tested, NOT ADOPTED (2026-08-09)
+
+**Tests the second of the two untested selection levers the gate-width study's own pre-registration
+identified** (gate width narrows *candidacy*; this narrows *capacity* directly) — motivated by Part 7
+of the selection audit (momentum ranking sits at the 99th percentile of random admission on return,
+98th-worst on drawdown; concentration trades one for the other). Four `per_trade_pct` values derived
+from `max_total_deployed(0.70) / N` for nominal targets N ∈ {5, 10, 40}, plus baseline unchanged
+(`per_trade_pct=0.05`, informally "22" after live's current snapshot). Full pre-registration and
+results: `research/position_count_prereg_2026-08-09/PREREGISTRATION.md` / `REPORT.md`.
+
+**Verdict: NOT ADOPTED — no arm clears the pre-registered +1.5pp cost-adjusted excess-return bar over
+baseline, in either pool** (best case Pool 2 CLEAN n40 at +1.400pp; Pool 1, direction-only, shows every
+arm *worse* than baseline). The walk-away sentence's primary clause fires outright, on its own.
+
+**The more consequential finding is Sec 1a's own concern, added on review before this ran, confirmed
+dead-on: two of the four arms never built the portfolios their names describe.** `per_trade_pct` is a
+ceiling fed into `_var_position_size_core()`, not a dial for concurrent-position count — VaR sizing is
+never pulled *up* to that ceiling, only capped by it, and across a 19-year walk of momentum-selected
+(inherently higher-volatility) candidates, realized sizing clusters in a band a loose enough ceiling
+never binds against. **Realized mean position count, both pools: n5 (target 5) → 11.78/12.17; n10
+(target 10) → 12.23/12.59; n22 baseline (never a target, kept as today's literal config value) →
+13.98/14.23 — the historical average, not the ~22 live's current snapshot showed; n40 (target 40) →
+35.38/35.47, cleanly realized.** Materiality test applied: is an arm's realized count closer to its own
+target, or closer to baseline's own realized count? n5 and n10 both land closer to baseline than to
+their own targets, in both pools — reported as not-tested for their nominal targets, not as results,
+per the pre-registration's own Sec 1a rule. n40 lands overwhelmingly closer to its own target — a clean
+result. The named risk at the *other* end (n40 sub-minimum rejections from an over-tight ceiling) never
+materialized at all — `n_rejected_subminimum = 0` in every one of the eight arm/pool runs.
+
+**The §2 deployment guard — checked independently, and confirmed insufficient on its own for this
+study's own purposes, exactly as Sec 1a warned it could be.** Mean deployment tracks baseline within
+0.45pp across all eight arm/pool combinations — the guard alone would have called n5 and n10 clean.
+Only the realized-position-count instrument added specifically because an arm can hold the same
+capital % deployed across a different number of, larger or smaller, positions catches that n5/n10 never
+built what they claim: the same total capital, spread across roughly the same ~12–14 positions as
+baseline, not concentrated into 5 or 10.
+
+**Consequences that trace directly back to this**: the pre-registration expected the 15pp drawdown
+ceiling to bind hardest at n5 ("5 positions will likely breach any reasonable ceiling") — it never
+does, in either pool, because n5 never concentrated enough to produce that effect; n40 (the one arm
+that did realize close to its target) shows a drawdown *improvement* of 12–15pp instead. The intended
+5→10→22→40 curve also collapses to two real points, not four, for the same reason — curve-shape
+discipline (monotonic vs. interior optimum) could not be meaningfully assessed on the intended range.
+
+**What this closes and doesn't.** Closes: `per_trade_pct` alone, at the 0.07–0.14 range this study
+tested, is not a usable lever for testing genuine concentration under this account's VaR sizing
+mechanics — confirmed, not merely suspected, and worth remembering before any future study reaches for
+this parameter to test tight position counts. Does not close: whether genuine 5–10-position
+concentration would actually help or hurt remains untested — would need a design enforcing a hard slot
+count directly (closer to the gate-width study's shortlist mechanism, narrowing capacity rather than
+candidacy) rather than a `per_trade_pct` retune.
+
+No changes to `analysis/signals.py`, `analysis/decision.py`, or the live path. `config.yaml` is not
+modified — every arm's `per_trade_pct` was passed as a direct argument to the existing, unmodified
+`simulate_portfolio_compounding_mtm()` logic (via an additively-instrumented copy,
+`position_count_engine.py`, parity-verified byte-identical to production on both pools before use) in
+the research harness only. Nothing adopted, nothing merged, nothing deployed.
+>>>>>>> Stashed changes
 
 ## Current architecture (as of 2026-08-04)
 

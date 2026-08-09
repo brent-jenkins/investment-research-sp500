@@ -1,0 +1,968 @@
+{
+  "pool1_n5": {
+    "n_trades": 4024,
+    "frictionless_cagr_pct": 8.54,
+    "peak_relative_drawdown_pct": -42.2,
+    "max_drawdown_fixed_pct": -80.6,
+    "mean_deployed_pct": 63.67,
+    "mean_n_open_positions": 11.78,
+    "fx_drag_pct_per_year": 3.3419,
+    "idle_credit_pct_per_year": 0.5539,
+    "cost_adjusted_cagr_pct": 5.752,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 966811,
+    "strategy_frictionless_cagr_pct": 8.54,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -2.623,
+    "excess_cost_adjusted_pct": -5.411,
+    "nominal_n": 5,
+    "realized_vs_nominal_ratio": 2.356,
+    "top3_concentration": {
+      "total_pnl_gbp": 179615.23,
+      "top3_pnl_gbp": 21388.08,
+      "top3_pct_of_total_pnl": 11.9,
+      "top3_tickers": [
+        "INTC",
+        "MU",
+        "PLTR"
+      ]
+    }
+  },
+  "pool1_n10": {
+    "n_trades": 4203,
+    "frictionless_cagr_pct": 8.3,
+    "peak_relative_drawdown_pct": -43.54,
+    "max_drawdown_fixed_pct": -72.93,
+    "mean_deployed_pct": 63.62,
+    "mean_n_open_positions": 12.23,
+    "fx_drag_pct_per_year": 3.3599,
+    "idle_credit_pct_per_year": 0.5548,
+    "cost_adjusted_cagr_pct": 5.495,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 964418,
+    "strategy_frictionless_cagr_pct": 8.3,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -2.863,
+    "excess_cost_adjusted_pct": -5.668,
+    "nominal_n": 10,
+    "realized_vs_nominal_ratio": 1.223,
+    "top3_concentration": {
+      "total_pnl_gbp": 170091.4,
+      "top3_pnl_gbp": 20219.96,
+      "top3_pct_of_total_pnl": 11.9,
+      "top3_tickers": [
+        "INTC",
+        "MU",
+        "DELL"
+      ]
+    }
+  },
+  "pool1_n22": {
+    "n_trades": 4752,
+    "frictionless_cagr_pct": 9.95,
+    "peak_relative_drawdown_pct": -41.94,
+    "max_drawdown_fixed_pct": -91.72,
+    "mean_deployed_pct": 63.46,
+    "mean_n_open_positions": 13.98,
+    "fx_drag_pct_per_year": 3.3428,
+    "idle_credit_pct_per_year": 0.5572,
+    "cost_adjusted_cagr_pct": 7.164,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 955263,
+    "strategy_frictionless_cagr_pct": 9.95,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -1.213,
+    "excess_cost_adjusted_pct": -3.999,
+    "nominal_n": 22,
+    "realized_vs_nominal_ratio": 0.635
+  },
+  "pool1_n40": {
+    "n_trades": 11951,
+    "frictionless_cagr_pct": 8.45,
+    "peak_relative_drawdown_pct": -29.49,
+    "max_drawdown_fixed_pct": -52.3,
+    "mean_deployed_pct": 63.07,
+    "mean_n_open_positions": 35.38,
+    "fx_drag_pct_per_year": 3.3345,
+    "idle_credit_pct_per_year": 0.5631,
+    "cost_adjusted_cagr_pct": 5.679,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 842759,
+    "strategy_frictionless_cagr_pct": 8.45,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -2.713,
+    "excess_cost_adjusted_pct": -5.484,
+    "nominal_n": 40,
+    "realized_vs_nominal_ratio": 0.885
+  },
+  "pool2_clean_n5": {
+    "n_trades": 4168,
+    "frictionless_cagr_pct": 7.51,
+    "peak_relative_drawdown_pct": -48.07,
+    "max_drawdown_fixed_pct": -65.72,
+    "mean_deployed_pct": 63.79,
+    "mean_n_open_positions": 12.17,
+    "fx_drag_pct_per_year": 3.3364,
+    "idle_credit_pct_per_year": 0.5521,
+    "cost_adjusted_cagr_pct": 4.726,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 1069932,
+    "strategy_frictionless_cagr_pct": 7.51,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -3.653,
+    "excess_cost_adjusted_pct": -6.437,
+    "nominal_n": 5,
+    "realized_vs_nominal_ratio": 2.434,
+    "block_pass": "7/16",
+    "excess_per_block": [
+      {
+        "block": 1,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 57,
+        "strategy_cagr_pct": -51.87,
+        "sp500tr_cagr_pct": -3.24,
+        "excess_pct": -48.625
+      },
+      {
+        "block": 2,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 313,
+        "strategy_cagr_pct": -26.44,
+        "sp500tr_cagr_pct": -23.32,
+        "excess_pct": -3.119
+      },
+      {
+        "block": 3,
+        "start": "2009-06-13",
+        "end": "2010-09-04",
+        "n_trades": 442,
+        "strategy_cagr_pct": 7.1,
+        "sp500tr_cagr_pct": 18.2,
+        "excess_pct": -11.098
+      },
+      {
+        "block": 4,
+        "start": "2010-09-04",
+        "end": "2011-11-25",
+        "n_trades": 263,
+        "strategy_cagr_pct": 6.58,
+        "sp500tr_cagr_pct": 7.18,
+        "excess_pct": -0.602
+      },
+      {
+        "block": 5,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 216,
+        "strategy_cagr_pct": 14.7,
+        "sp500tr_cagr_pct": 24.98,
+        "excess_pct": -10.278
+      },
+      {
+        "block": 6,
+        "start": "2013-02-14",
+        "end": "2014-05-08",
+        "n_trades": 246,
+        "strategy_cagr_pct": 10.55,
+        "sp500tr_cagr_pct": 21.26,
+        "excess_pct": -10.711
+      },
+      {
+        "block": 7,
+        "start": "2014-05-08",
+        "end": "2015-07-29",
+        "n_trades": 191,
+        "strategy_cagr_pct": 18.58,
+        "sp500tr_cagr_pct": 12.15,
+        "excess_pct": 6.429
+      },
+      {
+        "block": 8,
+        "start": "2015-07-29",
+        "end": "2016-10-19",
+        "n_trades": 222,
+        "strategy_cagr_pct": -2.95,
+        "sp500tr_cagr_pct": 3.64,
+        "excess_pct": -6.595
+      },
+      {
+        "block": 9,
+        "start": "2016-10-19",
+        "end": "2018-01-09",
+        "n_trades": 224,
+        "strategy_cagr_pct": 16.63,
+        "sp500tr_cagr_pct": 25.13,
+        "excess_pct": -8.498
+      },
+      {
+        "block": 10,
+        "start": "2018-01-09",
+        "end": "2019-04-01",
+        "n_trades": 227,
+        "strategy_cagr_pct": -6.11,
+        "sp500tr_cagr_pct": 5.6,
+        "excess_pct": -11.708
+      },
+      {
+        "block": 11,
+        "start": "2019-04-01",
+        "end": "2020-06-22",
+        "n_trades": 202,
+        "strategy_cagr_pct": 5.14,
+        "sp500tr_cagr_pct": 9.25,
+        "excess_pct": -4.114
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-12",
+        "n_trades": 345,
+        "strategy_cagr_pct": 19.43,
+        "sp500tr_cagr_pct": 35.81,
+        "excess_pct": -16.377
+      },
+      {
+        "block": 13,
+        "start": "2021-09-12",
+        "end": "2022-12-03",
+        "n_trades": 302,
+        "strategy_cagr_pct": 12.51,
+        "sp500tr_cagr_pct": -5.87,
+        "excess_pct": 18.384
+      },
+      {
+        "block": 14,
+        "start": "2022-12-03",
+        "end": "2024-02-24",
+        "n_trades": 278,
+        "strategy_cagr_pct": 19.13,
+        "sp500tr_cagr_pct": 23.87,
+        "excess_pct": -4.737
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "n_trades": 254,
+        "strategy_cagr_pct": 22.59,
+        "sp500tr_cagr_pct": 15.75,
+        "excess_pct": 6.843
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "n_trades": 386,
+        "strategy_cagr_pct": 97.2,
+        "sp500tr_cagr_pct": 25.56,
+        "excess_pct": 71.638
+      }
+    ],
+    "top3_concentration": {
+      "total_pnl_gbp": 142009.6,
+      "top3_pnl_gbp": 16074.98,
+      "top3_pct_of_total_pnl": 11.3,
+      "top3_tickers": [
+        "MU",
+        "PLTR",
+        "AMD"
+      ]
+    }
+  },
+  "pool2_clean_n10": {
+    "n_trades": 4339,
+    "frictionless_cagr_pct": 6.43,
+    "peak_relative_drawdown_pct": -48.92,
+    "max_drawdown_fixed_pct": -49.65,
+    "mean_deployed_pct": 63.81,
+    "mean_n_open_positions": 12.59,
+    "fx_drag_pct_per_year": 3.3178,
+    "idle_credit_pct_per_year": 0.5519,
+    "cost_adjusted_cagr_pct": 3.664,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 1067714,
+    "strategy_frictionless_cagr_pct": 6.43,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -4.733,
+    "excess_cost_adjusted_pct": -7.499,
+    "nominal_n": 10,
+    "realized_vs_nominal_ratio": 1.259,
+    "block_pass": "9/16",
+    "excess_per_block": [
+      {
+        "block": 1,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 56,
+        "strategy_cagr_pct": -50.41,
+        "sp500tr_cagr_pct": -3.24,
+        "excess_pct": -47.165
+      },
+      {
+        "block": 2,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 318,
+        "strategy_cagr_pct": -27.62,
+        "sp500tr_cagr_pct": -23.32,
+        "excess_pct": -4.299
+      },
+      {
+        "block": 3,
+        "start": "2009-06-13",
+        "end": "2010-09-04",
+        "n_trades": 443,
+        "strategy_cagr_pct": 6.99,
+        "sp500tr_cagr_pct": 18.2,
+        "excess_pct": -11.208
+      },
+      {
+        "block": 4,
+        "start": "2010-09-04",
+        "end": "2011-11-25",
+        "n_trades": 265,
+        "strategy_cagr_pct": 8.3,
+        "sp500tr_cagr_pct": 7.18,
+        "excess_pct": 1.118
+      },
+      {
+        "block": 5,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 235,
+        "strategy_cagr_pct": 12.5,
+        "sp500tr_cagr_pct": 24.98,
+        "excess_pct": -12.478
+      },
+      {
+        "block": 6,
+        "start": "2013-02-14",
+        "end": "2014-05-08",
+        "n_trades": 252,
+        "strategy_cagr_pct": 9.71,
+        "sp500tr_cagr_pct": 21.26,
+        "excess_pct": -11.551
+      },
+      {
+        "block": 7,
+        "start": "2014-05-08",
+        "end": "2015-07-29",
+        "n_trades": 210,
+        "strategy_cagr_pct": 18.42,
+        "sp500tr_cagr_pct": 12.15,
+        "excess_pct": 6.269
+      },
+      {
+        "block": 8,
+        "start": "2015-07-29",
+        "end": "2016-10-19",
+        "n_trades": 253,
+        "strategy_cagr_pct": -4.14,
+        "sp500tr_cagr_pct": 3.64,
+        "excess_pct": -7.785
+      },
+      {
+        "block": 9,
+        "start": "2016-10-19",
+        "end": "2018-01-09",
+        "n_trades": 248,
+        "strategy_cagr_pct": 5.1,
+        "sp500tr_cagr_pct": 25.13,
+        "excess_pct": -20.028
+      },
+      {
+        "block": 10,
+        "start": "2018-01-09",
+        "end": "2019-04-01",
+        "n_trades": 259,
+        "strategy_cagr_pct": -6.54,
+        "sp500tr_cagr_pct": 5.6,
+        "excess_pct": -12.138
+      },
+      {
+        "block": 11,
+        "start": "2019-04-01",
+        "end": "2020-06-22",
+        "n_trades": 224,
+        "strategy_cagr_pct": 6.12,
+        "sp500tr_cagr_pct": 9.25,
+        "excess_pct": -3.134
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-12",
+        "n_trades": 341,
+        "strategy_cagr_pct": 21.29,
+        "sp500tr_cagr_pct": 35.81,
+        "excess_pct": -14.517
+      },
+      {
+        "block": 13,
+        "start": "2021-09-12",
+        "end": "2022-12-03",
+        "n_trades": 316,
+        "strategy_cagr_pct": 0.4,
+        "sp500tr_cagr_pct": -5.87,
+        "excess_pct": 6.274
+      },
+      {
+        "block": 14,
+        "start": "2022-12-03",
+        "end": "2024-02-24",
+        "n_trades": 286,
+        "strategy_cagr_pct": 15.53,
+        "sp500tr_cagr_pct": 23.87,
+        "excess_pct": -8.337
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "n_trades": 265,
+        "strategy_cagr_pct": 26.43,
+        "sp500tr_cagr_pct": 15.75,
+        "excess_pct": 10.683
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "n_trades": 370,
+        "strategy_cagr_pct": 76.82,
+        "sp500tr_cagr_pct": 25.56,
+        "excess_pct": 51.258
+      }
+    ],
+    "top3_concentration": {
+      "total_pnl_gbp": 109370.51,
+      "top3_pnl_gbp": 14193.11,
+      "top3_pct_of_total_pnl": 13.0,
+      "top3_tickers": [
+        "INTC",
+        "MU",
+        "PLTR"
+      ]
+    }
+  },
+  "pool2_clean_n22": {
+    "n_trades": 4919,
+    "frictionless_cagr_pct": 6.23,
+    "peak_relative_drawdown_pct": -46.28,
+    "max_drawdown_fixed_pct": -49.92,
+    "mean_deployed_pct": 63.72,
+    "mean_n_open_positions": 14.23,
+    "fx_drag_pct_per_year": 3.3431,
+    "idle_credit_pct_per_year": 0.5532,
+    "cost_adjusted_cagr_pct": 3.44,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 1059124,
+    "strategy_frictionless_cagr_pct": 6.23,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -4.933,
+    "excess_cost_adjusted_pct": -7.723,
+    "nominal_n": 22,
+    "realized_vs_nominal_ratio": 0.647,
+    "block_pass": "7/16",
+    "excess_per_block": [
+      {
+        "block": 1,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 65,
+        "strategy_cagr_pct": -50.04,
+        "sp500tr_cagr_pct": -3.24,
+        "excess_pct": -46.795
+      },
+      {
+        "block": 2,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 334,
+        "strategy_cagr_pct": -25.43,
+        "sp500tr_cagr_pct": -23.32,
+        "excess_pct": -2.109
+      },
+      {
+        "block": 3,
+        "start": "2009-06-13",
+        "end": "2010-09-04",
+        "n_trades": 449,
+        "strategy_cagr_pct": 4.84,
+        "sp500tr_cagr_pct": 18.2,
+        "excess_pct": -13.358
+      },
+      {
+        "block": 4,
+        "start": "2010-09-04",
+        "end": "2011-11-25",
+        "n_trades": 301,
+        "strategy_cagr_pct": 7.53,
+        "sp500tr_cagr_pct": 7.18,
+        "excess_pct": 0.348
+      },
+      {
+        "block": 5,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 276,
+        "strategy_cagr_pct": 16.41,
+        "sp500tr_cagr_pct": 24.98,
+        "excess_pct": -8.568
+      },
+      {
+        "block": 6,
+        "start": "2013-02-14",
+        "end": "2014-05-08",
+        "n_trades": 295,
+        "strategy_cagr_pct": 8.41,
+        "sp500tr_cagr_pct": 21.26,
+        "excess_pct": -12.851
+      },
+      {
+        "block": 7,
+        "start": "2014-05-08",
+        "end": "2015-07-29",
+        "n_trades": 289,
+        "strategy_cagr_pct": 16.06,
+        "sp500tr_cagr_pct": 12.15,
+        "excess_pct": 3.909
+      },
+      {
+        "block": 8,
+        "start": "2015-07-29",
+        "end": "2016-10-19",
+        "n_trades": 306,
+        "strategy_cagr_pct": -4.65,
+        "sp500tr_cagr_pct": 3.64,
+        "excess_pct": -8.295
+      },
+      {
+        "block": 9,
+        "start": "2016-10-19",
+        "end": "2018-01-09",
+        "n_trades": 291,
+        "strategy_cagr_pct": 11.47,
+        "sp500tr_cagr_pct": 25.13,
+        "excess_pct": -13.658
+      },
+      {
+        "block": 10,
+        "start": "2018-01-09",
+        "end": "2019-04-01",
+        "n_trades": 303,
+        "strategy_cagr_pct": -7.31,
+        "sp500tr_cagr_pct": 5.6,
+        "excess_pct": -12.908
+      },
+      {
+        "block": 11,
+        "start": "2019-04-01",
+        "end": "2020-06-22",
+        "n_trades": 281,
+        "strategy_cagr_pct": 3.41,
+        "sp500tr_cagr_pct": 9.25,
+        "excess_pct": -5.844
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-12",
+        "n_trades": 350,
+        "strategy_cagr_pct": 20.27,
+        "sp500tr_cagr_pct": 35.81,
+        "excess_pct": -15.537
+      },
+      {
+        "block": 13,
+        "start": "2021-09-12",
+        "end": "2022-12-03",
+        "n_trades": 346,
+        "strategy_cagr_pct": 7.03,
+        "sp500tr_cagr_pct": -5.87,
+        "excess_pct": 12.904
+      },
+      {
+        "block": 14,
+        "start": "2022-12-03",
+        "end": "2024-02-24",
+        "n_trades": 305,
+        "strategy_cagr_pct": 10.54,
+        "sp500tr_cagr_pct": 23.87,
+        "excess_pct": -13.327
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "n_trades": 330,
+        "strategy_cagr_pct": 18.84,
+        "sp500tr_cagr_pct": 15.75,
+        "excess_pct": 3.093
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "n_trades": 399,
+        "strategy_cagr_pct": 74.32,
+        "sp500tr_cagr_pct": 25.56,
+        "excess_pct": 48.758
+      }
+    ]
+  },
+  "pool2_clean_n40": {
+    "n_trades": 12012,
+    "frictionless_cagr_pct": 7.61,
+    "peak_relative_drawdown_pct": -31.67,
+    "max_drawdown_fixed_pct": -48.51,
+    "mean_deployed_pct": 63.27,
+    "mean_n_open_positions": 35.47,
+    "fx_drag_pct_per_year": 3.3305,
+    "idle_credit_pct_per_year": 0.56,
+    "cost_adjusted_cagr_pct": 4.84,
+    "n_rejected_subminimum": 0,
+    "n_rejected_capacity": 947493,
+    "strategy_frictionless_cagr_pct": 7.61,
+    "sp500tr_cagr_pct": 11.16,
+    "excess_frictionless_pct": -3.553,
+    "excess_cost_adjusted_pct": -6.323,
+    "nominal_n": 40,
+    "realized_vs_nominal_ratio": 0.887,
+    "block_pass": "10/16",
+    "excess_per_block": [
+      {
+        "block": 1,
+        "start": "2007-01-01",
+        "end": "2008-03-23",
+        "n_trades": 183,
+        "strategy_cagr_pct": -47.93,
+        "sp500tr_cagr_pct": -3.24,
+        "excess_pct": -44.685
+      },
+      {
+        "block": 2,
+        "start": "2008-03-23",
+        "end": "2009-06-13",
+        "n_trades": 558,
+        "strategy_cagr_pct": -14.01,
+        "sp500tr_cagr_pct": -23.32,
+        "excess_pct": 9.311
+      },
+      {
+        "block": 3,
+        "start": "2009-06-13",
+        "end": "2010-09-04",
+        "n_trades": 797,
+        "strategy_cagr_pct": 6.78,
+        "sp500tr_cagr_pct": 18.2,
+        "excess_pct": -11.418
+      },
+      {
+        "block": 4,
+        "start": "2010-09-04",
+        "end": "2011-11-25",
+        "n_trades": 831,
+        "strategy_cagr_pct": 7.05,
+        "sp500tr_cagr_pct": 7.18,
+        "excess_pct": -0.132
+      },
+      {
+        "block": 5,
+        "start": "2011-11-25",
+        "end": "2013-02-14",
+        "n_trades": 732,
+        "strategy_cagr_pct": 12.84,
+        "sp500tr_cagr_pct": 24.98,
+        "excess_pct": -12.138
+      },
+      {
+        "block": 6,
+        "start": "2013-02-14",
+        "end": "2014-05-08",
+        "n_trades": 771,
+        "strategy_cagr_pct": 16.6,
+        "sp500tr_cagr_pct": 21.26,
+        "excess_pct": -4.661
+      },
+      {
+        "block": 7,
+        "start": "2014-05-08",
+        "end": "2015-07-29",
+        "n_trades": 777,
+        "strategy_cagr_pct": 12.99,
+        "sp500tr_cagr_pct": 12.15,
+        "excess_pct": 0.839
+      },
+      {
+        "block": 8,
+        "start": "2015-07-29",
+        "end": "2016-10-19",
+        "n_trades": 844,
+        "strategy_cagr_pct": -0.36,
+        "sp500tr_cagr_pct": 3.64,
+        "excess_pct": -4.005
+      },
+      {
+        "block": 9,
+        "start": "2016-10-19",
+        "end": "2018-01-09",
+        "n_trades": 755,
+        "strategy_cagr_pct": 12.7,
+        "sp500tr_cagr_pct": 25.13,
+        "excess_pct": -12.428
+      },
+      {
+        "block": 10,
+        "start": "2018-01-09",
+        "end": "2019-04-01",
+        "n_trades": 851,
+        "strategy_cagr_pct": 3.72,
+        "sp500tr_cagr_pct": 5.6,
+        "excess_pct": -1.878
+      },
+      {
+        "block": 11,
+        "start": "2019-04-01",
+        "end": "2020-06-22",
+        "n_trades": 775,
+        "strategy_cagr_pct": 8.96,
+        "sp500tr_cagr_pct": 9.25,
+        "excess_pct": -0.294
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-12",
+        "n_trades": 753,
+        "strategy_cagr_pct": 35.25,
+        "sp500tr_cagr_pct": 35.81,
+        "excess_pct": -0.557
+      },
+      {
+        "block": 13,
+        "start": "2021-09-12",
+        "end": "2022-12-03",
+        "n_trades": 867,
+        "strategy_cagr_pct": 0.99,
+        "sp500tr_cagr_pct": -5.87,
+        "excess_pct": 6.864
+      },
+      {
+        "block": 14,
+        "start": "2022-12-03",
+        "end": "2024-02-24",
+        "n_trades": 798,
+        "strategy_cagr_pct": 17.84,
+        "sp500tr_cagr_pct": 23.87,
+        "excess_pct": -6.027
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "n_trades": 879,
+        "strategy_cagr_pct": 19.28,
+        "sp500tr_cagr_pct": 15.75,
+        "excess_pct": 3.533
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "n_trades": 842,
+        "strategy_cagr_pct": 81.18,
+        "sp500tr_cagr_pct": 25.56,
+        "excess_pct": 55.618
+      }
+    ]
+  },
+  "pool1_paired_n22_vs_n5": {
+    "label_x": "n22",
+    "label_y": "n5",
+    "n_total_x": 4752,
+    "n_total_y": 4024,
+    "n_shared_pairs": 1252,
+    "shared_pct_of_x": 26.3,
+    "shared_pct_of_y": 31.1,
+    "n_x_only": 3500,
+    "n_y_only": 2772,
+    "n_differing_total": 6272,
+    "usable": true,
+    "n22_only": {
+      "n": 3500,
+      "win_rate": 0.4406,
+      "mean_pnl_pct": 0.0085,
+      "mean_pnl_gbp": 34.88
+    },
+    "n5_only": {
+      "n": 2772,
+      "win_rate": 0.4322,
+      "mean_pnl_pct": 0.0068,
+      "mean_pnl_gbp": 23.05
+    }
+  },
+  "pool1_overlap_n22_vs_n5": {
+    "n_top_decile_x": 475,
+    "n_top_decile_y": 402,
+    "exact_jaccard": 0.1678,
+    "ticker_jaccard": 0.6989
+  },
+  "pool1_paired_n22_vs_n10": {
+    "label_x": "n22",
+    "label_y": "n10",
+    "n_total_x": 4752,
+    "n_total_y": 4203,
+    "n_shared_pairs": 1335,
+    "shared_pct_of_x": 28.1,
+    "shared_pct_of_y": 31.8,
+    "n_x_only": 3417,
+    "n_y_only": 2868,
+    "n_differing_total": 6285,
+    "usable": true,
+    "n22_only": {
+      "n": 3417,
+      "win_rate": 0.4513,
+      "mean_pnl_pct": 0.0111,
+      "mean_pnl_gbp": 50.62
+    },
+    "n10_only": {
+      "n": 2868,
+      "win_rate": 0.4425,
+      "mean_pnl_pct": 0.0093,
+      "mean_pnl_gbp": 35.7
+    }
+  },
+  "pool1_overlap_n22_vs_n10": {
+    "n_top_decile_x": 475,
+    "n_top_decile_y": 420,
+    "exact_jaccard": 0.1387,
+    "ticker_jaccard": 0.6742
+  },
+  "pool1_paired_n22_vs_n40": {
+    "label_x": "n22",
+    "label_y": "n40",
+    "n_total_x": 4752,
+    "n_total_y": 11951,
+    "n_shared_pairs": 1005,
+    "shared_pct_of_x": 21.1,
+    "shared_pct_of_y": 8.4,
+    "n_x_only": 3747,
+    "n_y_only": 10946,
+    "n_differing_total": 14693,
+    "usable": true,
+    "n22_only": {
+      "n": 3747,
+      "win_rate": 0.4438,
+      "mean_pnl_pct": 0.009,
+      "mean_pnl_gbp": 41.53
+    },
+    "n40_only": {
+      "n": 10946,
+      "win_rate": 0.4425,
+      "mean_pnl_pct": 0.0074,
+      "mean_pnl_gbp": 12.95
+    }
+  },
+  "pool1_overlap_n22_vs_n40": {
+    "n_top_decile_x": 475,
+    "n_top_decile_y": 1195,
+    "exact_jaccard": 0.0685,
+    "ticker_jaccard": 0.495
+  },
+  "pool2_clean_paired_n22_vs_n5": {
+    "label_x": "n22",
+    "label_y": "n5",
+    "n_total_x": 4919,
+    "n_total_y": 4168,
+    "n_shared_pairs": 1351,
+    "shared_pct_of_x": 27.5,
+    "shared_pct_of_y": 32.4,
+    "n_x_only": 3568,
+    "n_y_only": 2817,
+    "n_differing_total": 6385,
+    "usable": true,
+    "n22_only": {
+      "n": 3568,
+      "win_rate": 0.4294,
+      "mean_pnl_pct": 0.006,
+      "mean_pnl_gbp": 16.42
+    },
+    "n5_only": {
+      "n": 2817,
+      "win_rate": 0.4295,
+      "mean_pnl_pct": 0.0088,
+      "mean_pnl_gbp": 29.28
+    }
+  },
+  "pool2_clean_overlap_n22_vs_n5": {
+    "n_top_decile_x": 491,
+    "n_top_decile_y": 416,
+    "exact_jaccard": 0.1584,
+    "ticker_jaccard": 0.6809
+  },
+  "pool2_clean_paired_n22_vs_n10": {
+    "label_x": "n22",
+    "label_y": "n10",
+    "n_total_x": 4919,
+    "n_total_y": 4339,
+    "n_shared_pairs": 1384,
+    "shared_pct_of_x": 28.1,
+    "shared_pct_of_y": 31.9,
+    "n_x_only": 3535,
+    "n_y_only": 2955,
+    "n_differing_total": 6490,
+    "usable": true,
+    "n22_only": {
+      "n": 3535,
+      "win_rate": 0.4286,
+      "mean_pnl_pct": 0.0062,
+      "mean_pnl_gbp": 19.96
+    },
+    "n10_only": {
+      "n": 2955,
+      "win_rate": 0.4186,
+      "mean_pnl_pct": 0.0066,
+      "mean_pnl_gbp": 24.4
+    }
+  },
+  "pool2_clean_overlap_n22_vs_n10": {
+    "n_top_decile_x": 491,
+    "n_top_decile_y": 433,
+    "exact_jaccard": 0.145,
+    "ticker_jaccard": 0.7158
+  },
+  "pool2_clean_paired_n22_vs_n40": {
+    "label_x": "n22",
+    "label_y": "n40",
+    "n_total_x": 4919,
+    "n_total_y": 12012,
+    "n_shared_pairs": 1071,
+    "shared_pct_of_x": 21.8,
+    "shared_pct_of_y": 8.9,
+    "n_x_only": 3848,
+    "n_y_only": 10941,
+    "n_differing_total": 14789,
+    "usable": true,
+    "n22_only": {
+      "n": 3848,
+      "win_rate": 0.4392,
+      "mean_pnl_pct": 0.008,
+      "mean_pnl_gbp": 22.31
+    },
+    "n40_only": {
+      "n": 10941,
+      "win_rate": 0.4409,
+      "mean_pnl_pct": 0.0079,
+      "mean_pnl_gbp": 12.2
+    }
+  },
+  "pool2_clean_overlap_n22_vs_n40": {
+    "n_top_decile_x": 491,
+    "n_top_decile_y": 1201,
+    "exact_jaccard": 0.0635,
+    "ticker_jaccard": 0.494
+  }
+}
