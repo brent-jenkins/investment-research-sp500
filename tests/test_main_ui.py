@@ -1742,3 +1742,132 @@ def test_no_blanket_cache_clear_on_status_page():
     source = inspect.getsource(main._render_status_page)
     assert "cache_data.clear()" not in source
     assert "cache_resource.clear()" not in source
+
+
+# ---------------------------------------------------------------------------
+# Log Viewer download buttons (2026-08-09 fix) -- the "Last 24 h"/"Last 7
+# days" downloads used to run their journalctl subprocess call unconditionally
+# on every render (st.download_button's `data=` has no lazy/callable form, so
+# feeding it directly from a fresh subprocess call meant that call fired
+# every time the section rendered, not only on click -- looked gated, wasn't).
+# Fixed to a two-step prepare-then-download flow: the subprocess call now
+# only runs inside an explicit st.button(...) click handler.
+# ---------------------------------------------------------------------------
+
+_SAMPLE_LOG_LINE = "2026-08-09T12:00:00+01:00 host investment-research[1234]: INFO: something happened\n"
+
+
+def _mock_journalctl(mocker, since_24h_output="24h log data", since_7d_output="7d log data"):
+    """Mocks subprocess.run so the initial -n 200 fetch (which gates whether
+    the whole Log Viewer section renders at all) succeeds with one real
+    line, while tracking every JOURNALCTL call's args so tests can assert on
+    which ones actually fired. The Status page also shells out to `git log`
+    for its deploy-info card (main.py's _git_log_info()) -- that call is
+    let through with a harmless empty result rather than tracked, since it's
+    unrelated to this fix and not itself gated by anything being tested here."""
+    calls = []
+
+    def _fake_run(args, **kwargs):
+        if args and args[0] != "journalctl":
+            result = mocker.MagicMock()
+            result.returncode = 1
+            result.stdout = ""
+            return result
+        calls.append(args)
+        result = mocker.MagicMock()
+        result.returncode = 0
+        if "-n" in args:
+            result.stdout = _SAMPLE_LOG_LINE
+        elif "24 hours ago" in args:
+            result.stdout = since_24h_output
+        elif "7 days ago" in args:
+            result.stdout = since_7d_output
+        else:
+            result.stdout = ""
+        return result
+
+    mocker.patch("main.subprocess.run", side_effect=_fake_run)
+    return calls
+
+
+def test_log_viewer_renders_without_calling_journalctl_since_downloads(status_app, mocker):
+    """Rendering the Status page (with the Log Viewer section populated)
+    must call journalctl exactly once -- the initial -n 200 fetch needed
+    to show the viewer itself -- and must NOT call the --since 24h/7d
+    variants at all until their own Prepare button is clicked."""
+    calls = _mock_journalctl(mocker)
+
+    at = status_app.run()
+
+    assert not at.exception
+    assert len(calls) == 1, f"expected exactly 1 journalctl call (the initial fetch), got {len(calls)}: {calls}"
+    assert "-n" in calls[0]
+    assert not any("--since" in c for c in calls)
+
+
+def test_log_viewer_prepare_24h_button_fetches_and_shows_download(status_app, mocker):
+    """st.download_button isn't natively recognised by this Streamlit
+    version's AppTest (renders as an UnknownElement, no dedicated
+    accessor) -- verified via st.session_state instead, which is the same
+    underlying data the download button reads from, so this is an
+    equally direct proof, not a weaker proxy."""
+    calls = _mock_journalctl(mocker, since_24h_output="the real 24h data")
+
+    at = status_app.run()
+    assert not at.exception
+    assert "_log_dl_24h_data" not in at.session_state, (
+        "prepared data must not exist before Prepare is clicked"
+    )
+
+    at.button(key="log_prep_24h").click().run()
+
+    assert not at.exception
+    assert any("24 hours ago" in c for c in calls), "Prepare click must trigger the --since 24-hours-ago fetch"
+    assert any(c[:2] == ["journalctl", "-u"] for c in calls if "24 hours ago" in c)
+    assert at.session_state["_log_dl_24h_data"] == "the real 24h data"
+
+
+def test_log_viewer_prepare_7d_button_fetches_and_shows_download(status_app, mocker):
+    calls = _mock_journalctl(mocker, since_7d_output="the real 7-day data")
+
+    at = status_app.run()
+    at.button(key="log_prep_7d").click().run()
+
+    assert not at.exception
+    assert any("7 days ago" in c for c in calls)
+    assert at.session_state["_log_dl_7d_data"] == "the real 7-day data"
+
+
+def test_log_viewer_24h_prepare_does_not_trigger_7d_fetch(status_app, mocker):
+    """Each Prepare button must only fetch its own window -- clicking one
+    must not incidentally trigger the other's journalctl call."""
+    calls = _mock_journalctl(mocker)
+
+    at = status_app.run()
+    at.button(key="log_prep_24h").click().run()
+
+    assert not at.exception
+    assert any("24 hours ago" in c for c in calls)
+    assert not any("7 days ago" in c for c in calls)
+    assert "_log_dl_7d_data" not in at.session_state
+
+
+def test_log_viewer_prepare_failure_shows_not_available_not_a_crash(status_app, mocker):
+    def _failing_run(args, **kwargs):
+        result = mocker.MagicMock()
+        result.returncode = 0
+        result.stdout = ""
+        if args and args[0] != "journalctl":
+            return result
+        if "24 hours ago" in args:
+            raise OSError("journalctl not found")
+        result.stdout = _SAMPLE_LOG_LINE if "-n" in args else ""
+        return result
+
+    mocker.patch("main.subprocess.run", side_effect=_failing_run)
+
+    at = status_app.run()
+    at.button(key="log_prep_24h").click().run()
+
+    assert not at.exception
+    assert at.session_state["_log_dl_24h_data"] == "(not available)"

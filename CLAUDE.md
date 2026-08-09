@@ -674,22 +674,35 @@ plausibly acceptable without further change. Per explicit instruction: measure r
 with finding 1's fix alone in place before revisiting this one; do not fix it speculatively ahead of
 evidence that it's still a problem.
 
-**Secondary finding, described but not yet fixed — Status page's log-download buttons look gated,
-aren't.** The "⬇ Last 24 h" and "⬇ Last 7 days" buttons (`main.py`, inside the Log Viewer section)
-each run a `subprocess.run(["journalctl", ..., "--since", "24 hours ago"/"7 days ago", ...])` call
-*before* the corresponding `st.download_button(...)`, to supply its `data=` argument. Confirmed
-against the actual pinned Streamlit version's `st.download_button` signature: `data` has no
-callable/deferred form — it must be a fully-computed value at the point the button is declared, so
-Streamlit evaluates it on **every** script run reaching that line, not only when the button is
-clicked. Both subprocess calls (15s and 30s timeouts respectively) therefore execute unconditionally
-on every Status-page render (or any rerun triggered by an unrelated widget elsewhere on the page)
-whenever the Log Viewer section renders at all — up to 45 seconds of combined local subprocess time
-per render, worse in raw wall-clock terms than either network-call finding above, though it is local
-I/O, not a network stall. The correct fix pattern: a two-step flow where a plain `st.button("Prepare
-24h download")` computes the log data into `st.session_state` on click, and a separate
-`st.download_button` reads from session state (empty/placeholder until prepared) — so the expensive
-`journalctl` call only ever runs after a deliberate click, never as a side effect of rendering. Not
-built yet; flagged for a future, explicit fix decision.
+**Finding 4, fixed same round — Status page's log-download buttons looked gated, weren't (own,
+separate commit).** The "⬇ Last 24 h" and "⬇ Last 7 days" buttons (`main.py`, inside the Log Viewer
+section) used to run a `subprocess.run(["journalctl", ..., "--since", "24 hours ago"/"7 days ago",
+...])` call *before* the corresponding `st.download_button(...)`, to supply its `data=` argument.
+Confirmed against the actual pinned Streamlit version's `st.download_button` signature directly
+(`inspect.signature`): `data` has no callable/deferred form — it must be a fully-computed value at
+the point the button is declared, so Streamlit evaluated it on **every** script run reaching that
+line, not only when the button was clicked. Both subprocess calls (15s and 30s timeouts
+respectively) therefore ran unconditionally on every Status-page render (or any rerun triggered by
+an unrelated widget elsewhere on the page) whenever the Log Viewer section rendered at all — up to
+45 seconds of combined local subprocess time per render, larger in raw wall-clock terms than either
+network-call finding above, though local I/O, not a network stall. Judged worth fixing alongside
+the other two specifically because it sits on the same page about to be used to measure finding 2's
+real-world behaviour — leaving it in would have meant any "does Status feel fast now" read was
+dominated by the thing left unfixed.
+
+Fix: a two-step prepare-then-download flow. A plain `st.button("Prepare last 24h"/"Prepare last 7
+days")` runs the `journalctl` call only inside its own click handler and stashes the result in
+`st.session_state`; a separate `st.download_button` renders only once that session-state key exists,
+reading the already-computed value — so the expensive call now only ever fires on a deliberate
+click, never as a side effect of rendering anything else on the page. Five new tests (subprocess
+call-tracking confirms exactly one journalctl call — the initial `-n 200` fetch needed for the
+viewer itself — on a bare render, with zero `--since` calls until the matching Prepare button is
+clicked; each Prepare button triggers only its own window's fetch, not the other's; a failed fetch
+shows "(not available)" without crashing) — `st.download_button` isn't natively recognised by this
+Streamlit version's `AppTest` harness (renders as an `UnknownElement`, no dedicated accessor), so
+verification reads `st.session_state` directly instead — the same underlying data the button
+consumes, an equally direct proof. Verified to actually fail against the reintroduced bug (via
+`git stash` on just this file, confirmed failing, then restored) before being trusted.
 
 ## Current architecture (as of 2026-08-04)
 

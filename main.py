@@ -2263,37 +2263,52 @@ def _render_status_page(config: dict) -> None:
                 key="log_dl_current",
             )
         with _dl2:
-            try:
-                _dl_24h = subprocess.run(
-                    ["journalctl", "-u", "investment-research", "--no-pager",
-                     "--since", "24 hours ago", "--output=short-iso"],
-                    capture_output=True, text=True, timeout=15,
-                ).stdout
-            except Exception:
-                _dl_24h = ""
-            st.download_button(
-                "⬇ Last 24 h",
-                data=_dl_24h or "(not available)",
-                file_name="investment-research-log-24h.txt",
-                mime="text/plain",
-                key="log_dl_24h",
-            )
+            # Two-step prepare-then-download (2026-08-09 fix -- see CLAUDE.md's
+            # "UI render-path blocking audit" section). st.download_button's
+            # `data=` has no lazy/callable form (confirmed against this
+            # project's own pinned Streamlit version) -- it must be a fully-
+            # computed value at the point the button is declared, so a
+            # subprocess call feeding it directly runs on EVERY render that
+            # reaches this line, not only when the button is clicked. The
+            # journalctl call now only fires inside this explicit
+            # st.button(...) block -- a real, deliberate click -- and its
+            # result is stashed in session_state so the download button that
+            # follows only ever reads already-computed data.
+            if st.button("Prepare last 24h", key="log_prep_24h"):
+                try:
+                    st.session_state["_log_dl_24h_data"] = subprocess.run(
+                        ["journalctl", "-u", "investment-research", "--no-pager",
+                         "--since", "24 hours ago", "--output=short-iso"],
+                        capture_output=True, text=True, timeout=15,
+                    ).stdout or "(not available)"
+                except Exception:
+                    st.session_state["_log_dl_24h_data"] = "(not available)"
+            if "_log_dl_24h_data" in st.session_state:
+                st.download_button(
+                    "⬇ Last 24 h",
+                    data=st.session_state["_log_dl_24h_data"],
+                    file_name="investment-research-log-24h.txt",
+                    mime="text/plain",
+                    key="log_dl_24h",
+                )
         with _dl3:
-            try:
-                _dl_7d = subprocess.run(
-                    ["journalctl", "-u", "investment-research", "--no-pager",
-                     "--since", "7 days ago", "--output=short-iso"],
-                    capture_output=True, text=True, timeout=30,
-                ).stdout
-            except Exception:
-                _dl_7d = ""
-            st.download_button(
-                "⬇ Last 7 days",
-                data=_dl_7d or "(not available)",
-                file_name="investment-research-log-7d.txt",
-                mime="text/plain",
-                key="log_dl_7d",
-            )
+            if st.button("Prepare last 7 days", key="log_prep_7d"):
+                try:
+                    st.session_state["_log_dl_7d_data"] = subprocess.run(
+                        ["journalctl", "-u", "investment-research", "--no-pager",
+                         "--since", "7 days ago", "--output=short-iso"],
+                        capture_output=True, text=True, timeout=30,
+                    ).stdout or "(not available)"
+                except Exception:
+                    st.session_state["_log_dl_7d_data"] = "(not available)"
+            if "_log_dl_7d_data" in st.session_state:
+                st.download_button(
+                    "⬇ Last 7 days",
+                    data=st.session_state["_log_dl_7d_data"],
+                    file_name="investment-research-log-7d.txt",
+                    mime="text/plain",
+                    key="log_dl_7d",
+                )
 
     _render_footer()
 
