@@ -111,6 +111,10 @@ Metadata keys written to system_metadata:
   t212_positions_snapshot    — JSON of latest T212 positions list (written by _fetch_t212_snapshot)
   t212_snapshot_fetched_at   — UTC ISO timestamp of last successful T212 fetch
   pending_t212_fetch         — "1" when the UI has requested a refresh; cleared by _dispatch_pending_jobs
+  open_position_cards_snapshot    — JSON list of Dashboard open-position card dicts (written by
+                                     _refresh_open_position_cards_snapshot, 2026-08-09 — see CLAUDE.md's
+                                     "UI render-path blocking audit" follow-up, finding 4)
+  open_position_cards_fetched_at  — UTC ISO timestamp of the last successful cards snapshot refresh
 """
 
 import json
@@ -456,7 +460,7 @@ def _record_account_value_history(summary: dict) -> None:
         logger.warning("Could not record account value history: %s", exc)
 
 
-def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> None:
+def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> bool:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
     Called by the 60-second dispatcher (on-demand UI requests) and by the EOD job
@@ -470,12 +474,22 @@ def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> None:
     default, and NOT passed by the 60-second dispatcher's or hourly job's
     own calls to this function, so the history table stays a genuine
     one-row-per-day series rather than accumulating many rows a day.
+
+    Returns True only when a genuinely fresh t212_positions_snapshot was
+    written this call, False for every other case (disabled, no
+    credentials, or a fetch failure) — added 2026-08-09 so
+    _account_state_job() can tell whether it's safe to derive the
+    open-position-cards display snapshot from t212_positions_snapshot this
+    cycle (see _refresh_open_position_cards_snapshot()'s own docstring for
+    why deriving from a stale positions snapshot would be wrong). No
+    existing caller inspected this function's old, always-None return
+    value, so this is a safe, additive change.
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
-        return
+        return False
     if not (os.environ.get("T212_API_KEY") and os.environ.get("T212_API_SECRET")):
-        return
+        return False
 
     live = t212_cfg.get("live", False)
     try:
@@ -494,7 +508,7 @@ def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> None:
     except Exception as exc:
         logger.error("T212 snapshot fetch failed: %s", exc)
         set_metadata("t212_invest_error", str(exc))
-        return
+        return False
 
     if record_history:
         _record_account_value_history(summary)
@@ -503,6 +517,57 @@ def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> None:
         _poll(config)
     except Exception as exc:
         logger.warning("T212 order poll failed after snapshot: %s", exc)
+
+    return True
+
+
+def _refresh_open_position_cards_snapshot(config: dict) -> None:
+    """Compute and store the Dashboard's open-position card data (2026-08-09
+    — see CLAUDE.md's "UI render-path blocking audit" follow-up, finding 4:
+    main.py's _get_open_cards() used to call get_brief_cards() directly
+    from the Streamlit render path, which recomputes momentum/signal state
+    from full price history for every open position on every render — a
+    real, measured ~6s stall on production data (22 open positions,
+    ~0.18-0.25s/ticker). Not a network call, but exactly the "per-position
+    price-history computation" this project's render-path standard
+    prohibits.
+
+    Calls the SAME shared display-computation entry point the Dashboard
+    used to call directly (output.performance.get_brief_cards(), which
+    itself calls analysis.signals.compute_signal_series() — the one
+    shared signal function, never independently re-derived here) — this
+    moves WHERE that computation runs (a background scheduler job, not the
+    Streamlit render thread) and WHEN (once an hour, not once per render),
+    not WHAT it computes or with what logic. get_brief_cards() is
+    unchanged.
+
+    Only called by _account_state_job() when _fetch_t212_snapshot() has
+    just confirmed a genuinely fresh t212_positions_snapshot this cycle —
+    get_brief_cards() reads that snapshot internally, so deriving cards
+    from a stale one and then stamping a brand-new fetched_at timestamp on
+    the result would display a falsely-current "as of" time for
+    underlying data that didn't actually change this cycle.
+
+    "Only overwrite stored state on a confirmed result" (same pattern as
+    _market_hours_check_job()'s crisis-status write below): get_brief_cards()
+    itself never raises (broad internal exception handling throughout, and
+    every per-ticker failure inside get_ticker_status() is caught and
+    degrades that one row rather than the whole call) — this wrapper's own
+    try/except in _account_state_job() is the only thing that can stop a
+    write, and on genuine failure the previous open_position_cards_snapshot
+    /open_position_cards_fetched_at pair is left untouched, not blanked.
+    An empty list IS written on a confirmed clean cycle (not treated as
+    "unknown") — on the real server trading is always enabled with
+    credentials present when this job runs, so [] genuinely means "zero
+    open positions right now," a real, confirmed fact, not the ambiguous
+    "T212 not configured" case that only arises in a test/dev environment.
+    """
+    from output.performance import get_brief_cards  # noqa: PLC0415
+
+    cards = get_brief_cards(config)
+    set_metadata("open_position_cards_snapshot", json.dumps(cards))
+    set_metadata("open_position_cards_fetched_at", datetime.utcnow().isoformat())
+    logger.info("Open-position cards snapshot updated (%d card(s)).", len(cards))
 
 
 def _dispatch_pending_jobs() -> None:
@@ -1135,6 +1200,12 @@ def _account_state_job() -> None:
         of trading hours (Status/Dashboard page freshness for anyone
         checking outside market hours), so gating it to NYSE hours
         would work directly against its own purpose.
+      - Open-position cards snapshot refresh
+        (`_refresh_open_position_cards_snapshot()`, added 2026-08-09) —
+        only runs when the snapshot refresh above just confirmed a
+        genuinely fresh positions read this cycle (see that function's
+        own docstring for why); this is what the Dashboard's open-
+        position cards now read instead of computing anything themselves.
     """
     logger.info("Account state refresh starting…")
     config = _load_config()
@@ -1146,9 +1217,16 @@ def _account_state_job() -> None:
         logger.error("Position reconciliation failed: %s", exc, exc_info=True)
 
     try:
-        _fetch_t212_snapshot(config)
+        snapshot_fresh = _fetch_t212_snapshot(config)
     except Exception as exc:
         logger.error("Account snapshot refresh failed: %s", exc)
+        snapshot_fresh = False
+
+    if snapshot_fresh:
+        try:
+            _refresh_open_position_cards_snapshot(config)
+        except Exception as exc:
+            logger.error("Open-position cards snapshot refresh failed: %s", exc, exc_info=True)
 
 
 def _membership_refresh_job() -> None:

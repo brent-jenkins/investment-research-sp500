@@ -824,14 +824,131 @@ def test_dashboard_shows_open_positions_replacing_top_trades(dashboard_app):
 
 
 def test_dashboard_open_positions_empty_state(dashboard_app):
-    """No T212 credentials in the test environment -- get_brief_cards()
-    correctly returns [] (see tests/test_performance.py:test_brief_cards_
-    no_credentials_returns_empty), so the Dashboard's own empty-state
+    """No open_position_cards_snapshot has ever been written in the fresh
+    db_engine test database (2026-08-09 -- see CLAUDE.md's "UI render-path
+    blocking audit" follow-up, finding 4: this section now reads a stored
+    snapshot instead of calling get_brief_cards() directly), so
+    get_stored_open_position_cards() correctly returns {"cards": [],
+    "fetched_at": None} and the Dashboard's own empty-state
     copy must render, not an exception or a blank section."""
     at = dashboard_app.run()
     assert not at.exception
     all_text = " ".join(i.value for i in at.info)
     assert "No open positions" in all_text
+
+
+def test_dashboard_open_positions_no_refresh_yet_caption(db_engine, dashboard_app):
+    """A brand-new deployment (no open_position_cards_fetched_at ever
+    written -- the hourly account_state_refresh job hasn't completed a
+    cycle yet) must show an explicit "hasn't populated yet" caption, not
+    a blank section or a fabricated timestamp -- same convention as the
+    crisis banner's own "time unknown" handling."""
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "no open-position refresh has completed yet" in all_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard open-position cards now read a stored snapshot only (2026-08-09)
+# -- see CLAUDE.md's "UI render-path blocking audit" follow-up, finding 4.
+# data.scheduler._account_state_job() (hourly) computes and stores the card
+# data; main.py's _get_open_cards() -> output.performance.get_stored_open_
+# position_cards() is a pure system_metadata read. These tests seed that
+# stored snapshot directly via set_metadata(), the same pattern the crisis-
+# status tests already use for crisis_mode_active/crisis_mode_checked_at.
+# ---------------------------------------------------------------------------
+
+def _seed_open_position_cards_snapshot(fetched_at="2026-08-09T10:05:00", cards=None):
+    import json as _json
+    from data.database import set_metadata
+
+    if cards is None:
+        cards = [{
+            "ticker": "VOO", "t212_ticker": "I50Dl_EQ", "asset_type": "STOCK",
+            "entry_price": 100.0, "quantity": 10.0, "entry_date": "2026-08-01T00:00:00",
+            "days_held": 8, "max_holding_days": 90, "live_price": 105.0,
+            "currency": "USD", "current_value_gbp": 800.0, "unreal_pnl_gbp": 40.0,
+            "unreal_pct": 5.0, "momentum_pct_at_entry": 0.12, "stop_price": 95.0,
+            "current_sig_on": True, "current_is_member": True, "crisis_now": False,
+            "status": "ON TRACK", "status_priority": 0,
+        }]
+    set_metadata("open_position_cards_snapshot", _json.dumps(cards))
+    if fetched_at is not None:
+        set_metadata("open_position_cards_fetched_at", fetched_at)
+    return cards
+
+
+def test_dashboard_open_positions_renders_from_stored_snapshot(db_engine, dashboard_app):
+    _seed_open_position_cards_snapshot()
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "VOO" in all_text
+    assert "ON TRACK" in all_text
+    assert "No open positions" not in " ".join(i.value for i in at.info)
+
+
+def test_dashboard_open_positions_shows_as_of_timestamp(db_engine, dashboard_app):
+    _seed_open_position_cards_snapshot(fetched_at="2026-08-09T10:05:00")
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption).lower()
+    assert "as of" in all_text
+    assert "refreshed hourly" in all_text
+
+
+def test_dashboard_open_positions_stale_refresh_keeps_last_good_cards_and_original_timestamp(
+    db_engine, dashboard_app,
+):
+    """If the hourly refresh has failed since, the last good snapshot and
+    its ORIGINAL fetched_at must keep showing -- never blank, never an
+    error, never a silently-refreshed timestamp for stale data. Simulated
+    here simply by seeding a snapshot and confirming the Dashboard shows
+    exactly the seeded (old) timestamp back, unmodified, on every render --
+    the render path has no mechanism to advance it itself."""
+    _seed_open_position_cards_snapshot(fetched_at="2026-08-01T09:00:00")
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "VOO" in all_text
+    caption_text = " ".join(c.value for c in at.caption)
+    assert "2026-08-01" in caption_text
+
+
+def test_dashboard_open_position_cards_render_path_never_calls_t212_or_yfinance(
+    db_engine, dashboard_app, mocker,
+):
+    """The decisive render-path proof (2026-08-09) -- matching
+    test_sector_breakdown_render_path_never_calls_yfinance and
+    test_crisis_status_render_path_never_calls_the_live_check's own shape
+    (tests/test_performance.py): patches BOTH the Trading212 client and
+    yfinance to raise if invoked at all while the Dashboard's open-position
+    cards render, with a real stored snapshot seeded so the section has
+    something to actually render rather than trivially short-circuiting on
+    an empty list."""
+    _seed_open_position_cards_snapshot()
+
+    mocker.patch(
+        "brokers.trading212.Trading212Client",
+        side_effect=AssertionError("Dashboard open-position cards must never construct a Trading212Client"),
+    )
+    mocker.patch(
+        "yfinance.Ticker",
+        side_effect=AssertionError("Dashboard open-position cards must never call yfinance"),
+    )
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.markdown)
+    assert "VOO" in all_text
 
 
 def test_dashboard_closed_positions_is_a_collapsible_expander(dashboard_app):

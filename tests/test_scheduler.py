@@ -1137,34 +1137,47 @@ def test_market_hours_check_job_crisis_check_exception_does_not_raise_or_block_o
 # there is no hidden gate anywhere in this job's own body.
 # ---------------------------------------------------------------------------
 
-def test_account_state_job_runs_when_nyse_open(monkeypatch, mocker):
+def test_account_state_job_runs_when_nyse_open(db_engine, monkeypatch, mocker):
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_reconcile = mocker.patch("brokers.trading212.reconcile_positions_with_broker")
-    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+    # Explicit return_value (2026-08-09) -- an unconfigured MagicMock is
+    # truthy, which would make _account_state_job()'s new "only refresh the
+    # cards snapshot when the positions snapshot genuinely came back fresh"
+    # branch fire unpredictably. Fixed False here since this test's own
+    # purpose (reconciliation + snapshot-refresh get called) doesn't need
+    # the cards-refresh branch at all -- see the dedicated tests below for
+    # that behaviour, including db_engine (added here too, belt-and-
+    # suspenders, so a real DB write can never land outside the in-memory
+    # test database even if this mock's return value is ever changed).
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot", return_value=False)
+    mock_cards = mocker.patch("data.scheduler._refresh_open_position_cards_snapshot")
 
     scheduler._account_state_job()
 
     mock_reconcile.assert_called_once()
     mock_snap.assert_called_once()
+    mock_cards.assert_not_called()
 
 
-def test_account_state_job_runs_when_nyse_genuinely_closed(monkeypatch, mocker):
+def test_account_state_job_runs_when_nyse_genuinely_closed(db_engine, monkeypatch, mocker):
     """The decisive proof this job is unconditional: a real, verified
     NYSE-closed (weekend) moment must still run reconciliation and the
     snapshot refresh, unlike _market_hours_check_job() above."""
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 1, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mock_reconcile = mocker.patch("brokers.trading212.reconcile_positions_with_broker")
-    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot", return_value=False)
+    mock_cards = mocker.patch("data.scheduler._refresh_open_position_cards_snapshot")
 
     scheduler._account_state_job()
 
     mock_reconcile.assert_called_once()
     mock_snap.assert_called_once()
+    mock_cards.assert_not_called()
 
 
-def test_account_state_job_reconciliation_failure_does_not_block_snapshot(monkeypatch, mocker):
+def test_account_state_job_reconciliation_failure_does_not_block_snapshot(db_engine, monkeypatch, mocker):
     """A reconciliation-check failure must not prevent the account snapshot
     refresh from still running that hour -- own try/except, same "one
     path's failure never blocks another's" convention every other call in
@@ -1172,11 +1185,110 @@ def test_account_state_job_reconciliation_failure_does_not_block_snapshot(monkey
     monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
     mocker.patch("data.scheduler._load_config", return_value={})
     mocker.patch("brokers.trading212.reconcile_positions_with_broker", side_effect=RuntimeError("boom"))
-    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mock_snap = mocker.patch("data.scheduler._fetch_t212_snapshot", return_value=False)
+    mock_cards = mocker.patch("data.scheduler._refresh_open_position_cards_snapshot")
 
     scheduler._account_state_job()  # must not raise
 
     mock_snap.assert_called_once()
+    mock_cards.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _account_state_job() -> _refresh_open_position_cards_snapshot() (2026-08-09)
+# -- see CLAUDE.md's "UI render-path blocking audit" follow-up, finding 4.
+# The cards snapshot must only be (re)computed when the positions snapshot
+# it depends on genuinely came back fresh THIS cycle -- otherwise the
+# derived cards would carry a freshly-stamped "fetched_at" timestamp for
+# underlying data that didn't actually change, misleading the Dashboard's
+# own "as of" display.
+# ---------------------------------------------------------------------------
+
+def test_account_state_job_refreshes_cards_snapshot_when_positions_snapshot_is_fresh(
+    db_engine, monkeypatch, mocker,
+):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={"trading212_invest": {"enabled": True}})
+    mocker.patch("brokers.trading212.reconcile_positions_with_broker")
+    mocker.patch("data.scheduler._fetch_t212_snapshot", return_value=True)
+    mock_cards = mocker.patch("data.scheduler._refresh_open_position_cards_snapshot")
+
+    scheduler._account_state_job()
+
+    mock_cards.assert_called_once_with({"trading212_invest": {"enabled": True}})
+
+
+def test_account_state_job_skips_cards_snapshot_refresh_when_positions_snapshot_fetch_failed(
+    db_engine, monkeypatch, mocker,
+):
+    """A failed/disabled/no-credentials T212 fetch this cycle must not
+    trigger a cards-snapshot recompute at all -- get_brief_cards() would
+    just read the same (now stale) t212_positions_snapshot again, and
+    stamping a new fetched_at on that unchanged result would misrepresent
+    how current the Dashboard's cards actually are."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.reconcile_positions_with_broker")
+    mocker.patch("data.scheduler._fetch_t212_snapshot", return_value=False)
+    mock_cards = mocker.patch("data.scheduler._refresh_open_position_cards_snapshot")
+
+    scheduler._account_state_job()
+
+    mock_cards.assert_not_called()
+
+
+def test_account_state_job_cards_snapshot_failure_leaves_prior_stored_values_untouched(
+    db_engine, monkeypatch, mocker,
+):
+    """"Only overwrite stored state on a confirmed result" -- if
+    _refresh_open_position_cards_snapshot() itself raises, the job must not
+    propagate the exception, and whatever was already stored in
+    open_position_cards_snapshot/_fetched_at (a real prior success) must
+    survive untouched, exactly like the crisis-status write's own
+    established pattern."""
+    from data.database import set_metadata, get_metadata_str
+    set_metadata("open_position_cards_snapshot", '[{"ticker": "OLD"}]')
+    set_metadata("open_position_cards_fetched_at", "2026-08-04T14:00:00")
+
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.reconcile_positions_with_broker")
+    mocker.patch("data.scheduler._fetch_t212_snapshot", return_value=True)
+    mocker.patch(
+        "data.scheduler._refresh_open_position_cards_snapshot",
+        side_effect=RuntimeError("boom"),
+    )
+
+    scheduler._account_state_job()  # must not raise
+
+    assert get_metadata_str("open_position_cards_snapshot") == '[{"ticker": "OLD"}]'
+    assert get_metadata_str("open_position_cards_fetched_at") == "2026-08-04T14:00:00"
+
+
+def test_refresh_open_position_cards_snapshot_writes_result_and_timestamp(db_engine, mocker):
+    from data.database import get_metadata_str
+    import json as _json
+
+    fake_cards = [{"ticker": "VOO", "status": "ON TRACK"}]
+    mocker.patch("output.performance.get_brief_cards", return_value=fake_cards)
+
+    scheduler._refresh_open_position_cards_snapshot({"trading212_invest": {"enabled": True}})
+
+    assert _json.loads(get_metadata_str("open_position_cards_snapshot")) == fake_cards
+    assert get_metadata_str("open_position_cards_fetched_at") is not None
+
+
+def test_refresh_open_position_cards_snapshot_writes_empty_list_as_a_confirmed_result(db_engine, mocker):
+    """A confirmed-clean cycle (get_brief_cards() genuinely returns []) IS
+    written, not treated as "unknown" -- see the function's own docstring
+    for why this differs from the ambiguous no-credentials case."""
+    from data.database import get_metadata_str
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+
+    scheduler._refresh_open_position_cards_snapshot({})
+
+    assert get_metadata_str("open_position_cards_snapshot") == "[]"
+    assert get_metadata_str("open_position_cards_fetched_at") is not None
 
 
 # ---------------------------------------------------------------------------

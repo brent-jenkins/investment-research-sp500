@@ -20,6 +20,7 @@ from output.performance import (
     get_current_account_summary,
     get_pending_candidates,
     get_pnl_rows,
+    get_stored_open_position_cards,
     get_ticker_status,
     get_top_trades,
     get_unconfirmed_exits,
@@ -165,6 +166,92 @@ def test_ticker_status_empty_tickers_list_returns_empty_without_lookup(mocker):
     )
     assert get_ticker_status(_config(), tickers=[]) == []
     live_pool_lookup.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_stored_open_position_cards (2026-08-09) -- see CLAUDE.md's "UI
+# render-path blocking audit" follow-up, finding 4. READ-ONLY against
+# system_metadata's open_position_cards_snapshot/open_position_cards_
+# fetched_at, written hourly by data.scheduler._refresh_open_position_
+# cards_snapshot() (itself just an off-render-thread call to
+# get_brief_cards(), unchanged) via _account_state_job(). This function
+# must never call get_brief_cards() -- and, more decisively for this
+# specific bug, must never perform any per-position price-history
+# computation at all, since the original stall was DB-bound (get_price_df()
+# reads local price_data), not a network call -- a yfinance/T212 patch
+# alone would not have caught it. See tests/test_main_ui.py for the
+# AppTest-level equivalent that also patches the network clients, for full
+# defense-in-depth coverage matching the crisis-status/sector-breakdown
+# fixes' own test shape.
+# ---------------------------------------------------------------------------
+
+def test_stored_open_position_cards_empty_when_never_refreshed(db_engine):
+    assert get_stored_open_position_cards() == {"cards": [], "fetched_at": None}
+
+
+def test_stored_open_position_cards_reads_the_stored_snapshot(db_engine):
+    import json as _json
+    from data.database import set_metadata
+
+    cards = [{"ticker": "VOO", "status": "ON TRACK"}]
+    set_metadata("open_position_cards_snapshot", _json.dumps(cards))
+    set_metadata("open_position_cards_fetched_at", "2026-08-09T10:05:00")
+
+    result = get_stored_open_position_cards()
+    assert result["cards"] == cards
+    assert result["fetched_at"] == "2026-08-09T10:05:00"
+
+
+def test_stored_open_position_cards_malformed_json_degrades_to_empty_list(db_engine):
+    """A corrupt stored payload must never raise or blank the timestamp --
+    the cards list degrades to [] but fetched_at is still reported honestly
+    (a caller can at least see when the bad write happened)."""
+    from data.database import set_metadata
+
+    set_metadata("open_position_cards_snapshot", "{not valid json")
+    set_metadata("open_position_cards_fetched_at", "2026-08-09T10:05:00")
+
+    result = get_stored_open_position_cards()
+    assert result["cards"] == []
+    assert result["fetched_at"] == "2026-08-09T10:05:00"
+
+
+def test_stored_open_position_cards_render_path_never_calls_get_brief_cards(db_engine, mocker):
+    """Direct proof, mirroring test_crisis_status_render_path_never_calls_
+    the_live_check below: get_stored_open_position_cards() must never call
+    get_brief_cards() -- patched to raise if called at all."""
+    import json as _json
+    from data.database import set_metadata
+
+    set_metadata("open_position_cards_snapshot", _json.dumps([{"ticker": "VOO"}]))
+    mock_compute = mocker.patch(
+        "output.performance.get_brief_cards",
+        side_effect=AssertionError("get_stored_open_position_cards() must never call get_brief_cards()"),
+    )
+
+    result = get_stored_open_position_cards()
+    assert result["cards"] == [{"ticker": "VOO"}]
+    mock_compute.assert_not_called()
+
+
+def test_stored_open_position_cards_render_path_performs_no_price_history_computation(db_engine, mocker):
+    """The decisive proof for this specific bug: the old stall was NOT a
+    network call (get_ticker_status()'s get_price_df() reads local
+    price_data, not yfinance/T212), so a yfinance/T212 patch alone would
+    not catch it -- the shared signal-computation function itself is
+    patched to raise if invoked at all."""
+    import json as _json
+    from data.database import set_metadata
+
+    set_metadata("open_position_cards_snapshot", _json.dumps([{"ticker": "VOO"}]))
+    mock_signal = mocker.patch(
+        "analysis.signals.compute_signal_series",
+        side_effect=AssertionError("get_stored_open_position_cards() must perform no price-history computation"),
+    )
+
+    result = get_stored_open_position_cards()
+    assert result["cards"] == [{"ticker": "VOO"}]
+    mock_signal.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
