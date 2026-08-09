@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 # `data`, `brokers`, etc. regardless of the directory pytest is invoked from.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from analysis.universe import clear_membership_cache  # noqa: E402
 from data.database import Base  # noqa: E402
 
 # Every module that does `from data.database import get_engine` at module
@@ -43,6 +44,17 @@ def db_engine(monkeypatch):
     calls production code makes (each normally opens a brand-new connection
     via NullPool against a real file; StaticPool keeps one connection alive
     so an in-memory database behaves the same way across those calls).
+
+    Also clears analysis.universe's in-process membership cache on both
+    entry and exit (2026-08-09) -- that cache is now bulk-populated from
+    whichever engine get_engine() resolves to at first access (see
+    analysis/universe.py:_bulk_load_membership_cache()), so a value left
+    over from an earlier test's engine (this fixture hands out a brand new
+    one per test) would otherwise silently outlive its own DB and leak into
+    a later test that expects a genuinely fresh one -- exactly the failure
+    mode test_universe.py's own narrower autouse fixture already guarded
+    against for that one file; this closes the same gap for every other
+    test file that uses db_engine.
     """
     engine = create_engine(
         "sqlite:///:memory:",
@@ -54,5 +66,7 @@ def db_engine(monkeypatch):
     for binding in _GET_ENGINE_BINDINGS:
         monkeypatch.setattr(binding, lambda: engine)
 
+    clear_membership_cache()
     yield engine
+    clear_membership_cache()
     engine.dispose()
