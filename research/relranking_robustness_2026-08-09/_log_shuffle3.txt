@@ -1,0 +1,4 @@
+[shuffle3] ptype=shuffle_tiebreak param=3 start=2007-01-01 n_tickers=612 n_usable=608 (1s)
+[shuffle3] A: 4919 trades, pnl=103926.50, mean_deployed=63.72 (1308s)
+[shuffle3] B: 4876 trades, pnl=166830.11, mean_deployed=63.74 (2618s total)
+[shuffle3] wrote trades/panel A+B, meta (2618s total)

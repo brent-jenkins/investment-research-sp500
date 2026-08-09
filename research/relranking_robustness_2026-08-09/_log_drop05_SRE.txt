@@ -1,0 +1,4 @@
+[drop05_SRE] ptype=drop_ticker param=SRE start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop05_SRE] A: 4919 trades, pnl=103926.50, mean_deployed=63.72 (1193s)
+[drop05_SRE] B: 4876 trades, pnl=166830.11, mean_deployed=63.74 (2452s total)
+[drop05_SRE] wrote trades/panel A+B, meta (2453s total)

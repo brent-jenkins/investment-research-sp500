@@ -1,0 +1,4 @@
+[shift5] ptype=shift_start param=5 start=2007-01-06 n_tickers=612 n_usable=608 (2s)
+[shift5] A: 4919 trades, pnl=103932.61, mean_deployed=63.76 (1297s)
+[shift5] B: 4884 trades, pnl=193226.87, mean_deployed=63.75 (2656s total)
+[shift5] wrote trades/panel A+B, meta (2656s total)

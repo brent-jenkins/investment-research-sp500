@@ -1,0 +1,4 @@
+[drop09_EXR] ptype=drop_ticker param=EXR start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop09_EXR] A: 4930 trades, pnl=106725.51, mean_deployed=63.73 (1286s)
+[drop09_EXR] B: 4867 trades, pnl=165571.97, mean_deployed=63.71 (2642s total)
+[drop09_EXR] wrote trades/panel A+B, meta (2642s total)

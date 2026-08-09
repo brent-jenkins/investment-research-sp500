@@ -1240,6 +1240,28 @@ demo-only (`trading212_invest.live: false`) regardless, so nothing here is urgen
 standpoint — but the research-to-production gap is real and should not be skipped because this result
 looks strong.
 
+**Robustness test, 2026-08-09 — CONFIRMED ROBUST, with one named caveat.** Before Arm B goes anywhere
+near promotion, its result was stress-tested against the measurement toolkit's own perturbation method
+(drop one random ticker, shift the walk start date, reshuffle admission tie-breaks) — 20 paired draws,
+Arm A and Arm B run against the *identical* perturbed pool/date/tie-break state each time so the
+quantity of interest is the B-minus-A delta's own distribution, not two independent spreads. Full
+detail: `research/relranking_robustness_2026-08-09/REPORT.md` (dedicated worktree,
+`c:\GitHub\investment-app-relranking-robustness`). **20 of 20 draws favour B — no exceptions, no sign
+flips, no near-zero draws.** The unperturbed +1.993pp sits exactly at the distribution's median and is
+its single most common value (9/20 draws land on it exactly). Not dominated by one ticker the way the
+original noise-floor study's DHI finding was (most individual ticker drops are complete no-ops; nothing
+comes close to erasing the result) — **but dropping AMAT alone compresses the delta to +0.427pp, ~21%
+of typical, the one real named partial dependency for the result's *magnitude* (not its existence or
+direction)** — stated plainly since that single-draw figure sits below this project's own ~1.08pp
+noise-floor bar on its own, even though 19 of the other 20 draws clear it comfortably. A second,
+distinct, ticker-independent mechanism (shifting the walk's start date ≥3 days) reliably pushes the
+delta *higher* (+2.33pp to +2.65pp), via the same capacity-cascade sensitivity this project has
+repeatedly measured elsewhere. Deployment parity holds under every perturbation (gap −0.05pp to
++0.02pp) and — the strongest single result in this test — **B-only admissions beat A-only admissions on
+mean P&L% in all 20/20 draws**, corroborating the original study's central claim (B's edge traces to
+genuinely better decisions, not a cash-holding or cascade artefact) across twenty independently-
+perturbed configurations, not just the one original run.
+
 ## Relative-rank admission ordering promoted to production code — OPEN CANDIDATE, not adopted (2026-08-09)
 
 **The relative-ranking study's own mechanism (admission ordered by cross-sectional relative rank instead

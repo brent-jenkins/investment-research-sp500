@@ -1,0 +1,4 @@
+[drop08_CNP] ptype=drop_ticker param=CNP start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop08_CNP] A: 4919 trades, pnl=103926.50, mean_deployed=63.72 (1281s)
+[drop08_CNP] B: 4881 trades, pnl=150145.43, mean_deployed=63.73 (2643s total)
+[drop08_CNP] wrote trades/panel A+B, meta (2643s total)

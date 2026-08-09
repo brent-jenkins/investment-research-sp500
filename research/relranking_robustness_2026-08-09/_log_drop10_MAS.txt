@@ -1,0 +1,4 @@
+[drop10_MAS] ptype=drop_ticker param=MAS start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop10_MAS] A: 4902 trades, pnl=110607.17, mean_deployed=63.74 (1290s)
+[drop10_MAS] B: 4878 trades, pnl=155683.49, mean_deployed=63.69 (2655s total)
+[drop10_MAS] wrote trades/panel A+B, meta (2655s total)

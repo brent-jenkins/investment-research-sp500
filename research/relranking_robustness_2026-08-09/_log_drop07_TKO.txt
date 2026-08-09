@@ -1,0 +1,4 @@
+[drop07_TKO] ptype=drop_ticker param=TKO start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop07_TKO] A: 4919 trades, pnl=114512.07, mean_deployed=63.72 (1193s)
+[drop07_TKO] B: 4870 trades, pnl=173765.04, mean_deployed=63.74 (2454s total)
+[drop07_TKO] wrote trades/panel A+B, meta (2454s total)

@@ -1,0 +1,36 @@
+^SP500TR: 4930 rows, 2007-01-03 -> 2026-08-07
+drop01_CAG: delta_B_minus_A=+1.973pp  (A=3.460 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop02_MTCH: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop03_AMAT: delta_B_minus_A=+0.427pp  (A=4.915 B=5.342)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop04_CCI: delta_B_minus_A=+1.274pp  (A=4.159 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop05_SRE: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop06_STE: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop07_TKO: delta_B_minus_A=+1.783pp  (A=3.829 B=5.612)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+drop08_CNP: delta_B_minus_A=+1.541pp  (A=3.440 B=4.981)  dd_delta=-1.52  deployed_gap=0.01  paired_usable=True
+drop09_EXR: delta_B_minus_A=+1.874pp  (A=3.541 B=5.415)  dd_delta=-1.52  deployed_gap=-0.02  paired_usable=True
+drop10_MAS: delta_B_minus_A=+1.436pp  (A=3.697 B=5.133)  dd_delta=-1.52  deployed_gap=-0.05  paired_usable=True
+shift1: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+shift2: delta_B_minus_A=+1.993pp  (A=3.439 B=5.432)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+shift3: delta_B_minus_A=+2.357pp  (A=3.438 B=5.795)  dd_delta=3.1  deployed_gap=0.0  paired_usable=True
+shift5: delta_B_minus_A=+2.645pp  (A=3.437 B=6.082)  dd_delta=5.02  deployed_gap=-0.01  paired_usable=True
+shift7: delta_B_minus_A=+2.645pp  (A=3.436 B=6.081)  dd_delta=5.02  deployed_gap=-0.01  paired_usable=True
+shift10: delta_B_minus_A=+2.331pp  (A=3.434 B=5.765)  dd_delta=3.77  deployed_gap=-0.02  paired_usable=True
+shuffle1: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+shuffle2: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+shuffle3: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+shuffle4: delta_B_minus_A=+1.993pp  (A=3.440 B=5.433)  dd_delta=-1.52  deployed_gap=0.02  paired_usable=True
+
+=== SUMMARY ===
+{
+  "n_draws": 20,
+  "mean": 1.9111,
+  "median": 1.993,
+  "min": 0.427,
+  "min_draw": "drop03_AMAT",
+  "max": 2.645,
+  "max_draw": "shift5",
+  "n_positive": 20,
+  "n_total": 20
+}
+
+Wrote research/relranking_robustness_2026-08-09/step4_all_results.json

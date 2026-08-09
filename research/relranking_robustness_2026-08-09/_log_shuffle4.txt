@@ -1,0 +1,4 @@
+[shuffle4] ptype=shuffle_tiebreak param=4 start=2007-01-01 n_tickers=612 n_usable=608 (1s)
+[shuffle4] A: 4919 trades, pnl=103926.50, mean_deployed=63.72 (1304s)
+[shuffle4] B: 4876 trades, pnl=166830.11, mean_deployed=63.74 (2617s total)
+[shuffle4] wrote trades/panel A+B, meta (2617s total)
