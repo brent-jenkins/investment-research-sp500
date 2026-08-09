@@ -710,21 +710,23 @@ def get_pending_candidates() -> list[dict]:
     completely unchanged; this function simply stops re-filtering out rows
     that policy has already decided to keep.
 
-    Ordered by momentum descending, matching the real admission-priority
-    order live submission itself uses
-    (`brokers/trading212.py:_load_pending_orders()`) — this also means a
-    ticker's several historical rows (e.g. an earlier SUPERSEDED decision
-    and the later, final one that replaced it) both surface at the same
-    momentum-ranked position, rather than one silently masking the other.
+    Ordered by admission_rank_value descending (2026-08-09 — was
+    momentum_pct directly; equals it byte-identically in the default
+    admission_ranking_mode, see brokers/trading212.py:_load_pending_
+    orders()'s own docstring), matching the real admission-priority order
+    live submission itself uses — this also means a ticker's several
+    historical rows (e.g. an earlier SUPERSEDED decision and the later,
+    final one that replaced it) both surface at the same ranked position,
+    rather than one silently masking the other.
     """
     from sqlalchemy import text as sa_text
     try:
         with get_engine().connect() as conn:
             rows = conn.execute(sa_text("""
                 SELECT ticker, is_etf, decided_at, decided_price, position_gbp,
-                       momentum_pct, status, resolution_note
+                       momentum_pct, admission_rank_value, status, resolution_note
                 FROM pending_orders
-                ORDER BY momentum_pct DESC
+                ORDER BY admission_rank_value DESC
             """)).mappings().all()
         return [dict(r) for r in rows]
     except Exception:
@@ -739,24 +741,29 @@ _QUEUE_PREVIEW_MAX_ROWS = 25
 def get_pending_candidates_ranked() -> list[dict]:
     """Every still-`PENDING` pending_orders row, ordered exactly the way
     `brokers/trading212.py:_load_pending_orders()` (the real submission
-    priority walk) orders them: momentum descending, `decided_at`
-    ascending as the tie-break. Deliberately excludes every resolved
-    status (SUBMITTED/FAILED/SKIPPED_*/REJECTED_CAPACITY/SUPERSEDED) —
-    unlike get_pending_candidates() (a research/audit-facing read of the
-    FULL retained history), this backs the operational "what hasn't been
-    decided on yet, in the order it'll be tried" view (2026-08-09, see
-    CLAUDE.md's Candidate Queue narrowing). Resolved rows are untouched
-    in the database either way — this is a query-scope choice, not a
-    retention or write-path change.
+    priority walk) orders them: admission_rank_value descending (2026-08-09
+    — was momentum_pct directly; the two are byte-identical in the default
+    admission_ranking_mode, only diverging if that mode is ever switched to
+    relative_rank), `decided_at` ascending as the tie-break.
+    `momentum_pct` is still selected/returned unchanged, since display
+    (Strength bands, the Momentum column) always shows the real absolute
+    momentum regardless of which value drove ranking priority. Deliberately
+    excludes every resolved status (SUBMITTED/FAILED/SKIPPED_*/
+    REJECTED_CAPACITY/SUPERSEDED) — unlike get_pending_candidates() (a
+    research/audit-facing read of the FULL retained history), this backs
+    the operational "what hasn't been decided on yet, in the order it'll be
+    tried" view (2026-08-09, see CLAUDE.md's Candidate Queue narrowing).
+    Resolved rows are untouched in the database either way — this is a
+    query-scope choice, not a retention or write-path change.
     """
     from sqlalchemy import text as sa_text
     try:
         with get_engine().connect() as conn:
             rows = conn.execute(sa_text("""
-                SELECT ticker, position_gbp, momentum_pct
+                SELECT ticker, position_gbp, momentum_pct, admission_rank_value
                 FROM pending_orders
                 WHERE status = 'PENDING'
-                ORDER BY momentum_pct DESC, decided_at ASC
+                ORDER BY admission_rank_value DESC, decided_at ASC
             """)).mappings().all()
         return [dict(r) for r in rows]
     except Exception:

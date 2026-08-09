@@ -1145,20 +1145,34 @@ def status_app(db_engine, monkeypatch, mocker):
 
 def _seed_pending_row(db_engine, *, ticker, momentum_pct, position_gbp=1000.0,
                        is_etf=False, status="PENDING", resolution_note=None,
-                       decided_at=None):
+                       decided_at=None, admission_rank_value=None):
     from sqlalchemy import text as sa_text
     from datetime import datetime
     now = decided_at or datetime.utcnow().isoformat()
+    # admission_rank_value (2026-08-09 admission-ranking promotion) defaults
+    # to mirror momentum_pct -- the real decide phase always populates both,
+    # and get_pending_candidates()/get_pending_candidates_ranked() now sort
+    # by admission_rank_value DESC, not momentum_pct DESC. Leaving this NULL
+    # (as an earlier version of this helper did) left every seeded row tied
+    # on the real sort key, falling through to decided_at ASC -- i.e. plain
+    # insertion order -- which is what caused
+    # test_status_page_candidate_table_ranked_by_submission_priority to
+    # observe seeding order instead of momentum order.
+    if admission_rank_value is None:
+        admission_rank_value = momentum_pct
     with db_engine.begin() as conn:
         conn.execute(sa_text("""
             INSERT INTO pending_orders
                 (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                 position_gbp, momentum_pct, stop_price, var_pct, status, resolution_note, created_at)
+                 position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct,
+                 status, resolution_note, created_at)
             VALUES (:ticker, :t212_ticker, :is_etf, 'USD', :now, 100.0,
-                    :position_gbp, :momentum_pct, 90.0, 0.02, :status, :resolution_note, :now)
+                    :position_gbp, :momentum_pct, :admission_rank_value, 90.0, 0.02,
+                    :status, :resolution_note, :now)
         """), {
             "ticker": ticker, "t212_ticker": f"{ticker}_US_EQ", "is_etf": is_etf,
             "now": now, "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+            "admission_rank_value": admission_rank_value,
             "status": status, "resolution_note": resolution_note,
         })
 

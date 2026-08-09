@@ -6,6 +6,8 @@ path) is actually wired to these functions, not just that the functions
 themselves are correct in isolation.
 """
 from analysis.decision import (
+    ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM,
+    ADMISSION_RANKING_MODE_RELATIVE_RANK,
     MIN_MOMENTUM_FLOOR,
     REENTRY_COOLDOWN_DAYS,
     evaluate_exit_reason,
@@ -16,6 +18,8 @@ from analysis.decision import (
     is_submission_price_move_blocked,
     passes_entry_gate,
     passes_momentum_floor,
+    resolve_admission_rank_value,
+    resolve_admission_ranking_mode,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
     resolve_min_momentum_floor,
@@ -423,3 +427,56 @@ def test_rank_dropped_unknown_none_does_not_trigger():
     matches this module's own None-tolerance convention throughout:
     unknown is never treated as an affirmative trigger."""
     assert evaluate_rank_dropped_exit(is_in_current_top_n=None) is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_admission_ranking_mode() / resolve_admission_rank_value() --
+# promoted 2026-08-09 from the relative-ranking study's own research engine.
+# See analysis/decision.py's own docstrings for the full record and the
+# "narrowed on review" scope: this changes ONLY the admission sort key,
+# never the entry gate / momentum floor / SIGNAL_OFF.
+# ---------------------------------------------------------------------------
+
+def test_resolve_admission_ranking_mode_defaults_to_absolute_momentum():
+    """A config predating this parameter (no admission_ranking_mode key at
+    all) must behave exactly as today's validated production system --
+    same guarantee every other config-driven parameter in this module
+    provides."""
+    assert resolve_admission_ranking_mode({"trading212_invest": {}}) == ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM
+    assert resolve_admission_ranking_mode({}) == ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM
+
+
+def test_resolve_admission_ranking_mode_reads_the_configured_value():
+    assert resolve_admission_ranking_mode(
+        {"trading212_invest": {"admission_ranking_mode": "relative_rank"}}
+    ) == ADMISSION_RANKING_MODE_RELATIVE_RANK
+
+
+def test_resolve_admission_rank_value_absolute_momentum_mode_returns_momentum():
+    assert resolve_admission_rank_value(
+        momentum=0.15, relative_rank=0.40, mode=ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM,
+    ) == 0.15
+
+
+def test_resolve_admission_rank_value_relative_rank_mode_returns_relative_rank():
+    assert resolve_admission_rank_value(
+        momentum=0.15, relative_rank=0.40, mode=ADMISSION_RANKING_MODE_RELATIVE_RANK,
+    ) == 0.40
+
+
+def test_resolve_admission_rank_value_unrecognised_mode_falls_back_to_momentum():
+    """Fails safe to today's validated behaviour, never to an unvalidated
+    one -- an unrecognised mode string must never silently resolve to
+    relative_rank."""
+    assert resolve_admission_rank_value(
+        momentum=0.15, relative_rank=0.40, mode="not_a_real_mode",
+    ) == 0.15
+
+
+def test_resolve_admission_rank_value_can_return_none_for_either_input():
+    assert resolve_admission_rank_value(
+        momentum=None, relative_rank=0.40, mode=ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM,
+    ) is None
+    assert resolve_admission_rank_value(
+        momentum=0.15, relative_rank=None, mode=ADMISSION_RANKING_MODE_RELATIVE_RANK,
+    ) is None

@@ -238,19 +238,28 @@ def _seed_t212_snapshot(summary: dict, checked_at: str = None) -> None:
 
 
 def _seed_pending_order(engine, *, ticker, t212_ticker, is_etf, decided_price=100.0,
-                         position_gbp=500.0, status="PENDING", currency="USD", momentum_pct=0.05):
+                         position_gbp=500.0, status="PENDING", currency="USD", momentum_pct=0.05,
+                         admission_rank_value=None):
+    # admission_rank_value defaults to momentum_pct (2026-08-09) -- the real
+    # decide phase always populates both, equal to each other in the
+    # default admission_ranking_mode; a seeded row that leaves it NULL
+    # would sort last in _load_pending_orders()'s real ORDER BY regardless
+    # of momentum_pct, which is not what a real queued row ever looks like.
+    if admission_rank_value is None:
+        admission_rank_value = momentum_pct
     with engine.begin() as conn:
         conn.execute(sa_text("""
             INSERT INTO pending_orders
                 (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
+                 position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct, status, created_at)
             VALUES (:ticker, :t212_ticker, :is_etf, :currency, :now, :decided_price,
-                    :position_gbp, :momentum_pct, :stop_price, 0.02, :status, :now)
+                    :position_gbp, :momentum_pct, :admission_rank_value, :stop_price, 0.02, :status, :now)
         """), {
             "ticker": ticker, "t212_ticker": t212_ticker, "is_etf": is_etf,
             "currency": currency, "now": datetime.utcnow().isoformat(),
             "decided_price": decided_price, "position_gbp": position_gbp,
             "stop_price": decided_price * 0.9, "status": status, "momentum_pct": momentum_pct,
+            "admission_rank_value": admission_rank_value,
         })
 
 

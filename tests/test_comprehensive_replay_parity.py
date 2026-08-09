@@ -122,8 +122,20 @@ def _calm_gspc_frame() -> pd.DataFrame:
     return pd.DataFrame({"date": dates, "open": closes, "high": highs, "low": lows, "close": closes})
 
 
-def _config() -> dict:
-    return {
+def _config(admission_ranking_mode: str | None = None) -> dict:
+    """admission_ranking_mode=None leaves the key absent entirely, matching
+    production's own default fallback (resolve_admission_ranking_mode()
+    resolves an absent key to "absolute_momentum") -- the original,
+    unmodified behaviour of this fixture, preserved exactly for the
+    existing default-mode test. Passing "relative_rank" (2026-08-09, the
+    admission-ranking promotion) exercises the SAME comprehensive,
+    un-cherry-picked multi-day walk under the new mode -- genuine Layer 2
+    coverage of resolve_admission_rank_value()/resolve_admission_ranking_
+    mode(), not just the single hand-engineered crossover day tests/
+    test_admission_ranking_parity.py drives. See this module's own
+    docstring for why a comprehensive walk catches divergences a targeted
+    scenario test cannot be told in advance to look for."""
+    cfg = {
         "instruments": {
             "ETFA": {"t212_instrument_id": "ETFA_EQ", "currency": "USD", "is_etf": True},
             "STKA": {"t212_instrument_id": "STKA_EQ", "currency": "USD", "is_etf": False},
@@ -143,6 +155,9 @@ def _config() -> dict:
         },
         "signals": {"atr_period": 14},
     }
+    if admission_ranking_mode is not None:
+        cfg["trading212_invest"]["admission_ranking_mode"] = admission_ranking_mode
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +362,9 @@ def replay_mocks(db_engine, monkeypatch, mocker):
     return None
 
 
-def _run_scenario(mocker) -> tuple["Counter[tuple[str, str]]", "Counter[tuple[str, str]]"]:
+def _run_scenario(
+    mocker, admission_ranking_mode: str | None = None,
+) -> tuple["Counter[tuple[str, str]]", "Counter[tuple[str, str]]"]:
     """Builds the standard two-ticker, ~320-simulated-day scenario, runs it
     through both live's real replay and the backtest engine, and returns
     (live_events, backtest_events) for the caller to assert on. Factored
@@ -355,13 +372,17 @@ def _run_scenario(mocker) -> tuple["Counter[tuple[str, str]]", "Counter[tuple[st
     test below share the identical scenario and comparison logic -- the
     injected test's only difference from the clean one is patching a real
     bug into live's code before calling this, exactly mirroring how
-    tests/test_live_backtest_parity.py itself was verified."""
+    tests/test_live_backtest_parity.py itself was verified.
+
+    admission_ranking_mode is threaded into the SAME config dict both the
+    live replay and the backtest engine below read from -- see _config()'s
+    own docstring for why this parameter exists."""
     from analysis.backtest import simulate_portfolio_compounding_mtm
     from analysis import signals as v2sig
     from analysis.volatility import _atr
     from collections import Counter
 
-    config = _config()
+    config = _config(admission_ranking_mode)
     t212_by_ticker = {"ETFA": "ETFA_EQ", "STKA": "STKA_EQ"}
 
     frame_etfa = _rising_frame()
@@ -390,7 +411,17 @@ def _run_scenario(mocker) -> tuple["Counter[tuple[str, str]]", "Counter[tuple[st
         atr_s = _atr(high, low, close, config["signals"]["atr_period"])
         sig = v2sig.compute_signal_series(close)
         mom = v2sig.compute_momentum_series(close)
-        working = pd.DataFrame({"close": close, "atr": atr_s, "signal": sig, "momentum": mom})
+        # relative_rank (2026-08-09 admission-ranking promotion) -- must be
+        # present in the cache frame the same way precompute_ticker() puts
+        # it there in production, or _admit_group()'s relative_rank mode
+        # falls back to float("-inf") for every candidate (row.get() on a
+        # genuinely missing column, not merely a NaN value) -- silently
+        # ranking everything last rather than genuinely comparing rank.
+        # Harmless for the default absolute_momentum-mode test (column
+        # computed but never read), required for the relative_rank-mode
+        # one below.
+        rank = v2sig.compute_relative_rank_series(close)
+        working = pd.DataFrame({"close": close, "atr": atr_s, "signal": sig, "momentum": mom, "relative_rank": rank})
         return {"ticker": ticker, "frame": working}
 
     gspc_close = gspc.set_index("date")["close"].astype(float)
@@ -436,6 +467,39 @@ def test_comprehensive_multiday_multiticker_replay_matches_backtest_trade_sequen
     assert live_events == backtest_events, (
         f"Live replay and backtest engine diverged on the executed trade "
         f"sequence (ticker, direction) -> count.\n"
+        f"Live:     {dict(sorted(live_events.items()))}\n"
+        f"Backtest: {dict(sorted(backtest_events.items()))}"
+    )
+
+
+def test_comprehensive_multiday_multiticker_replay_matches_backtest_trade_sequence_under_relative_rank_mode(
+    replay_mocks, mocker,
+):
+    """The SAME comprehensive, un-cherry-picked ~320-day walk as the test
+    above, run again with trading212_invest.admission_ranking_mode =
+    "relative_rank" (2026-08-09 admission-ranking promotion) instead of
+    left absent. This is deliberately NOT a targeted single-day crossover
+    scenario -- tests/test_admission_ranking_parity.py already covers that
+    -- the point here is the opposite: prove switching the config key
+    doesn't silently break something ELSE across a long, general,
+    capacity-sharing walk that nobody engineered in advance to expose one
+    specific ranking difference. ETFA and STKA don't happen to cross over
+    on relative rank vs. momentum in this scenario, so the actual admitted
+    sequence is expected to be IDENTICAL to the default-mode test above --
+    that sameness is itself the assertion: this mode switch changes only
+    which candidate wins a scarce slot on a day of genuine disagreement,
+    never anything else, so a scenario with no disagreement must produce
+    an unchanged trade sequence on both sides."""
+    live_events, backtest_events = _run_scenario(mocker, admission_ranking_mode="relative_rank")
+
+    assert sum(live_events.values()) > 0, "Replay harness recorded zero live events -- scenario doesn't exercise anything"
+    assert sum(backtest_events.values()) > 0, "Backtest engine recorded zero events -- scenario doesn't exercise anything"
+    assert any(d == "SELL" for _t, d in live_events), "Scenario never exercises a genuine exit on the live side"
+    assert any(d == "SELL" for _t, d in backtest_events), "Scenario never exercises a genuine exit on the backtest side"
+
+    assert live_events == backtest_events, (
+        f"Live replay and backtest engine diverged on the executed trade "
+        f"sequence under relative_rank mode (ticker, direction) -> count.\n"
         f"Live:     {dict(sorted(live_events.items()))}\n"
         f"Backtest: {dict(sorted(backtest_events.items()))}"
     )

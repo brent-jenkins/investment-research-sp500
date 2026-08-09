@@ -434,12 +434,18 @@ def test_get_pending_candidates_empty(db_engine):
 
 
 def _seed_pending_row(engine, *, ticker: str, status: str, momentum_pct: float):
+    # admission_rank_value mirrors momentum_pct here (2026-08-09) -- the
+    # real decide phase always populates both, equal to each other in the
+    # default admission_ranking_mode (see brokers/trading212.py:maybe_
+    # place_orders()); a seeded row that leaves it NULL would sort last
+    # regardless of momentum_pct, which is not what a real queued row ever
+    # looks like.
     with engine.begin() as conn:
         conn.execute(sa_text("""
             INSERT INTO pending_orders
                 (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                 position_gbp, momentum_pct, stop_price, var_pct, status, created_at)
-            VALUES (:t, :t, 0, 'USD', :now, 100.0, 500.0, :mom, 90.0, 0.02, :status, :now)
+                 position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct, status, created_at)
+            VALUES (:t, :t, 0, 'USD', :now, 100.0, 500.0, :mom, :mom, 90.0, 0.02, :status, :now)
         """), {"t": ticker, "mom": momentum_pct, "status": status, "now": datetime.utcnow().isoformat()})
 
 
