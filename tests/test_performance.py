@@ -13,17 +13,22 @@ import pytest
 from sqlalchemy import text as sa_text
 
 from output.performance import (
+    compute_momentum_strength_bands,
+    compute_queue_preview_cutoff,
     compute_sector_breakdown,
     get_account_value_history,
     get_brief_cards,
+    get_candidate_queue_preview,
     get_crisis_status,
     get_current_account_summary,
     get_pending_candidates,
+    get_pending_candidates_ranked,
     get_pnl_rows,
     get_stored_open_position_cards,
     get_ticker_status,
     get_top_trades,
     get_unconfirmed_exits,
+    momentum_strength_label,
     pnl_metrics_df,
 )
 
@@ -479,6 +484,240 @@ def test_get_pending_candidates_includes_status_and_resolution_note(db_engine):
     assert len(rows) == 1
     assert rows[0]["status"] == "SKIPPED_PRICE_MOVED"
     assert "price moved +3.11%" in rows[0]["resolution_note"]
+
+
+# ---------------------------------------------------------------------------
+# Candidate Queue narrowed to an operational preview (2026-08-09) -- "what is
+# likely to be bought tomorrow, in the order it will be attempted." See
+# CLAUDE.md's Candidate Queue narrowing section. get_pending_candidates()
+# above is unchanged and still the full-history read (research/audit use);
+# these three are the new, PENDING-only operational path.
+# ---------------------------------------------------------------------------
+
+def test_get_pending_candidates_ranked_excludes_resolved_rows(db_engine):
+    _seed_pending_row(db_engine, ticker="PENDINGTICK", status="PENDING", momentum_pct=0.10)
+    _seed_pending_row(db_engine, ticker="SUBMITTEDTICK", status="SUBMITTED", momentum_pct=0.50)
+    _seed_pending_row(db_engine, ticker="REJECTEDTICK", status="REJECTED_CAPACITY", momentum_pct=0.20)
+
+    rows = get_pending_candidates_ranked()
+
+    assert [r["ticker"] for r in rows] == ["PENDINGTICK"]
+
+
+def test_get_pending_candidates_ranked_orders_by_momentum_descending(db_engine):
+    _seed_pending_row(db_engine, ticker="LOWMOM", status="PENDING", momentum_pct=0.05)
+    _seed_pending_row(db_engine, ticker="HIGHMOM", status="PENDING", momentum_pct=0.30)
+    _seed_pending_row(db_engine, ticker="MIDMOM", status="PENDING", momentum_pct=0.15)
+
+    rows = get_pending_candidates_ranked()
+
+    assert [r["ticker"] for r in rows] == ["HIGHMOM", "MIDMOM", "LOWMOM"]
+
+
+def test_compute_momentum_strength_bands_uses_percentile_boundaries():
+    """10 values 1..10 -- exact, hand-computed pandas quantile boundaries
+    (q25=3.25, q75=7.75, q90=9.1) put 1-3 in Weak, 4-7 in Moderate, 8-9 in
+    Strong, and 10 alone in Very Strong."""
+    bands = compute_momentum_strength_bands(list(range(1, 11)))
+    labels = [momentum_strength_label(v, bands) for v in range(1, 11)]
+    assert labels == [
+        "Weak", "Weak", "Weak",
+        "Moderate", "Moderate", "Moderate", "Moderate",
+        "Strong", "Strong",
+        "Very Strong",
+    ]
+
+
+def test_compute_momentum_strength_bands_empty_with_too_few_values():
+    """Fewer than 4 usable values -- not enough to form 4 meaningful
+    bands -- returns {} so every candidate labels the placeholder "—"."""
+    bands = compute_momentum_strength_bands([1.0, 2.0])
+    assert bands == {}
+    assert momentum_strength_label(1.0, bands) == "—"
+
+
+def test_momentum_strength_label_handles_none_and_nan():
+    bands = compute_momentum_strength_bands([1.0, 2.0, 3.0, 4.0])
+    assert momentum_strength_label(None, bands) == "—"
+    assert momentum_strength_label(float("nan"), bands) == "—"
+
+
+def test_compute_queue_preview_cutoff_admitted_plus_margin_clamped_to_range():
+    # 10 admitted + margin 8 = 18, clamped up to the 20-row floor.
+    rows = (
+        [{"projected_status": "PROJECTED_ADMIT"}] * 10
+        + [{"projected_status": "PROJECTED_REJECT_CAPACITY"}] * 30
+    )
+    assert compute_queue_preview_cutoff(rows) == 20
+
+
+def test_compute_queue_preview_cutoff_caps_at_max_rows():
+    # 17 admitted + margin 8 = 25 -- lands exactly on the documented
+    # "typical" case from the 2026-08-09 narrowing spec.
+    rows = (
+        [{"projected_status": "PROJECTED_ADMIT"}] * 17
+        + [{"projected_status": "PROJECTED_REJECT_CAPACITY"}] * 100
+    )
+    assert compute_queue_preview_cutoff(rows) == 25
+
+    # 30 admitted + margin 8 = 38 -- still capped at 25, never uncapped.
+    rows_high = (
+        [{"projected_status": "PROJECTED_ADMIT"}] * 30
+        + [{"projected_status": "PROJECTED_REJECT_CAPACITY"}] * 100
+    )
+    assert compute_queue_preview_cutoff(rows_high) == 25
+
+
+def test_compute_queue_preview_cutoff_never_exceeds_row_count():
+    rows = [{"projected_status": "PROJECTED_ADMIT"}] * 3
+    assert compute_queue_preview_cutoff(rows) == 3
+
+
+def test_compute_queue_preview_cutoff_falls_back_to_max_rows_with_no_signal():
+    """No row carries a real projection at all (e.g. no stored account
+    snapshot) -- there's no admitted-count signal to build a margin on, so
+    this falls back to a plain top-max_rows slice rather than showing
+    nothing."""
+    rows = [{"projected_status": "PROJECTION_UNAVAILABLE"}] * 100
+    assert compute_queue_preview_cutoff(rows) == 25
+
+
+def test_compute_queue_preview_cutoff_empty_rows():
+    assert compute_queue_preview_cutoff([]) == 0
+
+
+def test_get_candidate_queue_preview_empty_when_no_pending_rows(db_engine, mocker):
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+    result = get_candidate_queue_preview({})
+    assert result == {
+        "rows": [], "total_pending": 0, "shown": 0,
+        "snapshot_checked_at": None, "fully_deployed": False,
+    }
+
+
+def test_get_candidate_queue_preview_merges_ranking_with_projection(db_engine, mocker):
+    _seed_pending_row(db_engine, ticker="AAPL", status="PENDING", momentum_pct=0.30)
+    _seed_pending_row(db_engine, ticker="MSFT", status="PENDING", momentum_pct=0.10)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 0.30, "position_gbp": 500.0,
+         "projected_status": "PROJECTED_ADMIT", "snapshot_checked_at": "2026-08-07T10:00:00"},
+        {"ticker": "MSFT", "momentum_pct": 0.10, "position_gbp": 500.0,
+         "projected_status": "PROJECTED_REJECT_CAPACITY", "snapshot_checked_at": "2026-08-07T10:00:00"},
+    ])
+
+    result = get_candidate_queue_preview({})
+
+    assert result["total_pending"] == 2
+    assert result["snapshot_checked_at"] == "2026-08-07T10:00:00"
+    assert result["fully_deployed"] is False  # AAPL is admitted
+    assert [r["ticker"] for r in result["rows"]] == ["AAPL", "MSFT"]
+    assert [r["rank"] for r in result["rows"]] == [1, 2]
+    assert result["rows"][0]["projected_status"] == "PROJECTED_ADMIT"
+    assert result["rows"][1]["projected_status"] == "PROJECTED_REJECT_CAPACITY"
+    # Fewer than 4 momentum values -- not enough for real bands, both "—".
+    assert result["rows"][0]["strength"] == "—"
+    assert result["rows"][1]["strength"] == "—"
+
+
+def test_get_candidate_queue_preview_defaults_to_projection_unavailable(db_engine, mocker):
+    _seed_pending_row(db_engine, ticker="AAPL", status="PENDING", momentum_pct=0.30)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[])
+
+    result = get_candidate_queue_preview({})
+
+    assert result["rows"][0]["projected_status"] == "PROJECTION_UNAVAILABLE"
+    # No real projection signal at all -- fully_deployed must not fire on
+    # a broken/unavailable projection, only on a genuine "all rejected".
+    assert result["fully_deployed"] is False
+
+
+def test_get_candidate_queue_preview_truncates_to_cutoff(db_engine, mocker):
+    projection = []
+    for i in range(40):
+        t = f"T{i}"
+        _seed_pending_row(db_engine, ticker=t, status="PENDING", momentum_pct=float(40 - i))
+        status = "PROJECTED_ADMIT" if i < 17 else "PROJECTED_REJECT_CAPACITY"
+        projection.append({"ticker": t, "momentum_pct": float(40 - i), "position_gbp": 500.0,
+                            "projected_status": status})
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=projection)
+
+    result = get_candidate_queue_preview({})
+
+    assert result["total_pending"] == 40
+    assert result["shown"] == 25  # 17 admitted + margin 8, capped at 25
+    assert len(result["rows"]) == 25
+    assert result["fully_deployed"] is False
+
+
+def test_get_candidate_queue_preview_strength_computed_over_full_pool_not_just_shown(db_engine, mocker):
+    """Strength bands must reflect the FULL 40-row pending pool, not just
+    the 25-row shown slice -- proven by seeding a pool where the bottom
+    15 rows (never shown, per the cutoff) are needed to make the top rows
+    genuinely land in the top decile rather than the bottom of a much
+    smaller sample."""
+    projection = []
+    for i in range(40):
+        t = f"T{i}"
+        mom = float(40 - i)  # T0=40.0 (highest) ... T39=1.0 (lowest)
+        _seed_pending_row(db_engine, ticker=t, status="PENDING", momentum_pct=mom)
+        status = "PROJECTED_ADMIT" if i < 17 else "PROJECTED_REJECT_CAPACITY"
+        projection.append({"ticker": t, "momentum_pct": mom, "position_gbp": 500.0,
+                            "projected_status": status})
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=projection)
+
+    result = get_candidate_queue_preview({})
+
+    strength_by_ticker = {r["ticker"]: r["strength"] for r in result["rows"]}
+    # T0 (momentum 40.0) is the single highest value across the full
+    # 40-row pool -- top decile, "Very Strong".
+    assert strength_by_ticker["T0"] == "Very Strong"
+    # Full-pool bands (over 1..40): q25=10.75. T24 (momentum 16.0) sits
+    # above it -- "Moderate", not "Weak" -- confirming the bands were
+    # computed from all 40 rows, not just the 25 shown.
+    assert strength_by_ticker["T24"] == "Moderate"
+
+
+def test_get_candidate_queue_preview_fully_deployed_true_when_every_row_rejected(db_engine, mocker):
+    """The real production edge case this flag exists for: every PENDING
+    row projects PROJECTED_REJECT_CAPACITY, none PROJECTED_ADMIT -- the
+    account is genuinely full, not a broken projection."""
+    projection = []
+    for i in range(20):
+        t = f"T{i}"
+        _seed_pending_row(db_engine, ticker=t, status="PENDING", momentum_pct=float(20 - i))
+        projection.append({"ticker": t, "momentum_pct": float(20 - i), "position_gbp": 500.0,
+                            "projected_status": "PROJECTED_REJECT_CAPACITY"})
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=projection)
+
+    result = get_candidate_queue_preview({})
+
+    assert result["fully_deployed"] is True
+    assert result["shown"] == 20  # falls back to the min-rows floor, per compute_queue_preview_cutoff
+
+
+def test_get_candidate_queue_preview_render_path_never_calls_the_live_client(db_engine, monkeypatch):
+    """Direct proof, mirroring the crisis-status/sector-breakdown/project-
+    admission render-path tests: Trading212Client itself is patched to
+    raise if constructed at all -- get_candidate_queue_preview() must never
+    reach it (it only reads a stored T212 snapshot via
+    project_pending_order_admission(), never a live one)."""
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+
+    def _raise(*_a, **_k):
+        raise AssertionError("get_candidate_queue_preview() must never construct a live Trading212Client")
+    monkeypatch.setattr("brokers.trading212.Trading212Client", _raise)
+
+    from data.database import set_metadata
+    set_metadata("t212_account_snapshot", '{"totalValue": 10000.0, '
+                  '"cash": {"availableToTrade": 10000.0}, "investments": {"currentValue": 0.0}}')
+    set_metadata("t212_snapshot_fetched_at", datetime.utcnow().isoformat())
+    _seed_pending_row(db_engine, ticker="AAPL", status="PENDING", momentum_pct=0.30)
+
+    config = {"trading212_invest": {"enabled": True, "max_total_deployed": 0.5}}
+    result = get_candidate_queue_preview(config)
+
+    assert result["rows"] and result["rows"][0]["projected_status"] == "PROJECTED_ADMIT"
 
 
 def test_get_unconfirmed_exits_empty(db_engine):

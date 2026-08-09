@@ -731,6 +731,227 @@ def get_pending_candidates() -> list[dict]:
         return []
 
 
+_QUEUE_PREVIEW_MARGIN = 8
+_QUEUE_PREVIEW_MIN_ROWS = 20
+_QUEUE_PREVIEW_MAX_ROWS = 25
+
+
+def get_pending_candidates_ranked() -> list[dict]:
+    """Every still-`PENDING` pending_orders row, ordered exactly the way
+    `brokers/trading212.py:_load_pending_orders()` (the real submission
+    priority walk) orders them: momentum descending, `decided_at`
+    ascending as the tie-break. Deliberately excludes every resolved
+    status (SUBMITTED/FAILED/SKIPPED_*/REJECTED_CAPACITY/SUPERSEDED) —
+    unlike get_pending_candidates() (a research/audit-facing read of the
+    FULL retained history), this backs the operational "what hasn't been
+    decided on yet, in the order it'll be tried" view (2026-08-09, see
+    CLAUDE.md's Candidate Queue narrowing). Resolved rows are untouched
+    in the database either way — this is a query-scope choice, not a
+    retention or write-path change.
+    """
+    from sqlalchemy import text as sa_text
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT ticker, position_gbp, momentum_pct
+                FROM pending_orders
+                WHERE status = 'PENDING'
+                ORDER BY momentum_pct DESC, decided_at ASC
+            """)).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def compute_momentum_strength_bands(momentum_values) -> dict:
+    """Relative, percentile-based momentum-strength band boundaries,
+    computed fresh from the CURRENT pending pool's own momentum
+    distribution every render — not fixed thresholds (2026-08-02;
+    restored to output/performance.py 2026-08-09 alongside the Candidate
+    Queue narrowing — see get_candidate_queue_preview()'s own docstring
+    for why the original per-decision-date cohort grouping is no longer
+    needed).
+
+    Deliberate design choice, stated explicitly rather than assumed:
+    RELATIVE bands, recalculated against today's own pool each time, not
+    absolute fixed percentages. Reasoning — the same "don't hardcode a
+    threshold that goes stale as conditions shift" trap this codebase has
+    already been burned by for max-holding-days and the old flat position
+    caps (see CLAUDE.md), just applied to a display label instead of a
+    trading parameter: the whole candidate pool's momentum distribution
+    moves with the market regime (a raging bull run lifts every
+    candidate's momentum; a flat/choppy market compresses it), so a fixed
+    absolute cutoff would either mislabel most candidates most of the
+    time or need periodic manual re-tuning to stay meaningful. A relative
+    percentile split adapts automatically and always reflects real,
+    current conditions. The trade-off, stated honestly: labels are not
+    numerically stable day to day — "Strong" today and "Strong" a month
+    ago do not necessarily mean the same underlying momentum percentage —
+    which is an accepted cost given the label's job is to communicate
+    today's relative standing at a glance, not to be a fixed benchmark.
+
+    Bands: bottom 25% "Weak", middle 50% (25th-75th percentile)
+    "Moderate", next 15% (75th-90th) "Strong", top 10% (90th+) "Very
+    Strong" — the standard percentile-decile convention, top decile as
+    "Very Strong". Every candidate on this list already has a positive
+    signal by construction (long/flat only — pending_orders never queues
+    a negative-momentum candidate), so these bands describe the STRENGTH
+    of positive momentum, not a bullish/bearish spectrum.
+
+    Returns {} (every candidate then labels "—") when fewer than 4 usable
+    values exist — not enough data to form 4 meaningful bands.
+    """
+    vals = pd.Series(list(momentum_values)).dropna()
+    if len(vals) < 4:
+        return {}
+    return {
+        "q25": vals.quantile(0.25),
+        "q75": vals.quantile(0.75),
+        "q90": vals.quantile(0.90),
+    }
+
+
+def momentum_strength_label(momentum_pct, bands: dict) -> str:
+    """Maps one candidate's raw momentum_pct to a qualitative strength
+    label via the relative bands from compute_momentum_strength_bands()
+    — see that function's docstring for the full reasoning. Displayed
+    ALONGSIDE the raw percentage, never in place of it, same principle as
+    the fixed-denominator/peak-relative drawdown pair shown together
+    elsewhere in this app."""
+    if not bands or momentum_pct is None or pd.isna(momentum_pct):
+        return "—"
+    if momentum_pct >= bands["q90"]:
+        return "Very Strong"
+    if momentum_pct >= bands["q75"]:
+        return "Strong"
+    if momentum_pct >= bands["q25"]:
+        return "Moderate"
+    return "Weak"
+
+
+def compute_queue_preview_cutoff(
+    rows: list[dict],
+    margin: int = _QUEUE_PREVIEW_MARGIN,
+    min_rows: int = _QUEUE_PREVIEW_MIN_ROWS,
+    max_rows: int = _QUEUE_PREVIEW_MAX_ROWS,
+) -> int:
+    """How many of *rows* (already ranked, each carrying a
+    `projected_status`) to actually show — derived from the projected
+    admission line itself, not a bare hardcoded constant: the
+    `PROJECTED_ADMIT` count plus a fixed margin, clamped to
+    `[min_rows, max_rows]` (and never more than `len(rows)`). At the
+    system's typical ~17 admitted candidates, this lands at the
+    `max_rows` ceiling (25) — "realistic set plus buffer," per the
+    2026-08-09 narrowing spec.
+
+    Falls back to `max_rows` when no row carries a real projection
+    (`PROJECTED_ADMIT`/`PROJECTED_REJECT_CAPACITY`) at all — e.g. no
+    stored account snapshot yet — since there's no admitted-count signal
+    to build a margin on top of in that case, and showing nothing would
+    be worse than showing a plain, un-prioritised top slice.
+    """
+    if not rows:
+        return 0
+    n_admit = sum(1 for r in rows if r.get("projected_status") == "PROJECTED_ADMIT")
+    has_signal = any(
+        r.get("projected_status") in ("PROJECTED_ADMIT", "PROJECTED_REJECT_CAPACITY")
+        for r in rows
+    )
+    if not has_signal:
+        return min(max_rows, len(rows))
+    return min(max(n_admit + margin, min_rows), max_rows, len(rows))
+
+
+def get_candidate_queue_preview(config: dict) -> dict:
+    """The operational Candidate Queue: 'what is likely to be bought
+    tomorrow, in the order it will be attempted' — not a complete
+    history (2026-08-09, narrowing the original 2026-08-02/08-03
+    all-statuses Candidate Queue). `PENDING` rows only, in real
+    submission-priority order, truncated to just past the projected
+    admission line (see compute_queue_preview_cutoff()). Resolved rows
+    (REJECTED_CAPACITY, SUBMITTED, SKIPPED_*, SUPERSEDED) are
+    deliberately excluded from this view — they remain in
+    `pending_orders` completely untouched, still fully queryable for
+    research (e.g. the selection audit's own use of REJECTED_CAPACITY
+    volume — see CLAUDE.md's "Descriptive selection audit" section),
+    just no longer surfaced on this operational page.
+
+    `strength` (Weak/Moderate/Strong/Very Strong) is computed from
+    compute_momentum_strength_bands() over the FULL still-PENDING pool
+    (before the cutoff slice), not just the shown rows — "relative to
+    today's pool" means the whole day's genuine candidate pool, not an
+    already-truncated top slice, which would understate how many
+    candidates are genuinely "Weak" by construction. Restored 2026-08-09
+    after the initial narrowing dropped it — no longer grouped by
+    decision-date cohort (the pre-2026-08-09 UI's own mechanism, needed
+    only because resolved rows from several different days used to be
+    shown side by side): PENDING rows only ever come from one EOD batch,
+    so there is exactly one cohort to compute bands against now.
+
+    Never raises, never makes a network call — both
+    get_pending_candidates_ranked() and
+    brokers.trading212.project_pending_order_admission() are themselves
+    exception-safe and network-free (the latter reads a STORED T212
+    snapshot, not a live one — see its own docstring).
+
+    Returns {"rows": [...], "total_pending": int, "shown": int,
+    "snapshot_checked_at": str | None, "fully_deployed": bool}.
+    `fully_deployed` is True when every row in the FULL pending pool
+    carries a real projection (not PROJECTION_UNAVAILABLE) and none of
+    them is PROJECTED_ADMIT — i.e. the account is genuinely full right
+    now, not that the projection failed (2026-08-09, added after a real
+    production account hit this exact state: 308 pending rows, every one
+    PROJECTED_REJECT_CAPACITY, which without this flag reads
+    indistinguishably from a broken projection). Each row: {rank, ticker,
+    momentum_pct, position_gbp, projected_status, strength}, rank
+    1-indexed in submission-priority order.
+    """
+    from brokers.trading212 import project_pending_order_admission
+
+    ranked = get_pending_candidates_ranked()
+    if not ranked:
+        return {
+            "rows": [], "total_pending": 0, "shown": 0,
+            "snapshot_checked_at": None, "fully_deployed": False,
+        }
+
+    projected = project_pending_order_admission(config)
+    projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
+    snapshot_checked_at = next(
+        (p["snapshot_checked_at"] for p in projected if p.get("snapshot_checked_at")), None,
+    )
+
+    bands = compute_momentum_strength_bands([r["momentum_pct"] for r in ranked])
+
+    all_rows = [
+        {
+            "rank": i,
+            "ticker": r["ticker"],
+            "momentum_pct": r["momentum_pct"],
+            "position_gbp": r["position_gbp"],
+            "projected_status": projected_by_ticker.get(r["ticker"], "PROJECTION_UNAVAILABLE"),
+            "strength": momentum_strength_label(r["momentum_pct"], bands),
+        }
+        for i, r in enumerate(ranked, start=1)
+    ]
+
+    n_admit = sum(1 for r in all_rows if r["projected_status"] == "PROJECTED_ADMIT")
+    has_signal = any(
+        r["projected_status"] in ("PROJECTED_ADMIT", "PROJECTED_REJECT_CAPACITY")
+        for r in all_rows
+    )
+    fully_deployed = has_signal and n_admit == 0
+
+    cutoff = compute_queue_preview_cutoff(all_rows)
+    return {
+        "rows": all_rows[:cutoff],
+        "total_pending": len(all_rows),
+        "shown": cutoff,
+        "snapshot_checked_at": snapshot_checked_at,
+        "fully_deployed": fully_deployed,
+    }
+
+
 def get_recent_orders(limit: int = 10) -> list[dict]:
     """The most recent *limit* invest_orders rows, any status/direction —
     real, permanent order history (placed/filled/failed/cancelled/
