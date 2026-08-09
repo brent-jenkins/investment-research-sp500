@@ -348,16 +348,19 @@ class TickerSector(Base):
     attempted, don't re-fetch," so a ticker yfinance has no sector for is
     cached as genuinely unresolved (sector=NULL) rather than being
     silently re-queried on every subsequent lookup. Written by
-    data.ingestion.get_or_fetch_sector() via write_ticker_sector() below —
-    a single shared path, not duplicated between the Dashboard and the
-    weekly email (both call output.performance.compute_sector_breakdown(),
-    which is the only caller of get_or_fetch_sector()).
+    write_ticker_sector() below, called from exactly one place:
+    prewarm_sector_data.py's bulk pre-warm script (repo root) — never from
+    the Dashboard or weekly-email render path (2026-08-09 fix: those read
+    via get_ticker_sector() only, a pure DB read, so a page render or email
+    generation can never block on a live yfinance call).
 
-    sector NULL means "fetched, yfinance had nothing" — display layers
-    render this as "Unknown", never crash, and it still counts toward
-    aggregate position/capital totals (see compute_sector_breakdown()'s
-    own docstring) — a ticker with no resolvable sector is still a real
-    open position and must not silently drop out of the totals.
+    sector NULL (or no row at all — the render path treats both the same)
+    means "no sector to show right now" — display layers render this as
+    "Uncategorized", never crash, and it still counts toward aggregate
+    position/capital totals (see output.performance.compute_sector_
+    breakdown()'s own docstring) — a ticker with no resolvable sector is
+    still a real open position and must not silently drop out of the
+    totals.
     """
 
     __tablename__ = "ticker_sector"

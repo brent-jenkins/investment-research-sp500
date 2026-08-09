@@ -140,7 +140,9 @@ def test_gather_weekly_data_total_pnl_is_realised_plus_unrealised(db_engine, moc
         _closed_row("AAPL", datetime.utcnow().isoformat(), "SIGNAL_OFF", 60.0),
     ])
     mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
-    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
+    # No ticker_sector seeding needed -- compute_sector_breakdown() is a
+    # pure DB read (2026-08-09), never calls yfinance, so an unseeded
+    # ticker just resolves to "Uncategorized" with no mock required.
 
     data = _gather_weekly_data({})
 
@@ -293,7 +295,8 @@ def test_gather_weekly_data_open_positions_alphabetical_not_by_risk_or_pnl(db_en
     ])
     mocker.patch("output.performance.get_pnl_rows", return_value=[])
     mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
-    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
+    # No ticker_sector seeding needed -- see the identical note in
+    # test_gather_weekly_data_total_pnl_is_realised_plus_unrealised above.
 
     data = _gather_weekly_data({})
 
@@ -1323,12 +1326,14 @@ def test_weekly_summary_sector_breakdown_has_no_forbidden_tone_language():
 
 
 def test_gather_weekly_data_includes_real_sector_breakdown(db_engine, mocker):
+    from data.database import write_ticker_sector
+    write_ticker_sector("AAPL", "Technology")
+
     mocker.patch("output.performance.get_brief_cards", return_value=[
         {**_open_card("AAPL", "2024-01-01T00:00:00", True, 100.0), "current_value_gbp": 5000.0},
     ])
     mocker.patch("output.performance.get_pnl_rows", return_value=[])
     mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
-    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
 
     data = _gather_weekly_data({})
 

@@ -333,14 +333,22 @@ def compute_sector_breakdown(open_cards: list[dict]) -> dict:
     Dashboard (main.py) and the weekly summary (output/briefing.py) — one
     shared computation, not two independently-rendered copies.
 
-    A ticker whose sector can't be resolved (get_or_fetch_sector() returns
-    None — roughly 40% of the historical/delisted population is like this,
-    per the selection audit's own coverage check) is grouped under
-    "Unknown" — it still counts toward total position count and total
-    capital; it is never silently dropped from the totals. An empty
-    open_cards list returns an all-zero breakdown, not an error.
+    READ-ONLY against ticker_sector — deliberately never calls
+    data.ingestion.get_or_fetch_sector() (which can fetch from yfinance on
+    a cache miss). A page render or email generation must never block on a
+    live network call; fetching happens only in the separate pre-warm path
+    (prewarm_sector_data.py) or the first time a genuinely new ticker is
+    processed there — never inline in this function. See
+    tests/test_performance.py::test_sector_breakdown_render_path_never_calls_yfinance
+    for the direct proof this holds.
+
+    A ticker with no ticker_sector row yet (never pre-warmed, or genuinely
+    unresolved when it was) is grouped under "Uncategorized" — it still
+    counts toward total position count and total capital; it is never
+    silently dropped from the totals. An empty open_cards list returns an
+    all-zero breakdown, not an error.
     """
-    from data.ingestion import get_or_fetch_sector
+    from data.database import get_ticker_sector
 
     by_count: dict[str, int] = {}
     by_capital: dict[str, float] = {}
@@ -348,7 +356,8 @@ def compute_sector_breakdown(open_cards: list[dict]) -> dict:
 
     for card in open_cards:
         ticker = card.get("ticker", "")
-        sector = get_or_fetch_sector(ticker) or "Unknown"
+        cached = get_ticker_sector(ticker)
+        sector = (cached["sector"] if cached else None) or "Uncategorized"
         capital = float(card.get("current_value_gbp") or 0)
         by_count[sector] = by_count.get(sector, 0) + 1
         by_capital[sector] = round(by_capital.get(sector, 0.0) + capital, 2)

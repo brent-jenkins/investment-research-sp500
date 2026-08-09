@@ -912,9 +912,14 @@ def get_or_fetch_sector(ticker: str) -> Optional[str]:
     yfinance only if this ticker has never been looked up at all (a prior
     row with sector=NULL means "already tried, nothing found", not "not
     yet attempted" -- see TickerSector's own docstring). This is the only
-    function that calls fetch_ticker_sector(); output.performance.
-    compute_sector_breakdown() is the only caller of this function, so a
-    genuinely new ticker triggers at most one real yfinance call, ever."""
+    function that calls fetch_ticker_sector().
+
+    CAN BLOCK on a live yfinance call -- deliberately never called from the
+    Dashboard or weekly-email render path (2026-08-09 fix; see
+    output.performance.compute_sector_breakdown()'s own docstring, which
+    reads via data.database.get_ticker_sector() only, a pure DB read).
+    This function's only real caller is prewarm_sector_data.py (repo
+    root), invoked as a standalone script, never inline in a page render."""
     from data.database import get_ticker_sector, write_ticker_sector
 
     cached = get_ticker_sector(ticker)

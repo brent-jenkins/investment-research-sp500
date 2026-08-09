@@ -505,9 +505,7 @@ gates, blocks, sizes, or exits anything.** Motivated by the selection audit's ow
 3 finding (momentum ranking naturally concentrates into higher-beta sectors — Technology and
 Consumer Cyclical 1.5–2.9x overweight vs. either candidate pool) — that concentration is the ranking
 mechanism working as designed, not a defect, but was previously only visible by eyeballing the open
-position list. Built in a dedicated worktree (`investment-app-sector-concentration`); not merged to
-`main` or deployed pending explicit confirmation — this section documents what was built, not a
-claim that it is live.
+position list.
 
 **No existing production code stored or fetched sector data before this** — confirmed by direct
 search before adding anything new, per the task's own instruction. Several research scripts (the
@@ -523,36 +521,58 @@ not "never attempted"), `source`, `fetched_at`, with paired `write_ticker_sector
 `get_ticker_sector()` upsert/read helpers. **A row is written after every fetch attempt, successful
 or not** — the presence of a row, not the value of `sector`, is what signals "already tried, don't
 re-fetch" — closing the obvious failure mode where an unresolvable ticker gets re-queried against
-yfinance on every single render forever.
+yfinance forever.
 
 **Deliberately never routed through `verify_ticker_identity()`/`scan_unverified_tickers()`**, per
 explicit instruction — those exist to catch recycled-ticker-symbol identity fraud in the
 historical/delisted population (see "Recycled-ticker-symbol corruption" above), an unrelated concern
 to sector classification, and conflating the two would repeat the exact domain-scoping mistake
 "Data-quality backstop was silently broken" (above) already found and fixed once this month (a check
-applied outside the population/purpose it was built for). `data/ingestion.py:fetch_ticker_sector()`
-is a new, independent, single yfinance `.info` call, never raises, returns `None` on any failure or
-missing field; `get_or_fetch_sector()` is the cache-check-then-fetch-once orchestration — the only
-function that calls `fetch_ticker_sector()`, and itself only ever called from
-`output/performance.py:compute_sector_breakdown()`, so a genuinely new ticker triggers at most one
-real yfinance call, ever, shared across both the Dashboard (Streamlit UI process) and the weekly
-email (scheduler daemon process) — the DB table, not Streamlit's own in-memory cache, is what makes
-this shared across those two separate processes.
+applied outside the population/purpose it was built for).
 
-**No scheduled backfill job was built.** The fetch happens lazily, the first time a ticker with no
-`ticker_sector` row appears in `open_cards` from either caller — a real, one-time network call on a
-position's first appearance, then permanently cached. This is a stated design trade-off, not an
-oversight: adding a recurring backstop scan (mirroring `scan_unverified_tickers()`'s own pattern) was
-considered and left out as more infrastructure than a reporting-only feature on ~20 typical open
-positions currently needs; worth revisiting if it should instead pre-warm ahead of any position ever
-being genuinely new to the account.
+**The render path is a pure DB read — corrected 2026-08-09, same day as the initial build, before
+deploy.** The first version had `output/performance.py:compute_sector_breakdown()` call
+`get_or_fetch_sector()` inline, which fetches from yfinance on a cache miss — a genuine risk of
+exactly the lazy-load stall this project has been bitten by before: a first load after deploy would
+otherwise run ~20 sequential throttled fetches while a user waits on the Dashboard. Fixed before any
+deploy happened, not discovered in production: `compute_sector_breakdown()` now calls
+`data.database.get_ticker_sector()` directly — a plain `SELECT`, never yfinance, regardless of
+whether the ticker has a row yet. A ticker with no row (never pre-warmed, or genuinely unresolved
+when it was) simply displays `"Uncategorized"` immediately. Verified directly, not just reasoned
+about: `test_sector_breakdown_render_path_never_calls_yfinance` patches `yf.Ticker` to raise if
+called at all and confirms the aggregation still completes correctly.
+
+**`data/ingestion.py:fetch_ticker_sector()`** (a new, independent, single yfinance `.info` call,
+never raises, returns `None` on any failure or missing field) **and `get_or_fetch_sector()`** (the
+cache-check-then-fetch orchestration) **still exist, but are called from exactly one place now:
+`prewarm_sector_data.py`** (repo root) — never from the Dashboard or weekly-email render path.
+
+**`prewarm_sector_data.py`** (repo root, mirrors `check_eod_job_in_progress.py`'s
+callable-function-with-a-thin-`__main__`-guard convention) fetches and caches sectors for the full
+**live candidate pool** (`analysis.universe.get_live_stock_candidates()`, ~500 tickers) — not just
+today's ~20 holdings, so a ticker that isn't currently held is already covered by the time it's
+first entered. Throttled at `config["data"]["rate_limit_seconds"]` (2.5s, the project standard)
+**only between genuine fetches** — an already-cached ticker is skipped with no sleep spent, so a
+re-run after the pool is mostly warm completes in seconds, not the full ~500-ticker runtime. Never
+raises per-ticker (`fetch_ticker_sector()` already catches everything internally; the pre-warm loop
+wraps the DB write too, belt-and-suspenders, matching `scan_unverified_tickers()`'s own convention).
+A row is written for every genuine attempt, resolved or not, so a real "yfinance has nothing for
+this ticker" result is cached exactly as durably as a resolved one and never re-queried on a future
+re-run either.
+
+**No scheduled/recurring backfill job was built** — this remains a deliberate, stated trade-off, not
+an oversight, unchanged from the original build: `prewarm_sector_data.py` is a one-off (or
+manually-rerun) operational script invoked over SSH, not wired into `data/scheduler.py`. If the
+pre-warm-plus-lazy-cache-on-first-genuine-fetch design proves insufficient later, that is a separate
+decision.
 
 **`output/performance.py:compute_sector_breakdown(open_cards)`** — the single shared aggregation,
 called identically by both surfaces, not two independently-rendered copies. Groups by sector, both
 by position count and by capital deployed (`current_value_gbp`, the mark-to-market figure — the view
 that matters for concentration risk, not historical entry cost), sorted descending by capital in
-both views. An unresolved sector groups under the literal string `"Unknown"` and still counts toward
-total position count and total capital — never silently dropped from the totals, per explicit
+both views. An unresolved sector groups under the literal string **`"Uncategorized"`** (renamed from
+an earlier `"Unknown"` before deploy — display string only, no behavioural change) and still counts
+toward total position count and total capital — never silently dropped from the totals, per explicit
 instruction. An empty `open_cards` list returns an all-zero breakdown, not an error.
 
 **Dashboard**: an expander (expanded by default — the whole point is visibility without a click) in
@@ -573,17 +593,25 @@ same neutral colour as everything else on the page. Both sections are omitted en
 empty) when there are no open positions.
 
 **Tests**: sector aggregation math (count and capital views, and that they can genuinely differ —
-e.g. one large position dominating capital share while trailing on count), unknown-sector handling
-(grouped correctly, still counted in totals), the empty-portfolio case (all-zero, not an error), and
-weekly-email rendering both with sector data present and with none (section correctly appears/is
-omitted in both the text and HTML bodies), plus direct tests of the new
-`fetch_ticker_sector()`/`get_or_fetch_sector()` functions (fetch-once-then-cache, including the
-unresolved-sector-is-still-cached case). 21 new tests; full suite (977 tests) passing.
+e.g. one large position dominating capital share while trailing on count), `"Uncategorized"` handling
+(grouped correctly, still counted in totals, and shown to cover both "never cached" and "cached as
+genuinely unresolved" identically), the empty-portfolio case (all-zero, not an error), the render
+path's own no-network-call guarantee, weekly-email rendering both with sector data present and with
+none, and the pre-warm script directly (already-cached tickers skipped with no sleep, a genuinely new
+ticker fetched/written/rate-limited, per-ticker exceptions don't stop the batch, an unresolvable
+ticker still writes a row). 30 new/changed tests across this feature; full suite (986 tests) passing.
 
 **No changes to ranking, sizing, admission, entry, or exit logic anywhere** — `compute_sector_breakdown()`
 is a pure read-only aggregation over already-open positions' cards (`output/performance.py:get_brief_cards()`,
 the same source the Dashboard and weekly email already used before this), consulted by nothing else
 in the system. No sector caps, no concentration limits, no alerts, no thresholds — exactly as scoped.
+
+**Deploy note — this feature needs a real deploy plus a manual pre-warm run.** `TickerSector` is a
+new table; `init_db()` creates it automatically on the first post-deploy service start, same as any
+other new model. Immediately after deploy, run `python prewarm_sector_data.py` over SSH once so the
+live candidate pool is warm before anyone loads the Dashboard — without this, every currently-open
+position (and every live candidate) displays `"Uncategorized"` until either the pre-warm script runs
+or a future scheduled pre-warm is added (deliberately not built now, see above).
 
 ## Current architecture (as of 2026-08-04)
 

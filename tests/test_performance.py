@@ -843,15 +843,19 @@ def test_positions_rules_explanation_has_no_call_to_action_language():
 # compute_sector_breakdown() -- sector concentration of open positions, by
 # count and by capital deployed. Reporting only, per CLAUDE.md's "Sector
 # concentration monitoring" section -- no gating, no thresholds.
+#
+# READ-ONLY against ticker_sector (2026-08-09 fix) -- these tests seed the
+# real (in-memory) DB via write_ticker_sector() rather than mocking
+# data.ingestion.get_or_fetch_sector(), since compute_sector_breakdown() no
+# longer calls that function at all -- see test_sector_breakdown_render_path_
+# never_calls_yfinance below for the direct proof of that.
 # ---------------------------------------------------------------------------
 
 def _card(ticker: str, current_value_gbp: float) -> dict:
     return {"ticker": ticker, "current_value_gbp": current_value_gbp}
 
 
-def test_sector_breakdown_empty_portfolio_returns_all_zero(mocker):
-    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
-
+def test_sector_breakdown_empty_portfolio_returns_all_zero(db_engine):
     result = compute_sector_breakdown([])
 
     assert result["by_count"] == {}
@@ -861,12 +865,14 @@ def test_sector_breakdown_empty_portfolio_returns_all_zero(mocker):
     assert result["total_capital_gbp"] == 0.0
 
 
-def test_sector_breakdown_count_and_capital_views_can_differ(mocker):
+def test_sector_breakdown_count_and_capital_views_can_differ(db_engine):
     """A sector with fewer, larger positions can dominate the capital view
     while trailing on the count view -- both are reported, deliberately not
     collapsed into one number."""
-    sectors = {"AAA": "Technology", "BBB": "Technology", "CCC": "Healthcare"}
-    mocker.patch("data.ingestion.get_or_fetch_sector", side_effect=lambda t: sectors[t])
+    from data.database import write_ticker_sector
+    write_ticker_sector("AAA", "Technology")
+    write_ticker_sector("BBB", "Technology")
+    write_ticker_sector("CCC", "Healthcare")
 
     cards = [_card("AAA", 1000.0), _card("BBB", 1000.0), _card("CCC", 8000.0)]
     result = compute_sector_breakdown(cards)
@@ -878,9 +884,10 @@ def test_sector_breakdown_count_and_capital_views_can_differ(mocker):
     assert result["total_capital_gbp"] == 10000.0
 
 
-def test_sector_breakdown_sorted_descending_by_capital(mocker):
-    sectors = {"AAA": "Small", "BBB": "Big"}
-    mocker.patch("data.ingestion.get_or_fetch_sector", side_effect=lambda t: sectors[t])
+def test_sector_breakdown_sorted_descending_by_capital(db_engine):
+    from data.database import write_ticker_sector
+    write_ticker_sector("AAA", "Small")
+    write_ticker_sector("BBB", "Big")
 
     cards = [_card("AAA", 100.0), _card("BBB", 9900.0)]
     result = compute_sector_breakdown(cards)
@@ -889,25 +896,25 @@ def test_sector_breakdown_sorted_descending_by_capital(mocker):
     assert list(result["by_count"].keys()) == ["Big", "Small"]  # same order in both views
 
 
-def test_sector_breakdown_unknown_sector_still_counted_in_totals(mocker):
-    """A ticker with no resolvable sector must not silently drop out of
-    the totals -- it groups under 'Unknown' and still counts."""
-    mocker.patch("data.ingestion.get_or_fetch_sector", return_value=None)
-
+def test_sector_breakdown_uncategorized_sector_still_counted_in_totals(db_engine):
+    """A ticker with no ticker_sector row (never pre-warmed, or genuinely
+    unresolved when it was) must not silently drop out of the totals -- it
+    groups under 'Uncategorized' and still counts."""
     cards = [_card("MYSTERY", 5000.0)]
     result = compute_sector_breakdown(cards)
 
-    assert result["by_count"] == {"Unknown": 1}
-    assert result["by_capital_gbp"] == {"Unknown": 5000.0}
+    assert result["by_count"] == {"Uncategorized": 1}
+    assert result["by_capital_gbp"] == {"Uncategorized": 5000.0}
     assert result["total_positions"] == 1
     assert result["total_capital_gbp"] == 5000.0
 
 
-def test_sector_breakdown_missing_capital_field_defaults_to_zero_not_a_crash(mocker):
+def test_sector_breakdown_missing_capital_field_defaults_to_zero_not_a_crash(db_engine):
     """A card missing current_value_gbp entirely (should not happen in
     practice, but must not crash the aggregation) contributes 0 capital,
     still counts toward position count."""
-    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
+    from data.database import write_ticker_sector
+    write_ticker_sector("NOFIELD", "Technology")
 
     result = compute_sector_breakdown([{"ticker": "NOFIELD"}])
 
@@ -916,13 +923,48 @@ def test_sector_breakdown_missing_capital_field_defaults_to_zero_not_a_crash(moc
     assert result["total_positions"] == 1
 
 
-def test_sector_breakdown_mixed_known_and_unknown_sectors(mocker):
-    sectors = {"AAA": "Technology", "BBB": None, "CCC": "Technology"}
-    mocker.patch("data.ingestion.get_or_fetch_sector", side_effect=lambda t: sectors[t])
+def test_sector_breakdown_mixed_known_and_uncategorized_sectors(db_engine):
+    from data.database import write_ticker_sector
+    write_ticker_sector("AAA", "Technology")
+    write_ticker_sector("BBB", None)  # attempted, genuinely unresolved -- still a row
+    write_ticker_sector("CCC", "Technology")
 
     cards = [_card("AAA", 3000.0), _card("BBB", 1000.0), _card("CCC", 6000.0)]
     result = compute_sector_breakdown(cards)
 
-    assert result["by_count"] == {"Technology": 2, "Unknown": 1}
-    assert result["by_capital_gbp"] == {"Technology": 9000.0, "Unknown": 1000.0}
+    assert result["by_count"] == {"Technology": 2, "Uncategorized": 1}
+    assert result["by_capital_gbp"] == {"Technology": 9000.0, "Uncategorized": 1000.0}
     assert result["total_capital_gbp"] == 10000.0
+
+
+def test_sector_breakdown_uncategorized_covers_both_never_cached_and_unresolved(db_engine):
+    """Two different underlying states -- 'DDD' has never been looked up at
+    all, 'BBB' was looked up and yfinance had nothing -- must display
+    identically as 'Uncategorized'; the render path doesn't distinguish
+    them (only the pre-warm script's own reporting does)."""
+    from data.database import write_ticker_sector
+    write_ticker_sector("BBB", None)  # attempted, unresolved
+
+    cards = [_card("BBB", 1000.0), _card("DDD", 1000.0)]  # DDD: no row at all
+    result = compute_sector_breakdown(cards)
+
+    assert result["by_count"] == {"Uncategorized": 2}
+    assert result["by_capital_gbp"] == {"Uncategorized": 2000.0}
+
+
+def test_sector_breakdown_render_path_never_calls_yfinance(db_engine, mocker):
+    """The render path must be a pure DB read -- a cache miss must never
+    trigger a synchronous yfinance call during a page render or email
+    generation. Direct proof: yf.Ticker is patched to raise if called at
+    all; a ticker with no ticker_sector row must still resolve (to
+    'Uncategorized') without tripping it."""
+    mock_yf = mocker.patch(
+        "data.ingestion.yf.Ticker",
+        side_effect=AssertionError("compute_sector_breakdown() must never call yfinance"),
+    )
+
+    cards = [_card("NEVERCACHED", 5000.0)]
+    result = compute_sector_breakdown(cards)
+
+    assert result["by_count"] == {"Uncategorized": 1}
+    mock_yf.assert_not_called()
