@@ -117,7 +117,7 @@ def _gather_weekly_data(config: dict) -> dict:
     from data.database import get_metadata_str
     from data.ingestion import get_price_df
     from analysis import crisis
-    from output.performance import get_brief_cards, get_pnl_rows
+    from output.performance import compute_sector_breakdown, get_brief_cards, get_pnl_rows
 
     now = datetime.utcnow()
 
@@ -134,6 +134,7 @@ def _gather_weekly_data(config: dict) -> dict:
     # P&L -- no ranking by risk or performance (see this section's own
     # docstring above).
     open_cards = sorted(get_brief_cards(config), key=lambda c: c["ticker"])
+    sector_breakdown = compute_sector_breakdown(open_cards)
 
     account_raw = get_metadata_str("t212_account_snapshot")
     total_value_gbp = None
@@ -192,6 +193,7 @@ def _gather_weekly_data(config: dict) -> dict:
         "generated_at": now,
         "window_start": window_start,
         "open_positions": open_cards,
+        "sector_breakdown": sector_breakdown,
         "total_value_gbp": total_value_gbp,
         "closed_this_week": closed_this_week,
         "realized_pnl_gbp": realized_pnl_gbp,
@@ -235,6 +237,16 @@ def _weekly_summary_text(data: dict) -> str:
             f"  {c['ticker']}: entered {entry}, {sig_text}, "
             f"unrealised P&L £{c.get('unreal_pnl_gbp', 0):,.2f}"
         )
+
+    sb = data["sector_breakdown"]
+    lines.append("")
+    if sb["total_positions"]:
+        lines.append("Sector concentration (by capital):")
+        for s in sb["by_count"]:
+            lines.append(
+                f"  {s}: {sb['by_capital_pct'][s]:.1f}% (£{sb['by_capital_gbp'][s]:,.2f}, "
+                f"{sb['by_count'][s]} position{'s' if sb['by_count'][s] != 1 else ''})"
+            )
 
     lines.append("")
     lines.append(f"Closed this week ({len(data['closed_this_week'])}):")
@@ -302,6 +314,18 @@ def _weekly_summary_html(data: dict) -> str:
     if not data["closed_this_week"]:
         rows_closed = f'<tr><td colspan="4" style="padding:4px 8px;color:{_NEUTRAL}">None.</td></tr>'
 
+    sb = data["sector_breakdown"]
+    sector_line = ""
+    if sb["total_positions"]:
+        parts = [
+            f"{esc(s)} {sb['by_capital_pct'][s]:.1f}% (£{sb['by_capital_gbp'][s]:,.2f})"
+            for s in sb["by_count"]
+        ]
+        sector_line = (
+            f'<p style="color:{_NEUTRAL};font-size:13px">'
+            f"<b>Sector concentration (by capital):</b> {' &middot; '.join(parts)}</p>"
+        )
+
     crisis_text = (
         f"fired on {esc(', '.join(data['crisis_fired_dates']))}"
         if data["crisis_fired_dates"] else "did not fire this week"
@@ -335,6 +359,7 @@ def _weekly_summary_html(data: dict) -> str:
         </tr>
         {rows_open}
       </table>
+      {sector_line}
 
       <h3 style="color:{_NEUTRAL}">Closed This Week ({len(data['closed_this_week'])})</h3>
       <table style="border-collapse:collapse;width:100%">

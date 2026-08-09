@@ -140,6 +140,7 @@ def test_gather_weekly_data_total_pnl_is_realised_plus_unrealised(db_engine, moc
         _closed_row("AAPL", datetime.utcnow().isoformat(), "SIGNAL_OFF", 60.0),
     ])
     mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
 
     data = _gather_weekly_data({})
 
@@ -242,6 +243,12 @@ def _sample_weekly_data(pnl_sign: float) -> dict:
         "realized_pnl_gbp": 50.0 * pnl_sign,
         "unrealized_pnl_gbp": 175.0 * pnl_sign,
         "total_pnl_gbp": 225.0 * pnl_sign,
+        "sector_breakdown": {
+            "by_count": {"Technology": 2},
+            "by_capital_gbp": {"Technology": 10000.0},
+            "by_capital_pct": {"Technology": 100.0},
+            "total_positions": 2, "total_capital_gbp": 10000.0,
+        },
         "crisis_fired_dates": [],
         "last_full_refresh": datetime.utcnow(),
         "eod_recent": True,
@@ -286,6 +293,7 @@ def test_gather_weekly_data_open_positions_alphabetical_not_by_risk_or_pnl(db_en
     ])
     mocker.patch("output.performance.get_pnl_rows", return_value=[])
     mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
 
     data = _gather_weekly_data({})
 
@@ -1247,3 +1255,93 @@ def test_data_quality_scan_alert_uses_its_own_dedup_key_not_shared_with_others(d
 
     assert sent is True
     mock_server.sendmail.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Sector breakdown in the weekly summary (2026-08-09) -- compact, alongside
+# the existing Open Positions section, per CLAUDE.md's "Sector concentration
+# monitoring" section. Both render paths (text/html) must handle the
+# populated case AND the "no open positions" case without crashing or
+# rendering a stray empty section.
+# ---------------------------------------------------------------------------
+
+_EMPTY_SECTOR_BREAKDOWN = {
+    "by_count": {}, "by_capital_gbp": {}, "by_capital_pct": {},
+    "total_positions": 0, "total_capital_gbp": 0.0,
+}
+
+
+def test_weekly_summary_text_includes_sector_breakdown_when_present():
+    data = _sample_weekly_data(pnl_sign=1.0)
+    text = _weekly_summary_text(data)
+    assert "Sector concentration" in text
+    assert "Technology" in text
+    assert "100.0%" in text
+
+
+def test_weekly_summary_text_omits_sector_section_when_no_open_positions():
+    data = _sample_weekly_data(pnl_sign=1.0)
+    data["open_positions"] = []
+    data["sector_breakdown"] = _EMPTY_SECTOR_BREAKDOWN
+    text = _weekly_summary_text(data)
+    assert "Sector concentration" not in text
+
+
+def test_weekly_summary_html_includes_sector_breakdown_when_present():
+    data = _sample_weekly_data(pnl_sign=1.0)
+    html = _weekly_summary_html(data)
+    assert "Sector concentration" in html
+    assert "Technology" in html
+
+
+def test_weekly_summary_html_omits_sector_section_when_no_open_positions():
+    data = _sample_weekly_data(pnl_sign=1.0)
+    data["open_positions"] = []
+    data["sector_breakdown"] = _EMPTY_SECTOR_BREAKDOWN
+    html = _weekly_summary_html(data)
+    assert "Sector concentration" not in html
+
+
+def test_weekly_summary_html_sector_section_is_not_a_second_table():
+    """Per instruction: compact, not a second table competing with the
+    positions list -- the sector breakdown must not introduce its own
+    <table> element."""
+    data = _sample_weekly_data(pnl_sign=1.0)
+    html = _weekly_summary_html(data)
+    # Exactly two <table> elements: Open Positions and Closed This Week --
+    # the sector breakdown must be inline text, not a third table.
+    assert html.count("<table") == 2
+
+
+def test_weekly_summary_sector_breakdown_has_no_forbidden_tone_language():
+    data = _sample_weekly_data(pnl_sign=1.0)
+    text = _weekly_summary_text(data).lower()
+    html = _weekly_summary_html(data).lower()
+    for word in _FORBIDDEN_WORDS:
+        assert word not in text
+        assert word not in html
+
+
+def test_gather_weekly_data_includes_real_sector_breakdown(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[
+        {**_open_card("AAPL", "2024-01-01T00:00:00", True, 100.0), "current_value_gbp": 5000.0},
+    ])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
+
+    data = _gather_weekly_data({})
+
+    assert data["sector_breakdown"]["by_count"] == {"Technology": 1}
+    assert data["sector_breakdown"]["by_capital_gbp"] == {"Technology": 5000.0}
+
+
+def test_gather_weekly_data_sector_breakdown_empty_with_no_open_positions(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+
+    assert data["sector_breakdown"]["total_positions"] == 0
+    assert data["sector_breakdown"]["by_count"] == {}

@@ -49,6 +49,7 @@ from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
     compute_position_context,
+    compute_sector_breakdown,
     get_account_value_history,
     get_brief_cards,
     get_crisis_status,
@@ -669,6 +670,16 @@ def _get_open_cards(_config: dict) -> list[dict]:
     return get_brief_cards(_config)
 
 
+@st.cache_data(ttl=60)
+def _get_sector_breakdown(_config: dict, open_cards: list[dict]) -> dict:
+    """Thin cached wrapper around output/performance.py:compute_sector_breakdown().
+    Takes open_cards (already fetched via _get_open_cards()) rather than
+    re-fetching them, so this never triggers its own T212/positions read —
+    the only I/O this can do is a yfinance sector lookup, and only for a
+    ticker genuinely new to ticker_sector (see get_or_fetch_sector())."""
+    return compute_sector_breakdown(open_cards)
+
+
 def _get_closed_rows() -> list[dict]:
     """All reconstructed closed positions — thin wrapper around
     output/performance.py:get_pnl_rows()."""
@@ -1266,6 +1277,42 @@ def _render_dashboard_page(config: dict) -> None:
     st.markdown(f"**{positions_summary_text(len(open_cards))}**")
     if open_cards:
         st.caption(POSITIONS_RULES_EXPLANATION)
+
+    # --- Sector breakdown ------------------------------------------------
+    # Reporting only -- context, not a warning (see output/performance.py:
+    # compute_sector_breakdown()'s own docstring, and CLAUDE.md's "Sector
+    # concentration monitoring" section). Two plain, neutral tables, same
+    # calm styling as the rest of this page -- no colour coding by
+    # concentration level, no threshold implying something needs attention.
+    if open_cards:
+        breakdown = _get_sector_breakdown(config, open_cards)
+        # Expanded by default -- the whole point (per motivation) is that
+        # concentration should be visible at a glance, not only after a
+        # click; a collapsed-by-default expander would work against that.
+        with st.expander(f"Sector breakdown ({len(breakdown['by_count'])} sectors)", expanded=True):
+            col_count, col_capital = st.columns(2)
+            with col_count:
+                st.markdown("**By position count**")
+                st.dataframe(
+                    pd.DataFrame(
+                        [{"Sector": s, "Positions": n} for s, n in breakdown["by_count"].items()]
+                    ),
+                    hide_index=True, use_container_width=True,
+                )
+            with col_capital:
+                st.markdown("**By capital deployed**")
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "Sector": s,
+                            "Capital (£)": f"{breakdown['by_capital_gbp'][s]:,.2f}",
+                            "% of deployed": f"{breakdown['by_capital_pct'][s]:.1f}%",
+                        }
+                        for s in breakdown["by_count"]
+                    ]),
+                    hide_index=True, use_container_width=True,
+                )
+
     if not open_cards:
         st.info("No open positions.")
     else:

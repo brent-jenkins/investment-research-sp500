@@ -882,6 +882,49 @@ def scan_unverified_tickers(config: Optional[dict] = None) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Sector classification (2026-08-09) -- reporting-only, unrelated to and
+# deliberately never routed through verify_ticker_identity()/
+# scan_unverified_tickers() above. Those exist to catch recycled-ticker-
+# symbol identity fraud in the historical/delisted population; sector is a
+# different, unrelated question (what business a ticker is in), and the two
+# concerns must not be conflated -- see TickerSector's own docstring in
+# data/database.py for the full reasoning.
+# ---------------------------------------------------------------------------
+
+def fetch_ticker_sector(ticker: str) -> Optional[str]:
+    """One yfinance `.info` call, returning the 'sector' field or None --
+    never raises. A ticker with no resolvable sector (roughly 40% of the
+    historical/delisted population, per research/selection_audit_2026-08-08's
+    own sector-map coverage check) is a normal, expected outcome, not an
+    error -- the caller (get_or_fetch_sector()) caches None just as
+    durably as a real value, so this is never re-attempted on every call."""
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        return None
+    sector = info.get("sector")
+    return str(sector) if sector else None
+
+
+def get_or_fetch_sector(ticker: str) -> Optional[str]:
+    """Cached sector lookup -- checks ticker_sector first; fetches from
+    yfinance only if this ticker has never been looked up at all (a prior
+    row with sector=NULL means "already tried, nothing found", not "not
+    yet attempted" -- see TickerSector's own docstring). This is the only
+    function that calls fetch_ticker_sector(); output.performance.
+    compute_sector_breakdown() is the only caller of this function, so a
+    genuinely new ticker triggers at most one real yfinance call, ever."""
+    from data.database import get_ticker_sector, write_ticker_sector
+
+    cached = get_ticker_sector(ticker)
+    if cached is not None:
+        return cached["sector"]
+    sector = fetch_ticker_sector(ticker)
+    write_ticker_sector(ticker, sector)
+    return sector
+
+
 def pull_incremental(tickers: Optional[list[str]] = None) -> dict[str, int]:
     """Backfill recent price data for each ticker using a rolling 10-day window.
 

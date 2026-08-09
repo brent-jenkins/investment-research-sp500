@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import text as sa_text
 
 from output.performance import (
+    compute_sector_breakdown,
     get_account_value_history,
     get_brief_cards,
     get_crisis_status,
@@ -836,3 +837,92 @@ def test_positions_summary_text_pluralises_correctly():
 def test_positions_rules_explanation_has_no_call_to_action_language():
     for phrase in ("click", "review", "close this", "consider", "you should"):
         assert phrase not in POSITIONS_RULES_EXPLANATION.lower()
+
+
+# ---------------------------------------------------------------------------
+# compute_sector_breakdown() -- sector concentration of open positions, by
+# count and by capital deployed. Reporting only, per CLAUDE.md's "Sector
+# concentration monitoring" section -- no gating, no thresholds.
+# ---------------------------------------------------------------------------
+
+def _card(ticker: str, current_value_gbp: float) -> dict:
+    return {"ticker": ticker, "current_value_gbp": current_value_gbp}
+
+
+def test_sector_breakdown_empty_portfolio_returns_all_zero(mocker):
+    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
+
+    result = compute_sector_breakdown([])
+
+    assert result["by_count"] == {}
+    assert result["by_capital_gbp"] == {}
+    assert result["by_capital_pct"] == {}
+    assert result["total_positions"] == 0
+    assert result["total_capital_gbp"] == 0.0
+
+
+def test_sector_breakdown_count_and_capital_views_can_differ(mocker):
+    """A sector with fewer, larger positions can dominate the capital view
+    while trailing on the count view -- both are reported, deliberately not
+    collapsed into one number."""
+    sectors = {"AAA": "Technology", "BBB": "Technology", "CCC": "Healthcare"}
+    mocker.patch("data.ingestion.get_or_fetch_sector", side_effect=lambda t: sectors[t])
+
+    cards = [_card("AAA", 1000.0), _card("BBB", 1000.0), _card("CCC", 8000.0)]
+    result = compute_sector_breakdown(cards)
+
+    assert result["by_count"] == {"Healthcare": 1, "Technology": 2}
+    assert result["by_capital_gbp"] == {"Healthcare": 8000.0, "Technology": 2000.0}
+    assert result["by_capital_pct"] == {"Healthcare": 80.0, "Technology": 20.0}
+    assert result["total_positions"] == 3
+    assert result["total_capital_gbp"] == 10000.0
+
+
+def test_sector_breakdown_sorted_descending_by_capital(mocker):
+    sectors = {"AAA": "Small", "BBB": "Big"}
+    mocker.patch("data.ingestion.get_or_fetch_sector", side_effect=lambda t: sectors[t])
+
+    cards = [_card("AAA", 100.0), _card("BBB", 9900.0)]
+    result = compute_sector_breakdown(cards)
+
+    assert list(result["by_capital_gbp"].keys()) == ["Big", "Small"]
+    assert list(result["by_count"].keys()) == ["Big", "Small"]  # same order in both views
+
+
+def test_sector_breakdown_unknown_sector_still_counted_in_totals(mocker):
+    """A ticker with no resolvable sector must not silently drop out of
+    the totals -- it groups under 'Unknown' and still counts."""
+    mocker.patch("data.ingestion.get_or_fetch_sector", return_value=None)
+
+    cards = [_card("MYSTERY", 5000.0)]
+    result = compute_sector_breakdown(cards)
+
+    assert result["by_count"] == {"Unknown": 1}
+    assert result["by_capital_gbp"] == {"Unknown": 5000.0}
+    assert result["total_positions"] == 1
+    assert result["total_capital_gbp"] == 5000.0
+
+
+def test_sector_breakdown_missing_capital_field_defaults_to_zero_not_a_crash(mocker):
+    """A card missing current_value_gbp entirely (should not happen in
+    practice, but must not crash the aggregation) contributes 0 capital,
+    still counts toward position count."""
+    mocker.patch("data.ingestion.get_or_fetch_sector", return_value="Technology")
+
+    result = compute_sector_breakdown([{"ticker": "NOFIELD"}])
+
+    assert result["by_count"] == {"Technology": 1}
+    assert result["by_capital_gbp"] == {"Technology": 0.0}
+    assert result["total_positions"] == 1
+
+
+def test_sector_breakdown_mixed_known_and_unknown_sectors(mocker):
+    sectors = {"AAA": "Technology", "BBB": None, "CCC": "Technology"}
+    mocker.patch("data.ingestion.get_or_fetch_sector", side_effect=lambda t: sectors[t])
+
+    cards = [_card("AAA", 3000.0), _card("BBB", 1000.0), _card("CCC", 6000.0)]
+    result = compute_sector_breakdown(cards)
+
+    assert result["by_count"] == {"Technology": 2, "Unknown": 1}
+    assert result["by_capital_gbp"] == {"Technology": 9000.0, "Unknown": 1000.0}
+    assert result["total_capital_gbp"] == 10000.0

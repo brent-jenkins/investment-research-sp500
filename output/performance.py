@@ -320,6 +320,60 @@ def compute_position_context(card: dict) -> dict:
     return {"pct_above_stop": pct_above_stop, "days_remaining": days_remaining}
 
 
+def compute_sector_breakdown(open_cards: list[dict]) -> dict:
+    """Sector concentration of currently open positions, by position count
+    and by capital deployed (current_value_gbp — mark-to-market, the view
+    that matters for concentration risk, not historical entry cost).
+
+    Reporting only — this computes nothing that gates, blocks, or sizes
+    anything; it exists purely so sector concentration (a real, expected
+    consequence of momentum ranking — see the selection audit's Part 3
+    "sector tilt" finding) is visible at a glance rather than only
+    discoverable by eyeballing a ticker list. Called identically by the
+    Dashboard (main.py) and the weekly summary (output/briefing.py) — one
+    shared computation, not two independently-rendered copies.
+
+    A ticker whose sector can't be resolved (get_or_fetch_sector() returns
+    None — roughly 40% of the historical/delisted population is like this,
+    per the selection audit's own coverage check) is grouped under
+    "Unknown" — it still counts toward total position count and total
+    capital; it is never silently dropped from the totals. An empty
+    open_cards list returns an all-zero breakdown, not an error.
+    """
+    from data.ingestion import get_or_fetch_sector
+
+    by_count: dict[str, int] = {}
+    by_capital: dict[str, float] = {}
+    total_capital_gbp = 0.0
+
+    for card in open_cards:
+        ticker = card.get("ticker", "")
+        sector = get_or_fetch_sector(ticker) or "Unknown"
+        capital = float(card.get("current_value_gbp") or 0)
+        by_count[sector] = by_count.get(sector, 0) + 1
+        by_capital[sector] = round(by_capital.get(sector, 0.0) + capital, 2)
+        total_capital_gbp += capital
+
+    # Descending by capital in both views -- a consistent, informative
+    # ordering (largest exposure first), not a ranking by "risk" or any
+    # implied urgency (see position_context_style()'s own tone note above).
+    order = sorted(by_capital, key=lambda s: -by_capital[s])
+    by_count_sorted = {s: by_count[s] for s in order}
+    by_capital_sorted = {s: by_capital[s] for s in order}
+    by_capital_pct = {
+        s: round(100.0 * v / total_capital_gbp, 1) if total_capital_gbp > 0 else 0.0
+        for s, v in by_capital_sorted.items()
+    }
+
+    return {
+        "by_count": by_count_sorted,
+        "by_capital_gbp": by_capital_sorted,
+        "by_capital_pct": by_capital_pct,
+        "total_positions": len(open_cards),
+        "total_capital_gbp": round(total_capital_gbp, 2),
+    }
+
+
 _NEUTRAL_POSITION_COLOUR = "#8899AA"
 
 

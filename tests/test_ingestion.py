@@ -21,7 +21,9 @@ from data.ingestion import (
     backfill_price_history,
     check_boundary_contiguity,
     detect_price_cliffs,
+    fetch_ticker_sector,
     filter_known_price_cliff_exceptions,
+    get_or_fetch_sector,
     scan_unverified_tickers,
     verify_ticker_identity,
 )
@@ -1004,3 +1006,86 @@ def test_scan_unverified_tickers_never_raises_on_a_single_ticker_error(db_engine
     # the batch completes regardless and the ticker is accounted for either
     # way, never silently dropped.
     assert result["checked"] == 1 or "BROKEN" in [e.split(":")[0] for e in result["errors"]]
+
+
+# ---------------------------------------------------------------------------
+# Sector classification (2026-08-09) -- fetch_ticker_sector()/get_or_fetch_sector().
+# Deliberately separate from verify_ticker_identity()/scan_unverified_tickers()
+# above -- see data/database.py:TickerSector's own docstring for why.
+# ---------------------------------------------------------------------------
+
+def test_fetch_ticker_sector_returns_sector_string(mocker):
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.info = {"sector": "Technology", "longName": "Some Corp"}
+    mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+    assert fetch_ticker_sector("AAPL") == "Technology"
+
+
+def test_fetch_ticker_sector_missing_field_returns_none(mocker):
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.info = {"longName": "Some Corp"}  # no 'sector' key at all
+    mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+    assert fetch_ticker_sector("OBSCURE") is None
+
+
+def test_fetch_ticker_sector_empty_info_returns_none(mocker):
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.info = {}
+    mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+    assert fetch_ticker_sector("DELISTED") is None
+
+
+def test_fetch_ticker_sector_never_raises_on_exception(mocker):
+    mocker.patch("data.ingestion.yf.Ticker", side_effect=RuntimeError("network boom"))
+
+    assert fetch_ticker_sector("ANYTHING") is None
+
+
+def test_get_or_fetch_sector_fetches_and_caches_on_first_call(db_engine, mocker):
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.info = {"sector": "Healthcare"}
+    mock_yf = mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+    result = get_or_fetch_sector("JNJ")
+
+    assert result == "Healthcare"
+    mock_yf.assert_called_once()
+
+    from data.database import get_ticker_sector
+    cached = get_ticker_sector("JNJ")
+    assert cached["sector"] == "Healthcare"
+
+
+def test_get_or_fetch_sector_second_call_does_not_refetch(db_engine, mocker):
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.info = {"sector": "Energy"}
+    mock_yf = mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+    first = get_or_fetch_sector("XOM")
+    second = get_or_fetch_sector("XOM")
+
+    assert first == second == "Energy"
+    mock_yf.assert_called_once()  # not called again on the second lookup
+
+
+def test_get_or_fetch_sector_caches_unresolved_and_does_not_refetch(db_engine, mocker):
+    """A ticker yfinance genuinely has no sector for must not be re-queried
+    on every subsequent lookup -- caching None is itself the point."""
+    mock_ticker = mocker.MagicMock()
+    mock_ticker.info = {}
+    mock_yf = mocker.patch("data.ingestion.yf.Ticker", return_value=mock_ticker)
+
+    first = get_or_fetch_sector("DELISTEDCO")
+    second = get_or_fetch_sector("DELISTEDCO")
+
+    assert first is None
+    assert second is None
+    mock_yf.assert_called_once()
+
+    from data.database import get_ticker_sector
+    cached = get_ticker_sector("DELISTEDCO")
+    assert cached is not None  # a row exists -- "attempted", not "never looked up"
+    assert cached["sector"] is None

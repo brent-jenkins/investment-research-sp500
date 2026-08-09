@@ -329,6 +329,45 @@ class TickerDataQuality(Base):
     detected_at = Column(DateTime, default=datetime.utcnow)
 
 
+class TickerSector(Base):
+    """Per-ticker sector classification, cached from yfinance's `.info`
+    'sector' field — added 2026-08-09 for sector-concentration monitoring
+    (Dashboard + weekly summary, reporting only; see CLAUDE.md's "Sector
+    concentration monitoring" section). Deliberately separate from, and
+    never routed through, TickerDataQuality/verify_ticker_identity() above
+    — that mechanism exists to catch recycled-ticker-symbol identity
+    fraud in the historical/delisted population; sector classification is
+    an unrelated concern (what business a ticker is in, not whether its
+    price history genuinely belongs to it), and conflating the two risks
+    exactly the kind of domain-scoping mistake this project has already
+    been bitten by once (see "Data-quality backstop" — a check applied
+    outside the population/purpose it was built for).
+
+    A row exists here after any fetch attempt, successful or not — the
+    presence of a row (not the value of `sector`) is what signals "already
+    attempted, don't re-fetch," so a ticker yfinance has no sector for is
+    cached as genuinely unresolved (sector=NULL) rather than being
+    silently re-queried on every subsequent lookup. Written by
+    data.ingestion.get_or_fetch_sector() via write_ticker_sector() below —
+    a single shared path, not duplicated between the Dashboard and the
+    weekly email (both call output.performance.compute_sector_breakdown(),
+    which is the only caller of get_or_fetch_sector()).
+
+    sector NULL means "fetched, yfinance had nothing" — display layers
+    render this as "Unknown", never crash, and it still counts toward
+    aggregate position/capital totals (see compute_sector_breakdown()'s
+    own docstring) — a ticker with no resolvable sector is still a real
+    open position and must not silently drop out of the totals.
+    """
+
+    __tablename__ = "ticker_sector"
+
+    ticker     = Column(String(20), primary_key=True)
+    sector     = Column(String(64))  # NULL = fetched, yfinance had no sector for this ticker
+    source     = Column(String(32), default="yfinance")
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PositionReconciliation(Base):
     """A discrepancy found between what this system's own order history
     implies is open and what T212's real, live positions list actually
@@ -576,6 +615,38 @@ def get_data_quality_status(ticker: str) -> "dict | None":
     return {"status": row[0], "reason": row[1], "evidence": row[2], "detected_at": row[3]}
 
 
+def write_ticker_sector(ticker: str, sector: "str | None") -> None:
+    """Upsert a ticker_sector row — same sqlite_insert(...).on_conflict_do_update()
+    primitive write_data_quality_status() uses. sector=None is a valid,
+    intentional write (see TickerSector's own docstring: "fetched, nothing
+    found" is cached too, not left as a permanent per-lookup re-fetch)."""
+    engine = get_engine()
+    stmt = sqlite_insert(TickerSector).values(
+        ticker=ticker, sector=sector, source="yfinance", fetched_at=datetime.utcnow(),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["ticker"],
+        set_={"sector": stmt.excluded.sector, "fetched_at": stmt.excluded.fetched_at},
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt)
+
+
+def get_ticker_sector(ticker: str) -> "dict | None":
+    """Return {"sector", "fetched_at"} for *ticker*, or None if it has
+    never been looked up (as opposed to looked up and found unresolved,
+    which returns {"sector": None, ...})."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT sector, fetched_at FROM ticker_sector WHERE ticker = :t"),
+            {"t": ticker},
+        ).fetchone()
+    if row is None:
+        return None
+    return {"sector": row[0], "fetched_at": row[1]}
+
+
 def get_metadata(key: str) -> "datetime | None":
     """Return the value stored for *key* as a datetime, or None if not set."""
     engine = get_engine()
@@ -758,6 +829,7 @@ def init_db() -> None:
         PendingOrder,
         InstrumentResolution,
         TickerDataQuality,
+        TickerSector,
         AccountValueHistory,
         User,
         SystemMetadata,

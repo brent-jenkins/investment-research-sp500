@@ -498,6 +498,93 @@ defect specific to cross-sectional's own 273-trading-day lookback.
 No code changed in `analysis/signals.py` or `config.yaml`. `analysis/decision.py` received exactly
 the one authorized addition. Nothing merged to the live path.
 
+## Sector concentration monitoring — reporting only (2026-08-09)
+
+**Displays sector concentration of open positions on the Dashboard and in the weekly email; never
+gates, blocks, sizes, or exits anything.** Motivated by the selection audit's own "sector tilt" Part
+3 finding (momentum ranking naturally concentrates into higher-beta sectors — Technology and
+Consumer Cyclical 1.5–2.9x overweight vs. either candidate pool) — that concentration is the ranking
+mechanism working as designed, not a defect, but was previously only visible by eyeballing the open
+position list. Built in a dedicated worktree (`investment-app-sector-concentration`); not merged to
+`main` or deployed pending explicit confirmation — this section documents what was built, not a
+claim that it is live.
+
+**No existing production code stored or fetched sector data before this** — confirmed by direct
+search before adding anything new, per the task's own instruction. Several research scripts (the
+selection audit's `sector_tilt` analysis and others) had each independently reimplemented the same
+`yf.Ticker(t).info.get("sector")` fetch-into-a-fresh-CSV pattern 3–4 times across different
+`research/` directories, always CSV-only, never DB-backed, and each with the same real ~40%
+unresolved-ticker gap (mostly delisted/historical names yfinance has nothing for). This is the first
+time sector data is persisted anywhere durable.
+
+**New table, `TickerSector` (`data/database.py`), follows the `TickerDataQuality` model pattern
+exactly**: `ticker` (primary key), `sector` (nullable — `NULL` means "fetched, yfinance had nothing",
+not "never attempted"), `source`, `fetched_at`, with paired `write_ticker_sector()`/
+`get_ticker_sector()` upsert/read helpers. **A row is written after every fetch attempt, successful
+or not** — the presence of a row, not the value of `sector`, is what signals "already tried, don't
+re-fetch" — closing the obvious failure mode where an unresolvable ticker gets re-queried against
+yfinance on every single render forever.
+
+**Deliberately never routed through `verify_ticker_identity()`/`scan_unverified_tickers()`**, per
+explicit instruction — those exist to catch recycled-ticker-symbol identity fraud in the
+historical/delisted population (see "Recycled-ticker-symbol corruption" above), an unrelated concern
+to sector classification, and conflating the two would repeat the exact domain-scoping mistake
+"Data-quality backstop was silently broken" (above) already found and fixed once this month (a check
+applied outside the population/purpose it was built for). `data/ingestion.py:fetch_ticker_sector()`
+is a new, independent, single yfinance `.info` call, never raises, returns `None` on any failure or
+missing field; `get_or_fetch_sector()` is the cache-check-then-fetch-once orchestration — the only
+function that calls `fetch_ticker_sector()`, and itself only ever called from
+`output/performance.py:compute_sector_breakdown()`, so a genuinely new ticker triggers at most one
+real yfinance call, ever, shared across both the Dashboard (Streamlit UI process) and the weekly
+email (scheduler daemon process) — the DB table, not Streamlit's own in-memory cache, is what makes
+this shared across those two separate processes.
+
+**No scheduled backfill job was built.** The fetch happens lazily, the first time a ticker with no
+`ticker_sector` row appears in `open_cards` from either caller — a real, one-time network call on a
+position's first appearance, then permanently cached. This is a stated design trade-off, not an
+oversight: adding a recurring backstop scan (mirroring `scan_unverified_tickers()`'s own pattern) was
+considered and left out as more infrastructure than a reporting-only feature on ~20 typical open
+positions currently needs; worth revisiting if it should instead pre-warm ahead of any position ever
+being genuinely new to the account.
+
+**`output/performance.py:compute_sector_breakdown(open_cards)`** — the single shared aggregation,
+called identically by both surfaces, not two independently-rendered copies. Groups by sector, both
+by position count and by capital deployed (`current_value_gbp`, the mark-to-market figure — the view
+that matters for concentration risk, not historical entry cost), sorted descending by capital in
+both views. An unresolved sector groups under the literal string `"Unknown"` and still counts toward
+total position count and total capital — never silently dropped from the totals, per explicit
+instruction. An empty `open_cards` list returns an all-zero breakdown, not an error.
+
+**Dashboard**: an expander (expanded by default — the whole point is visibility without a click) in
+the existing Open Positions section, two side-by-side `st.dataframe` tables (by count, by capital £
+and %). Plain, neutral styling throughout — no colour coding by concentration level, no threshold
+implying something needs attention, matching this codebase's own explicit, already-established
+"Decision-relevant, tone-neutral context" convention for position display (see
+`output/performance.py:position_context_style()`'s own docstring: a dashboard that makes a number
+look urgent as it approaches a threshold "would quietly reintroduce exactly [the reactive,
+emotionally-driven decision-making] this system exists to remove").
+
+**Weekly email**: a compact addition to both the plain-text and HTML bodies, alongside the existing
+Open Positions table — explicitly **not** a second competing table (verified directly:
+`test_weekly_summary_html_sector_section_is_not_a_second_table` asserts exactly two `<table>`
+elements survive, Open Positions and Closed This Week). The text version adds a few bullet lines
+("Technology: 96.0% (£12,000.00, 2 positions)"); the HTML version adds one inline paragraph in the
+same neutral colour as everything else on the page. Both sections are omitted entirely (not rendered
+empty) when there are no open positions.
+
+**Tests**: sector aggregation math (count and capital views, and that they can genuinely differ —
+e.g. one large position dominating capital share while trailing on count), unknown-sector handling
+(grouped correctly, still counted in totals), the empty-portfolio case (all-zero, not an error), and
+weekly-email rendering both with sector data present and with none (section correctly appears/is
+omitted in both the text and HTML bodies), plus direct tests of the new
+`fetch_ticker_sector()`/`get_or_fetch_sector()` functions (fetch-once-then-cache, including the
+unresolved-sector-is-still-cached case). 21 new tests; full suite (977 tests) passing.
+
+**No changes to ranking, sizing, admission, entry, or exit logic anywhere** — `compute_sector_breakdown()`
+is a pure read-only aggregation over already-open positions' cards (`output/performance.py:get_brief_cards()`,
+the same source the Dashboard and weekly email already used before this), consulted by nothing else
+in the system. No sector caps, no concentration limits, no alerts, no thresholds — exactly as scoped.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
