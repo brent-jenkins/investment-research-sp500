@@ -1494,7 +1494,6 @@ def _render_dashboard_page(config: dict) -> None:
 
 def _render_status_page(config: dict) -> None:
     """System status panel — rendered as the Status page."""
-    st.cache_data.clear()
     _render_page_wordmark("Status")
     st.markdown("## System Status")
 

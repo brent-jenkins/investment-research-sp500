@@ -1623,3 +1623,83 @@ def test_status_page_last_deployment_card_has_no_hash_link_when_file_absent(stat
     )
     assert deploy_card is not None, "Last Deployment card not found"
     assert "github.com" not in deploy_card
+
+
+# ---------------------------------------------------------------------------
+# Regression: Status page must not clear other pages' st.cache_data caches
+# (2026-08-09 fix). Before this fix, _render_status_page() called the blanket
+# st.cache_data.clear() as its very first statement -- leftover from the
+# removed manual "trigger pipeline now" buttons (which correctly scoped their
+# own clear() calls inside their own button handlers; this one was never
+# cleaned up when those buttons were removed). The blanket call wiped every
+# @st.cache_data-decorated function's cache app-wide, not just Status's own,
+# silently defeating the ttl= guard on every other cached page (most
+# importantly the Dashboard's own yfinance-capable crisis-status cache and
+# Status's own T212-account-summary-capable projection cache) every time a
+# user visited Status.
+# ---------------------------------------------------------------------------
+
+def test_visiting_status_page_does_not_reset_dashboard_cache(db_engine, monkeypatch, mocker):
+    """Navigate Dashboard -> Status -> Dashboard within ONE AppTest session
+    (the real-world shape of the bug: Streamlit's st.cache_data is a single
+    process-wide cache shared across every page, not per-page) and confirm a
+    Dashboard-cached function is not re-invoked by the intervening Status
+    visit -- it should still be within its own ttl=60 window."""
+    import streamlit as st
+    st.cache_data.clear()
+    mocker.patch("data.scheduler.start_scheduler")
+    monkeypatch.setattr("main.get_engine", lambda: db_engine)
+    monkeypatch.setattr("data.ingestion.get_all_watchlist_entries", lambda config: [])
+
+    call_count = {"n": 0}
+    real_summary = {
+        "total_value_gbp": 0.0, "cash_gbp": 0.0,
+        "invested_gbp": 0.0, "deployed_pct": 0.0,
+    }
+
+    def _counting_summary():
+        call_count["n"] += 1
+        return real_summary
+
+    mocker.patch("output.performance.get_current_account_summary", side_effect=_counting_summary)
+
+    at = AppTest.from_file(_MAIN_PY, default_timeout=30)
+    at.session_state["auth_user"] = _ADMIN_SESSION
+
+    at.session_state["page"] = "dashboard"
+    at.run()
+    assert not at.exception
+    assert call_count["n"] == 1, "first Dashboard render should call the (uncached) function once"
+
+    at.session_state["page"] = "status"
+    at.run()
+    assert not at.exception
+    # Status does not itself call get_current_account_summary(), so this
+    # must remain exactly 1 -- proves Status's own render didn't touch it.
+    assert call_count["n"] == 1
+
+    at.session_state["page"] = "dashboard"
+    at.run()
+    assert not at.exception
+    # THE regression check: before the fix, Status's blanket
+    # st.cache_data.clear() would have wiped Dashboard's cache, forcing
+    # this second Dashboard render to call the function again (n == 2).
+    # With the fix, the ttl=60 cache from the first render is still valid.
+    assert call_count["n"] == 1, (
+        "Dashboard's cached function was re-invoked after visiting Status -- "
+        "st.cache_data.clear() is defeating the cache again"
+    )
+
+
+def test_no_blanket_cache_clear_on_status_page():
+    """Cheap structural guard, in addition to the behavioural test above:
+    the Status page's render function must never call the blanket
+    st.cache_data.clear()/st.cache_resource.clear() -- if a future change
+    reintroduces it (even scoped differently), this fails loudly and
+    immediately rather than only being caught by the slower AppTest above."""
+    import inspect
+    import main
+
+    source = inspect.getsource(main._render_status_page)
+    assert "cache_data.clear()" not in source
+    assert "cache_resource.clear()" not in source
