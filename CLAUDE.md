@@ -613,6 +613,84 @@ live candidate pool is warm before anyone loads the Dashboard — without this, 
 position (and every live candidate) displays `"Uncategorized"` until either the pre-warm script runs
 or a future scheduled pre-warm is added (deliberately not built now, see above).
 
+## UI render-path blocking audit (2026-08-09)
+
+**Investigation-only survey of every Streamlit page for network/heavy-computation calls reachable
+from a render path** — motivated directly by the sector-concentration fix above finding one instance
+of this bug class; the audit traced all five real pages (Dashboard, Instruments, Backtest, Status,
+Users — there is no separate Performance page; removed 2026-08-03, content relocated) for the same
+shape of problem. Full report: `investment-app-blocking-audit/UI_BLOCKING_AUDIT_2026-08-09.md`.
+Three real findings, two fixed same-day as separate, standalone changes per explicit direction; one
+left deliberately unfixed pending real-world measurement.
+
+**Finding 1, fixed — `st.cache_data.clear()` removed from the Status page (own commit).**
+`_render_status_page()` called the blanket `st.cache_data.clear()` as its first statement —
+confirmed via `git blame` to be leftover cruft from the since-removed manual "trigger pipeline now"
+buttons (which correctly scoped their own `clear()` calls inside their own button handlers, all
+removed in commit `e1ad313`; this one was never cleaned up). `st.cache_data.clear()` is
+process-wide, not page-scoped — it silently wiped every `@st.cache_data` cache in the app on every
+single Status-page visit, not just Status's own, defeating the `ttl=` guard on two network-capable
+functions elsewhere (findings 2 and 3). Confirmed neither of the page's two remaining buttons
+("Clear" error, "Refresh Account") depends on it — both already achieve fresh state via `st.rerun()`
+plus reading un-cached `system_metadata` directly. Two regression tests: a behavioral one that
+navigates Dashboard → Status → Dashboard within one `AppTest` session and confirms a Dashboard-cached
+function isn't re-invoked by the intervening Status visit, and a cheap structural guard against the
+call reappearing — both verified to actually fail against the reintroduced bug before being trusted.
+
+**Finding 3, fixed — Dashboard's crisis banner no longer calls yfinance from the render path (own,
+separate commit).** `_render_crisis_banner()` → `get_crisis_status()` used to call
+`brokers.trading212.is_crisis_mode_active_now()` directly — a real, unconditional `^GSPC` intraday
+quote fetch on every Dashboard render, throttled only by the (partially-defeated-by-finding-1) 300s
+cache. Classified as bucket (c) — genuinely live external state, with no existing job already storing
+it on a useful cadence (unlike finding 2 below). Fix: `data/scheduler.py:_market_hours_check_job()`
+(already hourly, already NYSE-extended-hours-gated) now also calls `is_crisis_mode_active_now()`
+once per run and writes `crisis_mode_active`/`crisis_mode_checked_at` to `system_metadata` — but
+**only on a confirmed True/False result**; a `None` (check failure) leaves the last known-good value
+in place rather than overwriting good data with "unknown," mirroring how the order-submission path
+itself already treats `None`. `output/performance.py:get_crisis_status()` now reads these two keys
+directly (`data.database.get_metadata_str()`) instead of calling the live function at all — confirmed
+by a direct test (`test_crisis_status_render_path_never_calls_the_live_check`) that patches the live
+function to raise if called. The Dashboard banner shows the stored value's "as of" timestamp
+explicitly, and states plainly that it is informational only.
+
+**The separation this fix depends on was confirmed, not assumed, before building.** The
+order-submission path's own crisis check (`brokers/trading212.py:4144`, inside the stock-submission
+logic `_stock_order_submission_job()` calls) is a single, self-contained call to
+`is_crisis_mode_active_now()` with no shared state, no caching, and no dependency on
+`system_metadata`'s `crisis_mode_active`/`crisis_mode_checked_at` keys — it remains fully live, fully
+independent, and fully authoritative for the real, order-blocking decision, in a completely separate
+process (the scheduler daemon) from the Streamlit UI process this fix touches. Up to ~60 minutes of
+banner staleness (bounded by the hourly job cadence, and only while an NYSE extended-hours session is
+open) is accepted specifically because the banner is informational only; the correctness-critical
+check happens fresh, every time, at the one place that actually matters.
+
+**Finding 2, deliberately left unfixed — Status page's Candidate Queue admission projection.**
+`project_pending_order_admission()` (`brokers/trading212.py:3963`) genuinely calls
+`Trading212Client.get_account_summary()` live, by design — its own docstring explains the projection
+needs current, not hourly-stale, account state to be a meaningful preview of what would actually
+happen at submission time. Once finding 1's fix restores the `ttl=60` cache's real protection, this
+becomes at most one T212 call per minute on a page visited deliberately, not one per click — judged
+plausibly acceptable without further change. Per explicit instruction: measure real-world behaviour
+with finding 1's fix alone in place before revisiting this one; do not fix it speculatively ahead of
+evidence that it's still a problem.
+
+**Secondary finding, described but not yet fixed — Status page's log-download buttons look gated,
+aren't.** The "⬇ Last 24 h" and "⬇ Last 7 days" buttons (`main.py`, inside the Log Viewer section)
+each run a `subprocess.run(["journalctl", ..., "--since", "24 hours ago"/"7 days ago", ...])` call
+*before* the corresponding `st.download_button(...)`, to supply its `data=` argument. Confirmed
+against the actual pinned Streamlit version's `st.download_button` signature: `data` has no
+callable/deferred form — it must be a fully-computed value at the point the button is declared, so
+Streamlit evaluates it on **every** script run reaching that line, not only when the button is
+clicked. Both subprocess calls (15s and 30s timeouts respectively) therefore execute unconditionally
+on every Status-page render (or any rerun triggered by an unrelated widget elsewhere on the page)
+whenever the Log Viewer section renders at all — up to 45 seconds of combined local subprocess time
+per render, worse in raw wall-clock terms than either network-call finding above, though it is local
+I/O, not a network stall. The correct fix pattern: a two-step flow where a plain `st.button("Prepare
+24h download")` computes the log data into `st.session_state` on click, and a separate
+`st.download_button` reads from session state (empty/placeholder until prepared) — so the expensive
+`journalctl` call only ever runs after a deliberate click, never as a side effect of rendering. Not
+built yet; flagged for a future, explicit fix decision.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).

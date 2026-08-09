@@ -1055,6 +1055,82 @@ def test_market_hours_check_job_runs_during_overnight_session_previously_skipped
 
 
 # ---------------------------------------------------------------------------
+# _market_hours_check_job()'s crisis-status snapshot for display (2026-08-09)
+# -- see CLAUDE.md's "UI render-path blocking audit" section, finding 3.
+# Stores crisis_mode_active/crisis_mode_checked_at so the Dashboard's crisis
+# banner can read a stored value instead of calling yfinance itself. This is
+# a SEPARATE call from, and does not affect, the order-submission path's own
+# live is_crisis_mode_active_now() call -- confirmed by inspection
+# (brokers/trading212.py's stock-submission logic calls the same function
+# independently, with no shared state).
+# ---------------------------------------------------------------------------
+
+def test_market_hours_check_job_stores_confirmed_crisis_active(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.retry_missing_broker_stops")
+    mocker.patch("brokers.trading212.maybe_exit_positions")
+    mocker.patch("brokers.trading212.check_stop_health")
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
+    mock_set = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._market_hours_check_job()
+
+    mock_set.assert_any_call("crisis_mode_active", "true")
+    assert any(c.args[0] == "crisis_mode_checked_at" for c in mock_set.call_args_list)
+
+
+def test_market_hours_check_job_stores_confirmed_crisis_inactive(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.retry_missing_broker_stops")
+    mocker.patch("brokers.trading212.maybe_exit_positions")
+    mocker.patch("brokers.trading212.check_stop_health")
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=False)
+    mock_set = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._market_hours_check_job()
+
+    mock_set.assert_any_call("crisis_mode_active", "false")
+
+
+def test_market_hours_check_job_leaves_stored_crisis_value_on_unknown_check(monkeypatch, mocker):
+    """A None result (check failure) must NOT overwrite the previously
+    stored value/timestamp with 'unknown' -- the last known-good snapshot
+    stays in place, mirroring how the order-submission path itself treats
+    a None result as 'unknown, don't act' rather than a definite answer."""
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.retry_missing_broker_stops")
+    mocker.patch("brokers.trading212.maybe_exit_positions")
+    mocker.patch("brokers.trading212.check_stop_health")
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=None)
+    mock_set = mocker.patch("data.scheduler.set_metadata")
+
+    scheduler._market_hours_check_job()
+
+    assert not any(c.args[0] in ("crisis_mode_active", "crisis_mode_checked_at") for c in mock_set.call_args_list)
+
+
+def test_market_hours_check_job_crisis_check_exception_does_not_raise_or_block_other_steps(monkeypatch, mocker):
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4, hour=15, minute=0))
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("brokers.trading212.poll_placed_orders")
+    mocker.patch("brokers.trading212.retry_missing_broker_stops")
+    mock_exit = mocker.patch("brokers.trading212.maybe_exit_positions")
+    mock_stop_health = mocker.patch("brokers.trading212.check_stop_health")
+    mocker.patch("brokers.trading212.is_crisis_mode_active_now", side_effect=RuntimeError("boom"))
+
+    scheduler._market_hours_check_job()  # must not raise
+
+    mock_exit.assert_called_once()
+    mock_stop_health.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # _account_state_job() -- reconciliation + snapshot refresh, deliberately
 # UNconditional (no NYSE-hours gate at all -- 2026-08-03 split). Both the
 # genuinely-open and genuinely-closed cases must behave identically, proving

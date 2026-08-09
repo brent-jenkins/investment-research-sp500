@@ -572,10 +572,13 @@ def test_dashboard_shows_stale_warning_when_eod_record_is_old(db_engine, dashboa
 
 # ---------------------------------------------------------------------------
 # Dashboard crisis-mode warning banner (2026-08-03) -- sourced from
-# output.performance.get_crisis_status()'s entry_blocked field, which
-# itself defers to brokers.trading212.is_crisis_mode_active_now() -- the
-# same authoritative check order submission re-confirms fresh, never a
-# separate computation.
+# output.performance.get_crisis_status()'s entry_blocked field. Changed
+# 2026-08-09: that field is now a READ-ONLY stored snapshot (data.scheduler.
+# _market_hours_check_job()'s hourly write), not a live call made from this
+# render path -- see CLAUDE.md's "UI render-path blocking audit" section,
+# finding 3. The tests below mock get_crisis_status() directly, so they
+# exercise the banner's own rendering logic unchanged; the no-live-call
+# guarantee itself is proven separately, in test_performance.py.
 # ---------------------------------------------------------------------------
 
 def test_dashboard_shows_crisis_banner_when_entry_blocked(db_engine, dashboard_app, mocker):
@@ -627,6 +630,42 @@ def test_dashboard_crisis_banner_text_describes_new_entries_only(db_engine, dash
     assert "new entries" in banner_text
     assert "existing positions" in banner_text
     assert "monitored" in banner_text and ("exited" in banner_text or "normally" in banner_text)
+
+
+def test_dashboard_crisis_banner_shows_as_of_timestamp_when_available(db_engine, dashboard_app, mocker):
+    """2026-08-09: the banner reads a stored (hourly) snapshot now, not a
+    live call -- it must show when that snapshot was last taken, honestly,
+    rather than implying real-time freshness it doesn't have. The stored
+    value is naive-UTC (matching data.scheduler's own datetime.utcnow()
+    convention); _fmt_uk() converts it to UK local time for display (here,
+    13:05 UTC -> 14:05 BST in August) -- asserting on the converted value,
+    not the raw stored one, since that conversion is the correct, intended
+    behaviour, not something to route around in the test."""
+    mocker.patch("output.performance.get_crisis_status", return_value={
+        "entry_blocked": True, "entry_blocked_checked_at": "2026-08-09T13:05:00",
+    })
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    banner_text = " ".join(e.value for e in at.error if "crisis override active" in e.value.lower())
+    assert banner_text
+    assert "2026-08-09 14:05 bst" in banner_text.lower()
+    assert "checked hourly" in banner_text.lower()
+
+
+def test_dashboard_crisis_banner_shows_time_unknown_when_timestamp_missing(db_engine, dashboard_app, mocker):
+    """A stored-but-unstamped or missing entry_blocked_checked_at must not
+    crash the render -- falls back to an explicit 'time unknown' rather
+    than a blank or fabricated timestamp."""
+    mocker.patch("output.performance.get_crisis_status", return_value={"entry_blocked": True})
+
+    at = dashboard_app.run()
+
+    assert not at.exception
+    banner_text = " ".join(e.value.lower() for e in at.error if "crisis override active" in e.value.lower())
+    assert banner_text
+    assert "time unknown" in banner_text
 
 
 # ---------------------------------------------------------------------------

@@ -657,6 +657,15 @@ def test_brief_cards_without_ticker_status_rows_only_computes_status_for_held_ti
 
 # ---------------------------------------------------------------------------
 # get_crisis_status
+#
+# READ-ONLY against system_metadata (2026-08-09 fix) -- entry_blocked no
+# longer sources from a live call to brokers.trading212.is_crisis_mode_
+# active_now(); it reads the crisis_mode_active/crisis_mode_checked_at keys
+# written hourly by data.scheduler._market_hours_check_job(). These tests
+# use the real db_engine fixture and seed those keys directly via
+# set_metadata(), rather than mocking the (no longer called) live function.
+# See test_crisis_status_render_path_never_calls_the_live_check below for
+# the direct proof this function makes no live call at all.
 # ---------------------------------------------------------------------------
 
 def test_crisis_status_empty_price_data_returns_empty(mocker):
@@ -665,25 +674,29 @@ def test_crisis_status_empty_price_data_returns_empty(mocker):
     assert get_crisis_status() == {}
 
 
-def test_crisis_status_calm_day_reports_no_override(mocker):
+def test_crisis_status_calm_day_reports_no_override(db_engine, mocker):
+    from data.database import set_metadata
+    set_metadata("crisis_mode_active", "false")
+    set_metadata("crisis_mode_checked_at", "2026-07-30T12:00:00")
+
     calm = _price_frame(60, 100.0, 0.001)  # steady small gains, no crisis day
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
-    # entry_blocked now sources from brokers.trading212.is_crisis_mode_active_now()
-    # (2026-08-03) -- a separate module-level get_price_df binding the
-    # data.ingestion mock above does not reach, and which would otherwise
-    # make a real DB/yfinance call. Mocked directly at that boundary.
-    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=False)
 
     status = get_crisis_status()
     assert status["is_crisis_today"] is False
     assert status["entry_blocked"] is False
+    assert status["entry_blocked_checked_at"] == "2026-07-30T12:00:00"
     assert status["threshold_pct"] == pytest.approx(-7.0)
     assert status["today_return_pct"] is not None
     assert status["distance_to_threshold_pp"] > 0
 
 
-def test_crisis_status_today_is_crisis_day(mocker):
+def test_crisis_status_today_is_crisis_day(db_engine, mocker):
+    from data.database import set_metadata
+    set_metadata("crisis_mode_active", "true")
+    set_metadata("crisis_mode_checked_at", "2026-07-30T12:00:00")
+
     dates = pd.bdate_range(end=pd.Timestamp("2026-07-30"), periods=30)
     closes = [100.0] * 29 + [100.0 * 0.90]  # -10% on the last day
     df = pd.DataFrame({
@@ -691,7 +704,6 @@ def test_crisis_status_today_is_crisis_day(mocker):
     })
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=df)
-    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
 
     status = get_crisis_status()
     assert status["is_crisis_today"] is True
@@ -700,7 +712,10 @@ def test_crisis_status_today_is_crisis_day(mocker):
     assert status["last_trigger_date"] is not None
 
 
-def test_crisis_status_within_cooldown_after_trigger(mocker):
+def test_crisis_status_within_cooldown_after_trigger(db_engine, mocker):
+    from data.database import set_metadata
+    set_metadata("crisis_mode_active", "true")
+
     dates = pd.bdate_range(end=pd.Timestamp("2026-07-30"), periods=30)
     closes = [100.0] * 25 + [90.0, 90.0, 90.0, 90.0, 90.0]
     closes[25] = 90.0  # -10% trigger 4 trading days before the last row
@@ -709,7 +724,6 @@ def test_crisis_status_within_cooldown_after_trigger(mocker):
     })
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=df)
-    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
 
     status = get_crisis_status()
     assert status["entry_blocked"] is True
@@ -717,35 +731,61 @@ def test_crisis_status_within_cooldown_after_trigger(mocker):
     assert status["days_since_trigger"] == 4
 
 
-def test_crisis_status_entry_blocked_sources_from_authoritative_check_not_daily_bar_alone(mocker):
-    """The decisive proof this defers to is_crisis_mode_active_now()
-    rather than recomputing its own daily-bar-only verdict (2026-08-03):
-    stored daily-bar data shows a completely calm day (is_crisis_today
-    correctly False, computed independently from the same data), yet
-    entry_blocked still follows the authoritative check when it reports
-    True (the shape of a real intraday-only crisis, invisible to the
-    daily-bar data alone)."""
+def test_crisis_status_entry_blocked_sources_from_stored_snapshot_not_daily_bar_alone(db_engine, mocker):
+    """The decisive proof entry_blocked is independent of is_crisis_today
+    (2026-08-03, still true after the 2026-08-09 storage change): stored
+    daily-bar data shows a completely calm day (is_crisis_today correctly
+    False, computed independently from that data), yet entry_blocked still
+    follows the stored snapshot when it says True (the shape of a real
+    intraday-only crisis the hourly check caught but the daily bar alone
+    cannot see)."""
+    from data.database import set_metadata
+    set_metadata("crisis_mode_active", "true")
+
     calm = _price_frame(60, 100.0, 0.001)
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
-    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=True)
 
     status = get_crisis_status()
     assert status["is_crisis_today"] is False  # daily-bar data itself shows nothing wrong
-    assert status["entry_blocked"] is True      # but the authoritative check says blocked
+    assert status["entry_blocked"] is True      # but the stored hourly snapshot says blocked
 
 
-def test_crisis_status_entry_blocked_false_when_authoritative_check_cannot_determine(mocker):
-    """is_crisis_mode_active_now() returning None (a check failure) must
-    map to entry_blocked=False here -- a display-only function fails
-    toward showing nothing, never a fabricated or stale verdict."""
+def test_crisis_status_entry_blocked_false_when_never_checked(db_engine, mocker):
+    """No crisis_mode_active row at all (e.g. immediately after a fresh
+    deploy, before the first hourly check has run) must map to
+    entry_blocked=False -- a display-only function fails toward showing
+    nothing, never a fabricated or stale verdict."""
     calm = _price_frame(60, 100.0, 0.001)
     import data.ingestion as ingestion_mod
     mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
-    mocker.patch("brokers.trading212.is_crisis_mode_active_now", return_value=None)
 
     status = get_crisis_status()
     assert status["entry_blocked"] is False
+    assert status["entry_blocked_checked_at"] is None
+
+
+def test_crisis_status_render_path_never_calls_the_live_check(db_engine, mocker):
+    """The render path must be a pure DB read -- get_crisis_status() must
+    never call brokers.trading212.is_crisis_mode_active_now() itself,
+    regardless of what's stored. Direct proof, mirroring the sector-
+    breakdown fix's own no-live-call test: the live function is patched to
+    raise if called at all."""
+    from data.database import set_metadata
+    set_metadata("crisis_mode_active", "true")
+
+    mock_live_check = mocker.patch(
+        "brokers.trading212.is_crisis_mode_active_now",
+        side_effect=AssertionError("get_crisis_status() must never call the live check itself"),
+    )
+    calm = _price_frame(60, 100.0, 0.001)
+    import data.ingestion as ingestion_mod
+    mocker.patch.object(ingestion_mod, "get_price_df", return_value=calm)
+
+    status = get_crisis_status()
+
+    assert status["entry_blocked"] is True
+    mock_live_check.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -439,27 +439,42 @@ def get_crisis_status() -> dict:
     is to the -7% single-day trigger threshold — not just an active/inactive
     flag. Returns {} if price data isn't available yet.
 
-    `entry_blocked` is sourced from brokers.trading212.is_crisis_mode_
-    active_now() (2026-08-03) — the same single, authoritative check
-    order submission itself re-confirms fresh before ever placing a new
-    entry (see CLAUDE.md's "Submission-time crisis re-check" and
-    "Crisis-mode dashboard banner" sections) — never a second,
-    independently-derived daily-bar-only computation. This matters:
-    is_crisis_mode_active_now() also checks a genuinely live intraday
-    quote, which this function's own `today_return_pct`/
-    `distance_to_threshold_pp` fields below (still computed from stored
-    daily-bar data, since they're purely informational display context,
-    not a gating decision) cannot see — a crisis visible only intraday
-    would otherwise have shown here as "not blocked" while order
-    submission was already correctly refusing every new entry.
-    is_crisis_mode_active_now() returning None (a data-read failure) maps
-    to entry_blocked=False here — a display-only function fails toward
-    showing nothing rather than a stale or fabricated verdict; the real
-    safety mechanism lives entirely in order submission's own None
-    handling, not in this display value.
+    READ-ONLY against system_metadata — deliberately never calls
+    brokers.trading212.is_crisis_mode_active_now() itself (2026-08-09 fix;
+    see CLAUDE.md's "UI render-path blocking audit" section, finding 3).
+    `entry_blocked`/`entry_blocked_checked_at` are sourced from
+    `crisis_mode_active`/`crisis_mode_checked_at`, written hourly by
+    data.scheduler._market_hours_check_job() — a DISPLAY-ONLY snapshot of
+    the same underlying check, not a live call from this render-path
+    function. is_crisis_mode_active_now() itself is untouched and remains
+    fully live: brokers/trading212.py's stock-submission logic still calls
+    it fresh, every single time, immediately before placing a new entry —
+    that is the real, order-blocking, authoritative decision and this
+    display value has no bearing on it whatsoever (confirmed: the two are
+    separate function calls with no shared state, in separate processes —
+    the Streamlit UI process reads this function's stored snapshot; the
+    scheduler daemon process makes the real live call at submission time).
+
+    Because this is now a stored value refreshed at most once an hour (only
+    while an NYSE extended-hours session is open — see
+    _market_hours_check_job()'s own gating), `entry_blocked` here can lag a
+    genuine intraday crisis by up to ~60 minutes. This is judged acceptable
+    BECAUSE the banner is informational only — the authoritative,
+    correctness-critical check happens fresh at submission time, where it
+    actually matters. `entry_blocked_checked_at` is always returned
+    alongside so the display can show its own "as of" honestly rather than
+    implying real-time freshness it doesn't have; None if the job has never
+    successfully completed a check yet (e.g. immediately after a fresh
+    deploy, before the next NYSE session opens).
+
+    A None/failed check on a given run leaves the PREVIOUS stored value in
+    place rather than overwriting good data with "unknown" (see
+    _market_hours_check_job()'s own comment) — so a brief single-run read
+    failure does not itself blank the banner; only a sustained outage,
+    visible via a stale `entry_blocked_checked_at`, would.
     """
     from analysis import crisis
-    from brokers.trading212 import is_crisis_mode_active_now
+    from data.database import get_metadata_str
     from data.ingestion import get_price_df
 
     df = get_price_df("^GSPC", days=60)
@@ -476,7 +491,8 @@ def get_crisis_status() -> dict:
     latest_dt = close.index[-1]
 
     is_crisis_today = crisis.is_crisis_day(close, latest_dt)
-    entry_blocked = bool(is_crisis_mode_active_now())
+    entry_blocked = get_metadata_str("crisis_mode_active") == "true"
+    entry_blocked_checked_at = get_metadata_str("crisis_mode_checked_at")
 
     raw = crisis.compute_raw_trigger(close)
     trigger_dates = raw[raw].index
@@ -494,6 +510,7 @@ def get_crisis_status() -> dict:
         "distance_to_threshold_pp": distance_to_threshold_pct,
         "is_crisis_today": is_crisis_today,
         "entry_blocked": entry_blocked,
+        "entry_blocked_checked_at": entry_blocked_checked_at,
         "cooldown_days": crisis.ENTRY_BLOCK_COOLDOWN_DAYS,
         "last_trigger_date": last_trigger_date,
         "days_since_trigger": days_since_trigger,

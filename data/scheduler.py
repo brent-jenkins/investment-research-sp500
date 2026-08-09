@@ -1079,6 +1079,36 @@ def _market_hours_check_job() -> None:
     except Exception as exc:
         logger.error("Stop-health check failed: %s", exc, exc_info=True)
 
+    try:
+        # Crisis-status snapshot for DISPLAY only (2026-08-09) -- stores the
+        # result of the same live intraday check stock_order_submission uses
+        # for the real, order-blocking decision, purely so the Dashboard's
+        # crisis banner can read a stored value instead of calling yfinance
+        # itself on every render (see CLAUDE.md's "UI render-path blocking
+        # audit" section -- this closes finding 3 there). This is a SEPARATE
+        # call from, and has no shared state with, the order-submission
+        # path's own is_crisis_mode_active_now() call
+        # (brokers/trading212.py's stock-submission logic) -- that one
+        # remains fully live, fully independent, and fully authoritative for
+        # the real decision; this one exists only to feed a once-an-hour
+        # display refresh. Only overwrites the stored value on a CONFIRMED
+        # result (True/False) -- a None (check failure) leaves the last
+        # known-good value and timestamp in place rather than overwriting
+        # good data with "unknown", mirroring how the order-submission path
+        # itself already treats a None result as "unknown, don't act".
+        from brokers.trading212 import is_crisis_mode_active_now  # noqa: PLC0415
+        _crisis_now = is_crisis_mode_active_now()
+        if _crisis_now is not None:
+            set_metadata("crisis_mode_active", "true" if _crisis_now else "false")
+            set_metadata("crisis_mode_checked_at", datetime.utcnow().isoformat())
+        else:
+            logger.warning(
+                "Crisis-status check for display returned unknown -- leaving last "
+                "stored value in place rather than overwriting it."
+            )
+    except Exception as exc:
+        logger.error("Crisis-status check for display failed: %s", exc, exc_info=True)
+
 
 def _account_state_job() -> None:
     """Hourly, every single day, unconditionally — no NYSE-hours gate at

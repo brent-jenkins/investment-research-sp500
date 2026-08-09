@@ -1095,14 +1095,23 @@ def _render_eod_status_badge() -> None:
 
 
 def _render_crisis_banner() -> None:
-    """A prominent warning banner shown ONLY when the crisis override is
-    genuinely active right now (2026-08-03) -- sourced from
-    output/performance.py:get_crisis_status()'s `entry_blocked` field,
-    which itself defers entirely to brokers.trading212.is_crisis_mode_
-    active_now() -- the exact same single, authoritative check order
-    submission re-confirms fresh before ever placing a new entry. Never a
-    second, independently-derived computation -- see that function's own
-    docstring and CLAUDE.md's "Crisis-mode dashboard banner" section.
+    """A prominent warning banner shown ONLY when the crisis override was
+    active as of its last hourly check (2026-08-03; changed to a stored
+    snapshot 2026-08-09 -- see CLAUDE.md's "UI render-path blocking audit"
+    section, finding 3). Sourced from output/performance.py:
+    get_crisis_status()'s `entry_blocked` field, which is now a READ-ONLY
+    DB value (data.scheduler._market_hours_check_job()'s hourly snapshot),
+    not a live yfinance call made from this render path.
+
+    This banner is explicitly informational, not the safety mechanism --
+    the real, order-blocking decision is made by a completely separate,
+    still-fully-live call inside brokers/trading212.py's stock-submission
+    logic, confirmed to share no state with this display value. Up to ~60
+    minutes of staleness here is an accepted trade-off for that reason: an
+    intraday crisis genuinely wouldn't show here immediately, but it would
+    already be correctly blocking new entries at the one place that
+    matters. The "as of" timestamp is always shown alongside the banner so
+    this is stated, not implied.
 
     Nothing is rendered at all when crisis mode isn't active -- including
     when the underlying check couldn't be determined (get_crisis_status()
@@ -1119,12 +1128,23 @@ def _render_crisis_banner() -> None:
     if not status.get("entry_blocked"):
         return
 
+    checked_at_text = "time unknown"
+    checked_at_raw = status.get("entry_blocked_checked_at")
+    if checked_at_raw:
+        try:
+            checked_at_text = _fmt_uk(datetime.fromisoformat(checked_at_raw))
+        except Exception:
+            pass
+
     st.error(
-        "🚨 **Crisis override active — new entries are currently blocked.** "
+        f"🚨 **Crisis override active — new entries are currently blocked** "
+        f"(as of {checked_at_text}, checked hourly). "
         "The S&P 500 has triggered the ≥7% single-day decline circuit breaker "
         "(or remains within its post-trigger cooldown window). **Existing "
         "positions continue to be monitored and exited normally — only new "
-        "entries are affected.**"
+        "entries are affected.** This is an informational summary — the "
+        "actual entry block is re-verified fresh at order-submission time, "
+        "independent of this banner."
     )
 
 
