@@ -517,6 +517,54 @@ def get_crisis_status() -> dict:
     }
 
 
+def get_stored_open_position_cards() -> dict:
+    """The Dashboard's open-position card data — READ-ONLY against
+    system_metadata (2026-08-09 fix; see CLAUDE.md's "UI render-path
+    blocking audit" follow-up, finding 4: _get_open_cards() used to call
+    get_brief_cards() directly from the Streamlit render path, which in
+    turn called get_ticker_status() -> a real per-held-ticker price-history
+    read (get_price_df(ticker, days=8000)) plus a momentum/signal
+    recomputation (analysis.signals.compute_signal_series()) for every
+    open position, every render — measured at ~6s total for the 22
+    positions open in production at the time of the fix (~0.18-0.25s/
+    ticker, scaling directly with open-position count). Not a network
+    call (get_price_df() reads local price_data only) but exactly the
+    "per-position price-history computation" this project's render-path
+    standard prohibits just as firmly as a live API call.
+
+    Deliberately never calls get_brief_cards() itself from this function.
+    get_brief_cards() remains the one, shared computation entry point —
+    unchanged, still calling analysis.signals.compute_signal_series(), the
+    same shared signal function analysis/decision.py's entry/exit checks
+    and every backtest engine use — but it now only ever runs inside
+    data.scheduler._account_state_job() (hourly, minute 5, off the
+    Streamlit render thread entirely), via
+    data.scheduler._refresh_open_position_cards_snapshot(). This function
+    only ever reads what that job already wrote.
+
+    Returns {"cards": [...], "fetched_at": <ISO str or None>}. An empty
+    list is a genuine, confirmed "no open positions right now" (see
+    _refresh_open_position_cards_snapshot()'s own docstring for why an
+    empty result is written, not treated as "unknown"); fetched_at is
+    None only if the job has never completed a successful cycle yet (e.g.
+    immediately after a fresh deploy, before the first hourly refresh).
+    A stale/failed refresh cycle leaves the previous stored snapshot AND
+    its original fetched_at in place — the caller must display fetched_at
+    honestly rather than assume the cards are current.
+    """
+    import json as _json
+
+    raw = get_metadata_str("open_position_cards_snapshot")
+    cards: list[dict] = []
+    if raw:
+        try:
+            cards = _json.loads(raw) or []
+        except Exception:
+            cards = []
+    fetched_at = get_metadata_str("open_position_cards_fetched_at")
+    return {"cards": cards, "fetched_at": fetched_at}
+
+
 def get_pnl_rows() -> list[dict]:
     """All reconstructed closed positions, most recent first.
 
