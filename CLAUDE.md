@@ -613,7 +613,6 @@ live candidate pool is warm before anyone loads the Dashboard — without this, 
 position (and every live candidate) displays `"Uncategorized"` until either the pre-warm script runs
 or a future scheduled pre-warm is added (deliberately not built now, see above).
 
-<<<<<<< Updated upstream
 ## UI render-path blocking audit (2026-08-09)
 
 **Investigation-only survey of every Streamlit page for network/heavy-computation calls reachable
@@ -704,7 +703,7 @@ Streamlit version's `AppTest` harness (renders as an `UnknownElement`, no dedica
 verification reads `st.session_state` directly instead — the same underlying data the button
 consumes, an equally direct proof. Verified to actually fail against the reintroduced bug (via
 `git stash` on just this file, confirmed failing, then restored) before being trusted.
-=======
+
 ## Position-count (concurrent-holdings target) study — pre-registered, tested, NOT ADOPTED (2026-08-09)
 
 **Tests the second of the two untested selection levers the gate-width study's own pre-registration
@@ -762,7 +761,6 @@ modified — every arm's `per_trade_pct` was passed as a direct argument to the 
 `simulate_portfolio_compounding_mtm()` logic (via an additively-instrumented copy,
 `position_count_engine.py`, parity-verified byte-identical to production on both pools before use) in
 the research harness only. Nothing adopted, nothing merged, nothing deployed.
->>>>>>> Stashed changes
 
 ## Current architecture (as of 2026-08-04)
 
