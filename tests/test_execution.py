@@ -225,6 +225,18 @@ def _pending_rows(engine, status=None) -> list:
     return [dict(r) for r in rows]
 
 
+def _seed_t212_snapshot(summary: dict, checked_at: str = None) -> None:
+    """Seed the stored T212 account snapshot project_pending_order_admission()
+    now reads (2026-08-09 -- it no longer constructs a Trading212Client or
+    calls get_account_summary() itself, see that function's own docstring).
+    checked_at defaults to "now" -- pass an explicit ISO string to test
+    staleness-adjacent behaviour."""
+    import json as _json
+    from data.database import set_metadata
+    set_metadata("t212_account_snapshot", _json.dumps(summary))
+    set_metadata("t212_snapshot_fetched_at", checked_at or datetime.utcnow().isoformat())
+
+
 def _seed_pending_order(engine, *, ticker, t212_ticker, is_etf, decided_price=100.0,
                          position_gbp=500.0, status="PENDING", currency="USD", momentum_pct=0.05):
     with engine.begin() as conn:
@@ -5126,6 +5138,13 @@ def test_purge_never_touches_invest_orders(db_engine):
 # tomorrow's capacity admission, for the Dashboard's candidate-queue Status
 # column. Shares _capacity_fit_reason() with the real _submit_pending_orders()
 # walk -- never a second, independently-derived rule.
+#
+# Reads a STORED account snapshot, not a live one (2026-08-09) -- see the
+# function's own docstring for why. Tests seed system_metadata directly via
+# _seed_t212_snapshot() rather than mocking Trading212Client.get_account_
+# summary() (v2_mocks is still needed in most of these for T212_API_KEY/
+# SECRET env vars and to keep the client itself constructible, but its
+# get_account_summary() return value is no longer what this function reads).
 # ---------------------------------------------------------------------------
 
 def test_project_admission_ranks_by_momentum_and_admits_until_capacity(db_engine, v2_mocks):
@@ -5133,11 +5152,11 @@ def test_project_admission_ranks_by_momentum_and_admits_until_capacity(db_engine
     state -- must reproduce the exact 2026-08-02 verification shape."""
     from brokers.trading212 import project_pending_order_admission
 
-    v2_mocks.get_account_summary.return_value = {
+    _seed_t212_snapshot({
         "totalValue": 10_000.0,
         "cash": {"availableToTrade": 10_000.0},
         "investments": {"currentValue": 0.0},
-    }
+    })
     # £2,500 each -> cap (30%% = £3,000) fits exactly 1; the rest reject.
     _seed_pending_order(db_engine, ticker="HIGH", t212_ticker="HIGH_EQ", is_etf=False,
                          momentum_pct=2.0, position_gbp=2500.0)
@@ -5154,6 +5173,10 @@ def test_project_admission_ranks_by_momentum_and_admits_until_capacity(db_engine
     assert by_ticker["LOW"] == "PROJECTED_REJECT_CAPACITY"
     # Order returned must itself be momentum-descending, matching the real walk.
     assert [p["ticker"] for p in projected] == ["HIGH", "MID", "LOW"]
+    # Every row carries the same stored snapshot's timestamp (2026-08-09) --
+    # the whole reason a caller can show "as of" wherever the projection appears.
+    assert all(p["snapshot_checked_at"] for p in projected)
+    assert len({p["snapshot_checked_at"] for p in projected}) == 1
 
 
 def test_project_admission_never_places_an_order_or_resolves_a_row(db_engine, v2_mocks):
@@ -5161,16 +5184,17 @@ def test_project_admission_never_places_an_order_or_resolves_a_row(db_engine, v2
     call in this one test's own assertions."""
     from brokers.trading212 import project_pending_order_admission
 
-    v2_mocks.get_account_summary.return_value = {
+    _seed_t212_snapshot({
         "totalValue": 10_000.0, "cash": {"availableToTrade": 10_000.0},
         "investments": {"currentValue": 0.0},
-    }
+    })
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False,
                          momentum_pct=0.5, position_gbp=500.0)
 
     project_pending_order_admission(_submission_config(max_deployed=0.5))
 
     v2_mocks.place_market_order.assert_not_called()
+    v2_mocks.get_account_summary.assert_not_called()  # stored-state read, no live call at all
     still_pending = _pending_rows(db_engine, status="PENDING")
     assert len(still_pending) == 1  # unresolved -- projection never wrote anything
 
@@ -5181,12 +5205,27 @@ def test_project_admission_returns_empty_when_disabled(db_engine, v2_mocks):
     assert project_pending_order_admission(_config(enabled=False)) == []
 
 
-def test_project_admission_returns_empty_on_account_read_failure(db_engine, v2_mocks):
-    """No honest projection can be made without real account state --
+def test_project_admission_returns_empty_when_no_snapshot_stored(db_engine, v2_mocks):
+    """No honest projection can be made without a stored account state --
     returns [] rather than guessing, matching this project's own
-    "fail loud, don't guess" convention."""
+    "fail loud, don't guess" convention. (2026-08-09 -- this used to be a
+    live client failure; the function no longer calls the client at all,
+    so the equivalent failure mode is now "nothing in system_metadata yet",
+    e.g. immediately after a fresh deploy before the first hourly snapshot.)"""
     from brokers.trading212 import project_pending_order_admission
-    v2_mocks.get_account_summary.side_effect = RuntimeError("t212 api down")
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False, position_gbp=500.0)
+
+    assert project_pending_order_admission(_submission_config()) == []
+    v2_mocks.get_account_summary.assert_not_called()
+
+
+def test_project_admission_returns_empty_on_malformed_stored_snapshot(db_engine, v2_mocks):
+    """A corrupted/unparseable stored snapshot is the same "can't honestly
+    project" case as no snapshot at all -- [] , not a crash."""
+    from data.database import set_metadata
+    from brokers.trading212 import project_pending_order_admission
+    set_metadata("t212_account_snapshot", "not-valid-json{{{")
+    set_metadata("t212_snapshot_fetched_at", datetime.utcnow().isoformat())
     _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False, position_gbp=500.0)
 
     assert project_pending_order_admission(_submission_config()) == []
@@ -5195,6 +5234,33 @@ def test_project_admission_returns_empty_on_account_read_failure(db_engine, v2_m
 def test_project_admission_empty_when_no_pending_rows(db_engine, v2_mocks):
     from brokers.trading212 import project_pending_order_admission
     assert project_pending_order_admission(_submission_config()) == []
+
+
+def test_project_admission_render_path_never_calls_the_live_client(db_engine, monkeypatch):
+    """Direct proof, mirroring the crisis-status/sector-breakdown fixes'
+    own no-live-call tests (2026-08-09): Trading212Client itself is
+    patched to raise if constructed at all -- project_pending_order_
+    admission() must never reach it, regardless of what's stored. No
+    v2_mocks fixture on purpose -- that fixture's whole job is providing a
+    working mock client, which would silently mask this function ever
+    trying to construct one."""
+    from brokers.trading212 import project_pending_order_admission
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+
+    def _raise(*_a, **_k):
+        raise AssertionError("project_pending_order_admission() must never construct a live Trading212Client")
+    monkeypatch.setattr("brokers.trading212.Trading212Client", _raise)
+
+    _seed_t212_snapshot({
+        "totalValue": 10_000.0, "cash": {"availableToTrade": 10_000.0},
+        "investments": {"currentValue": 0.0},
+    })
+    _seed_pending_order(db_engine, ticker="AAPL", t212_ticker="AAPL_EQ", is_etf=False,
+                         momentum_pct=0.5, position_gbp=500.0)
+
+    projected = project_pending_order_admission(_submission_config(max_deployed=0.5))
+    assert projected and projected[0]["projected_status"] == "PROJECTED_ADMIT"
 
 
 def test_capacity_fit_reason_matches_real_submission_rejection_for_the_same_inputs(db_engine, v2_mocks, mocker):
@@ -5213,6 +5279,11 @@ def test_capacity_fit_reason_matches_real_submission_rejection_for_the_same_inpu
     v2_mocks.get_quantity_for_gbp.return_value = 10.0
     v2_mocks.get_instrument_price_gbp.return_value = 250.0
     v2_mocks.get_instruments.return_value = [{"ticker": "OVERCAP_EQ", "minTradeQuantity": 1.0}]
+    # The projection now reads a STORED snapshot (2026-08-09), not the live
+    # client -- seeded here with the identical account dict so this remains
+    # a genuine apples-to-apples parity check against the real submission
+    # walk's own (still-live, unchanged) account read.
+    _seed_t212_snapshot(account)
     # ^GSPC needs real (non-crashed) price data too -- submission now runs
     # a fresh crisis re-check (2026-08-03) before anything else, and an
     # unmocked, empty ^GSPC series would fail that check and block

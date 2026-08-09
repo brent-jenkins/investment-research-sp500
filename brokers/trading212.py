@@ -3964,11 +3964,33 @@ def project_pending_order_admission(config: dict) -> list[dict]:
     """Read-only projection of tomorrow's stock submission — reuses the
     EXACT capacity-fit rule (_capacity_fit_reason()) and the exact
     momentum-descending priority order (_load_pending_orders()) the real
-    _submit_pending_orders() walk uses, against a fresh, live read of the
-    account's real current state. Never places an order, never resolves a
+    _submit_pending_orders() walk uses, against the account's last STORED
+    snapshot (t212_account_snapshot / t212_snapshot_fetched_at in
+    system_metadata, written by data/scheduler.py:_fetch_t212_snapshot()
+    — hourly via account_state_refresh, or sooner via the UI's "Refresh
+    Account" button). Never places an order, never resolves a
     pending_orders row, never calls the price-sanity/already-held/
     quantity-viability checks _submit_pending_orders() also applies at
     genuine submission time.
+
+    DELIBERATELY STORED-STATE, NOT LIVE (2026-08-09) — a reversal of this
+    function's original 2026-08-02 design, which called
+    Trading212Client.get_account_summary() directly from this
+    (render-path-adjacent) function. That made the Status page's Candidate
+    Queue block on a live T212 API call on every cache-expiry render (see
+    CLAUDE.md's UI render-path blocking audit). Reading the stored
+    snapshot instead is judged acceptable, not merely expedient, for three
+    reasons: (1) this was already explicitly a PROJECTION, NOT A
+    GUARANTEE — the docstring below already told every caller not to
+    treat it as committed; (2) the real admission decision is
+    RE-VALIDATED FRESH at actual submission time
+    (_submit_pending_orders(), untouched by this change) against
+    whatever the account's real state is at that moment, so an hourly-
+    stale projection here cannot itself cause a wrong trade; (3) an
+    hourly snapshot is, if anything, CLOSER to the balance the EOD job
+    actually computed these queued decisions against than a mid-day live
+    read would be — the queue was built once, at EOD, against one
+    account-state snapshot, not continuously re-derived through the day.
 
     THIS IS A PROJECTION, NOT A GUARANTEE (2026-08-02, built for the
     Dashboard's candidate-queue Status column after the 2026-08-02 urgent
@@ -3978,15 +4000,22 @@ def project_pending_order_admission(config: dict) -> list[dict]:
     real state is AT THAT MOMENT — which can genuinely differ from right
     now (a position closing, an emergency exit, another candidate's order
     filling first and consuming capacity this projection assumed was
-    still free). Every caller must treat the returned "projected_status"
-    as exactly that: a projection, current as of this read, not a
-    committed outcome.
+    still free, OR simply the snapshot this projection reads having gone
+    stale since it was last fetched). Every caller must treat the
+    returned "projected_status" as exactly that: a projection, current as
+    of "snapshot_checked_at", not a committed outcome — and must surface
+    that timestamp wherever the projection is shown, not just wherever
+    the account panel happens to be.
 
     Returns one dict per PENDING stock row: {ticker, momentum_pct,
-    position_gbp, projected_status}, where projected_status is
-    "PROJECTED_ADMIT" or "PROJECTED_REJECT_CAPACITY". Never raises —
-    returns [] on any failure (a missing/unreadable account state means
-    no projection can honestly be made at all, not a guess).
+    position_gbp, projected_status, snapshot_checked_at}, where
+    projected_status is "PROJECTED_ADMIT" or "PROJECTED_REJECT_CAPACITY"
+    and snapshot_checked_at is the ISO timestamp the account snapshot was
+    fetched at (identical across every row in one call — one account
+    read informs the whole batch), or None if unavailable. Never raises,
+    never makes a network call — returns [] on any failure (a missing/
+    unreadable stored account state means no projection can honestly be
+    made at all, not a guess).
     """
     t212_cfg = config.get("trading212_invest", {})
     if not t212_cfg.get("enabled", False):
@@ -4003,17 +4032,21 @@ def project_pending_order_admission(config: dict) -> list[dict]:
         return []
 
     max_deployed_pct = float(t212_cfg.get("max_total_deployed", 0.5))
-    live = t212_cfg.get("live", False)
     try:
-        client = Trading212Client(live=live)
-        summary = client.get_account_summary()
+        from data.database import get_metadata_str
+        import json as _json
+        raw_snapshot = get_metadata_str("t212_account_snapshot")
+        if not raw_snapshot:
+            raise ValueError("no stored T212 account snapshot yet")
+        summary = _json.loads(raw_snapshot)
+        snapshot_checked_at = get_metadata_str("t212_snapshot_fetched_at") or None
         _s_cash = summary.get("cash", {}) if isinstance(summary.get("cash"), dict) else {}
         _s_inv  = summary.get("investments", {}) if isinstance(summary.get("investments"), dict) else {}
         total_val = float(summary.get("totalValue", 0) or 0)
         invested  = float(_s_inv.get("currentValue", 0) or 0)
         free_cash = float(_s_cash.get("availableToTrade", 0) or 0)
     except Exception as exc:
-        logger.warning("project_pending_order_admission: could not read account state — %s", exc)
+        logger.warning("project_pending_order_admission: could not read stored account state — %s", exc)
         return []
 
     projected = []
@@ -4029,6 +4062,7 @@ def project_pending_order_admission(config: dict) -> list[dict]:
         projected.append({
             "ticker": row["ticker"], "momentum_pct": row["momentum_pct"],
             "position_gbp": position_gbp, "projected_status": status,
+            "snapshot_checked_at": snapshot_checked_at,
         })
     return projected
 

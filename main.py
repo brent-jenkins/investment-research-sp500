@@ -2041,6 +2041,9 @@ def _render_status_page(config: dict) -> None:
     else:
         projected = _get_projected_admission_cached(config)
         projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
+        _snap_checked_at = next(
+            (p["snapshot_checked_at"] for p in projected if p.get("snapshot_checked_at")), None,
+        )
 
         cdf = pd.DataFrame(candidates).copy()
         # Real status wins for an already-resolved row — only a genuinely
@@ -2075,14 +2078,25 @@ def _render_status_page(config: dict) -> None:
         cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
         cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
 
+        if _snap_checked_at:
+            try:
+                _snap_dt = datetime.fromisoformat(_snap_checked_at)
+                _snap_fmt, _snap_age = _age_display(_snap_dt)
+                st.caption(f"📸 Projection based on account snapshot as of **{_snap_fmt} UTC** ({_snap_age}).")
+            except Exception:
+                pass
+        else:
+            st.caption("📸 Projection unavailable — no account snapshot stored yet.")
         st.caption(
             "⚠️ **A `PROJECTED_*` status is a projection, not a guarantee** — shown only for "
             "a row still genuinely `PENDING`. Computed by replaying the same momentum-ranked, "
             "skip-and-continue capacity check real submission uses, against the account's "
-            "real state *right now* — the actual decision only happens at real submission "
-            "time, against whatever the account's state is *at that moment*, which can "
-            "genuinely change in between (a position closing, an emergency exit). Any other "
-            "status shown is the row's real, final, historical outcome — not a projection."
+            "last STORED snapshot (hourly-refreshed, or sooner via the Refresh Account button "
+            "above — see the timestamp just above) — the actual decision only happens at real "
+            "submission time, against whatever the account's state is *at that moment*, which "
+            "can genuinely change in between (a position closing, an emergency exit, or simply "
+            "the stored snapshot having gone stale). Any other status shown is the row's real, "
+            "final, historical outcome — not a projection."
         )
         st.caption(
             "**Strength** is relative to that candidate's own decision-date cohort (bottom "

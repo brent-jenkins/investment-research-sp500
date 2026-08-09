@@ -1081,6 +1081,43 @@ def test_status_page_candidate_status_labelled_as_projection_not_guarantee(db_en
     assert "not a guarantee" in all_text.lower()
 
 
+def test_status_page_candidate_queue_shows_snapshot_as_of_timestamp(db_engine, status_app, mocker):
+    """2026-08-09 -- the projection now reads a stored, hourly-refreshed
+    T212 snapshot rather than a live one (see brokers/trading212.py:
+    project_pending_order_admission()'s docstring), so its own staleness
+    must be visible right where the projection is consumed, not only on
+    the account panel further up the page."""
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
+    checked_at = (datetime.utcnow() - timedelta(minutes=42)).isoformat()
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 0.5, "position_gbp": 1000.0,
+         "projected_status": "PROJECTED_ADMIT", "snapshot_checked_at": checked_at},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "snapshot" in all_text.lower()
+    assert "42m ago" in all_text
+
+
+def test_status_page_candidate_queue_snapshot_caption_handles_missing_timestamp(db_engine, status_app, mocker):
+    """No stored snapshot yet (e.g. immediately after a fresh deploy) must
+    render a plain "unavailable" caption, never crash or fabricate a time."""
+    _seed_pending_row(db_engine, ticker="AAPL", momentum_pct=0.5)
+    mocker.patch("brokers.trading212.project_pending_order_admission", return_value=[
+        {"ticker": "AAPL", "momentum_pct": 0.5, "position_gbp": 1000.0,
+         "projected_status": "PROJECTED_ADMIT", "snapshot_checked_at": None},
+    ])
+
+    at = status_app.run()
+
+    assert not at.exception
+    all_text = " ".join(c.value for c in at.caption)
+    assert "no account snapshot stored yet" in all_text.lower()
+
+
 def test_status_page_candidate_status_filter_narrows_the_table(db_engine, status_app, mocker):
     _seed_pending_row(db_engine, ticker="SNDK", momentum_pct=27.0)
     _seed_pending_row(db_engine, ticker="WBD", momentum_pct=0.98)

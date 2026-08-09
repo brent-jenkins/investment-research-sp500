@@ -664,7 +664,47 @@ banner staleness (bounded by the hourly job cadence, and only while an NYSE exte
 open) is accepted specifically because the banner is informational only; the correctness-critical
 check happens fresh, every time, at the one place that actually matters.
 
-**Finding 2, deliberately left unfixed — Status page's Candidate Queue admission projection.**
+**Finding 2, fixed 2026-08-09 — Status page's Candidate Queue admission projection now reads stored
+state (own, separate commit, superseding the "deliberately left unfixed" verdict below).** Originally
+left unfixed pending real-world measurement of finding 1's cache-clear fix alone — see the struck-through
+reasoning preserved at the end of this entry. After measurement, the decision was to fix it too, on the
+same pattern as finding 3: `project_pending_order_admission()` (`brokers/trading212.py:3963`) no longer
+constructs a `Trading212Client` or calls `get_account_summary()` at all. It reads the same stored
+snapshot the T212 Invest Account panel already displays — `t212_account_snapshot` /
+`t212_snapshot_fetched_at` in `system_metadata`, written by `data/scheduler.py:_fetch_t212_snapshot()`
+(hourly via `account_state_refresh`, or sooner via the page's existing "Refresh Account" button, which
+already used the correct dispatcher-flag pattern — `pending_t212_fetch`, serviced by the 60-second
+`_dispatch_pending_jobs()` — and needed no change). This was confirmed a rewiring job, not new
+infrastructure, before any code was written: both preconditions (`account_state_refresh` already
+writing everything the projection needs; the dispatcher already servicing UI-requested refreshes) were
+true. Every returned row now carries `snapshot_checked_at`, the ISO timestamp the whole batch's single
+account read was fetched at (`None` if unavailable) — the Candidate Queue's own caption shows it
+explicitly (`"📸 Projection based on account snapshot as of ... UTC (Xm/Xh ago)"`), not only the account
+panel further up the page, since the projection is consumed there and staleness must be visible where
+it's consumed. On a failed refresh, `_fetch_t212_snapshot()` already only wrote `t212_invest_error` and
+left `t212_account_snapshot`/`t212_snapshot_fetched_at` untouched (confirmed, not assumed, by reading
+its `except` branch directly) — so a failed refresh already meant "keep the last good value with its
+original timestamp," precisely the required behaviour, with no change needed to get it. Verified by a
+direct test (`test_project_admission_render_path_never_calls_the_live_client`, mirroring finding 3's
+own) that patches `Trading212Client` to raise if constructed at all — confirmed to actually fail
+against the reintroduced live call before being trusted.
+
+**Deliberate consequence, recorded rather than glossed over: this projection is now hourly-stale by
+design, not live.** `project_pending_order_admission()`'s docstring previously argued the projection
+needed current, not stale, account state to be meaningful — that argument is superseded, not merely
+overridden, for three reasons stated explicitly in the function's own docstring now: (1) the projection
+was already labelled a **projection, not a guarantee** — every caller was always told not to treat
+`projected_status` as committed, so admitting it can also be stale-by-up-to-an-hour is a difference of
+degree, not of kind; (2) the real admission decision is **re-validated fresh at actual submission time**
+(`_submit_pending_orders()`, untouched by this change) against whatever the account's real state is at
+that moment — an hourly-stale projection here cannot itself cause a wrong trade, only a wrong-looking
+preview; (3) an hourly snapshot is, if anything, **closer to the balance the EOD job actually computed
+the queued decisions against** than a live mid-day read would be — the queue was built once, at EOD,
+against one account-state snapshot, not continuously re-derived through the day, so reading a similarly
+time-anchored stored snapshot is arguably more consistent with what's being previewed, not less.
+
+<details><summary>Original "deliberately left unfixed" reasoning (struck through, preserved for the record)</summary>
+
 `project_pending_order_admission()` (`brokers/trading212.py:3963`) genuinely calls
 `Trading212Client.get_account_summary()` live, by design — its own docstring explains the projection
 needs current, not hourly-stale, account state to be a meaningful preview of what would actually
@@ -673,6 +713,8 @@ becomes at most one T212 call per minute on a page visited deliberately, not one
 plausibly acceptable without further change. Per explicit instruction: measure real-world behaviour
 with finding 1's fix alone in place before revisiting this one; do not fix it speculatively ahead of
 evidence that it's still a problem.
+
+</details>
 
 **Finding 4, fixed same round — Status page's log-download buttons looked gated, weren't (own,
 separate commit).** The "⬇ Last 24 h" and "⬇ Last 7 days" buttons (`main.py`, inside the Log Viewer
