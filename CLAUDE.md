@@ -870,6 +870,77 @@ mark-to-market deployment accounting, and every other pair of measurements this 
 similar but answer different questions. See `research/deployment_cap_prereg_2026-08-09/PREREGISTRATION.md`
 §0 for the full investigation and the READING (a)-confirmed verdict this reconciliation supports.
 
+## Deployment-cap (max_total_deployed) study — pre-registered, tested, NOT ADOPTED (2026-08-09)
+
+**Re-tests a lever two prior looks already examined, specifically on data corrected since both of
+them** (the 2026-08-06 deployment-cap sweep and the earnings-dampener finding — see the immediately
+preceding standing note's own motivation) — the realistic intraday-touch stop-fill correction, the
+recycled-ticker quarantine, and the current FX+idle-cash cost template all postdate both priors. Four
+`max_total_deployed` arms (0.70 baseline, 0.80, 0.90, 0.95), `per_trade_pct=0.05` held fixed (the
+position-count study's own NOT ADOPTED conclusion carried forward unchanged). Full pre-registration and
+results: `research/deployment_cap_prereg_2026-08-09/PREREGISTRATION.md` / `REPORT.md`.
+
+**§0's pre-check (see the preceding standing note) confirmed the cap genuinely binds — reading (a) —
+before any arm was run, and the deployment guard confirms this held across the full range tested**:
+median realized deployment tracks each arm's own nominal cap within ~1–1.5pp at every level (e.g. c95:
+94.13–94.16% median vs. a 95% cap, both pools) — unlike the position-count study's `per_trade_pct`
+arms, this lever cleanly does what it's named for throughout.
+
+**Verdict: NOT ADOPTED — two arms (0.80, 0.95) nominally clear the pre-registered +1.5pp cost-adjusted
+excess-return bar on Pool 2 CLEAN, but the paired per-decision instrument's own explicit disqualifying
+clause fires for all three higher-cap arms, not just the ones that failed the primary criterion.**
+c80 (+1.562pp) and c95 (+1.585pp) clear the bar; c90 (+0.521pp), sandwiched between them, does not — a
+genuine non-monotonic dip, not a smooth ramp. Pool 1 shows a different, partly contradictory shape (c90
+as the mild peak, c80/c95 both lower, c95 actually negative) — reported as an unreconciled cross-pool
+disagreement per the dual-provenance standing requirement, not resolved toward whichever pool looks more
+favourable. **The entire spread across the three non-baseline arms on Pool 2 CLEAN (+0.521pp to
++1.585pp, 1.06pp) is close to the measured ~1.08pp noise floor** — comparable in size to pure
+measurement noise, which argues against trusting either nominal "clear" as a reproducible effect.
+
+**The decisive finding: no arm's own unique admissions are distinguishably better than baseline's, in
+either pool, for any of the three higher-cap arms — including the two that nominally cleared the
+primary bar.** Win rate on each arm's own unique admissions is at or slightly *below* baseline's own
+unique-admission win rate in every single pairing (e.g. Pool 2 CLEAN vs. c95: baseline-only 43.87%,
+c95-only 43.42%). This is the walk-away sentence's own pre-registered disqualifying condition, and it
+fires cleanly.
+
+**A mechanistic reading recorded, explicitly not treated as grounds to override the pre-registered
+rule.** Raising `max_total_deployed` at constant `per_trade_pct` doesn't change *which* candidates are
+preferred, only how many can be held concurrently — reaching deeper into a ranked list the selection
+audit's own Part 5 already found is "not obviously worse" on average than the admitted population.
+Admitting more of a similarly-good population, funded by more capital rather than idle cash, is closer
+to a leverage/exposure effect than a selection-quality effect — under that reading, "unique admissions
+aren't better" is the expected signature of the mechanism, not evidence the mechanism failed. This is
+recorded as a hypothesis for a future, differently-instrumented study, not as an excuse for this one:
+the walk-away sentence was written in advance specifically so a plausible post-hoc explanation cannot
+talk a study out of its own disqualifying condition.
+
+**Costs modelled per-arm, confirmed material to the verdict, not just methodologically required.** FX
+drag rises from 3.34%/yr (c70) to 4.61–4.63%/yr (c95) as turnover scales with available capacity; idle-
+cash credit shrinks from ~0.55%/yr to ~0.20%/yr. The net swing (~1.5pp/yr) is comparable in size to the
+entire primary-criterion effect being measured (~1.06pp spread) — the 0.30% FX round-trip assumption,
+carried over unchanged from prior work, is doing real work in this verdict and would plausibly move it
+under a materially different real-world FX cost.
+
+**Converges with, rather than overturns, both priors this study was built to re-check** — on fully
+corrected data, the same conclusion holds: raising `max_total_deployed` above 0.70 has not been shown to
+deliver a robust, real improvement, across three independent looks spanning two different database
+states. Block-pass count (Pool 2 CLEAN: baseline 7/16, all three higher-cap arms 5/16, within the
+measured 3-block noise floor) does not discriminate the nominal winners (c80, c95) from the nominal
+loser (c90) either — one more small piece of corroboration for reading the whole excess-return spread
+as noise.
+
+**Operational headroom, qualitative, not scored, as pre-registered**: at 90–95% median realized
+deployment, the account routinely operates with only 5–12% cash — materially less room to act on a new
+high-conviction candidate than today's 0.70 cap provides, for a return effect this study could not
+confirm is real.
+
+No changes to `analysis/signals.py`, `analysis/decision.py`, `config.yaml`, or the live path. Caches
+reused directly from the position-count study (reconfirmed unchanged before use), no new engine — every
+arm's `max_total_deployed` passed as a direct argument to the existing, unmodified
+`simulate_portfolio_compounding_mtm()` logic via the same parity-verified
+`position_count_engine.py`. Nothing adopted, nothing merged, nothing deployed.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
