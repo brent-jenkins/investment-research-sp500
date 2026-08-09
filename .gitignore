@@ -72,3 +72,14 @@ logs/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# Disposable research artifacts — regenerable caches, run logs, and bulk
+# rejection dumps produced by research/ scripts across many studies. Scoped
+# to research/ specifically (not repo-wide) so these naming conventions
+# never accidentally ignore an unrelated file elsewhere. Trade-level CSVs
+# backing a shipped finding (trades_*.csv, panel_*.csv, REPORT.md) are
+# deliberately NOT covered here — see CLAUDE.md's "Research reproducibility
+# standard" for why those stay committed.
+research/**/_cache*.pkl
+research/**/_log_*.txt
+research/**/rejections_*.csv
