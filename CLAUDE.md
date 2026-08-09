@@ -986,6 +986,90 @@ independent of how much capital or how many slots) can be improved is a separate
 the relative-ranking work motivated by Part 4 of the selection audit is exactly that different question,
 not a re-test of either lever this section closes.
 
+## Relative-ranking (cross-sectional rank, daily admission) study — pre-registered, tested, ARM B CLEARS ITS BAR (2026-08-09)
+
+**The first arm in this project's entire recent research sequence — position-count, deployment-cap,
+gate-width, cross-sectional-monthly, all NOT ADOPTED — to clear every pre-registered walk-away
+condition.** Motivated by a real, unresolved tension left by the monthly cross-sectional study: that
+study failed decisively on its primary criterion (severe monthly-rebalance underdeployment swamping
+everything), but its own month-level per-decision instrument showed cross-sectional's realized trades
+winning the per-decision comparison 52–66% of the time — cadence and selection-quality were bundled
+together by that study's own design and never separated. This study removes the cadence confound
+entirely: all arms admit on the existing *daily* clock. Full pre-registration and results:
+`research/relative_ranking_prereg_2026-08-09/PREREGISTRATION.md` / `REPORT.md`. Built and run from a
+dedicated worktree (`c:\GitHub\investment-app-relative-ranking`), not the shared main checkout — see the
+concurrent-session collision note elsewhere in this file for why.
+
+**Narrowed on review before running, and this narrowing is what made attribution possible.** The first
+draft of Arm B swapped the cross-sectional rank signal into the entry gate, the 2% floor, and
+`SIGNAL_OFF` as well as the admission sort key — which would have changed exits in B too, collapsing B
+and C into two flavours of rank-based exit rather than a clean attribution arm plus one added variable.
+Corrected: **B changes exactly one thing relative to production — the sort key `_admit_group()` ranks
+gate-passing candidates by** (12-minus-1 cross-sectional relative rank, descending, instead of absolute
+12-month momentum). Gate, 2% floor, and every exit reason (`CRISIS_EXIT`/`STOP_LOSS`/`SIGNAL_OFF`/
+`MAX_HOLDING`) stay byte-identical to production for B *and* C — verified directly (30/30 sampled
+`SIGNAL_OFF` exits confirmed to trace to absolute momentum, never rank), not merely asserted. **C is B
+plus `evaluate_rank_dropped_exit()` (already in `analysis/decision.py`, added for the monthly study, not
+modified here) checked every day** — a currently-held position exits if it falls out of the daily-
+recomputed top-30 by cross-sectional rank (N=30 justified against baseline's own measured realized
+occupancy of ~14, roughly 2.1x, not the monthly study's N=40 which was calibrated to a completely
+different, occupancy-target construction).
+
+**Verification, stronger than the pre-registration itself required.** The pre-registration stated (as
+the monthly study had for its own construction) that no degenerate-case parity reduction exists for a
+cross-sectional engine. On review, a test-only `_sort_key="momentum"` toggle was added to the new engine
+specifically to create one: with it set, the new engine reproduced raw production
+`simulate_portfolio_compounding_mtm()` **byte-identical on Pool 2 CLEAN — 4,919 trades, £103,926.50, 0
+mismatches** — proving every part of the engine except the one sort-key line is a faithful copy of
+production. Staleness guard, exit-wiring/signal-separation, and a 4-date ranking hand-check (plausible,
+dated momentum leaders throughout — TSLA/ENPH/DXCM/MRNA/NVDA in the 2020 COVID rally, OXY/RRC/DVN/
+TRGP/EQT in the 2022 energy rally) all passed cleanly before any real result was trusted.
+
+**Headline result — Pool 2 CLEAN (decisive): B clears +1.993pp cost-adjusted excess return over
+baseline, nearly 2x the measured ~1.08pp noise floor, without breaching the drawdown ceiling
+(worsens only 1.52pp; actually improves 5.14pp on Pool 1).** Deployment guard passes cleanly for both B
+and C (within 0.21pp of baseline, both pools) — the tightest parity this project's whole sequence has
+measured, the direct, designed consequence of every day being an entry-attempt day for every arm (never
+gated to a periodic rebalance) plus cross-sectional rank's own zero-sum property (a name can only drop
+out of the top-N because another rose to displace it, and that displacer is, by construction, a live
+candidate for the freed slot).
+
+**The decisive corroboration — not a portfolio-level headline standing alone.** B's own unique
+admissions (the trades B makes that baseline doesn't) show a real, distinguishable edge over baseline's
+own unique admissions on *both* win rate and mean P&L%, in both pools (Pool 2 CLEAN: 44.30%/0.89% vs.
+43.57%/0.63%) — the walk-away sentence's own fourth clause, built specifically to catch a portfolio-
+level gain that doesn't trace to genuinely better individual decisions, does not fire. This is the
+strongest evidence this project has produced that a selection-quality signal (not a deployment or
+cash-holding artefact) is doing the work.
+
+**The A-vs-B overlap prediction was wrong, in an unusually informative direction.** Predicted 45–65%
+(already a downward correction from a naive same-signal argument); measured **21.8–23.1%**, both pools —
+far below even the low end of the prediction, for a change that touches *only* the sort key on an
+*otherwise-unchanged eligible set*, no gate change, no truncation. The largest capacity-cascade effect
+this project has measured for the narrowest change it has ever tested — reported as a real, standalone
+finding about this system's sensitivity to admission order, not folded quietly into the headline.
+
+**C does not improve on B — the curve-discipline check this study was specifically built to run.** C
+individually clears every one of its own walk-away conditions too, but the B→C delta (isolating what
+the added `RANK_DROPPED` exit itself contributes) is **negative in both pools** (Pool 2 CLEAN −0.243pp;
+Pool 1 −1.017pp, enough to push C's own Pool 1 delta negative outright). C's paired-instrument win-rate
+edge is larger than B's, but its P&L-magnitude edge is mixed (positive Pool 2 CLEAN, negative Pool 1) —
+consistent with more, smaller wins that don't net out ahead of B's fewer, better-sized ones. **B's
+mechanism alone is the recommendation; C's added de-selection layer should not be adopted on top of it.**
+
+**A research finding, not a production change — real promotion needs its own follow-up, not fast-
+tracking on a strong backtest number.** No code changed on any live path in this study; `config.yaml`
+untouched. If B's mechanism is ever built into the live system: the cross-sectional rank computation
+would need to move from research-only code into a genuine, tested production module (not left as
+research code a live caller reaches into, per this project's "one implementation of any given trading
+decision" invariant), and this project's four live/backtest parity-enforcement layers
+(`tests/test_decision_logic_placement.py`, `tests/test_comprehensive_replay_parity.py`,
+`tests/test_live_backtest_parity.py`, `tests/test_one_sided_decision_rules.py`) would need genuine
+coverage of the new ranking logic from the start, not retrofitted after the fact. Live trading remains
+demo-only (`trading212_invest.live: false`) regardless, so nothing here is urgent from a real-money-risk
+standpoint — but the research-to-production gap is real and should not be skipped because this result
+looks strong.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
