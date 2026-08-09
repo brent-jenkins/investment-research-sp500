@@ -9,6 +9,7 @@ from analysis.decision import (
     MIN_MOMENTUM_FLOOR,
     REENTRY_COOLDOWN_DAYS,
     evaluate_exit_reason,
+    evaluate_rank_dropped_exit,
     is_asset_class_enabled,
     is_position_size_viable,
     is_reentry_blocked,
@@ -407,3 +408,18 @@ def test_price_move_blocked_non_positive_decided_price_never_blocks():
     queued decision always has a real recorded price)."""
     assert is_submission_price_move_blocked(0.0, 90.0, 0.03) is False
     assert is_submission_price_move_blocked(-5.0, 90.0, 0.03) is False
+
+
+def test_rank_dropped_fires_when_not_in_current_top_n():
+    assert evaluate_rank_dropped_exit(is_in_current_top_n=False) == "RANK_DROPPED"
+
+
+def test_rank_dropped_does_not_fire_when_in_current_top_n():
+    assert evaluate_rank_dropped_exit(is_in_current_top_n=True) is None
+
+
+def test_rank_dropped_unknown_none_does_not_trigger():
+    """None means 'not a rebalance date, or ranking not computed' --
+    matches this module's own None-tolerance convention throughout:
+    unknown is never treated as an affirmative trigger."""
+    assert evaluate_rank_dropped_exit(is_in_current_top_n=None) is None

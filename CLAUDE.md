@@ -423,6 +423,81 @@ No code changed on any live path. No study arm was ever run. No `price_data`/`ti
 writes occurred — all instrument price history for this feasibility check was fetched read-only into
 a research-local cache.
 
+## Cross-sectional momentum — pre-registered, tested, NOT adopted (2026-08-09)
+
+**Tests a genuinely different strategy construction, not a parameter variant of the current
+system** — motivated directly by the selection audit's Part 4 finding (rank-*within-day* predicts
+trade outcome; raw time-series momentum does not) and Part 7 (momentum ranking beats random
+admission decisively but concentrates drawdown). Jegadeesh-Titman cross-sectional momentum: stocks
+ranked against *each other* on 12-minus-1-month return, monthly rebalance, top 40 held. Full
+pre-registration and results: `research/cross_sectional_momentum_prereg_2026-08-09/PREREGISTRATION.md`
+/ `REPORT.md`. Approved with three amendments before any run: a fourth arm (D — the existing
+2%-momentum-floor layered on top of pure relative rank, to measure rather than argue whether the
+floor's known defensive value transfers to this construction); the new `RANK_DROPPED` exit reason
+placed inside `analysis/decision.py` as a pure function (`evaluate_rank_dropped_exit()`) ahead of any
+live caller, per this project's "one implementation of any trading decision" invariant, rather than
+left in research code; and a staleness-guard requirement on the new ranking computation, mirroring
+`analysis/signals.py`'s `_MAX_ANCHOR_GAP_DAYS` for the identical failure mode.
+
+**Verdict: NOT ADOPTED — all three arms (B: 30-day max-holding; C: unlimited; D: unlimited + floor)
+fail decisively, in both pools, on the primary criterion alone.** Excess return over `^SP500TR`
+missed the pre-registered +2.5pp-over-baseline bar by −0.19pp to −9.83pp across all six
+arm/pool combinations — not close calls inside any measured noise floor. Peak-relative drawdown
+improved for every arm (smaller than baseline's, never the binding constraint), which is itself the
+tell: the deployment guard failed badly for B (mean deployment 22.5–23.0pp below baseline) and C
+(50–51pp below) — capital freed by a mid-month exit sits idle until the next monthly rebalance, the
+identical wait-for-rebalance mechanism the admission-redesign study's own deployment guard caught,
+now reproduced independently in a categorically different strategy construction. C/D spend roughly
+87% of the 19-year window out of the market entirely.
+
+**A genuine tension surfaced and resolved, not glossed over**: the primary per-decision
+corroboration instrument (month-level pairing, 3,000–4,800 shared ticker-months per comparison) shows
+cross-sectional's own realized trades winning 52–66% of the time against baseline's on the same
+ticker/month — nominally a portfolio-level-vs-per-decision disagreement, exactly the shape the
+walk-away sentence was written to catch. Not a rescue: the instrument only measures outcomes
+*conditional on both arms independently choosing to hold the same name* and says nothing about the
+40–87% of the time the cross-sectional arm sat in cash instead — a highly selective portfolio's
+realized trades outperforming per-trade is fully compatible with, and the more parsimonious
+explanation for, a portfolio-level return that trails once near-permanent underinvestment is priced
+in. The two instruments answer different questions; the disagreement diagnoses *why* the arms fail
+rather than arguing against the failure.
+
+**Arm D's floor confirmed doing exactly what it was built to do, without closing the gap.** Held-name
+count at each of 236 rebalance dates: median 40 (floor essentially inert in a typical month), but
+genuinely flat (zero held) at 15 dates (6.4%), concentrated in broad-decline periods — the mechanism
+a "top-40 always" construction structurally cannot express. Real, measured risk reduction (D's
+drawdown modestly better than C's) but excess-return gap nearly identical to C's, since the floor
+only ever removes candidates from an already-underfilled slice — it never touches the wait-for-
+rebalance idle-capital mechanism that is the actual cause of the failure.
+
+**Standing observation for future redesigns, recorded because this is the second time this exact
+shape has appeared independently.** Both this study and the admission-redesign study (monthly
+shortlist rebalancing within the *existing* time-series construction) found their headline
+portfolio-level result reduced almost entirely to a deployment-level artifact once checked against a
+capacity/cascade-uncontaminated per-decision instrument — different strategies, identical failure
+mechanism. Any future redesign that gates entries to a periodic rebalance grid, on this account's
+existing capacity/sizing machinery, should budget for this failure mode from the design stage (e.g.
+holding mean deployment parity as an explicit constraint) rather than re-discovering it after the
+fact a third time.
+
+**Engine verification, done without a degenerate-parity reduction (none exists for this
+construction, stated honestly rather than skipped).** Four independent checks instead: a staleness-
+guard regression (synthetic gap → NaN, mirroring `compute_momentum_series()`'s own 2026-08-01
+incident) plus a real-data scan (zero fires across 4.76M ticker-dates, plausible not alarming);
+exit-wiring (30/30 sampled trades matched `evaluate_exit_reason()`/`evaluate_rank_dropped_exit()`
+called directly); sizing (an initial 21/30 spot-check "failure" traced to the verification script's
+own balance-timing proxy, not an engine bug — corrected and re-run at 30/30 once the engine was
+instrumented to emit its real pre-entry balance); and a ranking/rebalance hand-computation across 5
+regime dates × 2 pools × 3 arms (30 checks, zero instances of the engine holding a ticker it wasn't
+legitimately eligible for). One incidental finding: the true candidate universe's price history
+starts almost exactly 2007-01-03, giving both this construction and the existing production baseline
+an identical, structural cold start with zero trades possible before ~2008 — confirmed directly
+against the existing production reference file (0 trades in 2007, first trade 2008-01-03), not a
+defect specific to cross-sectional's own 273-trading-day lookback.
+
+No code changed in `analysis/signals.py` or `config.yaml`. `analysis/decision.py` received exactly
+the one authorized addition. Nothing merged to the live path.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).

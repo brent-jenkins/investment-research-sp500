@@ -506,3 +506,55 @@ def is_submission_price_move_blocked(
 # for why folding it into the frozen, validated production backtest engine
 # would be a materially larger change than the single-variable direction
 # flip this task actually scoped.
+
+
+def evaluate_rank_dropped_exit(*, is_in_current_top_n: Optional[bool]) -> Optional[str]:
+    """RANK_DROPPED — the exit reason for cross-sectional (relative-rank)
+    construction, checked only on a rebalance date: a currently-held
+    position exits when it is no longer within that date's freshly
+    re-computed top-N ranking.
+
+    This has no analog in the current live system or in any of
+    analysis/backtest.py's engines — none of them rank candidates against
+    each other or rebalance on a fixed calendar grid, so there was nothing
+    existing for this rule to converge with or diverge from. It is placed
+    here anyway, ahead of any live caller, rather than living inline in a
+    research engine: see CLAUDE.md's cross-sectional-momentum
+    pre-registration (2026-08-09 amendment) for the reasoning — if
+    cross-sectional construction is ever adopted for real, the live path
+    calls this exact function, not a second, independently-written copy of
+    the same rule invented after the fact. This mirrors the standing "one
+    implementation of any given trading decision" invariant this module's
+    own docstring describes, applied proactively rather than retroactively.
+
+    `is_in_current_top_n` follows this module's own None-tolerance
+    convention: True/False must be an explicit, confirmed ranking result
+    for today; None ("not a rebalance date, or ranking not computed today")
+    never triggers an exit — matching how every other function here treats
+    unknown/not-yet-computed state as "this check contributes nothing,"
+    never as an affirmative trigger.
+
+    Priority relative to the shared evaluate_exit_reason() above: callers
+    are expected to check evaluate_exit_reason() (CRISIS_EXIT / STOP_LOSS /
+    MAX_HOLDING) FIRST, every day, and only call this function on rebalance
+    dates for positions that check left un-exited — CRISIS_EXIT/STOP_LOSS/
+    MAX_HOLDING take priority over RANK_DROPPED, not the reverse, since a
+    position that would already be stopped out or crisis-exited mid-month
+    should never survive to be evaluated for a rank-based exit at all.
+
+    Layer 4 (tests/test_one_sided_decision_rules.py) note: this function is
+    called by neither brokers/trading212.py nor analysis/backtest.py today
+    (its one real caller is the cross-sectional research engine in
+    research/cross_sectional_momentum_prereg_2026-08-09/). Verified
+    directly against that test's own set-difference logic before relying on
+    this: the check only flags a function called by EXACTLY ONE of the two
+    production files with no recorded exemption — a function called by
+    NEITHER is a different, unflagged state (research-only, pending a live
+    path that does not exist yet), so no EXEMPT_LIVE_ONLY/EXEMPT_BACKTEST_ONLY
+    entry is needed or added for this function while that remains true.
+    """
+    if is_in_current_top_n is None:
+        return None
+    if is_in_current_top_n is False:
+        return "RANK_DROPPED"
+    return None
