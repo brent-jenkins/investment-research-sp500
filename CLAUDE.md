@@ -941,6 +941,51 @@ arm's `max_total_deployed` passed as a direct argument to the existing, unmodifi
 `simulate_portfolio_compounding_mtm()` logic via the same parity-verified
 `position_count_engine.py`. Nothing adopted, nothing merged, nothing deployed.
 
+## Capital deployment is not a usable lever in this system, from either direction — synthesis of two studies, 2026-08-09
+
+**Recorded as one conclusion, not left as two separate study results, because the two studies tested
+opposite directions of the same underlying question and both came back the same way.** The
+position-count study (`per_trade_pct`, narrowing concentration) and the deployment-cap study
+(`max_total_deployed`, raising total exposure) are, together, a complete test of whether this account's
+capital deployment — how much is committed, and how concentrated it is — can be tuned for more return.
+Neither direction delivered one.
+
+**Direction 1 — concentrating capital into fewer, larger positions.** The position-count study found
+`per_trade_pct` is a ceiling VaR sizing is never pulled up to, not a dial: at the tight end (nominal 5
+and 10 positions), realized position count collapsed to ~12–14 regardless of the target, landing closer
+to baseline's own realized count than to the arm's own nominal one. **A second, independent fact from
+the same study reinforces this from a different angle**: mean deployed % sat at 63.07–63.81% across
+*all eight* arm/pool combinations — n5, n10, n22, and n40 alike — despite position count itself varying
+by nearly 3x (11.78 to 35.47 realized positions). Deployment level and position count are close to
+decoupled at this account's volatility/momentum-selection profile: changing how many positions are held
+does not change how much capital ends up deployed in aggregate.
+
+**Direction 2 — deploying more capital in total.** The deployment-cap study confirmed `max_total_deployed`
+*does* track cleanly as a genuine dial (median realized deployment within ~1–1.5pp of every nominal cap
+tested, 70–95%, both pools — unlike `per_trade_pct`'s failure at the low end) — but raising it delivered
+no robust, real return benefit. Two arms nominally cleared the pre-registered bar, but the paired
+per-decision instrument showed none of the three higher-cap arms' own unique admissions were
+distinguishably better than baseline's — the walk-away sentence's own disqualifying clause, on its own
+sufficient to not-adopt. Corroborated, not merely accompanied, by two more independent signals: the
+whole spread of results across arms (~1.06pp) sat close to the measured noise floor (~1.08pp), and the
+curve shape inverted between the two pools rather than replicating. Three independent reasons pointing
+the same way, not one number that happened to miss a threshold.
+
+**The honest combined summary**: this account cannot be meaningfully concentrated tighter than its own
+natural ~12–14-position equilibrium by adjusting per-trade sizing, and deploying more of its capital in
+total — even though the lever genuinely works mechanically — has not been shown to buy anything for it.
+Today's `max_total_deployed=0.70` / `per_trade_pct=0.05` should be read as settled for capital-deployment
+purposes specifically, not as an arbitrary historical default still worth revisiting from either side,
+pending a genuinely new argument (not a re-run of either lever) for doing so. **This also converges
+with, not merely coexists alongside, two older, pre-correction looks at the deployment-cap lever
+specifically** (the 2026-08-06 sweep and the earnings-dampener finding) — three independent
+investigations, spanning two different database states, all landing in the same place.
+
+**What this synthesis does not close**: whether *which* candidates get admitted (selection quality,
+independent of how much capital or how many slots) can be improved is a separate, still-open question —
+the relative-ranking work motivated by Part 4 of the selection audit is exactly that different question,
+not a re-test of either lever this section closes.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
