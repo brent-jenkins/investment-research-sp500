@@ -8,7 +8,7 @@ merely importing the module. Every function here is a plain, side-effect-free
 (besides DB reads) data-shaping function; main.py's own thin wrappers just
 call into this module and add Streamlit caching/rendering on top.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -1010,3 +1010,175 @@ def get_unconfirmed_exits() -> list[dict]:
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+# ---------------------------------------------------------------------------
+# Forward shadow comparison (2026-08-09) — the only forward evidence stream
+# for the relative-ranking promotion's OPEN CANDIDATE decision. See
+# CLAUDE.md's "Forward shadow comparison" section and data/database.py's
+# AdmissionRankingShadow model for the full record.
+# ---------------------------------------------------------------------------
+
+# House convention (main.py's Performance Metrics section): statistical
+# metrics unlock at 5 closed positions. Applied here to the active-mode-
+# unique bucket's own win-rate/mean-P&L display specifically — a smaller,
+# display-level threshold, distinct from the larger review-trigger floor
+# below (which decides when the whole comparison is trustworthy enough to
+# actually review a config change against, not merely worth showing a
+# number for).
+ADMISSION_SHADOW_MIN_CLOSED_FOR_STATS = 5
+
+# The review-trigger's own sample floor (2026-08-09) — see CLAUDE.md's
+# "Forward shadow comparison" section for the full justification. Backtest
+# evidence put admission-order disagreement between the two rankings at
+# ~77-79% of all admissions (research/relative_ranking_prereg_2026-08-09/
+# REPORT.md's own A-vs-B overlap finding, 21.8-23.1%) — meaning most real
+# admissions ARE active-mode-unique, the population this floor counts.
+# 30 is chosen as roughly 6x the house 5-closed-position "show something at
+# all" gate — enough that a single win/loss no longer swings the win rate
+# by ±20 percentage points (at 30, one trade moves it ±3.3pp) — while
+# staying reachable within a realistic multi-month window given this
+# system's own historical turnover (~180 trades/year across the full
+# candidate pool). Deliberately a REPORTING threshold, not a trading
+# parameter — lives here, not in analysis/decision.py or config.yaml.
+ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES = 30
+
+ADMISSION_SHADOW_REVIEW_MIN_DAYS = 90
+
+
+def get_admission_ranking_shadow_rows() -> list[dict]:
+    """Every recorded forward-shadow-comparison decision, oldest first —
+    thin wrapper around data.database.get_all_admission_ranking_shadow_
+    rows() matching this module's own get_*()-does-the-DB-read
+    convention. A pure DB read; no T212/yfinance call, matching every
+    other function in this module."""
+    from data.database import get_all_admission_ranking_shadow_rows
+    try:
+        return get_all_admission_ranking_shadow_rows()
+    except Exception:
+        return []
+
+
+def compute_admission_ranking_shadow_summary(rows: list[dict]) -> dict:
+    """Pure aggregation over already-fetched shadow rows (see
+    get_admission_ranking_shadow_rows()) — no DB/network access itself,
+    matching compute_sector_breakdown()'s own pure-function pattern.
+
+    **The structural asymmetry this function's output must never blur,
+    stated here so a caller can't accidentally present it as symmetric**:
+    only ONE ranking mode is ever genuinely live-traded for any given
+    row (that row's own recorded `active_mode`) — a REAL, realised
+    outcome can only ever exist for a candidate the row's OWN active mode
+    admitted. This means:
+      - `shared["count"]` — both rankings would admit this candidate.
+        Real trades exist for these (the active mode bought them), but
+        they carry NO DISCRIMINATING SIGNAL — the inactive ranking would
+        have made the identical trade, so its outcome says nothing about
+        which ranking is better.
+      - `active_unique` — admitted by this row's own active mode ONLY.
+        THE signal: real trades the active ranking chose that the
+        alternative wouldn't have. `closed_count`/`win_rate`/
+        `mean_pnl_pct` are computed from real, realised outcomes once
+        `closed_count` clears ADMISSION_SHADOW_MIN_CLOSED_FOR_STATS.
+      - `inactive_unique` — admitted by the OTHER (inactive-for-that-row)
+        mode ONLY. These were NEVER bought — no live evidence can ever
+        exist for this specific decision, structurally, not merely
+        because the sample is still small. `closed_count` is always 0,
+        `win_rate`/`mean_pnl_pct` are always None, by construction — a
+        caller must show this as a COUNT ONLY, explicitly labelled as
+        having no live outcome, never as "0% win rate" or blank.
+
+    Every row is classified by comparing its OWN `admitted_under_<active_
+    mode>` against its OWN `admitted_under_<the other mode>` — evaluated
+    per-row, not against today's config — so this remains correct even
+    across a future admission_ranking_mode config change partway through
+    the table's history (rows recorded before the switch keep their own
+    original active_mode).
+    """
+    total_decisions = len(rows)
+    shared_count = 0
+    active_unique_rows: list[dict] = []
+    inactive_unique_rows: list[dict] = []
+
+    for r in rows:
+        active_mode = r.get("active_mode")
+        if active_mode == "relative_rank":
+            own_admitted = bool(r.get("admitted_under_relative_rank"))
+            other_admitted = bool(r.get("admitted_under_absolute_momentum"))
+        else:  # default / absolute_momentum / any unrecognised value
+            own_admitted = bool(r.get("admitted_under_absolute_momentum"))
+            other_admitted = bool(r.get("admitted_under_relative_rank"))
+
+        if own_admitted and other_admitted:
+            shared_count += 1
+        elif own_admitted and not other_admitted:
+            active_unique_rows.append(r)
+        elif other_admitted and not own_admitted:
+            inactive_unique_rows.append(r)
+        # neither admitted -> not a signal either ranking would have acted on; excluded from all three buckets
+
+    def _bucket(bucket_rows: list[dict], apply_min_sample: bool) -> dict:
+        closed = [r for r in bucket_rows if r.get("outcome_available")]
+        closed_count = len(closed)
+        out = {"count": len(bucket_rows), "closed_count": closed_count, "win_rate": None, "mean_pnl_pct": None}
+        if closed_count == 0:
+            return out
+        if apply_min_sample and closed_count < ADMISSION_SHADOW_MIN_CLOSED_FOR_STATS:
+            return out
+        wins = sum(1 for r in closed if (r.get("pnl_gbp") or 0) > 0)
+        out["win_rate"] = wins / closed_count
+        pnl_pcts = [r.get("pnl_pct") for r in closed if r.get("pnl_pct") is not None]
+        out["mean_pnl_pct"] = (sum(pnl_pcts) / len(pnl_pcts)) if pnl_pcts else None
+        return out
+
+    active_unique = _bucket(active_unique_rows, apply_min_sample=True)
+    # inactive_unique's own closed_count is always 0 by construction (see
+    # this function's own docstring) -- min-sample gating is applied
+    # anyway, for defensive symmetry, though it can never actually bind.
+    inactive_unique = _bucket(inactive_unique_rows, apply_min_sample=True)
+
+    return {
+        "total_decisions": total_decisions,
+        "shared": {"count": shared_count},
+        "active_unique": active_unique,
+        "inactive_unique": inactive_unique,
+        "current_active_mode": rows[-1]["active_mode"] if rows else None,
+    }
+
+
+def compute_admission_ranking_shadow_review_status(
+    active_unique_closed_count: int, first_decided_at,
+) -> dict:
+    """Whether the forward shadow comparison's review trigger has fired —
+    WHICHEVER COMES LATER of (i) ADMISSION_SHADOW_REVIEW_MIN_DAYS (90)
+    days from the first recorded decision and (ii)
+    ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES (30) active-mode-unique
+    closed outcomes — see this module's own constant docstrings and
+    CLAUDE.md's "Forward shadow comparison" section for the full
+    justification. Deriving the review date from first_decided_at (never
+    hardcoded at build time) means a delay in shipping this feature does
+    not silently shorten the review window.
+
+    active_unique_closed_count is the interpretable sample — the same
+    figure compute_admission_ranking_shadow_summary()'s own
+    active_unique["closed_count"] returns, not total_decisions (which
+    includes shared/inactive-unique rows that carry no outcome signal).
+
+    Returns {"review_date", "days_reached", "sample_reached", "review_due",
+    "paired_outcomes", "floor"}. review_date is None (and every *_reached
+    flag False) if first_decided_at is None (no shadow data recorded
+    yet)."""
+    if first_decided_at is None:
+        return {
+            "review_date": None, "days_reached": False, "sample_reached": False,
+            "review_due": False, "paired_outcomes": active_unique_closed_count,
+            "floor": ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES,
+        }
+    review_date = first_decided_at + timedelta(days=ADMISSION_SHADOW_REVIEW_MIN_DAYS)
+    days_reached = datetime.utcnow() >= review_date
+    sample_reached = active_unique_closed_count >= ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES
+    return {
+        "review_date": review_date, "days_reached": days_reached, "sample_reached": sample_reached,
+        "review_due": days_reached and sample_reached,
+        "paired_outcomes": active_unique_closed_count, "floor": ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES,
+    }

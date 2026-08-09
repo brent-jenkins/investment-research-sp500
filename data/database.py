@@ -225,6 +225,11 @@ class PendingOrder(Base):
     position_gbp     = Column(Float)
     momentum_pct     = Column(Float)
     admission_rank_value = Column(Float)  # the value _load_pending_orders() actually sorts by (2026-08-09) -- see that function's own docstring; equals momentum_pct in the default admission_ranking_mode, the 12-minus-1 relative-rank value when the mode is switched
+    # relative_rank_pct (2026-08-09, forward shadow comparison) -- ALWAYS
+    # computed and stored, regardless of admission_ranking_mode, so the
+    # shadow simulation at submission time can evaluate BOTH rankings for
+    # every candidate, not only whichever one is currently active.
+    relative_rank_pct = Column(Float)
     stop_price       = Column(Float)
     var_pct          = Column(Float)
     status           = Column(String(24), default="PENDING")  # PENDING / SUBMITTED / FAILED / SKIPPED_PRICE_MOVED / SKIPPED_ALREADY_HELD / REJECTED_CAPACITY / SKIPPED_CRISIS_BLOCKED / SUPERSEDED
@@ -370,6 +375,93 @@ class TickerSector(Base):
     sector     = Column(String(64))  # NULL = fetched, yfinance had no sector for this ticker
     source     = Column(String(32), default="yfinance")
     fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AdmissionRankingShadow(Base):
+    """Forward-only evidence for the relative-ranking promotion's OPEN
+    CANDIDATE decision (2026-08-09) — see CLAUDE.md's "Relative-rank
+    admission ordering promoted to production code" and "Forward shadow
+    comparison" sections. This is the only forward evidence stream for
+    that decision; the backtest research (`research/relative_ranking_
+    prereg_2026-08-09/`, `research/relranking_robustness_2026-08-09/`) is
+    historical, not live.
+
+    Records, for EVERY gate-passing candidate the EOD decide phase queues,
+    what BOTH admission-ranking modes (absolute_momentum, relative_rank)
+    would do with it — rank position and admit/reject verdict — computed
+    ONCE, at the real submission step (brokers/trading212.py:
+    _submit_pending_orders()), from the EXACT SAME eligible pool and
+    capacity state (total_val/invested/free_cash) the real order-placement
+    walk itself uses, via the one shared `_capacity_fit_reason()` function
+    — never an independently re-derived approximation computed later from
+    different state.
+
+    Self-contained: every field needed for later reporting is copied here
+    directly, never joined back to `pending_orders` — PENDING rows are
+    genuinely DELETED after `pending_orders_retention_days` (30) once
+    resolved (see `purge_old_pending_orders()`), so a row here that merely
+    referenced `pending_orders` by id would silently lose its own display
+    fields once that retention window passed. This table has no such
+    retention limit; it is the durable record.
+
+    **The central, structural limitation of a live single-account shadow,
+    stated here so it is never mistaken for an oversight**: only ONE
+    ranking mode is ever genuinely live-traded at a time (whichever
+    `trading212_invest.admission_ranking_mode` says — see `active_mode`
+    below). A REAL, realised outcome can only ever exist for the candidate
+    the ACTIVE mode actually admitted and bought (`real_buy_order_id` gets
+    set when that happens; outcome fields populate once that position
+    closes, via `pnl`). A candidate the INACTIVE mode would have uniquely
+    admitted was never bought under real (or demo) money and NEVER WILL
+    have a realised outcome for THIS specific decision — this is not a
+    "small sample, wait longer" gap the way the backtest's own gates were;
+    it is permanent for any row where the inactive ranking's pick differs
+    from the active one. `outcome_available` distinguishes "no outcome
+    yet, because the position the active mode bought hasn't closed" (False,
+    `real_buy_order_id` set) from "no outcome will ever exist, because
+    this candidate was never actually traded" (False, `real_buy_order_id`
+    NULL) — see `output/performance.py:compute_admission_ranking_shadow_
+    summary()`'s own docstring for how the display keeps this distinction
+    explicit rather than silently blending the two into one number.
+    """
+
+    __tablename__ = "admission_ranking_shadow"
+
+    id                = Column(Integer, primary_key=True, autoincrement=True)
+    # pending_orders.id at write time -- NOT a DB-enforced foreign key
+    # (pending_orders rows are genuinely deleted after their own retention
+    # window; this column exists only to make the write idempotent -- see
+    # write_admission_ranking_shadow_row()'s own docstring -- and is never
+    # read back via a join once written).
+    pending_order_id  = Column(Integer, nullable=False, unique=True)
+    decided_at        = Column(DateTime, nullable=False, index=True)
+    ticker            = Column(String(20), nullable=False)
+    is_etf            = Column(Boolean, nullable=False, default=False)
+    momentum_pct      = Column(Float)
+    relative_rank_pct = Column(Float)
+    position_gbp      = Column(Float)
+    # 1-indexed priority position that day, within this candidate's own
+    # asset class, under each ranking -- 1 is the strongest candidate.
+    momentum_rank_position       = Column(Integer)
+    relative_rank_rank_position  = Column(Integer)
+    admitted_under_absolute_momentum = Column(Boolean, nullable=False)
+    admitted_under_relative_rank     = Column(Boolean, nullable=False)
+    # The admission_ranking_mode actually driving REAL submission for this
+    # decision -- resolve_admission_ranking_mode(config), read once at
+    # write time. Determines which of the two "admitted_under_*" columns
+    # a real trade (if any) can ever be attributed to.
+    active_mode       = Column(String(24), nullable=False)
+    # invest_orders.id of the real BUY, set only if the active mode
+    # actually admitted (and the real submission loop actually placed)
+    # this candidate -- see set_admission_ranking_shadow_buy_order().
+    real_buy_order_id = Column(Integer)
+    outcome_available = Column(Boolean, nullable=False, default=False)
+    exit_reason       = Column(String(20))
+    pnl_gbp           = Column(Float)
+    pnl_pct           = Column(Float)
+    closed_at         = Column(DateTime)
+    recorded_at       = Column(DateTime, default=datetime.utcnow)
+    outcome_checked_at = Column(DateTime)
 
 
 class PositionReconciliation(Base):
@@ -651,6 +743,137 @@ def get_ticker_sector(ticker: str) -> "dict | None":
     return {"sector": row[0], "fetched_at": row[1]}
 
 
+def write_admission_ranking_shadow_row(
+    *, pending_order_id: int, decided_at, ticker: str, is_etf: bool,
+    momentum_pct: "float | None", relative_rank_pct: "float | None", position_gbp: "float | None",
+    momentum_rank_position: "int | None", relative_rank_rank_position: "int | None",
+    admitted_under_absolute_momentum: bool, admitted_under_relative_rank: bool, active_mode: str,
+) -> None:
+    """Insert one admission_ranking_shadow row — INSERT and silently do
+    nothing on a (pending_order_id) conflict, never an upsert. This is
+    computed exactly once, from the pristine pre-loop capacity state, at
+    real submission time (see brokers/trading212.py:_submit_pending_
+    orders()) — a retried submission attempt for the same pending row
+    (e.g. after a transient failure earlier in the same run, or a
+    subsequent run that still finds the row PENDING) must never overwrite
+    an already-recorded shadow snapshot with a different, later, already-
+    mutated capacity state.
+
+    decided_at accepts either a datetime or an ISO-format string — the
+    real caller (_load_pending_orders(), a raw SQL SELECT) returns
+    pending_orders.decided_at as a plain string, unlike the ORM's own
+    DateTime column type, which SQLAlchemy's Core insert().values()
+    enforces strictly (unlike a raw text() INSERT, which never validates
+    Python-side types at all -- confirmed directly: this is why
+    PendingOrder's own decided_at column can be written as a string
+    elsewhere in this codebase without incident, while this ORM-level
+    insert cannot)."""
+    if isinstance(decided_at, str):
+        decided_at = datetime.fromisoformat(decided_at)
+    engine = get_engine()
+    stmt = sqlite_insert(AdmissionRankingShadow).values(
+        pending_order_id=pending_order_id, decided_at=decided_at, ticker=ticker, is_etf=is_etf,
+        momentum_pct=momentum_pct, relative_rank_pct=relative_rank_pct, position_gbp=position_gbp,
+        momentum_rank_position=momentum_rank_position,
+        relative_rank_rank_position=relative_rank_rank_position,
+        admitted_under_absolute_momentum=admitted_under_absolute_momentum,
+        admitted_under_relative_rank=admitted_under_relative_rank, active_mode=active_mode,
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["pending_order_id"])
+    with engine.begin() as conn:
+        conn.execute(stmt)
+
+
+def set_admission_ranking_shadow_buy_order(pending_order_id: int, invest_order_id: int) -> None:
+    """Record which real invest_orders row (a BUY) resulted from this
+    shadow decision, once the real submission loop actually places one —
+    only ever called for a candidate the ACTIVE mode admitted. Never
+    raises; a failure here must not affect the real order-placement loop
+    it's called from (the caller wraps this in its own try/except too, per
+    defense in depth, matching this project's established pattern for
+    every other best-effort DB write in brokers/trading212.py)."""
+    engine = get_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE admission_ranking_shadow SET real_buy_order_id = :oid "
+                    "WHERE pending_order_id = :pid"
+                ),
+                {"oid": invest_order_id, "pid": pending_order_id},
+            )
+    except Exception:
+        pass
+
+
+def get_unreconciled_admission_ranking_shadow_rows() -> list[dict]:
+    """Shadow rows with a real BUY attached but no outcome recorded yet —
+    candidates for reconcile_admission_ranking_shadow_outcomes() to check
+    against the (separately, already-existing) pnl table."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, real_buy_order_id FROM admission_ranking_shadow "
+            "WHERE real_buy_order_id IS NOT NULL AND outcome_available = 0"
+        )).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def set_admission_ranking_shadow_outcome(
+    shadow_id: int, *, exit_reason: str, pnl_gbp: float, pnl_pct: float, closed_at,
+) -> None:
+    """Populate a shadow row's realised outcome, read directly from the
+    existing pnl table (never recomputed — see reconcile_admission_
+    ranking_shadow_outcomes()'s own docstring for why this reuses pnl
+    reconstruction rather than reimplementing it)."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE admission_ranking_shadow
+            SET outcome_available = 1, exit_reason = :er, pnl_gbp = :pg, pnl_pct = :pp,
+                closed_at = :ca, outcome_checked_at = :now
+            WHERE id = :id
+        """), {
+            "er": exit_reason, "pg": pnl_gbp, "pp": pnl_pct, "ca": closed_at,
+            "now": datetime.utcnow().isoformat(), "id": shadow_id,
+        })
+
+
+def get_all_admission_ranking_shadow_rows() -> list[dict]:
+    """Every recorded shadow row, oldest first — the raw material
+    output/performance.py:compute_admission_ranking_shadow_summary()
+    aggregates. A plain, unfiltered SELECT — small enough (one row per
+    gate-passing EOD candidate) that filtering in Python is simpler than a
+    family of narrower queries, and this is never called from a render
+    path more than once per cache TTL."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT decided_at, ticker, is_etf, momentum_pct, relative_rank_pct, position_gbp, "
+            "momentum_rank_position, relative_rank_rank_position, "
+            "admitted_under_absolute_momentum, admitted_under_relative_rank, active_mode, "
+            "real_buy_order_id, outcome_available, exit_reason, pnl_gbp, pnl_pct, closed_at "
+            "FROM admission_ranking_shadow ORDER BY decided_at ASC"
+        )).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_admission_ranking_shadow_first_decided_at() -> "datetime | None":
+    """The earliest decided_at recorded in admission_ranking_shadow, or
+    None if the table is empty — the anchor the 90-day review-trigger date
+    is derived from (see CLAUDE.md's "Forward shadow comparison" section
+    for why this must be derived, not hardcoded at build time)."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT MIN(decided_at) FROM admission_ranking_shadow")).fetchone()
+    if row is None or row[0] is None:
+        return None
+    val = row[0]
+    if isinstance(val, datetime):
+        return val
+    return datetime.fromisoformat(str(val))
+
+
 def get_metadata(key: str) -> "datetime | None":
     """Return the value stored for *key* as a datetime, or None if not set."""
     engine = get_engine()
@@ -690,6 +913,12 @@ def _apply_migrations(engine) -> None:
         # (should not exist in practice -- pending_orders has a bounded
         # retention window) is never silently mis-prioritised.
         ("pending_orders", "admission_rank_value", "REAL"),
+        # Forward shadow comparison (2026-08-09) -- momentum_pct was already
+        # stored; relative_rank_pct is the OTHER ranking's own value, needed
+        # so the shadow simulation (brokers/trading212.py:_simulate_dual_
+        # ranking_admission()) can compute BOTH rankings' verdicts at
+        # submission time regardless of which mode is currently active.
+        ("pending_orders", "relative_rank_pct", "REAL"),
     ]
 
     for table, column, col_type in new_columns:
@@ -841,6 +1070,7 @@ def init_db() -> None:
         InstrumentResolution,
         TickerDataQuality,
         TickerSector,
+        AdmissionRankingShadow,
         AccountValueHistory,
         User,
         SystemMetadata,

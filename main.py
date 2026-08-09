@@ -43,14 +43,24 @@ import yaml
 import auth
 from analysis.backtest import compute_metrics, equity_curve_gbp
 from analysis.universe import MEMBERSHIP_STALE_HOURS, is_membership_refresh_stale
-from data.database import get_engine, get_metadata, get_metadata_str, init_db, set_metadata
+from data.database import (
+    get_admission_ranking_shadow_first_decided_at,
+    get_engine,
+    get_metadata,
+    get_metadata_str,
+    init_db,
+    set_metadata,
+)
 from data.ingestion import _yf_symbol, get_all_watchlist_entries
 from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
+    compute_admission_ranking_shadow_review_status,
+    compute_admission_ranking_shadow_summary,
     compute_position_context,
     compute_sector_breakdown,
     get_account_value_history,
+    get_admission_ranking_shadow_rows,
     get_candidate_queue_preview,
     get_crisis_status,
     get_current_account_summary,
@@ -1464,6 +1474,77 @@ def _render_dashboard_page(config: dict) -> None:
                 exit_show["avg_hold"] = exit_show["avg_hold"].round(1)
                 exit_show.columns = ["Trades", "Win Rate %", "Avg Return %", "Avg Hold Days"]
                 st.dataframe(exit_show, width="stretch")
+
+    # --- Forward shadow comparison (2026-08-09) --------------------------
+    # The only forward evidence stream for the relative-ranking
+    # promotion's OPEN CANDIDATE decision -- see CLAUDE.md's "Forward
+    # shadow comparison" section. Pure DB reads (get_admission_ranking_
+    # shadow_rows(), get_admission_ranking_shadow_first_decided_at()) --
+    # no T212/yfinance call, matching every other Dashboard section.
+    shadow_rows = get_admission_ranking_shadow_rows()
+    with st.expander("🔀 Relative-Rank Admission — Forward Shadow Comparison", expanded=False):
+        if not shadow_rows:
+            st.caption(
+                "No shadow-comparison decisions recorded yet — this section "
+                "populates automatically once the next stock order submission "
+                "runs. See CLAUDE.md's \"Forward shadow comparison\" section."
+            )
+        else:
+            summary = compute_admission_ranking_shadow_summary(shadow_rows)
+            first_decided_at = get_admission_ranking_shadow_first_decided_at()
+            review = compute_admission_ranking_shadow_review_status(
+                active_unique_closed_count=summary["active_unique"]["closed_count"],
+                first_decided_at=first_decided_at,
+            )
+            active_mode_label = (
+                "relative rank" if summary["current_active_mode"] == "relative_rank" else "absolute momentum"
+            )
+            first_str = _fmt_uk(first_decided_at) if first_decided_at else "unknown"
+            st.caption(
+                f"Currently live-trading on **{active_mode_label}** admission ordering — "
+                f"{summary['total_decisions']} decision(s) recorded since {first_str} UK."
+            )
+
+            au = summary["active_unique"]
+            iu = summary["inactive_unique"]
+            sh = summary["shared"]
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric(
+                "Shared admissions", sh["count"],
+                help="Both rankings would admit this candidate — carries no discriminating signal.",
+            )
+            c2.metric(f"{active_mode_label.title()}-only admissions", au["count"])
+            c3.metric(
+                "Alternative-only admissions", iu["count"],
+                help="Never actually traded — no live outcome can exist for these (see caption below).",
+            )
+
+            if au["closed_count"] < 5:
+                st.caption(
+                    f"{active_mode_label.title()}-only win rate/mean P&L not yet interpretable "
+                    f"({au['closed_count']}/5 closed positions)."
+                )
+            else:
+                st.caption(
+                    f"{active_mode_label.title()}-only admissions so far: {au['closed_count']} closed, "
+                    f"win rate {au['win_rate']*100:.1f}%, mean P&L "
+                    f"{(au['mean_pnl_pct'] or 0)*100:+.2f}%."
+                )
+
+            st.caption(
+                f"Alternative-ranking-only admissions ({iu['count']}) were never actually traded, "
+                f"so they have no live outcome and never will for these specific decisions — shown "
+                f"as a count only. This is a structural limitation of comparing two rankings against "
+                f"one real account, not a small-sample gap that more time will close."
+            )
+
+            review_date_str = _fmt_uk(review["review_date"]) if review["review_date"] else "unknown"
+            due_str = "**Review is due.**" if review["review_due"] else "Not yet due."
+            st.caption(
+                f"Review trigger: {review['paired_outcomes']}/{review['floor']} paired outcomes, "
+                f"due from {review_date_str} UK (whichever comes later). {due_str}"
+            )
 
     _render_footer()
 

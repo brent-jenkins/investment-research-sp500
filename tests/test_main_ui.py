@@ -983,6 +983,132 @@ def test_dashboard_candidate_queue_and_unconfirmed_exits_are_gone(dashboard_app)
     assert "Placed, Unconfirmed Exits" not in all_text
 
 
+# ---------------------------------------------------------------------------
+# Forward shadow comparison Dashboard section (2026-08-09) -- see CLAUDE.md's
+# "Forward shadow comparison" section. Pure DB reads; must never call T212
+# or yfinance from the render path, matching this project's established
+# render-path-blocking-audit standard.
+# ---------------------------------------------------------------------------
+
+def _seed_admission_ranking_shadow_row(
+    engine, *, pending_order_id, ticker="AAPL", active_mode="absolute_momentum",
+    admitted_momentum=True, admitted_rank=False, outcome_available=False,
+    pnl_gbp=None, pnl_pct=None, decided_at="2026-08-09T21:30:00",
+):
+    from sqlalchemy import text as sa_text
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO admission_ranking_shadow
+                (pending_order_id, decided_at, ticker, is_etf, momentum_pct, relative_rank_pct,
+                 position_gbp, momentum_rank_position, relative_rank_rank_position,
+                 admitted_under_absolute_momentum, admitted_under_relative_rank, active_mode,
+                 outcome_available, pnl_gbp, pnl_pct, exit_reason, closed_at, recorded_at)
+            VALUES (:pid, :decided_at, :ticker, 0, 0.10, 0.05, 500.0, 1, 1, :am, :ar, :mode,
+                    :oa, :pnl_gbp, :pnl_pct, :er, :closed_at, :decided_at)
+        """), {
+            "pid": pending_order_id, "decided_at": decided_at, "ticker": ticker,
+            "am": admitted_momentum, "ar": admitted_rank, "mode": active_mode,
+            "oa": outcome_available, "pnl_gbp": pnl_gbp, "pnl_pct": pnl_pct,
+            "er": "SIGNAL_OFF" if outcome_available else None,
+            "closed_at": decided_at if outcome_available else None,
+        })
+
+
+def test_dashboard_shadow_comparison_is_a_collapsible_expander(dashboard_app):
+    at = dashboard_app.run()
+    assert not at.exception
+    labels = [e.label for e in at.expander]
+    assert any("Forward Shadow Comparison" in label for label in labels)
+
+
+def test_dashboard_shadow_comparison_empty_state_no_crash(dashboard_app):
+    """No shadow rows recorded yet (a fresh deploy, or before the first
+    stock submission run) -- must show a plain, honest "not recorded yet"
+    caption, never crash or show a fabricated zero."""
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.caption)
+    assert "No shadow-comparison decisions recorded yet" in all_text
+
+
+def test_dashboard_shadow_comparison_shows_bucket_counts(db_engine, dashboard_app):
+    _seed_admission_ranking_shadow_row(db_engine, pending_order_id=1, ticker="A", admitted_momentum=True, admitted_rank=True)
+    _seed_admission_ranking_shadow_row(db_engine, pending_order_id=2, ticker="B", admitted_momentum=True, admitted_rank=False)
+    _seed_admission_ranking_shadow_row(db_engine, pending_order_id=3, ticker="C", admitted_momentum=False, admitted_rank=True)
+
+    at = dashboard_app.run()
+    assert not at.exception
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Shared admissions"] == "1"
+    assert metrics["Absolute Momentum-only admissions"] == "1"
+    assert metrics["Alternative-only admissions"] == "1"
+
+
+def test_dashboard_shadow_comparison_states_the_structural_limitation(db_engine, dashboard_app):
+    """The inactive ranking's own unique admissions must be explicitly
+    labelled as never having a live outcome -- not silently shown as a
+    bare number a reader could mistake for a 0% win rate."""
+    _seed_admission_ranking_shadow_row(db_engine, pending_order_id=1, ticker="C", admitted_momentum=False, admitted_rank=True)
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.caption)
+    assert "never actually traded" in all_text
+    assert "no live outcome" in all_text
+
+
+def test_dashboard_shadow_comparison_win_rate_gated_below_five_closed(db_engine, dashboard_app):
+    for i in range(4):
+        _seed_admission_ranking_shadow_row(
+            db_engine, pending_order_id=i + 1, ticker=f"T{i}", admitted_momentum=True, admitted_rank=False,
+            outcome_available=True, pnl_gbp=10.0, pnl_pct=0.05,
+        )
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.caption)
+    assert "not yet interpretable" in all_text
+    assert "4/5" in all_text
+
+
+def test_dashboard_shadow_comparison_shows_real_stats_at_five_closed(db_engine, dashboard_app):
+    for i in range(5):
+        _seed_admission_ranking_shadow_row(
+            db_engine, pending_order_id=i + 1, ticker=f"T{i}", admitted_momentum=True, admitted_rank=False,
+            outcome_available=True, pnl_gbp=10.0, pnl_pct=0.05,
+        )
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.caption)
+    assert "win rate 100.0%" in all_text
+
+
+def test_dashboard_shadow_comparison_shows_review_trigger_progress(db_engine, dashboard_app):
+    _seed_admission_ranking_shadow_row(db_engine, pending_order_id=1, ticker="A")
+    at = dashboard_app.run()
+    assert not at.exception
+    all_text = " ".join(m.value for m in at.caption)
+    assert "Review trigger:" in all_text
+    assert "/30 paired outcomes" in all_text
+
+
+def test_dashboard_shadow_comparison_render_path_never_calls_t212_or_yfinance(db_engine, dashboard_app, mocker):
+    """The decisive render-path proof, matching this project's established
+    pattern (sector breakdown, crisis banner, open-position cards) --
+    patches both the T212 client and yfinance to raise if invoked at all
+    while this section renders, with real seeded data so the section has
+    something non-trivial to actually render."""
+    _seed_admission_ranking_shadow_row(db_engine, pending_order_id=1, ticker="A", outcome_available=True, pnl_gbp=10.0, pnl_pct=0.05)
+    mocker.patch(
+        "brokers.trading212.Trading212Client",
+        side_effect=AssertionError("Shadow comparison section must never construct a Trading212Client"),
+    )
+    mocker.patch(
+        "yfinance.Ticker",
+        side_effect=AssertionError("Shadow comparison section must never call yfinance"),
+    )
+    at = dashboard_app.run()
+    assert not at.exception
+
+
 def test_status_page_shows_placed_unconfirmed_exits_section(status_app):
     """Alongside Candidate Queue (covered by its own dedicated test
     section above) -- confirms this second relocated section also

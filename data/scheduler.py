@@ -1127,6 +1127,22 @@ def _market_hours_check_job() -> None:
         logger.error("Exit check failed: %s", exc, exc_info=True)
 
     try:
+        # Forward shadow comparison reconciliation (2026-08-09) — run right
+        # after the exit check above, since that's the step that actually
+        # causes _reconstruct_pnl() to run and populate new pnl rows this
+        # cycle; checking here means this always reconciles against pnl
+        # data as fresh as this hour's own exit check, not a stale earlier
+        # read. See brokers.trading212.reconcile_admission_ranking_shadow_
+        # outcomes()'s own docstring and CLAUDE.md's "Forward shadow
+        # comparison" section.
+        from brokers.trading212 import reconcile_admission_ranking_shadow_outcomes  # noqa: PLC0415
+        _n_reconciled = reconcile_admission_ranking_shadow_outcomes()
+        if _n_reconciled:
+            logger.info("Forward shadow comparison: %d outcome(s) newly reconciled.", _n_reconciled)
+    except Exception as exc:
+        logger.error("Forward shadow comparison reconciliation failed: %s", exc, exc_info=True)
+
+    try:
         # Stop-health check (2026-08-04) — runs LAST in this job,
         # deliberately after every call above: poll_placed_orders() may
         # have just placed a fresh stop for a newly-FILLED BUY this same

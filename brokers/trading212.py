@@ -1120,14 +1120,24 @@ def _log_order(
     exit_reason: Optional[str] = None,
     var_pct: Optional[float] = None,
     error_message: Optional[str],
-) -> None:
-    """Insert one row into invest_orders (best-effort; never raises)."""
+) -> Optional[int]:
+    """Insert one row into invest_orders (best-effort; never raises).
+
+    Returns the new row's invest_orders.id on success, None on any
+    failure — added 2026-08-09 for the forward shadow comparison
+    (brokers/trading212.py:_submit_pending_orders() uses this to record
+    which real invest_orders row a shadow decision's BUY resulted in, via
+    data.database.set_admission_ranking_shadow_buy_order()). Every
+    existing call site ignored the return value before this change and
+    is unaffected by it — a fire-and-forget INSERT stays fire-and-forget
+    unless a caller opts in to reading the id.
+    """
     try:
         from sqlalchemy import text as sa_text
         from data.database import get_engine
         engine = get_engine()
         with engine.begin() as conn:
-            conn.execute(sa_text("""
+            result = conn.execute(sa_text("""
                 INSERT INTO invest_orders (
                     order_id, ticker, t212_ticker, direction,
                     quantity, estimated_price, estimated_value_gbp,
@@ -1160,8 +1170,10 @@ def _log_order(
                 "error_message":       error_message,
                 "now":                 datetime.utcnow().isoformat(),
             })
+            return result.lastrowid
     except Exception as exc:
         logger.warning("Failed to log T212 order to DB: %s", exc)
+        return None
 
 
 def _reconstruct_pnl(config: dict) -> None:
@@ -1455,6 +1467,7 @@ def _queue_pending_order(
     position_gbp: float,
     momentum_pct: Optional[float],
     admission_rank_value: Optional[float],
+    relative_rank_pct: Optional[float],
     stop_price: Optional[float],
     var_pct: Optional[float],
 ) -> None:
@@ -1472,6 +1485,12 @@ def _queue_pending_order(
     momentum_pct is stored unchanged alongside it (still the real absolute
     momentum, used for display and audit — never overloaded with a
     different meaning depending on admission_ranking_mode).
+
+    relative_rank_pct (2026-08-09, forward shadow comparison) is ALWAYS
+    stored, regardless of admission_ranking_mode — the shadow simulation
+    at submission time (_simulate_dual_ranking_admission()) needs BOTH
+    rankings' own raw values for every candidate to evaluate what each
+    mode would do, not only whichever one is currently active.
     """
     try:
         from sqlalchemy import text as sa_text
@@ -1482,18 +1501,18 @@ def _queue_pending_order(
             conn.execute(sa_text("""
                 INSERT INTO pending_orders (
                     ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                    position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct,
-                    status, created_at
+                    position_gbp, momentum_pct, admission_rank_value, relative_rank_pct,
+                    stop_price, var_pct, status, created_at
                 ) VALUES (
                     :ticker, :t212_ticker, :is_etf, :currency, :now, :decided_price,
-                    :position_gbp, :momentum_pct, :admission_rank_value, :stop_price, :var_pct,
-                    'PENDING', :now
+                    :position_gbp, :momentum_pct, :admission_rank_value, :relative_rank_pct,
+                    :stop_price, :var_pct, 'PENDING', :now
                 )
             """), {
                 "ticker": ticker, "t212_ticker": t212_ticker, "is_etf": is_etf,
                 "currency": currency, "now": now, "decided_price": decided_price,
                 "position_gbp": position_gbp, "momentum_pct": momentum_pct,
-                "admission_rank_value": admission_rank_value,
+                "admission_rank_value": admission_rank_value, "relative_rank_pct": relative_rank_pct,
                 "stop_price": stop_price, "var_pct": var_pct,
             })
     except Exception as exc:
@@ -1560,7 +1579,8 @@ def _load_pending_orders(is_etf: bool) -> list:
     with eng.connect() as conn:
         rows = conn.execute(sa_text("""
             SELECT id, ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                   position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct
+                   position_gbp, momentum_pct, admission_rank_value, relative_rank_pct,
+                   stop_price, var_pct
             FROM pending_orders
             WHERE status = 'PENDING' AND is_etf = :is_etf
             ORDER BY admission_rank_value DESC, decided_at ASC
@@ -3949,6 +3969,7 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                 currency=instrument_currency, decided_price=entry_price,
                 position_gbp=position_gbp, momentum_pct=state["momentum_pct"],
                 admission_rank_value=admission_rank_value,
+                relative_rank_pct=state["relative_rank_pct"],
                 stop_price=stop_price, var_pct=holding_var,
             )
             orders_queued += 1
@@ -4109,6 +4130,126 @@ def project_pending_order_admission(config: dict) -> list[dict]:
             "snapshot_checked_at": snapshot_checked_at,
         })
     return projected
+
+
+def _simulate_dual_ranking_admission(
+    pending: list, total_val: float, invested: float, free_cash: float, max_deployed_pct: float,
+) -> dict:
+    """Pure, read-only simulation of what BOTH admission-ranking modes
+    would do with the SAME candidate pool and capacity state — the
+    computational core of the forward shadow comparison (2026-08-09; see
+    CLAUDE.md's "Forward shadow comparison" section). Reuses
+    _capacity_fit_reason() (the same shared function _submit_pending_
+    orders() and project_pending_order_admission() both already use) for
+    the actual admit/reject decision in each walk — never an
+    independently re-derived approximation of that rule.
+
+    Runs the skip-and-continue capacity walk twice, once per ranking,
+    each starting from the identical (total_val, invested, free_cash)
+    baseline — never mutating the real values the caller is about to use
+    for its own, real walk. Position sizing (position_gbp) is identical
+    in both walks, matching this project's own established finding that
+    admission_ranking_mode changes ONLY ordering, never sizing.
+
+    A candidate with a missing (None) value for a ranking sorts last
+    under that ranking (float("-inf")), the same defensive convention
+    _load_pending_orders() already applies to a NULL admission_rank_value
+    — an unknown-strength candidate is deprioritised, never crashes or
+    wins priority by accident.
+
+    Returns {pending_row_id: {"momentum_rank_position", "relative_rank_
+    rank_position", "admitted_under_absolute_momentum", "admitted_under_
+    relative_rank"}}.
+    """
+    def _walk(sort_value_key):
+        ordered = sorted(
+            pending,
+            key=lambda r: (
+                -(sort_value_key(r) if sort_value_key(r) is not None else float("-inf")),
+                r["decided_at"],
+            ),
+        )
+        local_invested = invested
+        local_free_cash = free_cash
+        result = {}
+        for rank_idx, row in enumerate(ordered, start=1):
+            position_gbp = row["position_gbp"] or 0.0
+            fit_reason = _capacity_fit_reason(position_gbp, local_invested, total_val, local_free_cash, max_deployed_pct)
+            admitted = fit_reason is None
+            if admitted:
+                local_invested += position_gbp
+                local_free_cash -= position_gbp
+            result[row["id"]] = {"rank_position": rank_idx, "admitted": admitted}
+        return result
+
+    momentum_walk = _walk(lambda r: r["momentum_pct"])
+    relative_rank_walk = _walk(lambda r: r["relative_rank_pct"])
+
+    return {
+        row["id"]: {
+            "momentum_rank_position": momentum_walk[row["id"]]["rank_position"],
+            "admitted_under_absolute_momentum": momentum_walk[row["id"]]["admitted"],
+            "relative_rank_rank_position": relative_rank_walk[row["id"]]["rank_position"],
+            "admitted_under_relative_rank": relative_rank_walk[row["id"]]["admitted"],
+        }
+        for row in pending
+    }
+
+
+def record_admission_ranking_shadow(
+    config: dict, pending: list, total_val: float, invested: float, free_cash: float, max_deployed_pct: float,
+) -> None:
+    """Writes one admission_ranking_shadow row per candidate in *pending*
+    (2026-08-09) — see AdmissionRankingShadow's own docstring for the full
+    schema rationale and CLAUDE.md's "Forward shadow comparison" section
+    for why this exists: the only forward evidence stream for the
+    relative-ranking promotion's OPEN CANDIDATE decision.
+
+    Called from _submit_pending_orders(), wrapped in the caller's own
+    try/except — this function itself also never raises (every DB write
+    inside is individually best-effort, matching this project's
+    established pattern for every other write in this module), so a
+    failure here can NEVER interrupt the real order-submission loop that
+    follows it. write_admission_ranking_shadow_row() is an INSERT-or-
+    ignore keyed on pending_order_id, so calling this more than once for
+    the same still-PENDING row (e.g. a retried submission run) is safe —
+    the FIRST recorded snapshot (computed from the pristine capacity
+    state that run started with) always wins, never a later, already-
+    mutated one.
+    """
+    from analysis.decision import resolve_admission_ranking_mode
+    from data.database import write_admission_ranking_shadow_row
+
+    if not pending:
+        return
+    active_mode = resolve_admission_ranking_mode(config)
+    try:
+        results = _simulate_dual_ranking_admission(pending, total_val, invested, free_cash, max_deployed_pct)
+    except Exception as exc:
+        logger.error("Forward shadow comparison: dual-ranking simulation failed — %s", exc, exc_info=True)
+        return
+
+    for row in pending:
+        r = results.get(row["id"])
+        if r is None:
+            continue
+        try:
+            write_admission_ranking_shadow_row(
+                pending_order_id=row["id"], decided_at=row["decided_at"],
+                ticker=row["ticker"], is_etf=bool(row["is_etf"]),
+                momentum_pct=row["momentum_pct"], relative_rank_pct=row["relative_rank_pct"],
+                position_gbp=row["position_gbp"],
+                momentum_rank_position=r["momentum_rank_position"],
+                relative_rank_rank_position=r["relative_rank_rank_position"],
+                admitted_under_absolute_momentum=r["admitted_under_absolute_momentum"],
+                admitted_under_relative_rank=r["admitted_under_relative_rank"],
+                active_mode=active_mode,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Forward shadow comparison: failed to record shadow row for %s: %s",
+                row["ticker"], exc,
+            )
 
 
 def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
@@ -4275,6 +4416,20 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
         )
         return 0
 
+    # Forward shadow comparison (2026-08-09) -- see CLAUDE.md's "Forward
+    # shadow comparison" section. Computed HERE, from the pristine
+    # total_val/invested/free_cash just fetched above and the SAME
+    # `pending` list this function is about to walk for real -- before
+    # anything below mutates that state -- so the shadow simulation is
+    # never independently re-derived from different state later. Wrapped
+    # so a failure here can NEVER affect the real submission loop that
+    # follows: caught, logged, and this function proceeds exactly as if
+    # this block did not exist.
+    try:
+        record_admission_ranking_shadow(config, pending, total_val, invested, free_cash, max_deployed_pct)
+    except Exception as exc:
+        logger.error("Forward shadow comparison recording failed for %s submission — %s", label, exc, exc_info=True)
+
     try:
         open_order_tickers = _load_open_order_tickers(days=resolve_reentry_cooldown_days(config))
     except Exception as exc:
@@ -4434,7 +4589,7 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 )
 
             _api_ccy = meta.get("currencyCode")
-            _log_order(
+            _new_invest_order_id = _log_order(
                 ticker=ticker, t212_ticker=t212_ticker, direction="BUY",
                 quantity=quantity, estimated_price=decided_price, estimated_value_gbp=est_value_gbp,
                 status=status, order_id=order_id, is_etf=row["is_etf"],
@@ -4446,6 +4601,21 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 row["id"], "SUBMITTED" if status == "PLACED" else "FAILED",
                 note=(f"order_id={order_id}" if order_id else error_msg),
             )
+            # Forward shadow comparison (2026-08-09) -- link this shadow
+            # row to the real invest_orders BUY it produced, so a later
+            # reconciliation pass can join the eventual pnl outcome back
+            # to it. Best-effort, never allowed to affect the real
+            # submission loop -- see set_admission_ranking_shadow_buy_
+            # order()'s own docstring.
+            if status == "PLACED" and _new_invest_order_id is not None:
+                try:
+                    from data.database import set_admission_ranking_shadow_buy_order
+                    set_admission_ranking_shadow_buy_order(row["id"], _new_invest_order_id)
+                except Exception as _shadow_exc:
+                    logger.warning(
+                        "Forward shadow comparison: failed to link BUY order for %s: %s",
+                        ticker, _shadow_exc,
+                    )
 
             if status == "FAILED":
                 logger.warning("Halting %s submission after buy-order failure.", label)
@@ -4496,3 +4666,66 @@ def submit_pending_stock_orders(config: dict) -> int:
     decisions. Deliberately not timed to any after-hours window, since
     after-hours order behaviour on this account is unconfirmed."""
     return _submit_pending_orders(config, is_etf=False)
+
+
+def reconcile_admission_ranking_shadow_outcomes() -> int:
+    """Joins realised P&L back onto forward-shadow-comparison rows whose
+    real BUY has been recorded but whose outcome isn't yet known
+    (2026-08-09) — see AdmissionRankingShadow's own docstring and
+    CLAUDE.md's "Forward shadow comparison" section.
+
+    REUSES the existing pnl table directly (a plain SELECT keyed on
+    buy_order_id) — never reimplements _reconstruct_pnl()'s own FIFO BUY/
+    SELL pairing. This function's only job is noticing that a pairing
+    _reconstruct_pnl() already produced now covers a shadow row that was
+    still waiting for one.
+
+    Called from the hourly market_hours_check job
+    (data/scheduler.py:_market_hours_check_job()), after the exit-
+    processing steps that are what actually cause _reconstruct_pnl() to
+    run and populate new pnl rows in the first place — so this always
+    checks against pnl data that's as fresh as that hour's own exit
+    check, not a stale earlier read.
+
+    Never raises (per-row try/except, matching this module's established
+    pattern for every other best-effort reconciliation step). Returns the
+    number of shadow rows newly reconciled this call.
+    """
+    from data.database import (
+        get_unreconciled_admission_ranking_shadow_rows,
+        set_admission_ranking_shadow_outcome,
+    )
+    from sqlalchemy import text as sa_text
+    from data.database import get_engine
+
+    try:
+        unreconciled = get_unreconciled_admission_ranking_shadow_rows()
+    except Exception as exc:
+        logger.error("Forward shadow comparison: failed to read unreconciled rows — %s", exc, exc_info=True)
+        return 0
+    if not unreconciled:
+        return 0
+
+    reconciled = 0
+    eng = get_engine()
+    for shadow_row in unreconciled:
+        try:
+            with eng.connect() as conn:
+                pnl_row = conn.execute(sa_text(
+                    "SELECT exit_reason, pnl_gbp, pnl_pct, exit_date FROM pnl "
+                    "WHERE buy_order_id = :bid LIMIT 1"
+                ), {"bid": shadow_row["real_buy_order_id"]}).mappings().fetchone()
+            if pnl_row is None:
+                continue  # position not closed yet -- try again next cycle
+            set_admission_ranking_shadow_outcome(
+                shadow_row["id"],
+                exit_reason=pnl_row["exit_reason"], pnl_gbp=pnl_row["pnl_gbp"],
+                pnl_pct=pnl_row["pnl_pct"], closed_at=pnl_row["exit_date"],
+            )
+            reconciled += 1
+        except Exception as exc:
+            logger.warning(
+                "Forward shadow comparison: failed to reconcile shadow row %s: %s",
+                shadow_row.get("id"), exc,
+            )
+    return reconciled

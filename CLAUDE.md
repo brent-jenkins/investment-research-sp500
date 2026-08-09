@@ -1340,6 +1340,123 @@ real-money risk regardless of the config default. Full suite (1,059 tests) green
 `feature/relative-rank-admission-2026-08-09` branch (worktree
 `c:\GitHub\investment-app-relranking-promotion`) — not pushed, not deployed, pending explicit review.
 
+## Forward shadow comparison for the relative-rank admission promotion — recording only, OPEN CANDIDATE unchanged (2026-08-09)
+
+**The only forward evidence stream for the relative-ranking promotion's OPEN CANDIDATE decision — built
+immediately after the promotion above landed, per its own stated dependency (the production ranking has
+to exist in `analysis/signals.py` before anything can shadow-compare against it).** A backtest, however
+carefully validated (the study itself, plus a 20-draw robustness test — see the two sections above), is
+still historical; this is what actually answers whether relative-rank ordering beats absolute-momentum
+ordering in live operation, going forward. Built in its own dedicated worktree
+(`c:\GitHub\investment-app-relranking-shadow`, branch `feature/relranking-shadow-comparison-2026-08-09`,
+branched from the promotion branch) per this project's absolute git-worktree rule. **Recording and display
+only — no trading-behaviour change, no sizing/exit change, `trading212_invest.live` untouched.**
+`admission_ranking_mode` still defaults to `absolute_momentum`; whichever mode is actually configured is
+the one that trades for real, the other is recorded only.
+
+**The structural limitation this whole feature exists inside of, stated here first because it shapes
+every other design choice below.** Only ONE ranking mode is ever genuinely live-traded at a time. A real,
+realised outcome can only ever exist for a candidate the currently-ACTIVE mode actually admitted and
+bought — a candidate the INACTIVE mode would have uniquely admitted was never bought under real (or demo)
+money and NEVER WILL have a realised outcome for that specific decision. This is not a "small sample, wait
+longer" gap the way most of this project's other statistical gates are — it is permanent for any row where
+the two rankings disagree, for as long as that mode stays inactive. The whole design below (recording,
+reconciliation, and especially the display) is built to keep this asymmetry explicit rather than blend it
+into one misleading number.
+
+**RECORDING — `data/database.py:AdmissionRankingShadow`, a new table, written from inside the real
+submission path, never a parallel computation.** For every gate-passing candidate the EOD decide phase
+queues, `brokers/trading212.py:_submit_pending_orders()` — right after fetching the account's real, live
+`total_val`/`invested`/`free_cash` and the real eligible `pending` list, BEFORE the real order-placement
+loop mutates any of it — calls `record_admission_ranking_shadow()`, which runs
+`_simulate_dual_ranking_admission()`: the identical skip-and-continue capacity walk twice, once sorted by
+momentum, once by relative rank, both reusing the SAME shared `_capacity_fit_reason()` function the real
+submission loop and the Dashboard's own admission projection already use — never an independently
+re-derived approximation of that rule. Each candidate's own rank position and admit/reject verdict under
+BOTH rankings, plus `momentum_pct`/`relative_rank_pct`/`position_gbp`/`decided_at`/`ticker`, are written
+self-contained into the new table (never joined back to `pending_orders`, which genuinely deletes resolved
+rows after `pending_orders_retention_days` — this table has no such retention limit). A new
+`pending_orders.relative_rank_pct` column (populated at decide time, alongside the already-existing
+`momentum_pct`, regardless of which mode is active) supplies the "other" ranking's own raw value the
+shadow simulation needs but the live decision itself never uses.
+
+**Wrapped so a failure can never affect the real order-placement loop — verified, not just designed.**
+`record_admission_ranking_shadow()`'s own call is wrapped in the caller's try/except; the function itself
+also never raises internally (every DB write is individually best-effort). Two dedicated tests
+(`tests/test_admission_ranking_shadow.py`) deliberately inject a `RuntimeError` — once into the dual-
+ranking simulation itself, once into the later buy-order-linking step inside the real submission loop's
+own per-row try/except — and confirm the real BUY still places successfully and the real `pending_orders`
+row still resolves to `SUBMITTED`, exactly as if the shadow code did not exist. This mirrors the "verified
+to actually fail" discipline this project already applies to its live/backtest parity tests, turned around
+to prove a fail-SAFE property instead of a fail-LOUD one.
+
+**OUTCOME RECONCILIATION reuses the existing `pnl` table directly — never reimplements
+`_reconstruct_pnl()`'s own FIFO BUY/SELL pairing.** When the real submission loop places a genuine BUY for
+a candidate the active mode admitted, `_log_order()` (now returning the new `invest_orders.id` — a small,
+additive change every existing call site already ignored the return value of, so nothing else changed)
+lets the shadow row record `real_buy_order_id`. `reconcile_admission_ranking_shadow_outcomes()` — called
+from the hourly `market_hours_check` job, right after the exit check that is what actually causes new
+`pnl` rows to appear — finds shadow rows with a `real_buy_order_id` set but no outcome yet, and does a
+plain `SELECT ... FROM pnl WHERE buy_order_id = :id`. Never raises; a position still open just isn't
+picked up yet and is retried automatically next cycle.
+
+**THE DISPLAY keeps the structural asymmetry explicit, never blended into one number.**
+`output/performance.py:compute_admission_ranking_shadow_summary()` classifies every row, using its OWN
+recorded `active_mode` (not today's config — a row stays correctly classified even across a future
+config flip), into three buckets: **shared** (both rankings would admit it — real trades exist, but carry
+NO discriminating signal, since the inactive ranking would have made the identical trade); **active-mode-
+only** (the real, discriminating signal — real trades the active ranking chose that the alternative
+wouldn't have; win rate/mean P&L% shown once `closed_count` clears 5, the same house threshold the
+existing Performance Metrics section already uses); **inactive-mode-only** (never actually traded — shown
+as a COUNT ONLY, explicitly labelled as having no live outcome and never will for these decisions, never
+shown as a fabricated 0% win rate). Dashboard: a new "🔀 Relative-Rank Admission — Forward Shadow
+Comparison" expander, pure DB reads (`get_admission_ranking_shadow_rows()`), confirmed by a dedicated
+render-path test that patches both `Trading212Client` and `yfinance.Ticker` to raise if invoked at all.
+
+**THE REVIEW TRIGGER — derived from the first recorded decision, never hardcoded, because a CLAUDE.md note
+alone will not reach a human in 90 days.** Fires WHICHEVER COMES LATER of (i) 90 days from
+`data.database.get_admission_ranking_shadow_first_decided_at()` (the actual earliest recorded row, not a
+build-time constant — a delay in shipping this feature does not silently shorten the window) and (ii)
+`ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES = 30` active-mode-only closed outcomes (the only population
+that can ever carry real signal — see the structural-limitation paragraph above). **30, not the display's
+own smaller 5-closed gate, is the number that decides when the comparison is trustworthy enough to act on,
+not merely worth showing.** Chosen as roughly 6x the house 5-closed "show something at all" threshold —
+enough that one closed trade no longer swings the win rate by ±20 percentage points (at 30, one trade
+moves it ±3.3pp) — while staying reachable within a realistic window: the original study's own A-vs-B
+overlap finding (21.8–23.1%) means roughly 77–79% of real admissions are active-mode-unique, so at this
+system's historical turnover (~180 trades/year across the full candidate pool) 30 is expected to
+accumulate in a few months, keeping the two trigger conditions roughly aligned rather than one dominating
+by default.
+
+**The weekly summary email carries this forward, since that's the mechanism actually intended to reach a
+reader within the window — a CLAUDE.md entry alone is not.** A single compact line, in both the plain-text
+and HTML bodies: `"Forward comparison: 47 paired outcomes (floor: 30) — next check from 2026-11-07."`
+before the trigger fires, changing to `"Forward comparison: trigger conditions met — 47 paired outcomes
+(floor 30 cleared), 2026-11-07 or later reached."` once both conditions clear. **Deliberately avoids the
+word "review"** (and every other word in this project's own established, tested weekly-email tone
+standard's forbidden-word list — `tests/test_briefing.py`'s `_FORBIDDEN_WORDS`, which already bans
+"review" as call-to-action language) — the MEANING the review-trigger needs to convey is expressed in
+neutral, factual wording instead, matching this email's existing calm/no-call-to-action design rather than
+being treated as an exception to it.
+
+**The AMAT-dependency caveat travels with this feature too, so a forward number is never read as
+confirming or refuting the specific +1.99pp backtest figure.** The backtest robustness test found B's
+DIRECTION robust in 20/20 perturbation draws but its MAGNITUDE partly dependent on one ticker (AMAT —
+dropping it alone compressed the measured advantage from +1.993pp to +0.427pp). A forward shadow result
+— however many paired outcomes accumulate — answers "does relative-rank ordering admit genuinely better
+trades in live operation," not "does it beat baseline by exactly 1.99 percentage points" — the same
+qualitative-finding-not-point-estimate framing the robustness test itself already established.
+
+**Tests**: 32 new tests in `tests/test_admission_ranking_shadow.py` (the dual-ranking simulation's
+correctness including a missing-value NULL-sorts-last case, idempotent first-write-wins recording, both
+fail-safe injection proofs, reconciliation against real seeded `pnl` rows, the summary aggregation's own
+structural-asymmetry behaviour, and the review-trigger's date-derivation), 8 new Dashboard render tests in
+`tests/test_main_ui.py` (including the render-path-never-calls-network proof), 5 new weekly-email tests in
+`tests/test_briefing.py` (including the forbidden-tone-word check on both the pre- and post-trigger
+wording). Full suite green. Committed locally on the `feature/relranking-shadow-comparison-2026-08-09`
+branch (worktree `c:\GitHub\investment-app-relranking-shadow`) — not pushed, not deployed, pending explicit
+review.
+
 ## Candidate Queue diagnosed and narrowed from a 2,197-row full-history dump to a ~25-row operational preview (2026-08-09)
 
 **Raised as a symptom, diagnosed before any UI change was made.** The Status page's Candidate Queue was showing 2,197 rows and was slow to load — investigated first, per this project's own standing practice of diagnosing before treating a symptom, rather than reaching straight for paging.
@@ -1460,7 +1577,7 @@ Run across all 408 remediation-added tickers (`research/data_quality_remediation
 
 **Validation — before/after 16-block comparison, single variable changed (candidate pool), continuous-walk convention, no earnings dampener (out of scope):** at `max_total_deployed=0.70`, block-pass rate rose from a badly-failing **1/16 to 9/16** and total P&L fell from £2,211,986.14 to £116,748.91 (−94.7%) — the corruption's own headline anomaly, confirmed and corrected, landing almost exactly on this project's long-documented ~9/16 realistic-stop-fill baseline. At 0.50, 10/16 → 11/16, P&L £33,203.17 → £52,841.47 (rose, not fell — capacity freed by removing corrupted candidates at the lower cap was absorbed by otherwise-crowded-out genuine trades, the capacity-turnover effect this project's own standing requirement asks to be reported separately from the direct effect). Full detail, including that the after-arm's pool still contains all 209 unresolved `NEEDS_REVIEW` tickers (so 9/16 should be read as "corruption removed, adjudication still pending," not "fully clean"): `research/data_quality_remediation_2026-08-07/REPORT.md`.
 
-**Database.** SQLite, `data/database.py`. All tables, verified directly against the current schema: `price_data`, `universe_membership`, `invest_orders` (every order attempt, BUY and SELL, including `stop_order_id`/`stop_order_status` for the broker-side stop), `pnl` (reconstructed realised P&L, FIFO-paired from `invest_orders`), `pending_orders` (decide-then-submit queue, bounded retention), `instrument_resolutions`, `position_reconciliations`, `account_value_history`, `system_metadata`, `schema_migrations`, `ticker_data_quality` (identity-verification status per ticker — see "Recycled-ticker-symbol corruption" above). **There is no persisted backtest-run table** — `run_full_validation()` computes a full result in memory on every call; nothing about a backtest run is written to the database.
+**Database.** SQLite, `data/database.py`. All tables, verified directly against the current schema: `price_data`, `universe_membership`, `invest_orders` (every order attempt, BUY and SELL, including `stop_order_id`/`stop_order_status` for the broker-side stop), `pnl` (reconstructed realised P&L, FIFO-paired from `invest_orders`), `pending_orders` (decide-then-submit queue, bounded retention), `instrument_resolutions`, `position_reconciliations`, `account_value_history`, `system_metadata`, `schema_migrations`, `ticker_data_quality` (identity-verification status per ticker — see "Recycled-ticker-symbol corruption" above), `ticker_sector` (per-ticker sector classification cache), `admission_ranking_shadow` (the relative-rank promotion's forward shadow comparison — see "Forward shadow comparison" above). **There is no persisted backtest-run table** — `run_full_validation()` computes a full result in memory on every call; nothing about a backtest run is written to the database.
 
 **Key `config.yaml` live-trading keys** (`trading212_invest:`, extensively commented in the file itself — treat the file's own comments as more current than any narrative description, including this one): `enabled`, `live` (hard-blocked `true` in code), `max_total_deployed`, `per_trade_pct`, `absolute_max_position_gbp`, `var_confidence`/`var_lookback_days`/`max_risk_pct`/`min_position_gbp`, `stock_max_holding_days`, `stock_trading_enabled`/`stock_submission_enabled`, `price_sanity_threshold_pct`, `pending_orders_retention_days`, `reentry_cooldown_days`, `min_momentum_pct`, `broker_side_stop_enabled`.
 

@@ -114,10 +114,17 @@ def _gather_weekly_data(config: dict) -> dict:
     (output/performance.py's Daily-Briefing/Performance-page functions)
     rather than a fresh, parallel computation of the same thing.
     """
-    from data.database import get_metadata_str
+    from data.database import get_admission_ranking_shadow_first_decided_at, get_metadata_str
     from data.ingestion import get_price_df
     from analysis import crisis
-    from output.performance import compute_sector_breakdown, get_brief_cards, get_pnl_rows
+    from output.performance import (
+        compute_admission_ranking_shadow_review_status,
+        compute_admission_ranking_shadow_summary,
+        compute_sector_breakdown,
+        get_admission_ranking_shadow_rows,
+        get_brief_cards,
+        get_pnl_rows,
+    )
 
     now = datetime.utcnow()
 
@@ -189,11 +196,26 @@ def _gather_weekly_data(config: dict) -> dict:
         get_metadata_str("invest_error") or get_metadata_str("t212_invest_error") or ""
     ).strip()
 
+    # Forward shadow comparison (2026-08-09) -- the only forward evidence
+    # stream for the relative-ranking promotion's OPEN CANDIDATE decision.
+    # See CLAUDE.md's "Forward shadow comparison" section. This is the
+    # mechanism intended to actually reach a reader within the 90-day
+    # window -- a CLAUDE.md note alone would not; this weekly email line
+    # is what carries the review-trigger progress forward in practice.
+    shadow_rows = get_admission_ranking_shadow_rows()
+    shadow_summary = compute_admission_ranking_shadow_summary(shadow_rows)
+    shadow_first_decided_at = get_admission_ranking_shadow_first_decided_at()
+    shadow_review = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=shadow_summary["active_unique"]["closed_count"],
+        first_decided_at=shadow_first_decided_at,
+    )
+
     return {
         "generated_at": now,
         "window_start": window_start,
         "open_positions": open_cards,
         "sector_breakdown": sector_breakdown,
+        "admission_shadow_review": shadow_review,
         "total_value_gbp": total_value_gbp,
         "closed_this_week": closed_this_week,
         "realized_pnl_gbp": realized_pnl_gbp,
@@ -204,6 +226,37 @@ def _gather_weekly_data(config: dict) -> dict:
         "eod_recent": eod_recent,
         "unresolved_error": unresolved_error,
     }
+
+
+def _admission_shadow_review_line(data: dict) -> str:
+    """One-line progress-toward-trigger statement, shared by both the
+    plain-text and HTML bodies -- see CLAUDE.md's "Forward shadow
+    comparison" section. This line is the mechanism actually intended to
+    reach a reader within the 90-day window; a CLAUDE.md note alone would
+    not. Plainly states once both trigger conditions (see compute_
+    admission_ranking_shadow_review_status()) are met, rather than
+    continuing to show a not-yet-there progress line past that point.
+
+    Deliberately avoids the word "review" (and every other word in
+    tests/test_briefing.py's own _FORBIDDEN_WORDS list) -- this weekly
+    email has an established, tested, calm/factual tone standard (no
+    call-to-action language, regardless of good or bad news), and
+    "review" is explicitly one of the words that standard already
+    excludes. The trigger-met/not-yet-met MEANING is conveyed with
+    neutral, factual wording instead."""
+    review = data.get("admission_shadow_review")
+    if not review or review["review_date"] is None:
+        return "Forward comparison: no shadow-comparison decisions recorded yet."
+    if review["review_due"]:
+        return (
+            f"Forward comparison: trigger conditions met -- {review['paired_outcomes']} paired "
+            f"outcomes (floor {review['floor']} cleared), {review['review_date'].date().isoformat()} "
+            f"or later reached."
+        )
+    return (
+        f"Forward comparison: {review['paired_outcomes']} paired outcomes "
+        f"(floor: {review['floor']}) — next check from {review['review_date'].date().isoformat()}."
+    )
 
 
 def _weekly_summary_text(data: dict) -> str:
@@ -247,6 +300,9 @@ def _weekly_summary_text(data: dict) -> str:
                 f"  {s}: {sb['by_capital_pct'][s]:.1f}% (£{sb['by_capital_gbp'][s]:,.2f}, "
                 f"{sb['by_count'][s]} position{'s' if sb['by_count'][s] != 1 else ''})"
             )
+
+    lines.append("")
+    lines.append(_admission_shadow_review_line(data))
 
     lines.append("")
     lines.append(f"Closed this week ({len(data['closed_this_week'])}):")
@@ -326,6 +382,10 @@ def _weekly_summary_html(data: dict) -> str:
             f"<b>Sector concentration (by capital):</b> {' &middot; '.join(parts)}</p>"
         )
 
+    admission_shadow_line = (
+        f'<p style="color:{_NEUTRAL};font-size:13px">{esc(_admission_shadow_review_line(data))}</p>'
+    )
+
     crisis_text = (
         f"fired on {esc(', '.join(data['crisis_fired_dates']))}"
         if data["crisis_fired_dates"] else "did not fire this week"
@@ -360,6 +420,7 @@ def _weekly_summary_html(data: dict) -> str:
         {rows_open}
       </table>
       {sector_line}
+      {admission_shadow_line}
 
       <h3 style="color:{_NEUTRAL}">Closed This Week ({len(data['closed_this_week'])})</h3>
       <table style="border-collapse:collapse;width:100%">

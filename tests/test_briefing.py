@@ -1350,3 +1350,82 @@ def test_gather_weekly_data_sector_breakdown_empty_with_no_open_positions(db_eng
 
     assert data["sector_breakdown"]["total_positions"] == 0
     assert data["sector_breakdown"]["by_count"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Forward shadow comparison weekly-email line (2026-08-09) -- see CLAUDE.md's
+# "Forward shadow comparison" section. The mechanism intended to actually
+# reach a reader within the 90-day review window; a CLAUDE.md note alone
+# would not.
+# ---------------------------------------------------------------------------
+
+def test_weekly_summary_admission_shadow_line_absent_when_no_data():
+    data = _sample_weekly_data(pnl_sign=1.0)  # no "admission_shadow_review" key at all
+    text = _weekly_summary_text(data)
+    html = _weekly_summary_html(data)
+    assert "Forward comparison: no shadow-comparison decisions recorded yet." in text
+    assert "Forward comparison: no shadow-comparison decisions recorded yet." in html
+
+
+def test_weekly_summary_admission_shadow_line_shows_progress_before_trigger():
+    data = _sample_weekly_data(pnl_sign=1.0)
+    data["admission_shadow_review"] = {
+        "review_date": datetime(2026, 11, 7), "review_due": False,
+        "paired_outcomes": 47, "floor": 30,
+    }
+    text = _weekly_summary_text(data)
+    html = _weekly_summary_html(data)
+    assert "47 paired outcomes" in text
+    assert "floor: 30" in text
+    assert "2026-11-07" in text
+    assert "47 paired outcomes" in html
+    assert "2026-11-07" in html
+
+
+def test_weekly_summary_admission_shadow_line_states_trigger_met_plainly():
+    """When both trigger conditions are met, the line must change to
+    plainly say so -- without using any of this email's own forbidden
+    tone words (including "review", explicitly banned by this file's own
+    _FORBIDDEN_WORDS list, which is why this line avoids that word
+    entirely -- see _admission_shadow_review_line()'s own docstring)."""
+    data = _sample_weekly_data(pnl_sign=1.0)
+    data["admission_shadow_review"] = {
+        "review_date": datetime(2026, 11, 7), "review_due": True,
+        "paired_outcomes": 45, "floor": 30,
+    }
+    text = _weekly_summary_text(data)
+    html = _weekly_summary_html(data)
+    assert "trigger conditions met" in text
+    assert "trigger conditions met" in html
+    for word in _FORBIDDEN_WORDS:
+        assert word not in text.lower()
+        assert word not in html.lower()
+
+
+def test_gather_weekly_data_includes_admission_shadow_review(db_engine, mocker):
+    from data.database import write_admission_ranking_shadow_row
+
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    write_admission_ranking_shadow_row(
+        pending_order_id=1, decided_at=datetime.utcnow() - timedelta(days=200), ticker="AAPL", is_etf=False,
+        momentum_pct=0.1, relative_rank_pct=0.05, position_gbp=500.0,
+        momentum_rank_position=1, relative_rank_rank_position=2,
+        admitted_under_absolute_momentum=True, admitted_under_relative_rank=False,
+        active_mode="absolute_momentum",
+    )
+
+    data = _gather_weekly_data({})
+    assert data["admission_shadow_review"]["review_date"] is not None
+    assert data["admission_shadow_review"]["floor"] == 30
+
+
+def test_gather_weekly_data_admission_shadow_review_none_when_no_shadow_data(db_engine, mocker):
+    mocker.patch("output.performance.get_brief_cards", return_value=[])
+    mocker.patch("output.performance.get_pnl_rows", return_value=[])
+    mocker.patch("data.ingestion.get_price_df", return_value=__import__("pandas").DataFrame())
+
+    data = _gather_weekly_data({})
+    assert data["admission_shadow_review"]["review_date"] is None
