@@ -51,9 +51,9 @@ from output.performance import (
     compute_position_context,
     compute_sector_breakdown,
     get_account_value_history,
+    get_candidate_queue_preview,
     get_crisis_status,
     get_current_account_summary,
-    get_pending_candidates,
     get_pnl_rows,
     get_recent_orders,
     get_stored_open_position_cards,
@@ -655,7 +655,7 @@ def _get_open_cards(_config: dict) -> dict:
     get_stored_open_position_cards(). Leading-underscore parameter name is
     the Streamlit convention for "don't try to hash this argument" (config
     is a plain dict, not needed as a cache key — same pattern as
-    _get_projected_admission_cached()). config is accepted only for call-
+    _get_candidate_queue_preview_cached()). config is accepted only for call-
     site symmetry with the rest of this page's cached wrappers; the
     underlying read doesn't use it.
 
@@ -932,20 +932,15 @@ def _get_value_history(days: int) -> list[dict]:
 
 
 @st.cache_data(ttl=60)
-def _get_pending_candidates_cached() -> list[dict]:
-    """Thin cached wrapper around output/performance.py:get_pending_candidates()."""
-    return get_pending_candidates()
-
-
-@st.cache_data(ttl=60)
-def _get_projected_admission_cached(_config: dict) -> list[dict]:
-    """Thin cached wrapper around brokers/trading212.py:
-    project_pending_order_admission() (2026-08-02). Leading underscore on
-    the parameter name is the Streamlit convention for "don't try to hash
-    this argument" — config is a plain dict, not needed as a cache key
-    here since there's only ever one config in play per page render."""
-    from brokers.trading212 import project_pending_order_admission
-    return project_pending_order_admission(_config)
+def _get_candidate_queue_preview_cached(_config: dict) -> dict:
+    """Thin cached wrapper around output/performance.py:
+    get_candidate_queue_preview() (2026-08-09, replaces the earlier
+    separate _get_pending_candidates_cached()/_get_projected_admission_cached()
+    pair — see CLAUDE.md's Candidate Queue narrowing). Leading underscore
+    on the parameter name is the Streamlit convention for "don't try to
+    hash this argument" — config is a plain dict, not needed as a cache
+    key here since there's only ever one config in play per page render."""
+    return get_candidate_queue_preview(_config)
 
 
 @st.cache_data(ttl=60)
@@ -958,68 +953,6 @@ def _get_unconfirmed_exits_cached() -> list[dict]:
 def _get_recent_orders_cached(limit: int = 10) -> list[dict]:
     """Thin cached wrapper around output/performance.py:get_recent_orders()."""
     return get_recent_orders(limit)
-
-
-def _compute_momentum_strength_bands(momentum_values: pd.Series) -> dict:
-    """Relative, percentile-based momentum-strength band boundaries,
-    computed fresh from the CURRENT live candidate pool's own momentum
-    distribution every render — not fixed thresholds (2026-08-02).
-
-    Deliberate design choice, stated explicitly rather than assumed:
-    RELATIVE bands, recalculated against today's own pool each time, not
-    absolute fixed percentages. Reasoning — the same "don't hardcode a
-    threshold that goes stale as conditions shift" trap this codebase has
-    already been burned by for max-holding-days and the old flat position
-    caps (see CLAUDE.md), just applied to a display label instead of a
-    trading parameter: the whole candidate pool's momentum distribution
-    moves with the market regime (a raging bull run lifts every
-    candidate's momentum; a flat/choppy market compresses it), so a fixed
-    absolute cutoff would either mislabel most candidates most of the
-    time or need periodic manual re-tuning to stay meaningful. A relative
-    percentile split adapts automatically and always reflects real,
-    current conditions. The trade-off, stated honestly: labels are not
-    numerically stable day to day — "Strong" today and "Strong" a month
-    ago do not necessarily mean the same underlying momentum percentage —
-    which is an accepted cost given the label's job is to communicate
-    today's relative standing at a glance, not to be a fixed benchmark.
-
-    Bands: bottom 25% "Weak", middle 50% (25th-75th percentile)
-    "Moderate", next 15% (75th-90th) "Strong", top 10% (90th+) "Very
-    Strong" — the standard percentile-decile convention, top decile as
-    "Very Strong". Every candidate on this list already has a positive
-    signal by construction (long/flat only — pending_orders never queues
-    a negative-momentum candidate), so these bands describe the STRENGTH
-    of positive momentum, not a bullish/bearish spectrum.
-
-    Returns {} (every candidate then labels "—") when fewer than 4 usable
-    values exist — not enough data to form 4 meaningful bands.
-    """
-    vals = momentum_values.dropna()
-    if len(vals) < 4:
-        return {}
-    return {
-        "q25": vals.quantile(0.25),
-        "q75": vals.quantile(0.75),
-        "q90": vals.quantile(0.90),
-    }
-
-
-def _momentum_strength_label(momentum_pct, bands: dict) -> str:
-    """Maps one candidate's raw momentum_pct to a qualitative strength
-    label via the relative bands from _compute_momentum_strength_bands()
-    — see that function's docstring for the full reasoning. Displayed
-    ALONGSIDE the raw percentage, never in place of it, same principle as
-    the fixed-denominator/peak-relative drawdown pair shown together
-    elsewhere on this page."""
-    if not bands or pd.isna(momentum_pct):
-        return "—"
-    if momentum_pct >= bands["q90"]:
-        return "Very Strong"
-    if momentum_pct >= bands["q75"]:
-        return "Strong"
-    if momentum_pct >= bands["q25"]:
-        return "Moderate"
-    return "Weak"
 
 
 def _value_history_chart(rows: list[dict]) -> go.Figure:
@@ -2045,69 +1978,34 @@ def _render_status_page(config: dict) -> None:
     # Moved here from the (now-removed) Dashboard section 2026-08-03 (see
     # CLAUDE.md's "Performance page removed — content relocated" section)
     # — positioned beneath T212 Account Status, unconditionally (not
-    # gated on trading212_invest.enabled, matching Log Viewer below):
-    # both this and Placed, Unconfirmed Exits represent PENDING, not-yet-
-    # resolved state ("will this candidate get admitted?" / "will this
-    # sell get confirmed?") — a coherent pairing distinct from the
-    # Dashboard's confirmed, settled real-money activity, and grouped
-    # here with the rest of the Status page's system-state content
-    # rather than the Dashboard's historical record.
+    # gated on trading212_invest.enabled, matching Log Viewer below).
+    #
+    # NARROWED 2026-08-09 (see CLAUDE.md's Candidate Queue narrowing) to
+    # answer exactly one operational question — "what is likely to be
+    # bought tomorrow, in the order it will be attempted" — rather than
+    # showing the full retained pending_orders history. Resolved rows
+    # (REJECTED_CAPACITY/SUBMITTED/SKIPPED_*/SUPERSEDED) are no longer
+    # queried or displayed here at all; they remain completely untouched
+    # in the database, still fully available for research (e.g. the
+    # selection audit's own use of REJECTED_CAPACITY volume) via direct
+    # DB access or output/performance.py:get_pending_candidates().
     st.divider()
     st.markdown("### Candidate Queue")
     st.caption(
-        "Every decision queued at EOD, still retained by the 30-day pending_orders "
-        "retention policy — whatever became of it: still awaiting its exchange-timed "
-        "submission window (14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware order "
-        "submission\" section), or already resolved (submitted, skipped, rejected on "
-        "capacity, or superseded by a fresh re-run). A resolved row is a real, final, "
-        "historical outcome — not something that disappears once decided."
+        "What is likely to be bought tomorrow, in the order it will be attempted — "
+        "still-PENDING decisions only, ranked by the same momentum-descending priority "
+        "real submission uses (14:30 UTC for stocks — see CLAUDE.md's \"Exchange-aware "
+        "order submission\" section). Resolved decisions (submitted, skipped, rejected "
+        "on capacity, superseded) are no longer shown on this page — they stay in the "
+        "database, unaffected, for research use."
     )
-    candidates = _get_pending_candidates_cached()
-    if not candidates:
-        st.info("No candidates currently queued or retained.")
+    preview = _get_candidate_queue_preview_cached(config)
+    if not preview["rows"]:
+        st.info("No candidates currently pending.")
     else:
-        projected = _get_projected_admission_cached(config)
-        projected_by_ticker = {p["ticker"]: p["projected_status"] for p in projected}
-        _snap_checked_at = next(
-            (p["snapshot_checked_at"] for p in projected if p.get("snapshot_checked_at")), None,
-        )
-
-        cdf = pd.DataFrame(candidates).copy()
-        # Real status wins for an already-resolved row — only a genuinely
-        # still-PENDING row gets the live re-projected status. Looked up per
-        # ROW, not by ticker: a ticker can have several historical rows
-        # (e.g. an earlier SUPERSEDED decision and the later, final one that
-        # replaced it), and a ticker-keyed map would silently show one row's
-        # status on the other (2026-08-03 fix).
-        cdf["Status"] = cdf.apply(
-            lambda r: r["status"] if r["status"] != "PENDING"
-            else projected_by_ticker.get(r["ticker"], "PROJECTION_UNAVAILABLE"),
-            axis=1,
-        )
-        cdf["Note"] = cdf["resolution_note"].fillna("—")
-        cdf["decided_date"] = pd.to_datetime(cdf["decided_at"]).dt.date
-        cdf["decided_at"] = pd.to_datetime(cdf["decided_at"]).dt.strftime("%Y-%m-%d %H:%M")
-
-        # Momentum-strength bands are computed per decision-date cohort, not
-        # across the whole table (2026-08-03) -- now that resolved rows from
-        # earlier days are shown alongside today's, computing one set of
-        # bands across every day at once would silently mix different days'
-        # momentum distributions together, breaking _compute_momentum_
-        # strength_bands()'s own documented "relative to that day's pool"
-        # design. Grouping by decided_date keeps each day's candidates
-        # judged only against their own day's real pool, exactly as before
-        # this fix for whichever day is the most recent.
-        def _label_group(s: pd.Series) -> pd.Series:
-            bands = _compute_momentum_strength_bands(s)
-            return s.map(lambda v: _momentum_strength_label(v, bands))
-        cdf["Strength"] = cdf.groupby("decided_date")["momentum_pct"].transform(_label_group)
-
-        cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
-        cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
-
-        if _snap_checked_at:
+        if preview["snapshot_checked_at"]:
             try:
-                _snap_dt = datetime.fromisoformat(_snap_checked_at)
+                _snap_dt = datetime.fromisoformat(preview["snapshot_checked_at"])
                 _snap_fmt, _snap_age = _age_display(_snap_dt)
                 st.caption(f"📸 Projection based on account snapshot as of **{_snap_fmt} UTC** ({_snap_age}).")
             except Exception:
@@ -2115,33 +2013,38 @@ def _render_status_page(config: dict) -> None:
         else:
             st.caption("📸 Projection unavailable — no account snapshot stored yet.")
         st.caption(
-            "⚠️ **A `PROJECTED_*` status is a projection, not a guarantee** — shown only for "
-            "a row still genuinely `PENDING`. Computed by replaying the same momentum-ranked, "
-            "skip-and-continue capacity check real submission uses, against the account's "
-            "last STORED snapshot (hourly-refreshed, or sooner via the Refresh Account button "
-            "above — see the timestamp just above) — the actual decision only happens at real "
-            "submission time, against whatever the account's state is *at that moment*, which "
-            "can genuinely change in between (a position closing, an emergency exit, or simply "
-            "the stored snapshot having gone stale). Any other status shown is the row's real, "
-            "final, historical outcome — not a projection."
+            "⚠️ **A `PROJECTED_*` status is a projection, not a guarantee** — computed by "
+            "replaying the same momentum-ranked, skip-and-continue capacity check real "
+            "submission uses, against the account's last STORED snapshot (hourly-refreshed, "
+            "or sooner via the Refresh Account button above — see the timestamp just above). "
+            "The actual decision only happens at real submission time, against whatever the "
+            "account's state is *at that moment*, which can genuinely change in between (a "
+            "position closing, an emergency exit, or simply the stored snapshot having gone "
+            "stale)."
         )
         st.caption(
-            "**Strength** is relative to that candidate's own decision-date cohort (bottom "
-            "25% Weak · middle 50% Moderate · next 15% Strong · top 10% Very Strong), "
-            "recalculated fresh per day — not a fixed threshold — so it reflects that day's "
-            "real conditions rather than going stale as the market moves. The raw percentage "
-            "is always shown alongside it."
+            f"Showing top {preview['shown']} of {preview['total_pending']} pending "
+            "(ranked by submission priority, cut off just past the projected admission line)."
         )
-        status_options = sorted(cdf["Status"].unique().tolist())
-        status_filter = st.multiselect(
-            "Filter by status", options=status_options, default=status_options,
-            key="candidate_status_filter",
+        st.caption(
+            "**Strength** is relative to today's full pending pool (bottom 25% Weak · "
+            "middle 50% Moderate · next 15% Strong · top 10% Very Strong), recalculated "
+            "fresh each render from ALL pending candidates — not just the ones shown "
+            "above — so it reflects real, current conditions rather than a fixed "
+            "threshold. The raw percentage is always shown alongside it."
         )
-        cdf = cdf[cdf["Status"].isin(status_filter)]
+        if preview["fully_deployed"]:
+            st.caption(
+                "🔒 **The account is currently fully deployed** — every pending candidate "
+                "is projected `PROJECTED_REJECT_CAPACITY`; none is projected to be admitted "
+                "right now. That's the account's real capacity state, not a broken projection."
+            )
 
-        cdf = cdf[["ticker", "Status", "momentum_pct", "Strength", "position_gbp", "decided_at", "Note"]]
-        cdf.columns = ["Ticker", "Status", "Momentum", "Strength", "Sized Position", "Decided At", "Note"]
-        st.caption(f"{len(cdf)} of {len(candidates)} candidates shown")
+        cdf = pd.DataFrame(preview["rows"]).copy()
+        cdf["momentum_pct"] = cdf["momentum_pct"].map(lambda v: f"{v * 100:+.1f}%" if pd.notna(v) else "—")
+        cdf["position_gbp"] = cdf["position_gbp"].map(lambda v: f"£{v:,.2f}" if pd.notna(v) else "—")
+        cdf = cdf[["rank", "ticker", "momentum_pct", "strength", "position_gbp", "projected_status"]]
+        cdf.columns = ["Rank", "Ticker", "Momentum", "Strength", "Sized Position", "Status"]
         st.dataframe(cdf, width="stretch", hide_index=True)
 
     # ── Placed, Unconfirmed Exits ──────────────────────────────────────────
