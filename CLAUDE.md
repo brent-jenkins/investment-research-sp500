@@ -1237,6 +1237,109 @@ demo-only (`trading212_invest.live: false`) regardless, so nothing here is urgen
 standpoint — but the research-to-production gap is real and should not be skipped because this result
 looks strong.
 
+## Relative-rank admission ordering promoted to production code — OPEN CANDIDATE, not adopted (2026-08-09)
+
+**The relative-ranking study's own mechanism (admission ordered by cross-sectional relative rank instead
+of absolute momentum) is now a real, tested option in the production codebase — but the config default
+still points at the OLD behaviour, and nothing about live trading changed.** This section documents the
+promotion work the study's own "What this doesn't close" and the 20-draw robustness test both flagged as
+required before the finding could even be considered for real use. Promoting the CODE is deliberately
+separated from adopting the BEHAVIOUR: `trading212_invest.admission_ranking_mode` defaults to
+`"absolute_momentum"` (today's real, current behaviour, byte-for-byte unchanged), and switching it to
+`"relative_rank"` is a distinct, later, deliberate decision — not a consequence of this work landing.
+
+**What actually changed, precisely, matching the study's own scope statement exactly.** Admission
+ordering only — which gate-passing candidate wins a scarce capacity slot when more qualify than there is
+room for. The entry gate (momentum > 0 + the 2% floor), `SIGNAL_OFF`, every other exit reason, sizing, and
+capacity accounting are all unaffected and stay keyed to absolute momentum regardless of this setting.
+Arm C (the added `RANK_DROPPED` de-selection exit) was explicitly excluded from this promotion, exactly as
+the study itself recommended (C did not beat B in either pool).
+
+**The two new production pieces, mirroring the shared-implementation pattern this project already uses
+throughout — see "There is exactly one implementation of any given trading decision" above.**
+- `analysis/signals.py:compute_relative_rank_series()` — the 12-minus-1 cross-sectional signal
+  (`close(t-21)/close(t-252) - 1`), promoted verbatim from the study's own research-only
+  `cross_sectional_signal.py`. Carries the identical staleness-guard mechanism as
+  `compute_momentum_series()`'s own `_MAX_ANCHOR_GAP_DAYS`, tested with the same synthetic-gap fixture
+  style already established in `tests/test_signals.py` (a real gap in either the 1-month or 12-month
+  anchor correctly resolves to `NaN`, recovers once a full gapless window exists past the gap).
+- `analysis/decision.py:resolve_admission_ranking_mode(config)` / `resolve_admission_rank_value(*,
+  momentum, relative_rank, mode)` — the ONE function both `analysis/backtest.py`'s `_admit_group()` and
+  `brokers/trading212.py`'s `maybe_place_orders()` call to resolve the sort key used for capacity-
+  constrained admission. `_load_pending_orders()`'s SQL `ORDER BY` and `output/performance.py`'s two
+  display-side candidate-queue queries were all renamed from `momentum_pct DESC` to
+  `admission_rank_value DESC` (a new `pending_orders.admission_rank_value` column, populated identically
+  by live's decide phase and read by the same submission-priority ordering that already existed) —
+  behaviour-preserving in the default mode, since `admission_rank_value` equals `momentum_pct` whenever
+  `admission_ranking_mode` is `"absolute_momentum"`.
+
+**All four structural live/backtest parity layers got genuine new coverage, not a retrofit, per the
+promotion's own requirement.** Layer 1 (`tests/test_decision_logic_placement.py`)'s AST scanner keyword
+list now includes `admission_rank`/`admission_ranking_mode`/`relative_rank` — a defensive, forward-looking
+addition, since both real call sites already correctly route through the shared function. Layer 4
+(`tests/test_one_sided_decision_rules.py`) confirms both new `analysis/decision.py` functions are called
+by both live and backtest with no stale exemption. **A new file,
+`tests/test_admission_ranking_parity.py`, implements Layer 3's own requirement directly**: two synthetic
+tickers engineered with a genuine momentum/relative-rank crossover (A has higher absolute momentum, B has
+higher relative rank — verified numerically, not assumed) race for one scarce capacity slot; live order
+submission and the backtest engine must agree on the same winner under each mode, and do. **Verified to
+actually fail, not just pass**: `analysis.backtest.resolve_admission_rank_value` was monkeypatched to
+silently ignore `mode` and always return momentum (simulating exactly the "a call site quietly stops
+calling the shared function correctly" regression this test exists to catch) — the broken backtest then
+falls back to the momentum winner while live (unbroken) still picks the relative-rank winner, and the two
+sides correctly disagree, exactly as a real regression should be caught. **Layer 2
+(`tests/test_comprehensive_replay_parity.py`) gained a full re-run of its own existing ~320-day,
+multi-ticker, capacity-sharing walk under `admission_ranking_mode="relative_rank"`** — a genuinely
+different kind of check from the targeted single-day race above (a long, un-cherry-picked scenario
+nobody engineered in advance to expose one specific difference), confirming the mode switch doesn't
+silently break anything else. Building this exposed one real gap worth recording: the two synthetic-price
+fixture functions had to be split into separate backtest-length (253 rows — sized so the frame's only row
+is also the first day either signal is non-`NaN`, since the backtest engine admits on a ticker's first
+eligible day, not its last) and live-length (305 rows — clearing `_ticker_state()`'s own 300-row minimum-
+history floor, since live only ever evaluates the frame's latest row) variants; an earlier single-frame
+version silently produced a scenario with no real crossover on the day that actually mattered, caught
+only because the resulting admitted set didn't match either arm's expected winner.
+
+**Reproduced Arm B's own study figures via the real production code path — not the disposable research
+engine — before any of the above was trusted as sufficient.** `research/relative_ranking_promotion_verify_2026-08-09/`
+re-ran the study's own Pool 2 CLEAN comparison (612 CLEAN tickers, price data through 2026-08-07 — DB
+state reconfirmed fresh, not assumed) using the real, unmodified `analysis/backtest.py:
+simulate_portfolio_compounding_mtm()`, switching only the new `admission_ranking_mode` config key.
+**Arm A: 4,919 trades, £103,926.50 total P&L. Arm B: 4,876 trades, £166,830.11 total P&L — both figures
+match the study's own `trades_pool2_clean_{A,B}.csv` exactly, 0 row-level mismatches after sorting both
+frames onto a canonical `(ticker, entry_date, exit_date)` order** (a first comparison pass showed hundreds
+of apparent "mismatches" despite identical trade counts and identical total P&L to the penny — investigated
+before being trusted, traced to comparing raw insertion order rather than trade identity; the engine's
+day-by-day event walk doesn't guarantee two separate runs return trades in the same row order even when
+the trade sets are identical). Arm A's own figures additionally match the study's separately-reported
+degenerate-case parity check (`_sort_key="momentum"` vs. raw production, byte-identical, same two numbers)
+— three independent runs now agree exactly. The promotion changed no backtest behaviour relative to the
+research finding it promotes.
+
+**The caveat that must travel with this result, everywhere it's cited — stated here and in `config.yaml`'s
+own comment on the key, not left implicit in either place.** The robustness test
+(`research/relranking_robustness_2026-08-09/REPORT.md`, on the branch
+`research/relranking-robustness-2026-08-09` — pushed to its own remote branch, not yet merged to `main` as
+of this promotion) ran 20 paired perturbation draws (10 single-ticker drops, 6 start-date shifts, 4
+tie-break reshuffles) and found the DIRECTION of B's advantage robust in every single draw — 20/20
+positive, the unperturbed +1.993pp sitting exactly at the distribution's median and mode, B-only
+admissions beating A-only admissions on mean P&L% in all 20 draws with no exception. **But the MAGNITUDE
+is partly dependent on one ticker**: dropping AMAT alone compresses the measured advantage from +1.993pp
+to +0.427pp — about 21% of the typical value, by far the largest compression any single perturbation
+produced, and on its own (if it were the only data point available) below this project's own ~1.08pp
+noise-floor bar for a "decisive" result. It does not reverse or come close to reversing the finding, and
+19 of the other 20 draws clear the noise floor comfortably — but "relative-rank ordering admits genuinely
+better trades" is the finding to rely on going forward, not the specific +1.99pp point estimate.
+
+**This is an OPEN CANDIDATE pending forward validation, not a closed study, and not a production
+decision.** The code is promoted, tested, and verified to reproduce the research finding exactly; the
+BEHAVIOUR is not adopted — `admission_ranking_mode` stays at its default (`"absolute_momentum"`) until the
+forward shadow-comparison (see next section) provides real, live-operation evidence, not merely a stronger
+backtest. `trading212_invest.live` remains `false`, untouched by this work, so nothing here carries any
+real-money risk regardless of the config default. Full suite (1,059 tests) green. Committed locally on the
+`feature/relative-rank-admission-2026-08-09` branch (worktree
+`c:\GitHub\investment-app-relranking-promotion`) — not pushed, not deployed, pending explicit review.
+
 ## Candidate Queue diagnosed and narrowed from a 2,197-row full-history dump to a ~25-row operational preview (2026-08-09)
 
 **Raised as a symptom, diagnosed before any UI change was made.** The Status page's Candidate Queue was showing 2,197 rows and was slow to load — investigated first, per this project's own standing practice of diagnosing before treating a symptom, rather than reaching straight for paging.
@@ -1268,6 +1371,7 @@ looks strong.
 - `resolve_dynamic_max_position_gbp(...)` / `resolve_cash_constrained_position_gbp(...)` / `is_position_size_viable(...)` — VaR-based position sizing as a percentage of the account's real, current balance (`per_trade_pct: 0.05`, `max_total_deployed: 0.7`), with an `absolute_max_position_gbp` backstop (rarely binding) and a minimum-viable-order floor. `max_total_deployed`'s own "already deployed" figure is genuine mark-to-market (T212's `investments.currentValue`, unrealized gains/losses included) — confirmed, evidence-based (not switched to cost-basis, which real block-validated history shows is measurably worse), see history's "Deployment-cap accounting — mark-to-market vs cost-basis". **Raised from 0.5 to 0.8 on 2026-08-06 (a deliberate user decision, not a research-backed one), then reset back to 0.7 on 2026-08-07, also a deliberate user decision.** The deployment-cap sweep (`research/deployment_cap_sweep_2026-08-06`, "A cost is safe to defer only while it's constant across the arms being compared" above) tested only 0.50/0.70/0.95 and found cost-adjusted CAGR at every tested level *underperformed* the 0.50 baseline once FX/turnover costs (which scale with the higher trade count a bigger cap enables) were modelled — 0.7 was one of the tested levels, not an untested midpoint. Still safe to run as-is only because live trading remains demo-only (`live: false`); re-run `run_full_validation()` with this value before ever considering enabling real-money trading.
 - `is_asset_class_enabled(...)` — the ETF/stock trading-enabled switches (ETF path is permanently off; stock path is `stock_trading_enabled`).
 - `is_submission_price_move_blocked(...)` — the submission-time price-sanity check (see below).
+- `resolve_admission_ranking_mode(config)` / `resolve_admission_rank_value(...)` (2026-08-09) — the sort key used to order gate-passing candidates for capacity-constrained admission when more qualify than there is room for; does NOT touch the entry gate, `SIGNAL_OFF`, or any other exit reason, which stay keyed to absolute momentum regardless. `admission_ranking_mode` defaults to `"absolute_momentum"` (today's real behaviour, unchanged); `"relative_rank"` (cross-sectional 12-minus-1 rank, `analysis/signals.py:compute_relative_rank_series()`) is a promoted, tested, NOT-YET-ADOPTED alternative — see "Relative-rank admission ordering promoted to production code" below for the full record.
 
 **Position count is emergent, not a separately-enforced cap** — it falls out of `per_trade_pct` and `max_total_deployed` together. There is no `max_open_positions` or flat `max_position_gbp` any more (both were removed in favour of the percentage-of-current-balance scheme — see history's "Live execution switched to the compounding two-parameter scheme").
 

@@ -118,3 +118,90 @@ def test_momentum_recovers_once_a_full_gapless_window_exists_past_the_gap():
     # (row 300+i-252) is once again inside the post-gap, contiguous run --
     # real signal must resume.
     assert pd.notna(mom.iloc[300 + 252])
+
+
+# ---------------------------------------------------------------------------
+# compute_relative_rank_series() -- 12-minus-1 relative-rank value, promoted
+# from research code 2026-08-09 (see analysis/signals.py's own docstring for
+# the relative-ranking study this closes the promotion loop for). Same
+# staleness-guard failure mode and shape of test as compute_momentum_series()
+# above, plus the additional 1-month leg.
+# ---------------------------------------------------------------------------
+
+def test_relative_rank_is_nan_before_lookback_window():
+    close = _close_series(n=300)
+    rank = v2s.compute_relative_rank_series(close)
+    assert rank.iloc[:v2s.RANK_LOOKBACK_DAYS].isna().all()
+    assert rank.iloc[v2s.RANK_LOOKBACK_DAYS:].notna().all()
+
+
+def test_relative_rank_positive_for_rising_series():
+    close = _close_series(n=400, daily_drift=0.001)
+    rank = v2s.compute_relative_rank_series(close)
+    assert rank.iloc[-1] > 0
+
+
+def test_relative_rank_negative_for_falling_series():
+    close = _close_series(n=400, daily_drift=-0.001)
+    rank = v2s.compute_relative_rank_series(close)
+    assert rank.iloc[-1] < 0
+
+
+def test_relative_rank_excludes_the_most_recent_month_unlike_momentum():
+    """The defining difference from compute_momentum_series(): a sharp
+    move in the final RANK_SKIP_DAYS days changes momentum but not the
+    relative-rank value, since the rank anchor stops 21 trading days short
+    of today."""
+    close = _close_series(n=400, daily_drift=0.001)
+    close_with_late_crash = close.copy()
+    close_with_late_crash.iloc[-5:] *= 0.5  # crash in the last week only
+
+    mom_before = v2s.compute_momentum_series(close).iloc[-1]
+    mom_after = v2s.compute_momentum_series(close_with_late_crash).iloc[-1]
+    rank_before = v2s.compute_relative_rank_series(close).iloc[-1]
+    rank_after = v2s.compute_relative_rank_series(close_with_late_crash).iloc[-1]
+
+    assert mom_after < mom_before  # momentum reacts to the late crash
+    assert rank_after == rank_before  # relative rank does not -- anchor predates it
+
+
+def test_relative_rank_nan_immediately_after_a_real_gap():
+    close = _gapped_close_series()
+    rank = v2s.compute_relative_rank_series(close)
+    # Row 300's 252-rows-back anchor (row 48) is calendar-stale, same
+    # mechanism as compute_momentum_series()'s own test above.
+    assert pd.isna(rank.iloc[300])
+    assert pd.isna(rank.iloc[310])
+
+
+def test_relative_rank_unaffected_by_a_short_gap_within_tolerance():
+    dates1 = pd.bdate_range("2020-01-01", periods=300)
+    dates2 = pd.bdate_range(dates1[-1] + pd.Timedelta(days=5), periods=100)  # 5-day halt
+    idx = pd.DatetimeIndex(list(dates1) + list(dates2))
+    vals = list(100.0 + i * 0.5 for i in range(400))
+    close = pd.Series(vals, index=idx)
+    rank = v2s.compute_relative_rank_series(close)
+    assert pd.notna(rank.iloc[300])
+
+
+def test_relative_rank_recovers_once_a_full_gapless_window_exists_past_the_gap():
+    close = _gapped_close_series()
+    rank = v2s.compute_relative_rank_series(close)
+    assert pd.notna(rank.iloc[300 + 252])
+
+
+def test_relative_rank_nan_when_only_the_1month_leg_is_calendar_stale():
+    """A gap shorter than _MAX_ANCHOR_GAP_DAYS (so the 252-day leg is fine)
+    but longer than _MAX_1MO_ANCHOR_GAP_DAYS must still suppress the value
+    -- the 1-month leg has its own, tighter guard, not just the 12-month
+    one."""
+    dates1 = pd.bdate_range("2020-01-01", periods=300)
+    # ~100-calendar-day halt: comfortably within _MAX_ANCHOR_GAP_DAYS (400)
+    # for the 12-month leg, but well past _MAX_1MO_ANCHOR_GAP_DAYS (60) for
+    # the 1-month leg specifically.
+    dates2 = pd.bdate_range(dates1[-1] + pd.Timedelta(days=100), periods=100)
+    idx = pd.DatetimeIndex(list(dates1) + list(dates2))
+    vals = list(100.0 + i * 0.5 for i in range(400))
+    close = pd.Series(vals, index=idx)
+    rank = v2s.compute_relative_rank_series(close)
+    assert pd.isna(rank.iloc[300])

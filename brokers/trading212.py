@@ -83,6 +83,8 @@ from analysis.decision import (
     is_submission_price_move_blocked,
     passes_entry_gate,
     passes_momentum_floor,
+    resolve_admission_rank_value,
+    resolve_admission_ranking_mode,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
     resolve_min_momentum_floor,
@@ -1452,6 +1454,7 @@ def _queue_pending_order(
     decided_price: float,
     position_gbp: float,
     momentum_pct: Optional[float],
+    admission_rank_value: Optional[float],
     stop_price: Optional[float],
     var_pct: Optional[float],
 ) -> None:
@@ -1460,6 +1463,15 @@ def _queue_pending_order(
     Decide-phase (maybe_place_orders()) writes here instead of calling
     place_market_order() directly — see "Exchange-aware order submission"
     in CLAUDE.md. A separate, exchange-timed job submits this later.
+
+    admission_rank_value (2026-08-09) is the value _load_pending_orders()
+    actually sorts admission priority by — resolved once, at decide time,
+    via analysis/decision.py:resolve_admission_rank_value(), so live can
+    never resolve a different priority value at submission time than the
+    one the backtest engine would compute for the identical inputs.
+    momentum_pct is stored unchanged alongside it (still the real absolute
+    momentum, used for display and audit — never overloaded with a
+    different meaning depending on admission_ranking_mode).
     """
     try:
         from sqlalchemy import text as sa_text
@@ -1470,15 +1482,18 @@ def _queue_pending_order(
             conn.execute(sa_text("""
                 INSERT INTO pending_orders (
                     ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                    position_gbp, momentum_pct, stop_price, var_pct, status, created_at
+                    position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct,
+                    status, created_at
                 ) VALUES (
                     :ticker, :t212_ticker, :is_etf, :currency, :now, :decided_price,
-                    :position_gbp, :momentum_pct, :stop_price, :var_pct, 'PENDING', :now
+                    :position_gbp, :momentum_pct, :admission_rank_value, :stop_price, :var_pct,
+                    'PENDING', :now
                 )
             """), {
                 "ticker": ticker, "t212_ticker": t212_ticker, "is_etf": is_etf,
                 "currency": currency, "now": now, "decided_price": decided_price,
                 "position_gbp": position_gbp, "momentum_pct": momentum_pct,
+                "admission_rank_value": admission_rank_value,
                 "stop_price": stop_price, "var_pct": var_pct,
             })
     except Exception as exc:
@@ -1506,14 +1521,22 @@ def _has_pending_order(ticker: str) -> bool:
 
 
 def _load_pending_orders(is_etf: bool) -> list:
-    """PENDING rows for one asset class, ranked by signal strength — strongest
-    trailing-12-month momentum first (2026-08-01, replaces the confirmed-
-    arbitrary decided_at-then-config-order priority rule — see CLAUDE.md's
-    "Trade prioritization and capacity-allocation engine" section). Priority
-    ("is this worth doing") and position size ("can we fit it") are
-    deliberately independent questions: this function only ever answers the
-    first — the caller (_submit_pending_orders()) walks rows in this order
-    and decides fit separately, per candidate, against live capacity.
+    """PENDING rows for one asset class, ranked by admission_rank_value —
+    strongest first (2026-08-01, replaces the confirmed-arbitrary decided_at-
+    then-config-order priority rule — see CLAUDE.md's "Trade prioritization
+    and capacity-allocation engine" section). Priority ("is this worth
+    doing") and position size ("can we fit it") are deliberately independent
+    questions: this function only ever answers the first — the caller
+    (_submit_pending_orders()) walks rows in this order and decides fit
+    separately, per candidate, against live capacity.
+
+    Sorts by admission_rank_value (2026-08-09), not momentum_pct directly —
+    the value resolved at decide time via analysis/decision.py:resolve_
+    admission_rank_value(), which equals momentum_pct byte-identically in
+    the default (absolute_momentum) admission_ranking_mode, so this is a
+    behaviour-preserving rename for every existing config. Only diverges
+    from momentum_pct when admission_ranking_mode is switched to
+    relative_rank.
 
     Only ever called separately per asset class (ETF submission and stock
     submission are two distinct scheduled jobs, LSE-hours vs NYSE-hours) —
@@ -1526,10 +1549,10 @@ def _load_pending_orders(is_etf: bool) -> list:
     two-pass-per-day structure in analysis/backtest.py:
     simulate_portfolio_compounding() for the same reasoning applied there.
 
-    SQLite's default NULL ordering puts a NULL momentum_pct (should not
-    happen for a real queued entry, but defensively) last in a DESC sort —
-    an unknown-strength candidate is deprioritised, never crashes or wins
-    priority by accident.
+    SQLite's default NULL ordering puts a NULL admission_rank_value (should
+    not happen for a real queued entry, but defensively) last in a DESC
+    sort — an unknown-strength candidate is deprioritised, never crashes or
+    wins priority by accident.
     """
     from sqlalchemy import text as sa_text
     from data.database import get_engine
@@ -1537,10 +1560,10 @@ def _load_pending_orders(is_etf: bool) -> list:
     with eng.connect() as conn:
         rows = conn.execute(sa_text("""
             SELECT id, ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
-                   position_gbp, momentum_pct, stop_price, var_pct
+                   position_gbp, momentum_pct, admission_rank_value, stop_price, var_pct
             FROM pending_orders
             WHERE status = 'PENDING' AND is_etf = :is_etf
-            ORDER BY momentum_pct DESC, decided_at ASC
+            ORDER BY admission_rank_value DESC, decided_at ASC
         """), {"is_etf": is_etf}).mappings().all()
     return [dict(r) for r in rows]
 
@@ -1794,6 +1817,13 @@ def _ticker_state(ticker: str, config: dict, gspc_close: pd.Series) -> Optional[
         "sig_on": bool(sig_series.iloc[-1]),
         "momentum_pct": float(signals.compute_momentum_series(close).iloc[-1])
                         if pd.notna(signals.compute_momentum_series(close).iloc[-1]) else None,
+        # relative_rank_pct (2026-08-09, promotion of the relative-ranking
+        # study) -- ONLY ever used as an alternate admission sort key
+        # (resolve_admission_rank_value() below), never the entry gate or
+        # momentum floor, which stay keyed to momentum_pct above
+        # unconditionally regardless of admission_ranking_mode.
+        "relative_rank_pct": float(signals.compute_relative_rank_series(close).iloc[-1])
+                              if pd.notna(signals.compute_relative_rank_series(close).iloc[-1]) else None,
         "is_member": is_member,
         "crisis_now": crisis.is_crisis_day(gspc_close, latest_dt),
         "entry_blocked": crisis.is_entry_blocked(gspc_close, latest_dt),
@@ -3901,10 +3931,24 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
                              ticker, position_gbp)
                 continue
 
+            # Admission-ranking value (2026-08-09) -- resolved once, here,
+            # via the same shared function the backtest engine calls
+            # (analysis/decision.py:resolve_admission_rank_value()), so the
+            # value stored and later sorted by is never independently
+            # re-derived at submission time. See that function's own
+            # docstring for the full scope statement: this changes ONLY
+            # admission priority, never the entry gate above (already
+            # evaluated) or any exit reason.
+            admission_rank_value = resolve_admission_rank_value(
+                momentum=state["momentum_pct"], relative_rank=state["relative_rank_pct"],
+                mode=resolve_admission_ranking_mode(config),
+            )
+
             _queue_pending_order(
                 ticker=ticker, t212_ticker=t212_ticker, is_etf=state["is_etf"],
                 currency=instrument_currency, decided_price=entry_price,
                 position_gbp=position_gbp, momentum_pct=state["momentum_pct"],
+                admission_rank_value=admission_rank_value,
                 stop_price=stop_price, var_pct=holding_var,
             )
             orders_queued += 1

@@ -558,3 +558,72 @@ def evaluate_rank_dropped_exit(*, is_in_current_top_n: Optional[bool]) -> Option
     if is_in_current_top_n is False:
         return "RANK_DROPPED"
     return None
+
+
+ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM = "absolute_momentum"
+ADMISSION_RANKING_MODE_RELATIVE_RANK = "relative_rank"
+
+
+def resolve_admission_ranking_mode(config: dict) -> str:
+    """The real, currently-configured admission-ranking mode -- reads
+    trading212_invest.admission_ranking_mode, falling back to
+    ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM (today's actual production
+    behaviour) only when the key is absent entirely. Same config-driven-
+    parameter pattern as resolve_reentry_cooldown_days()/resolve_min_
+    momentum_floor() above: both live order placement
+    (brokers/trading212.py:maybe_place_orders()) and the backtest engine
+    (simulate_portfolio_compounding_mtm()) call this ONE function, so
+    neither can silently resolve a different mode for the same config.
+
+    Promoted 2026-08-09 from the relative-ranking study's own research
+    engine (research/relative_ranking_prereg_2026-08-09/) after it cleared
+    its pre-registered bar and a 20-draw paired robustness test (see
+    CLAUDE.md's "Relative-ranking (cross-sectional rank, daily admission)
+    study" and the robustness-test addendum for the full record, including
+    the AMAT-dependency caveat on the point estimate). Defaults to
+    ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM deliberately — promoting the
+    CODE is separable from adopting the BEHAVIOUR; flipping this value in
+    config.yaml is a distinct, deliberate decision made after review, not a
+    side effect of this function existing.
+    """
+    t212_cfg = config.get("trading212_invest", {}) or {}
+    return str(t212_cfg.get("admission_ranking_mode", ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM))
+
+
+def resolve_admission_rank_value(
+    *, momentum: Optional[float], relative_rank: Optional[float], mode: str,
+) -> Optional[float]:
+    """The single value gate-passing candidates are sorted by (descending)
+    for capacity-constrained admission — the ONLY thing
+    admission_ranking_mode changes. Called identically by live order
+    placement (brokers/trading212.py:maybe_place_orders(), which stores the
+    result as pending_orders.admission_rank_value and sorts
+    `ORDER BY admission_rank_value DESC` at submission time) and the
+    backtest engine (simulate_portfolio_compounding_mtm()'s _admit_group()),
+    so neither can silently rank candidates by a different value for the
+    same config.
+
+    Deliberately narrow in scope, matching the relative-ranking study's own
+    "narrowed on review" Arm B design (see CLAUDE.md): this function is the
+    ENTIRE promoted behaviour change. The entry gate (passes_entry_gate()),
+    the 2% momentum floor (passes_momentum_floor()), and every exit reason
+    (evaluate_exit_reason()'s sig_on input, including SIGNAL_OFF) all
+    continue to read the real, unchanged absolute momentum value regardless
+    of this function's return — never relative_rank. The original, broader
+    design (relative rank driving the gate and SIGNAL_OFF too) was reviewed
+    and rejected before the research study even ran, specifically because
+    it would have made B and C two flavours of rank-based exit rather than
+    a clean attribution arm plus one added variable — see the relative-
+    ranking study's own PREREGISTRATION.md §1 for that correction.
+
+    momentum is returned unchanged for the (default, current production)
+    ADMISSION_RANKING_MODE_ABSOLUTE_MOMENTUM mode, so an unconfigured
+    system behaves byte-identically to before this function existed —
+    same "config predating this parameter behaves exactly as before"
+    guarantee every other config-driven parameter in this module provides.
+    An unrecognised mode string also falls back to momentum (fails safe to
+    today's validated behaviour, never to an unvalidated one).
+    """
+    if mode == ADMISSION_RANKING_MODE_RELATIVE_RANK:
+        return relative_rank
+    return momentum

@@ -26,6 +26,8 @@ from analysis.decision import (
     is_reentry_blocked,
     passes_entry_gate,
     passes_momentum_floor,
+    resolve_admission_rank_value,
+    resolve_admission_ranking_mode,
     resolve_cash_constrained_position_gbp,
     resolve_dynamic_max_position_gbp,
     resolve_min_momentum_floor,
@@ -224,10 +226,18 @@ def precompute_ticker(ticker: str, config: dict) -> Optional[dict]:
     atr_s = _atr(high, low, close, config["signals"]["atr_period"])
     momentum_s = signals.compute_momentum_series(close)
     sig = signals.compute_signal_series(close)
+    # relative_rank (added 2026-08-09, promotion of the relative-ranking
+    # study) -- the 12-minus-1 cross-sectional ranking value, used ONLY as
+    # an alternate admission sort key (see simulate_portfolio_compounding_
+    # mtm()'s own _admit_group() and analysis/decision.py:resolve_
+    # admission_rank_value()). Every other engine in this file ignores this
+    # column entirely, the same "additive and harmless" reasoning `momentum`
+    # was added under above.
+    relative_rank_s = signals.compute_relative_rank_series(close)
 
     frame = pd.DataFrame({
         "close": close, "atr": atr_s, "signal": sig, "momentum": momentum_s,
-        "open": open_, "low": low,
+        "relative_rank": relative_rank_s, "open": open_, "low": low,
     })
     return {"ticker": ticker, "frame": frame}
 
@@ -1345,6 +1355,15 @@ def simulate_portfolio_compounding_mtm(
     absolute_max_position_gbp = float(var_cfg.get("absolute_max_position_gbp", 1_000_000))
     reentry_cooldown_days = resolve_reentry_cooldown_days(config)
     min_momentum_floor = resolve_min_momentum_floor(config)
+    # Admission-ranking mode (2026-08-09, promotion of the relative-ranking
+    # study) -- resolved ONCE per run, exactly like every other config-
+    # driven parameter above. Defaults to ADMISSION_RANKING_MODE_ABSOLUTE_
+    # MOMENTUM (today's validated production behaviour); changes ONLY the
+    # candidate sort key in _admit_group() below -- the entry gate, the 2%
+    # floor, and every exit reason still read raw absolute momentum
+    # unconditionally. See analysis/decision.py:resolve_admission_rank_
+    # value()'s own docstring for the full scope statement.
+    admission_ranking_mode = resolve_admission_ranking_mode(config)
 
     per_ticker: dict[str, dict] = {}
     events: list[tuple] = []
@@ -1452,12 +1471,24 @@ def simulate_portfolio_compounding_mtm(
             days_since_exit = (dt - last_exit).days if last_exit is not None else None
             if is_reentry_blocked(days_since_exit, cooldown_days=reentry_cooldown_days):
                 continue
-            # Sort key must always be a real float -- momentum_val can only
-            # be None here when the floor itself is a no-op (<=0.0; see
-            # passes_momentum_floor()'s own docstring), in which case -inf
-            # is the same "sorts last, never wins ranking" placeholder this
-            # code used unconditionally before the floor existed.
-            candidates.append((ticker, momentum_val if momentum_val is not None else float("-inf")))
+            # Admission sort key (2026-08-09, promotion of the relative-
+            # ranking study) -- resolve_admission_rank_value() returns
+            # momentum_val unchanged in the default (absolute_momentum)
+            # mode, so this is a byte-identical no-op for every existing
+            # config. relative_rank is read from this row exactly like
+            # momentum is, never gating the entry check above -- only the
+            # sort key below. Sort key must always be a real float -- None
+            # can occur here (the floor is a no-op and momentum_val is
+            # None, or relative_rank hasn't got enough history yet even
+            # though momentum has), in which case -inf is the same "sorts
+            # last, never wins ranking" placeholder this code has always
+            # used.
+            relative_rank_val = row.get("relative_rank")
+            relative_rank_val = float(relative_rank_val) if pd.notna(relative_rank_val) else None
+            rank_val = resolve_admission_rank_value(
+                momentum=momentum_val, relative_rank=relative_rank_val, mode=admission_ranking_mode,
+            )
+            candidates.append((ticker, rank_val if rank_val is not None else float("-inf")))
 
         candidates.sort(key=lambda c: (-c[1], per_ticker[c[0]]["idx"]))
 

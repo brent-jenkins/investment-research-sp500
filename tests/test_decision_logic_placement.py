@@ -65,6 +65,20 @@ DECISION_SIGNAL_KEYWORDS = (
     # shared is_position_size_viable() -- see analysis/decision.py and
     # CLAUDE.md's "Live and backtest consolidation audit" section).
     "position_gbp",
+    # Added 2026-08-09 during the relative-ranking study's production
+    # promotion -- a defensive addition, not a reaction to a found bug:
+    # both real call sites correctly call the shared
+    # resolve_admission_rank_value()/resolve_admission_ranking_mode()
+    # (analysis/decision.py), so neither currently trips this scanner. These
+    # keywords exist so a FUTURE inline re-derivation of the admission
+    # ranking mode/value (e.g. an "if mode == ..." comparison written
+    # directly in either scanned file instead of calling the shared
+    # function) would be caught, the same proactive-coverage reasoning
+    # RANK_DROPPED's own placement in decision.py already followed ahead of
+    # any live caller existing. "admission_rank"/"relative_rank" match as
+    # substrings against real variable names this promotion introduced
+    # (admission_rank_value, relative_rank_val, relative_rank_pct).
+    "admission_rank", "admission_ranking_mode", "relative_rank",
 )
 
 # (file name, line number) pairs for comparisons already reviewed and

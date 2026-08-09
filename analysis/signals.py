@@ -85,3 +85,71 @@ def latest_signal(close: pd.Series) -> bool:
     if series.empty:
         return False
     return bool(series.iloc[-1])
+
+
+RANK_LOOKBACK_DAYS = 252
+RANK_SKIP_DAYS = 21
+"""12-minus-1 cross-sectional relative-rank construction (Jegadeesh &
+Titman 1993) -- promoted 2026-08-09 from research/cross_sectional_
+momentum_prereg_2026-08-09/cross_sectional_signal.py and
+research/relative_ranking_prereg_2026-08-09/relative_ranking_engine.py's
+own research-only signal, into this module, per the relative-ranking
+study's own "the signal moves into production code" promotion requirement
+(live code must never reach into research/). The formula and constants are
+unchanged from the research version: rank_signal(t) = close(t-21) /
+close(t-252) - 1 -- the same trailing return compute_momentum_series()
+computes, but anchored one month earlier, excluding the most recent
+month's price action from the ranking value (the standard construction's
+short-horizon-reversal exclusion).
+
+This is a RANKING input only, used exclusively to order gate-passing
+candidates for capacity-constrained admission when
+trading212_invest.admission_ranking_mode == "relative_rank" (see
+analysis/decision.py:resolve_admission_rank_value()). It never touches the
+entry gate, the 2% momentum floor, or SIGNAL_OFF -- all three stay
+absolute-momentum-based regardless of ranking mode, exactly as validated
+by the research study (Arm B: "admission sort key only" -- see CLAUDE.md's
+"Relative-ranking (cross-sectional rank, daily admission) study" section
+for why the entry/exit gate and the ranking key were deliberately kept
+separate after an earlier, broader design was narrowed on review).
+"""
+
+_MAX_1MO_ANCHOR_GAP_DAYS = 60
+"""Gap tolerance for the 21-trading-day ('1 month') leg -- a genuine,
+gapless 21-trading-day window spans roughly 30 calendar days (21 trading
+days / ~5 trading days per week * 7 calendar days); 60 gives 2x slack for
+a holiday-heavy month or a handful of individually-missing days without
+over-tolerating a genuine multi-week gap. Unchanged from the research
+version's own already-validated constant."""
+
+
+def compute_relative_rank_series(close: pd.Series) -> pd.Series:
+    """Vectorized 12-minus-1 relative-rank value for every date in *close*'s
+    own index: close(t-RANK_SKIP_DAYS) / close(t-RANK_LOOKBACK_DAYS) - 1.
+
+    NaN wherever either anchor is unavailable (insufficient history) or
+    calendar-stale in EITHER leg -- the 252-day leg reuses
+    _MAX_ANCHOR_GAP_DAYS (the exact same guard, and the exact same failure
+    mode, as compute_momentum_series() above: a row-count .shift() has no
+    way to know whether the anchor it reached back to is genuinely ~12
+    months ago in calendar time, or a stale row on the far side of a real
+    gap -- see that function's own docstring). The 21-day leg uses the new
+    _MAX_1MO_ANCHOR_GAP_DAYS for the identical reason, scaled to a shorter
+    window. Callers must treat NaN as "not rankable this date", matching
+    this module's own "NaN means no signal yet" convention throughout.
+    """
+    p1 = close.shift(RANK_SKIP_DAYS)
+    p12 = close.shift(RANK_LOOKBACK_DAYS)
+    rank_signal = p1 / p12 - 1.0
+
+    if close.empty or not isinstance(close.index, pd.DatetimeIndex):
+        return rank_signal
+
+    dates = close.index.to_series()
+    anchor_1mo = dates.shift(RANK_SKIP_DAYS)
+    anchor_12mo = dates.shift(RANK_LOOKBACK_DAYS)
+    gap_1mo = (dates - anchor_1mo).dt.days
+    gap_12mo = (dates - anchor_12mo).dt.days
+    stale = (gap_1mo > _MAX_1MO_ANCHOR_GAP_DAYS).fillna(False) | (gap_12mo > _MAX_ANCHOR_GAP_DAYS).fillna(False)
+    rank_signal[stale.to_numpy()] = float("nan")
+    return rank_signal

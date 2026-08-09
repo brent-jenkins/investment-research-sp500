@@ -224,6 +224,7 @@ class PendingOrder(Base):
     decided_price    = Column(Float)             # native-currency close used to size/sanity-check against
     position_gbp     = Column(Float)
     momentum_pct     = Column(Float)
+    admission_rank_value = Column(Float)  # the value _load_pending_orders() actually sorts by (2026-08-09) -- see that function's own docstring; equals momentum_pct in the default admission_ranking_mode, the 12-minus-1 relative-rank value when the mode is switched
     stop_price       = Column(Float)
     var_pct          = Column(Float)
     status           = Column(String(24), default="PENDING")  # PENDING / SUBMITTED / FAILED / SKIPPED_PRICE_MOVED / SKIPPED_ALREADY_HELD / REJECTED_CAPACITY / SKIPPED_CRISIS_BLOCKED / SUPERSEDED
@@ -682,6 +683,13 @@ def _apply_migrations(engine) -> None:
         ("invest_orders", "stop_order_id", "TEXT"),
         ("invest_orders", "stop_order_status", "TEXT"),
         ("invest_orders", "stop_order_note", "TEXT"),
+        # Admission-ranking promotion (2026-08-09) -- see PendingOrder's own
+        # column comment. NULL for any row written before this migration;
+        # _load_pending_orders() defensively deprioritises a NULL exactly
+        # like it already did for momentum_pct, so an old unresolved row
+        # (should not exist in practice -- pending_orders has a bounded
+        # retention window) is never silently mis-prioritised.
+        ("pending_orders", "admission_rank_value", "REAL"),
     ]
 
     for table, column, col_type in new_columns:
