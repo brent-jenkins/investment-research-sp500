@@ -354,6 +354,75 @@ are the same "a reference figure decays the moment ingestion moves on" phenomeno
 comparing trade sets rather than totals, per the standing rule two sections above — now confirmed
 live, same day, a second time.
 
+## Sleeve-allocation (equity/defensive) study — pre-registered, feasibility-checked, SHELVED without running (2026-08-09)
+
+**A two-sleeve design (equity momentum + a defensive sleeve of Treasuries/defensive sectors, binary
+switched on `^GSPC` 12-month momentum) was pre-registered, approved with required edits, then parked
+mid-way through its own required pre-run step — confirming T212 tradeability of the five proposed
+instruments (SHY, TLT, XLU, XLP, XLV). Resuming that check found two separate, each independently
+sufficient, reasons to shelve the study without ever running an arm.** Full detail:
+`research/sleeve_allocation_prereg_2026-08-08/INSTRUMENT_FEASIBILITY_REPORT.md` and that
+directory's `PREREGISTRATION.md` (closure verdict appended, not merged into a new engine or config).
+
+**T212 (UK/EU retail) cannot offer the US-domiciled originals directly — no PRIIPs KID — so every
+proposed instrument needed a UCITS equivalent, resolved from a real, live `get_instruments()` pull
+(cached, not guessed), using a name-keyword search rather than `resolve_instrument_candidate()`
+(that function's `{TICKER}_US_EQ`/shortName-match convention is stock-specific and returns zero
+matches for any ETF — stated explicitly as the methodology substitution, per this project's own
+standing practice of never silently assuming availability).** Genuine, sector-matched UCITS
+equivalents were found for all five components — including, for the three sector legs, SPDR's own
+UCITS wrapper of the identical Select Sector index each US original tracks — directly contradicting
+the pre-registration's own stated worry that no clean sector equivalent might exist.
+
+**Reason 1 — the 2008 block is untestable with real tradeable instruments, regardless of any other
+finding.** The earliest date at which all five components have genuine history is **2015-07-07**,
+bounded by the three sector legs (the sector-fund UCITS wrappers, both the SPDR and iShares
+families, did not exist before 2015/2017). This is over six years after the project's own
+2008-03-23→2009-06-13 crisis block ends. A defensive sleeve's entire rationale is protection against
+exactly this kind of event; a study restricted to 2015-onward would only ever see one genuine equity
+drawdown (2022) and one fast V-shaped one (2020) — neither resembling the scenario the sleeve exists
+for. This is a fatal, not merely reduced-power, problem for this design.
+
+**Reason 2 — the Acc/Dist accounting mismatch on the sector legs is not confined to the untested
+window, and is larger than the effect this study was measuring for.** No sector-matched,
+USD-denominated, **distributing** UCITS equivalent of XLU/XLP/XLV exists on T212 — only accumulating
+share classes (one Dist alternative exists for Health Care only, at the cost of ~5 more years of
+history). Measured against the real US series over the full available overlap (2015-07-07→2026,
+11.1 years): **+2.86 pp/yr (XLU), +2.53 pp/yr (XLP), +1.42 pp/yr (XLV)** CAGR divergence, compounding
+to **35–69% cumulative divergence**. Backtesting the US (Dist) series while the actual held
+instrument is Acc means simulated and achievable returns would differ by more than the margin needed
+to declare a win — a measurement error larger than the signal being tested, not a stated,
+acceptable-to-defer limitation in the sense this project's cost-deferral standard (see "A cost is
+safe to defer only while it's constant across the arms being compared" above) allows.
+
+**Combined with priors already on record** (the structurally similar gate-width study's Phase 2:
+every variant underperformed on every pool; this design's plausible upside was always bounded by
+"Treasury yield during defensive periods minus mistiming cost"), the study was shelved rather than
+run in a degraded (2015-onward, accounting-biased) form. The idea itself is not judged wrong — the
+instruments actually available to hold it don't support testing it honestly.
+
+**Two things salvaged.** (1) **A new price-data artifact for the catalogue**: the GBP-denominated
+UCITS share class proposed for the SHY leg (`IBTSl_EQ`, ISIN `IE00B14X4S71`, LSE) has an unexplained
+**~145x price cliff on 2009-01-02** — confirmed a genuine data artifact, not a real market move (the
+US original, `SHY`, has zero comparable breaks anywhere in its history; the USD-denominated share
+class of the *same* underlying fund, `IBTSs_EQ`, has none either). Root cause not identified
+(currency-redenomination or ticker-reuse are both plausible, consistent with this project's own
+already-documented recycled-symbol corruption class — see "Recycled-ticker-symbol corruption"
+above — but this is a UCITS/LSE instrument, outside that mechanism's stock-only scope, and was not
+investigated further since it was never going to be used). Recorded here so this ISIN's GBP share
+class isn't trusted at face value if ever revisited. (2) **The underlying problem this study was
+trying to solve — idle cash between equity positions earns nothing — remains real and unaddressed.**
+The cheapest honest fix isn't a sleeve: it's parking flat capital in a single short-duration
+instrument. SHY's UCITS equivalent, used correctly (`IBTSs_EQ`, the **USD** share class, not the
+GBP one), supports this cleanly from **2009-01-05** with tight tracking (correlation 0.367, CAGR
+diff +0.10 pp/yr, cumulative divergence +1.77 over 17.6 years) — one instrument, one accounting
+treatment, no blend, no switching signal. Not pursued now; a candidate for a much smaller, separately
+pre-registered study later.
+
+No code changed on any live path. No study arm was ever run. No `price_data`/`ticker_data_quality`
+writes occurred — all instrument price history for this feasibility check was fetched read-only into
+a research-local cache.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
