@@ -1364,6 +1364,33 @@ the two rankings disagree, for as long as that mode stays inactive. The whole de
 reconciliation, and especially the display) is built to keep this asymmetry explicit rather than blend it
 into one misleading number.
 
+**What this means for the 90-day review specifically, stated plainly rather than left for someone to
+discover in November: the review will NOT be able to answer "does B beat A," the symmetric comparison the
+backtest's own paired per-decision instrument could make (both arms fully simulated, so both sides' unique
+admissions had real, comparable outcomes). Live, only one side is ever observed.** The review can answer
+"did the active mode's own unique admissions perform well" — a real, meaningful, but one-sided question —
+never "would the inactive mode's unique admissions have performed better or worse than the active mode's
+own." The inactive mode's counterfactual is permanently unobserved for as long as it stays inactive,
+regardless of how long the comparison runs or how large `active_unique["count"]` grows. Treat any review-
+time conclusion as bounded by this from the start, not as a limitation to explain away after the fact.
+
+**A partial workaround exists, worth running as a supplementary analysis at review time, not built now.**
+The inactive mode's own unique admissions (`inactive_unique` rows) were never bought, but the ticker's real
+subsequent price history exists regardless — the same `price_data` this system ingests for every candidate
+whether or not it was ever traded. A research script, run once at review time (not a live/scheduled
+mechanism — this is retrospective analysis, not a second trading path), could walk each `inactive_unique`
+row's own `decided_at`/`ticker` forward through real subsequent prices using the SAME shared decision
+functions the backtest already uses (`analysis/decision.py:evaluate_exit_reason()` for the exit, the
+already-recorded `position_gbp`/`momentum_pct` for entry sizing) and compute a counterfactual P&L exactly
+as the backtest would have realised it — not a real fill, but the same fill assumptions this project's own
+backtest figures are already built on and already understood to carry (same-day-close entries, the
+realistic intraday-touch `STOP_LOSS` model, etc. — see "What every backtest figure in this project does and
+does not model" above). This does not produce a second real outcome — it produces a backtest-quality
+estimate for the one side live trading structurally cannot observe, which is the only way to get anything
+resembling a symmetric comparison out of a single live account. Not implemented as part of this feature;
+recorded here as the intended review-time analysis so it isn't reinvented from scratch, or skipped, in
+November.
+
 **RECORDING — `data/database.py:AdmissionRankingShadow`, a new table, written from inside the real
 submission path, never a parallel computation.** For every gate-passing candidate the EOD decide phase
 queues, `brokers/trading212.py:_submit_pending_orders()` — right after fetching the account's real, live
