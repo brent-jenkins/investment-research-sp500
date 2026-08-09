@@ -48,7 +48,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Any documented state claim in CLAUDE.md or CLAUDE_HISTORY.md must name which database it describes, not leave it implicit.** "Final counts: X CLEAN / Y QUARANTINED / Z NEEDS_REVIEW" reads as a fact about the system; it is actually a fact about *whichever database was queried to produce that sentence*, and a reader (human or a future session) has no way to tell local from production from the sentence alone. State it explicitly — "confirmed on production via SSH, `<date>`" or "local research DB only, not yet applied to production" — every time, the same way this file already insists every backtest report state which of the two backtest conventions it used, and every cost-adjacent report state which cost is deferred. A claim with no named database should be treated as unverified for production purposes until re-checked.
 
-**If more than one local Claude Code session is running against this repository at the same time, each must use its own `git worktree` (`git worktree add <path> <branch>`), not share a single working directory.** Two genuinely separate sessions (UI work, research experiments) have already had their git staging briefly interleave twice — one session's uncommitted edits or in-flight commit sequence became visible to, and in one case momentarily reordered by, the other, both times on this same shared checkout. Both incidents were caught and separated cleanly before anything was lost (via careful `git status`/`git diff --cached`/`git reflog` checks before and after each commit), but relying on catching this after the fact is avoidable entirely with separate worktrees, which give each session its own working directory and index while still sharing the one underlying repository and object store.
+**Every local Claude Code session uses its own `git worktree` (`git worktree add <path> <branch>`) — unconditionally, from the first tool call, never contingent on first checking whether another session happens to be active.** This rule was originally conditional ("if more than one session is running at the same time") — tightened to absolute 2026-08-09 after a third incident (below) showed the condition itself is the problem: a session has no reliable way to know whether another session is concurrently touching the same checkout, so "check first, then decide whether to isolate" is exactly the gap that let the first two incidents happen at all. A short-lived session doing a single quick edit is not exempt — a `git status`/`git add`/`git commit` sequence that overlaps a concurrent session's own in-flight commit takes seconds, not minutes, to cause damage.
+
+Three incidents on record, escalating in severity, all on this same shared main checkout:
+1. Two genuinely separate sessions (UI work, research experiments) had their git staging briefly interleave — one session's uncommitted edits or in-flight commit sequence became visible to, and momentarily reordered by, the other. Caught and separated cleanly before anything was lost, via careful `git status`/`git diff --cached`/`git reflog` checks before and after each commit.
+2. A second, similar interleave, same shared checkout, same pattern — caught the same way.
+3. **A commit landed on `main` containing literal, unresolved git conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) inside `CLAUDE.md` itself** (commit `2e77cdd`) — a concurrent session's own merge/rebase resolution was never actually completed before it committed, and nothing caught it before the commit reached `main`. Found by a different session doing unrelated work, not by any automated check (there is no test that scans committed prose files for conflict markers), and fixed as its own dedicated follow-up commit (`f14bf2f`), verified via `git diff HEAD` to confirm only the three marker lines changed. Unlike incidents 1-2, this one shipped to `main` before being caught — the closest this project has come to a real, silent corruption of its own standing documentation from concurrent-session interference alone.
+
+The first two incidents were caught by careful manual `git` hygiene in the moment; the third was caught by luck (an unrelated session happening to read the affected section). Relying on catching this after the fact — three times now — is avoidable entirely with separate worktrees from the start, which give each session its own working directory and index while still sharing the one underlying repository and object store. A repo-wide `git grep` for conflict markers across every tracked `.py`/`.md`/`.yaml`/`.yml` file was run 2026-08-09 following incident 3, to confirm no other file was silently carrying the same damage — clean, nothing else found — but this is a one-time sweep, not a standing check; a future session finding this section should re-run the same sweep if there's any reason to suspect another concurrent-session incident occurred since.
 
 **There is exactly one implementation of any given trading decision — never two hand-written copies that are merely supposed to agree.** "Decision logic" means anything that determines *what should happen*: what qualifies for entry, how a position is sized, which candidates win when capacity is scarce, what triggers an exit and in what priority. It does not mean *execution mechanics* — live legitimately needs a real broker-API call (`Trading212Client`), retry/back-off, and DB bookkeeping that the backtest simulates instead; that split is fine and is not what this rule is about. Anywhere the *same decision* has to be made by both live order placement (`brokers/trading212.py`) and the backtest engine (`analysis/backtest.py`), both must call one shared function — never two independently-written expressions of the same rule.
 
@@ -745,6 +752,166 @@ Streamlit version's `AppTest` harness (renders as an `UnknownElement`, no dedica
 verification reads `st.session_state` directly instead — the same underlying data the button
 consumes, an equally direct proof. Verified to actually fail against the reintroduced bug (via
 `git stash` on just this file, confirmed failing, then restored) before being trusted.
+
+## UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit (2026-08-09)
+
+**A fourth render-path stall, in the same class as findings 1-3 above, that the original audit's own
+"confirmed clean" verdict on `_get_open_cards()`/`get_brief_cards()` missed entirely — found and fixed
+in a follow-up pass, own commit, on the `dashboard-open-cards` branch.** Not a network call (the
+audit's own three risk categories were yfinance, T212, and long computations) but a genuine
+per-position price-history read-and-recompute on every Dashboard render, scaling directly with
+open-position count — the same class of bug the audit's finding 5 (`get_ticker_status()`'s dead
+full-universe path) flagged as a *latent* risk, except this one was live and firing on every render,
+not latent.
+
+**Why the audit missed it.** The audit's own "Confirmed clean" line for this exact function read:
+`get_brief_cards()` (confirmed non-blocking post-2026-08-04 fix, scoped to held tickers only)" — true
+as far as it went (the 2026-08-04 fix genuinely closed the ~60s full-503-ticker-pool stall, and
+confirmed no yfinance/T212 call exists anywhere in the chain), but the audit's own three-category
+scope (yfinance calls, T212 calls, long full-universe/multi-year computations) had no category for
+"a *scoped*, per-open-position computation that is still expensive per position and still runs on
+every render." The 2026-08-04 fix was verified against the specific complaint it was investigating
+("~60s, feels like a stuck full pull") and, once that number dropped to a few seconds, was read as
+"fixed" without a fresh, direct timing measurement of the now-scoped result — a `~6s` stall on 22
+open positions doesn't trigger the same "something is clearly broken" signal a `~60s` stall does, so
+it went unnoticed until this task's own explicit instruction to measure directly rather than trust
+the existing "confirmed clean" line.
+
+**Measured, not estimated — against the real, copied-in production database, 22 genuinely open
+positions (the account's real position count at measurement time).**
+- `get_ticker_status(config, tickers=<22 held tickers>)` (called internally by `get_brief_cards()`,
+  the function `_get_open_cards()` used to call directly): **6.057s**.
+- The full `get_brief_cards(config)` call (what `_get_open_cards()` actually invoked): **6.081s**
+  single call; three repeated calls (no caching between them) measured **5.908s / 6.493s / 5.916s**.
+- Scaling confirmed directly (not assumed) by varying N: N=1 → 0.416s; N=5 → 0.969s (0.194s/ticker);
+  N=10 → 1.720s (0.172s/ticker); N=22 → 3.941s (0.179s/ticker) — linear in open-position count, at
+  **~0.18-0.25s per held ticker**.
+- Broken down by component (per ticker): `get_price_df(ticker, days=8000)` — the dominant cost —
+  **0.225s** (a ~4,930-row SQL read + pandas frame construction, not a network call);
+  `signals.compute_signal_series()` **0.0021s**; `signals.compute_momentum_series()` **0.0024s**;
+  `universe.is_member()` **~0.0000s**; `crisis.is_crisis_day()` + `crisis.is_entry_blocked()` combined
+  **0.0026s**; one shared `get_price_df("^GSPC", days=8000)` call (paid once per `get_ticker_status()`
+  call, not per ticker) **0.169s**. The actual momentum/signal computation is cheap — the stall is
+  overwhelmingly the raw per-ticker price-history DB read, still squarely inside "per-position
+  price-history computation," the class of cost this project's render-path standard prohibits
+  regardless of whether the underlying I/O is local or remote.
+- Of the fields `get_brief_cards()` produces, only `current_sig_on` (from `sig_series.iloc[-1]`) is
+  actually consumed by the rendered card and depends on this per-ticker read; `current_is_member` and
+  `crisis_now` are cheap once the one shared `^GSPC` series is loaded; `momentum_pct` from
+  `get_ticker_status()` is computed but never used by `get_brief_cards()`'s card-building loop at all.
+  Every other card field (`entry_price`, `quantity`, `live_price`, `current_value_gbp`,
+  `unreal_pnl_gbp`, `unreal_pct`, `momentum_pct_at_entry`, `stop_price`, `days_held`) was already a
+  cheap, batched DB read (`t212_positions_snapshot`, `invest_orders`) before this fix — never the
+  bottleneck — but per the task's own verbatim decision, **all** of it now comes from a single stored
+  snapshot at render time, not just the expensive field, so "compute nothing at render" holds without
+  exception rather than as a field-by-field judgement call.
+
+**The fix — compute nothing at render; read one stored snapshot.** `output/performance.py:
+get_stored_open_position_cards()` is a pure `system_metadata` read (`open_position_cards_snapshot` —
+JSON list of the exact card-dict shape `get_brief_cards()` already produced — plus
+`open_position_cards_fetched_at`, an ISO timestamp), never calling `get_brief_cards()` itself.
+`main.py:_get_open_cards()` now wraps this read (still `@st.cache_data(ttl=60)`, but the TTL now
+exists only to avoid a redundant SQL read on a widget rerun, not to throttle an expensive
+computation) instead of calling `get_brief_cards()` directly. Measured post-fix:
+`get_stored_open_position_cards()` averaged **17.8ms/call** (50 calls, empty snapshot) — no longer
+scaling with open-position count at all, since it is a single-row metadata read regardless of how
+many positions are open.
+
+**Where the stored value comes from.** `data/scheduler.py:_account_state_job()` (hourly, minute 5 —
+already the job that refreshes `t212_positions_snapshot`, which `get_brief_cards()` depends on) now
+also calls a new `_refresh_open_position_cards_snapshot(config)`, which calls **the same, unchanged
+`get_brief_cards()`** — moving *where* (a background scheduler job, not the Streamlit render thread)
+and *when* (hourly, not every render) this computation runs, never *what* it computes or *how*. This
+only fires when `_fetch_t212_snapshot()` (now returning `bool`, previously always `None` — confirmed
+no existing caller inspected the old return value before this change) confirms a genuinely fresh
+`t212_positions_snapshot` was written *this* cycle — deriving cards from a stale positions snapshot
+and stamping a brand-new `fetched_at` on the result would show a falsely-current "as of" time for
+underlying data that didn't actually change. "Only overwrite stored state on a confirmed result"
+(the same pattern as `_market_hours_check_job()`'s crisis-status write, see finding 3 above): a
+raised exception inside `_refresh_open_position_cards_snapshot()` is caught in `_account_state_job()`
+and logged, leaving the previous `open_position_cards_snapshot`/`_fetched_at` pair untouched — an
+empty list, by contrast, **is** written on a confirmed clean cycle (not treated as "unknown"), since
+on the real server trading is always enabled with credentials present when this job runs, so `[]`
+genuinely means "zero open positions right now."
+
+**The signal-field caching tension, named explicitly, per this project's own standing practice of
+never letting a display cache silently become something the trading logic reads.** This project has
+a deliberate standing decision (see "Current architecture" above and `analysis/signals.py`'s own
+role) that momentum signals are computed live from stored price history at DECISION time, never
+pre-computed into a table — that decision is unchanged and this fix does not touch it.
+`open_position_cards_snapshot` **does** now hold a second, cached copy of `current_sig_on` (a
+per-position momentum-signal read) for DISPLAY purposes, computed by the same shared
+`get_brief_cards()` → `get_ticker_status()` → `analysis.signals.compute_signal_series()` call chain
+the Dashboard always used, just relocated off the render thread. **Confirmed directly, not assumed**:
+`analysis/decision.py`'s `evaluate_exit_reason()`/`passes_entry_gate()`, every backtest engine in
+`analysis/backtest.py`, and live order placement/exit logic in `brokers/trading212.py` (`_ticker_state()`,
+`maybe_place_orders()`, `maybe_exit_positions()`) read `system_metadata` keys of their own
+(`t212_account_snapshot`, `crisis_mode_active`, etc.) but **never** read `open_position_cards_snapshot`
+or `open_position_cards_fetched_at` — grepped directly across `analysis/` and `brokers/trading212.py`
+before shipping this fix, zero matches outside `output/performance.py` and `data/scheduler.py`
+(the two files this fix touches). The key name itself (`open_position_cards_*`, not a generic
+`signal_*` key) and its home in `output/performance.py` (the module whose own docstring already
+states "extracted out of main.py so it's actually testable," never imported by any decision-path
+module) are the scoping mechanism — a future session adding a new decision-path read must reach into
+a display-only module and key to create the exact hazard this section warns against, not stumble
+into it by accident.
+
+**Staleness display and fallback, matching the crisis-banner/T212-account-panel precedent exactly.**
+The Dashboard's "Open Positions" section shows "As of `<UK-local-time>` (refreshed hourly)." beneath
+the summary line whenever `open_position_cards_fetched_at` is set, and "No open-position refresh has
+completed yet — this section will populate after the next hourly account-state refresh." when it
+isn't (a fresh deploy, before the first successful cycle) — never a blank section, never an
+exception, never a value with no accompanying timestamp. A failed refresh cycle leaves the prior
+snapshot and its ORIGINAL `fetched_at` in place (confirmed directly:
+`tests/test_scheduler.py::test_account_state_job_cards_snapshot_failure_leaves_prior_stored_values_untouched`
+seeds an old snapshot, forces `_refresh_open_position_cards_snapshot()` to raise, and asserts both
+stored values are byte-identical to what was seeded beforehand) — the cards keep showing the last
+good values with their real age visible, never a silently-refreshed timestamp for stale data.
+
+**Tests, and the discipline of confirming they actually fail without the fix.** 16 new tests plus 4
+modified across three files: `tests/test_performance.py` (5 new — including the decisive proof that
+`get_stored_open_position_cards()` never calls `get_brief_cards()`, and a second, stronger proof that
+it triggers no price-history computation at all by patching
+`analysis.signals.compute_signal_series()` to raise — the yfinance/T212-patch pattern alone would
+**not** have caught this specific bug, since the original stall was DB-bound, not network-bound;
+stated explicitly here so a future reader doesn't assume that pattern alone is sufficient for every
+render-path finding); `tests/test_scheduler.py` (5 new — `_refresh_open_position_cards_snapshot()`'s
+write behaviour including the confirmed-empty-list case, `_account_state_job()`'s new conditional
+call and its leave-prior-values-untouched-on-failure behaviour — plus 3 existing
+`_account_state_job()` tests modified to pin down `_fetch_t212_snapshot()`'s now-meaningful `bool`
+return, which an unconfigured `MagicMock`'s truthiness would otherwise have made those 3 tests
+silently exercise the new cards-refresh branch unpredictably); and `tests/test_main_ui.py` (5 new
+AppTest-level cases — rendering from a seeded stored snapshot, the "as of" caption, the
+never-refreshed caption, the stale-snapshot-keeps-showing-old-timestamp case, and a literal
+T212-client/yfinance-patch test matching findings 1-3's own shape for defense-in-depth, though — per
+the point above — that particular test does not by itself prove the price-history-computation guard,
+only the direct `compute_signal_series()` patch in `test_performance.py` does — plus 1 existing test's
+docstring updated to describe the new mechanism it was already, incidentally, passing under).
+Verified via `git stash` on the
+relevant files (mirroring finding 4's own already-established verification discipline above): with
+`output/performance.py`'s fix reverted to call `get_brief_cards()` internally, 3 of the 5
+`test_performance.py` cases failed (both "never calls" proofs, plus the stored-snapshot-read case);
+with `main.py`'s render-path change reverted to call `get_brief_cards()` directly, 5 of the 7
+`test_main_ui.py` cases failed. All rechecked green after restoring the real fix; full suite (1,015
+tests) passing.
+
+**Does this mean Users/Instruments need re-checking with a corrected method? No.** The audit's own
+"Confirmed clean" verdict for the Users page rested on "pure DB reads + button-gated writes
+throughout — verified directly, zero network imports anywhere in the page or in `auth.py`" — a
+direct, exhaustive import/call-site check, not an inference from a *different* function's earlier fix
+the way this finding's miss was. The Instruments page's verdict rested on the same kind of direct
+check (`get_all_watchlist_entries()`/`load_all_instrument_resolutions()` read `instrument_resolutions`/
+`universe_membership` tables directly; confirmed no `get_live_stock_candidates()` call and therefore
+no per-ticker `is_member()` loop) — again a direct trace, not an inherited verdict from a prior,
+differently-scoped incident. **The actual blind spot was narrower than "any indirectly-reached
+function might hide a cost"**: it was specifically "a function's fix for one reported symptom (a
+~60s full-universe stall) was trusted as closing the finding entirely, without a fresh, direct timing
+measurement of the function's now-scoped-but-still-real cost." Neither Users nor Instruments has an
+analogous unverified-fix-carried-forward in their own trace — both were checked fresh, directly,
+against the audit's own three stated risk categories, with no intervening "this was already fixed for
+a different reason" assumption standing in for a direct measurement. If either page's own verdict is
+ever found to rest on that shape of inference rather than a direct check, it should be re-audited on
+that basis specifically — not as a blanket consequence of this finding.
 
 ## Position-count (concurrent-holdings target) study — pre-registered, tested, NOT ADOPTED (2026-08-09)
 

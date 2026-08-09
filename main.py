@@ -51,12 +51,12 @@ from output.performance import (
     compute_position_context,
     compute_sector_breakdown,
     get_account_value_history,
-    get_brief_cards,
     get_crisis_status,
     get_current_account_summary,
     get_pending_candidates,
     get_pnl_rows,
     get_recent_orders,
+    get_stored_open_position_cards,
     get_unconfirmed_exits,
     position_context_style,
     position_exit_rule_text,
@@ -649,25 +649,36 @@ def _render_trade_card(e: dict) -> None:
 
 
 @st.cache_data(ttl=60)
-def _get_open_cards(_config: dict) -> list[dict]:
-    """Enriched trade-card dicts for open positions — thin cached wrapper
-    around output/performance.py:get_brief_cards(). Leading-underscore
-    parameter name is the Streamlit convention for "don't try to hash
-    this argument" (config is a plain dict, not needed as a cache key —
-    same pattern as _get_projected_admission_cached()).
+def _get_open_cards(_config: dict) -> dict:
+    """Enriched trade-card dicts for open positions, plus their "as of"
+    freshness — thin cached wrapper around output/performance.py:
+    get_stored_open_position_cards(). Leading-underscore parameter name is
+    the Streamlit convention for "don't try to hash this argument" (config
+    is a plain dict, not needed as a cache key — same pattern as
+    _get_projected_admission_cached()). config is accepted only for call-
+    site symmetry with the rest of this page's cached wrappers; the
+    underlying read doesn't use it.
 
     Fixed 2026-08-04: this used to pre-fetch get_ticker_status() for the
-    FULL ~503-ticker live candidate pool (via a separate ttl=300-cached
-    wrapper) before ever knowing which tickers actually have an open
-    position — a real, measured ~60s delay on production data, since
-    get_brief_cards() only ever consults the handful of tickers (~16 as
-    of this fix) that are actually held. get_brief_cards() now scopes its
-    own internal get_ticker_status() call to just those tickers, so no
-    pre-fetch is needed here at all — this wrapper's only remaining job
-    is caching the whole (now genuinely fast) result for 60s so a widget
-    interaction elsewhere on the page doesn't recompute it on every
-    Streamlit rerun."""
-    return get_brief_cards(_config)
+    FULL ~503-ticker live candidate pool before ever knowing which tickers
+    actually have an open position — a real, measured ~60s delay. Scoping
+    get_ticker_status() to just the held tickers (get_brief_cards()'s own
+    fix) closed that, but left a second, smaller-scale version of the same
+    class of bug: get_brief_cards() still recomputed momentum/signal state
+    from full price history for every held ticker on every render — a
+    real, measured ~6s stall on 22 open positions in production
+    (~0.18-0.25s/ticker, scaling with position count), not a network call
+    but still a genuine per-position price-history computation.
+
+    Fixed 2026-08-09 (see CLAUDE.md's "UI render-path blocking audit"
+    follow-up, finding 4): this wrapper no longer calls get_brief_cards()
+    at all. data.scheduler._account_state_job() (hourly, minute 5) now
+    calls get_brief_cards() itself, off the Streamlit render thread, and
+    stores the result; this function is a pure system_metadata read via
+    get_stored_open_position_cards(), computing nothing. The 60s TTL here
+    now exists purely to avoid a redundant SQL read on every widget
+    interaction, not to throttle an expensive computation."""
+    return get_stored_open_position_cards()
 
 
 @st.cache_data(ttl=60)
@@ -1272,29 +1283,45 @@ def _render_dashboard_page(config: dict) -> None:
 
     # --- Open Positions -----------------------------------------------
     # Moved here from the (now-removed) Performance page 2026-08-03 --
-    # replaces the old "Top Trades" section. Confirmed database-only
-    # before relocating: _get_open_cards() -> output/performance.py:
-    # get_brief_cards() reads exclusively from the scheduler-maintained
-    # t212_positions_snapshot (system_metadata), invest_orders, and
-    # price_data (via Trading212Client's static _fx_rates()/_to_gbp()
-    # helpers and get_ticker_status()'s own get_price_df() reads) -- no
-    # live T212 API call anywhere in this chain, so no new snapshot
-    # mechanism was needed to relocate it safely.
+    # replaces the old "Top Trades" section.
     #
-    # Re-investigated 2026-08-04 after a real, direct report of "the
-    # Dashboard appears to be querying T212 again" -- traced end to end
-    # again, confirmed still no T212 call anywhere in this chain. What was
-    # actually happening: get_ticker_status() (called via _get_open_cards())
-    # was computing momentum/signal/membership status for the FULL live
-    # ~503-ticker candidate pool on every cache miss, a measured ~60s delay
-    # on production data, even though get_brief_cards() only ever consults
-    # the handful of tickers with an actual open position. The long delay
-    # was mistaken for an external-API call. Fixed by scoping
-    # get_ticker_status() to just the held tickers (see its own and
-    # get_brief_cards()'s docstrings) and caching _get_open_cards() itself.
+    # History, for anyone reading this comment before checking CLAUDE.md's
+    # own "UI render-path blocking audit" follow-up (finding 4) first:
+    # confirmed database-only when relocated 2026-08-03; re-investigated
+    # 2026-08-04 after a report of "the Dashboard appears to be querying
+    # T212 again" (it wasn't -- get_ticker_status() was recomputing signal
+    # state for the FULL ~503-ticker live pool, a ~60s delay, fixed by
+    # scoping it to only the held tickers). That 2026-08-04 fix left a
+    # smaller-scale version of the identical bug in place: get_brief_
+    # cards() still recomputed momentum/signal state from full price
+    # history for every HELD ticker, on every render -- a real, measured
+    # ~6s stall on 22 open positions in production. Not a network call,
+    # but a genuine per-position price-history computation, which this
+    # project's render-path standard prohibits just as firmly.
+    #
+    # Fixed 2026-08-09: this section now reads a stored snapshot only --
+    # data.scheduler._account_state_job() (hourly, minute 5) calls
+    # get_brief_cards() itself, off the Streamlit render thread, and
+    # writes the result to system_metadata; _get_open_cards() (main.py)
+    # -> output/performance.py:get_stored_open_position_cards() is a pure
+    # DB read of that stored result, computing nothing. See
+    # tests/test_performance.py::test_open_position_cards_render_path_
+    # performs_no_price_history_computation for the direct proof.
     st.markdown("### Open Positions")
-    open_cards = _get_open_cards(config)
+    _open_cards_data = _get_open_cards(config)
+    open_cards = _open_cards_data["cards"]
+    _cards_fetched_at = _open_cards_data["fetched_at"]
     st.markdown(f"**{positions_summary_text(len(open_cards))}**")
+    if _cards_fetched_at:
+        try:
+            st.caption(f"As of {_fmt_uk(datetime.fromisoformat(_cards_fetched_at))} (refreshed hourly).")
+        except Exception:
+            pass
+    else:
+        st.caption(
+            "No open-position refresh has completed yet -- this section will "
+            "populate after the next hourly account-state refresh."
+        )
     if open_cards:
         st.caption(POSITIONS_RULES_EXPLANATION)
 
