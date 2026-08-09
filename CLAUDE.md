@@ -1276,6 +1276,23 @@ throughout — see "There is exactly one implementation of any given trading dec
   behaviour-preserving in the default mode, since `admission_rank_value` equals `momentum_pct` whenever
   `admission_ranking_mode` is `"absolute_momentum"`.
 
+**Verified directly, not just argued, that `resolve_admission_rank_value()` is the ONLY place admission
+ordering happens on either side that this comparison could ever be run against — a targeted grep across
+`brokers/trading212.py` and `analysis/backtest.py` for every sort/`ORDER BY` involving momentum or rank,
+checked before merging this work, not after.** Two more hits turned up, both pre-existing and already
+outside the live-comparable scope, matching this project's own established frozen-engine exemption
+pattern (see "Backtest engines" above): `simulate_portfolio()`'s `priority_rank` predates momentum-based
+admission entirely (the old `(is_etf, config-order)` rule momentum priority itself superseded, unrelated
+to this promotion); `simulate_portfolio_compounding()` (the non-MTM variant) has its own internal
+momentum-sorted `_admit_group()`-shaped closure that genuinely bypasses the resolver — but this engine is
+one of the three explicitly FROZEN, historical-reproducibility-only engines already documented as exempt
+from every post-freeze fix (the 2026-08-03 re-entry-cooldown fix, the 2026-08-06 realistic-stop-fill fix,
+and now this one, by the same standing reasoning), never called by `run_full_validation()` or exercised by
+any live/backtest parity test — `simulate_portfolio_compounding_mtm()` is the one engine actually compared
+against live, and its own single admission sort is confirmed resolver-routed. Recorded here explicitly so
+a future reader auditing this promotion doesn't flag `simulate_portfolio_compounding()`'s own momentum
+sort as an overlooked gap — it was checked, and is accepted, not missed.
+
 **All four structural live/backtest parity layers got genuine new coverage, not a retrofit, per the
 promotion's own requirement.** Layer 1 (`tests/test_decision_logic_placement.py`)'s AST scanner keyword
 list now includes `admission_rank`/`admission_ranking_mode`/`relative_rank` — a defensive, forward-looking
