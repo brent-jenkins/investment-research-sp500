@@ -762,6 +762,72 @@ modified — every arm's `per_trade_pct` was passed as a direct argument to the 
 `position_count_engine.py`, parity-verified byte-identical to production on both pools before use) in
 the research harness only. Nothing adopted, nothing merged, nothing deployed.
 
+## "Mean deployment" and "cap binding" are not the same measurement — standing note (2026-08-09)
+
+**Why this exists.** The deployment-cap study's own pre-check (see next section) reported the 0.70
+`max_total_deployed` cap rejecting a viable candidate on 99.7% of steady-state trading days — in
+apparent direct contradiction with the position-count study's own headline figure, run the same day,
+that mean deployment sat at 63.07–63.81% across all eight arm/pool combinations, roughly 7pp of
+persistent unused headroom under the identical 0.70 cap. Investigated directly (no new backtest runs —
+both figures came from data the position-count study's own `rejections_{pool}_{arm}.csv` and
+`panel_{pool}_{arm}.csv` had already produced) rather than either accepted as contradicting the other or
+quietly reconciled by picking one. **Resolved: both are correct, and are not contradictory — they are
+two different measurements of two different things**, and the apparent conflict was purely a labelling
+problem, not a data problem.
+
+**"Mean deployment" is a time-average of a state variable, sampled across every trading day in the full
+19-year window, including 2007 (zero trades, cold start) and 2008–09 (crisis-driven mass exits).**
+"Cap binding" is a frequency count of a rejection *event* — the fraction of days on which at least one
+candidate that had already cleared every other admission check (`passes_entry_gate`,
+`passes_momentum_floor`, `is_reentry_blocked`, VaR sizing, the cash clamp, `is_position_size_viable` —
+`would_deploy_pct > max_deployed_pct` is the last check in the sequence, so a logged
+`REJECTED_CAPACITY` row is, by construction, a candidate that would otherwise have been admitted) was
+turned away purely for breaching the cap. A system can be at a low time-averaged deployment level while
+still rejecting a candidate on nearly every day it's actually trading, because rejection depends on the
+*marginal* candidate's own position size pushing that specific day's balance over the cap, not on where
+the account's deployment happens to sit on average across the whole history. Confirmed directly, not
+just argued: on the 4,163 (of 4,174) steady-state days with ≥1 capacity rejection, `current_deployed_pct`
+never fell below 65.02–65.03% in either pool (mean 68.81–68.91%, median 69.16–69.20%) — every binding
+day sits well above the 63% full-sample average; the days pulling that average down (2007, 2008–09, and
+isolated crisis-blocked days like 2020-03-09→03-23, when entries are blocked entirely by the crisis gate
+before ever reaching the capacity check) are a near-disjoint subset of the timeline from the days
+rejection actually occurs on.
+
+**The concrete measurement, not just the argument — from the position-count study's n22 (baseline,
+`per_trade_pct=0.05`) rejection logs, both pools, no new backtest runs.** `reason` breakdown is 100%
+`REJECTED_CAPACITY`, 0% `REJECTED_SUBMINIMUM`, in both pools — the log recorded no other rejection
+reason at all (insufficient free cash, price sanity, and re-entry block are upstream gate/sizing checks
+that `continue` silently with no log entry if they fail; they are not distinguishable from a "cap did
+not bind" case in this log, but with sub-minimum at zero, no competing constraint was ever the one that
+actually turned a candidate away in these runs either). Total `REJECTED_CAPACITY` rows: **955,263 (Pool
+1) / 1,059,124 (Pool 2 CLEAN)**, spread across **4,463 / 4,477 distinct trading days** (90.5% / 90.8% of
+the full 4,930-day history; 99.7% of the 4,174 steady-state 2010-onward days) and **497 / 599 distinct
+tickers** — near the entire usable candidate pool in each case, an average of ~214 / ~237 rejections per
+binding day. This is a steady, near-daily phenomenon across most of the candidate universe, not a
+handful of pileup days. "Otherwise viable" is not inferred from the volume — it follows from where the
+check sits in the code (last in the admission sequence, as described above), confirmed by reading
+`position_count_engine.py`'s (and the identical production logic's) own control flow, not assumed from
+the rejection count alone.
+
+**On record: the pre-check that first proposed this study might be moot made exactly the error this
+note now documents.** It read "mean realised deployment ~63% against a 0.70 cap" as evidence the cap
+"was not binding" — inferring an event-frequency conclusion from a time-averaged figure, without
+checking the event frequency directly. The correction came from checking the actual rejection log
+before treating the inference as settled, per this project's own repeated practice of preferring a
+direct measurement over a plausible-sounding inference — worth stating plainly as the same class of
+mistake, not a different one, from the "argument vs. measurement" gap this note otherwise describes.
+
+**The rule.** "Mean deployment" and "cap binding" have been used interchangeably in this project's own
+reasoning up to this point, and they are not interchangeable — a low full-sample mean does not imply a
+cap rarely binds, and a high binding frequency does not imply the mean will be high, because one is a
+time-average and the other is an event-frequency conditioned on the marginal candidate's own size. Any
+future report characterizing a cap, ceiling, or limit as "binding" or "not binding" should state
+explicitly which of the two it means, and should not infer one from the other without checking — the
+same discipline this file already requires for the two backtest conventions, cost-basis vs.
+mark-to-market deployment accounting, and every other pair of measurements this project has found look
+similar but answer different questions. See `research/deployment_cap_prereg_2026-08-09/PREREGISTRATION.md`
+§0 for the full investigation and the READING (a)-confirmed verdict this reconciliation supports.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
