@@ -1,0 +1,243 @@
+{
+  "meta": {
+    "arm": "Arm B (relative-rank admission), Pool 2 CLEAN",
+    "trading_days": 4930,
+    "trades": 4876,
+    "mean_balance_gbp": 75802.29,
+    "mean_position_gbp": 3381.34,
+    "fx_round_trip_fee": 0.003,
+    "near_full_threshold_pct": 65.0,
+    "near_full_days": 4484,
+    "margin_units": "absolute difference in the 12-minus-1 rank signal (percentage points of trailing return)"
+  },
+  "Q1_opportunity_rate": {
+    "5%": {
+      "days_with_opportunity": 4483,
+      "pct_of_all_days": 99.4,
+      "pct_of_near_full_days": 99.44
+    },
+    "10%": {
+      "days_with_opportunity": 4431,
+      "pct_of_all_days": 98.25,
+      "pct_of_near_full_days": 98.39
+    },
+    "20%": {
+      "days_with_opportunity": 4157,
+      "pct_of_all_days": 92.17,
+      "pct_of_near_full_days": 92.52
+    },
+    "30%": {
+      "days_with_opportunity": 3732,
+      "pct_of_all_days": 82.75,
+      "pct_of_near_full_days": 83.17
+    }
+  },
+  "Q2_displacements_per_year": {
+    "5%": {
+      "total_displacements": 16261,
+      "mean_per_year": 813.0,
+      "median_per_year": 818.0,
+      "min_year": 0,
+      "max_year": 1334,
+      "per_year": {
+        "2007": 0,
+        "2008": 663,
+        "2009": 671,
+        "2010": 1257,
+        "2011": 836,
+        "2012": 684,
+        "2013": 692,
+        "2014": 711,
+        "2015": 901,
+        "2016": 948,
+        "2017": 697,
+        "2018": 800,
+        "2019": 641,
+        "2020": 962,
+        "2021": 1334,
+        "2022": 1064,
+        "2023": 842,
+        "2024": 945,
+        "2025": 992,
+        "2026": 621
+      }
+    },
+    "10%": {
+      "total_displacements": 13655,
+      "mean_per_year": 682.8,
+      "median_per_year": 668.5,
+      "min_year": 0,
+      "max_year": 1215,
+      "per_year": {
+        "2007": 0,
+        "2008": 577,
+        "2009": 554,
+        "2010": 1112,
+        "2011": 708,
+        "2012": 520,
+        "2013": 581,
+        "2014": 564,
+        "2015": 702,
+        "2016": 760,
+        "2017": 560,
+        "2018": 663,
+        "2019": 467,
+        "2020": 796,
+        "2021": 1215,
+        "2022": 899,
+        "2023": 674,
+        "2024": 846,
+        "2025": 880,
+        "2026": 577
+      }
+    },
+    "20%": {
+      "total_displacements": 9965,
+      "mean_per_year": 498.2,
+      "median_per_year": 470.0,
+      "min_year": 0,
+      "max_year": 1020,
+      "per_year": {
+        "2007": 0,
+        "2008": 407,
+        "2009": 411,
+        "2010": 889,
+        "2011": 492,
+        "2012": 317,
+        "2013": 456,
+        "2014": 383,
+        "2015": 465,
+        "2016": 479,
+        "2017": 366,
+        "2018": 475,
+        "2019": 251,
+        "2020": 525,
+        "2021": 1020,
+        "2022": 681,
+        "2023": 464,
+        "2024": 678,
+        "2025": 698,
+        "2026": 508
+      }
+    },
+    "30%": {
+      "total_displacements": 7397,
+      "mean_per_year": 369.9,
+      "median_per_year": 331.0,
+      "min_year": 0,
+      "max_year": 874,
+      "per_year": {
+        "2007": 0,
+        "2008": 253,
+        "2009": 305,
+        "2010": 747,
+        "2011": 329,
+        "2012": 178,
+        "2013": 354,
+        "2014": 274,
+        "2015": 333,
+        "2016": 297,
+        "2017": 266,
+        "2018": 344,
+        "2019": 146,
+        "2020": 351,
+        "2021": 874,
+        "2022": 527,
+        "2023": 308,
+        "2024": 508,
+        "2025": 545,
+        "2026": 458
+      }
+    }
+  },
+  "Q3_turnover_cost": {
+    "5%": {
+      "displacements_per_year": 813.0,
+      "extra_round_trips_per_year": 1626.1,
+      "cost_gbp_per_year": 16495.18,
+      "drag_pct_per_year": 21.761
+    },
+    "10%": {
+      "displacements_per_year": 682.8,
+      "extra_round_trips_per_year": 1365.5,
+      "cost_gbp_per_year": 13851.65,
+      "drag_pct_per_year": 18.273
+    },
+    "20%": {
+      "displacements_per_year": 498.2,
+      "extra_round_trips_per_year": 996.5,
+      "cost_gbp_per_year": 10108.51,
+      "drag_pct_per_year": 13.335
+    },
+    "30%": {
+      "displacements_per_year": 369.9,
+      "extra_round_trips_per_year": 739.7,
+      "cost_gbp_per_year": 7503.53,
+      "drag_pct_per_year": 9.899
+    }
+  },
+  "Q4_rank_gap_distribution": {
+    "best_unadmitted_minus_worst_held": {
+      "p1": 0.0734,
+      "p5": 0.1689,
+      "p10": 0.2232,
+      "p25": 0.3718,
+      "p50": 0.6023,
+      "p75": 0.9787,
+      "p90": 1.6481,
+      "p95": 2.6588,
+      "p99": 5.5936,
+      "mean": 0.9599,
+      "pct_positive": 99.87
+    },
+    "best_unadmitted_minus_each_held_sampled": {
+      "p1": -2.8443,
+      "p5": -0.7192,
+      "p10": -0.313,
+      "p25": -0.0099,
+      "p50": 0.247,
+      "p75": 0.6308,
+      "p90": 1.3079,
+      "p95": 2.0008,
+      "p99": 5.6277,
+      "n_samples": 2780,
+      "pct_positive": 74.28
+    },
+    "mean_n_held": 14.26,
+    "mean_n_eligible_unadmitted": 215.68
+  },
+  "Q5_competitiveness_duration": {
+    "5%": {
+      "n_trades": 4876,
+      "never_displaceable": 583,
+      "never_pct": 11.96,
+      "median_days_to_first_displaceable": 0.0,
+      "pct_displaceable_within_1_day": 77.8,
+      "pct_displaceable_within_5_days": 91.54
+    },
+    "10%": {
+      "n_trades": 4876,
+      "never_displaceable": 669,
+      "never_pct": 13.72,
+      "median_days_to_first_displaceable": 0.0,
+      "pct_displaceable_within_1_day": 74.04,
+      "pct_displaceable_within_5_days": 89.52
+    },
+    "20%": {
+      "n_trades": 4876,
+      "never_displaceable": 888,
+      "never_pct": 18.21,
+      "median_days_to_first_displaceable": 0.0,
+      "pct_displaceable_within_1_day": 67.08,
+      "pct_displaceable_within_5_days": 85.61
+    },
+    "30%": {
+      "n_trades": 4876,
+      "never_displaceable": 1172,
+      "never_pct": 24.04,
+      "median_days_to_first_displaceable": 1.0,
+      "pct_displaceable_within_1_day": 60.77,
+      "pct_displaceable_within_5_days": 81.59
+    }
+  }
+}
