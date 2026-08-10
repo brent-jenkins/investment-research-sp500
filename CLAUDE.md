@@ -1886,6 +1886,104 @@ after the first EOD run that follows both the table's creation and `^SP500TR`'s 
 pull — expect "not computed yet" on the Dashboard until then, which is the correct display, not a
 failure.
 
+## Momentum-smoothness candidacy filter — pre-registered, tested, NOT ADOPTED (2026-08-10)
+
+**Motivated by Part 2 of the selection audit** (Spearman(momentum-at-entry, `pnl_pct`) = −0.033), which
+is a finding about one signal family rather than about entry information generally — nearly every
+candidate tested to date is price-derived momentum in some form. Momentum *smoothness* (was a trailing
+return accumulated steadily or in a few jumps) is a different construction over the same stored data,
+with published support (Da/Gurun/Warachka's information discreteness), and it refines **ranking** — the
+only mechanism this project has shown to work. Full detail:
+`research/momentum_smoothness_prereg_2026-08-10/`. Baseline was **Arm B, not production**, since that
+is the ranking that will be adopted.
+
+**The metric choice was the most valuable part of the pre-registration, and it inverted the obvious
+answer.** Two candidates: (i) signed positive-day fraction,
+`sign(momentum) × (n_pos − n_neg) / 252`, and (ii) path efficiency (`net / Σ|daily|`, Kaufman's
+Efficiency Ratio). **(ii) is not merely weaker — it is inverted for this hypothesis.** A single +250%
+jump with flat other days scores **ER ≈ 1.0, the maximum**, because one jump is the most direct possible
+path; a steady climb to the same total also scores ≈1.0. ER measures *directness*, not *smoothness*, and
+cannot separate them. It would have scored the jumpiest possible candidate as maximally smooth — a check
+reporting clean for a reason unrelated to what it is checking, this project's named recurring failure
+class — and produced a null that looked like evidence against the hypothesis rather than against the
+measurement. Confirmed empirically before any arm ran: single jump **+0.0040**, steady climb **+1.0000**.
+
+**Filter form, one threshold, no weight, deliberately.** A blended rank/smoothness score introduces a
+weighting parameter, and V1's confluence scoring was abandoned precisely because that makes a result
+untestable. The blend was declined outright rather than held as a fallback, and the null did not rescue
+it. **Thresholds calibrated from the independent variable only** — smoothness across 2,967,281
+gate-passing candidate-days, no backtest, no outcome data — then frozen as absolute numbers before any
+arm ran: **T1 = −0.004 (p10), T2 = +0.032 (p25), T3 = +0.052 (p40)**. The distribution is tighter than
+the hypothesis implicitly assumes (mean +0.068, std 0.056, range [−0.167, +0.302]).
+
+**Verdict: NOT ADOPTED.** B1 clears the +1.5pp cost-adjusted excess bar on Pool 2 CLEAN at **+1.551pp —
+a margin of 0.051pp, 3.4% of the bar** — and is **−0.420pp on Pool 1**. No walk-away clause fires, and
+the arm is still not adopted: **the sentence is a veto, not an adoption trigger.** Three reasons — the
+margin is effectively *at* a bar deliberately set at 1.4× the ~1.08pp noise floor; the pools disagree in
+**sign** on the primary metric; and the paired per-decision instrument **reproduces the disagreement
+rather than resolving it** (B1-only beats A-only on Pool 2, loses on Pool 1), which rules out a
+cash/cascade artefact and confirms the pools genuinely differ. A fourth signal specific to B1: it is the
+only arm in either pool where the two drawdown measures move in opposite directions (peak-relative
+improves 6.11pp, fixed-denominator worsens 16.55pp). Both pools show interior peaks rather than
+monotonic curves, but at **different thresholds** (T1 vs T2) — a bracketed optimum whose location is
+unstable across independently-provenanced pools is not a located optimum.
+
+**§6 is the reusable lesson.** Candidate-day exclusion exceeded admission displacement by ~1.5× at every
+threshold (9.5%→6.9%, 28.4%→17.9%, 41.7%→27.3%) — exactly what Part 4's "92–93% of admissions are
+capacity-timed" predicts — but never fell below the 5% floor, so **the null is about the hypothesis, not
+the instrument**. Without that second floor the two would have been indistinguishable. The deployment
+guard passed comfortably (≤1.74pp), the first candidacy-narrowing mechanism in the sequence to do so.
+
+**A separate finding, recorded as an observation and deliberately NOT promoted**: peak-relative drawdown
+improves **monotonically with filter strength in both pools** — the only quantity in the study agreeing
+in direction everywhere — reaching **+15.07pp** (Pool 2) and **+12.24pp** (Pool 1) at B3. Not a cash
+artefact (deployment moves ≤1.74pp). But B3 has the *worst* return in both pools, so it is a
+return-for-risk trade, and the pre-registration made drawdown a one-sided ceiling rather than a
+criterion. Promoting it now would be the metric-switching pre-registration exists to prevent; it
+motivates a separately pre-registered follow-up instead.
+
+## Displacement-rate analysis — no usable operating point, NOT BUILT (2026-08-10)
+
+**Read-only prep, not a mechanism.** Five studies now point at the same constraint — gate width,
+position count, the two rebalancing studies, and smoothness all found that changing the *candidate pool*
+barely reaches admissions, because 92–93% of admissions happen only when that day's exits free capacity.
+Displacement (letting a strongly-ranked candidate replace a weaker holding rather than waiting for an
+exit) is the only structural alternative attacking the timing constraint directly. Measured on Arm B's
+preserved trade history before building anything. Full detail: `research/displacement_rate_2026-08-10/`.
+
+**Recommendation: do not build it — and not at a different threshold, because the threshold is not the
+problem.**
+
+**The pre-specified 5/10/20/30% margin grid sat below the 25th percentile of the actual gap
+distribution** (p25 = 0.372, p50 = 0.602), so it could not locate an operating point; extended to 5.00.
+**No margin works.** Arm B's entire cost-adjusted CAGR is 5.433%; margins from 0.05 to 0.30 cost
+**9.9–21.8%/yr** in turnover — two to four times the whole return. It only becomes affordable (<1%/yr)
+at margins ≥1.50, requiring a candidate to out-rank a holding by **150+ percentage points of trailing
+return**, where it fires a median of 18/yr (0/yr at 3.00) against maxima of 78–191 — a
+crisis-concentrated burst at every affordable setting, never a steady trickle. Near-full-deployment days
+are indistinguishable from all days (99.44 vs 99.40 at the tightest margin), so the days displacement
+exists to serve are not special.
+
+**Two findings say the signal is wrong rather than the threshold.** (1) The gap is positive on **99.87%**
+of days, median **0.602** — it compares the **max of ~216 daily candidates against one incumbent**, a
+winner's-curse order statistic biased upward by construction, so widening the margin samples further
+into the tail of the same biased quantity rather than buying discrimination. (2) **61–78% of positions
+become displaceable within one day of admission** (median 0–1 days) — the trigger would reverse its own
+admission decisions almost immediately at two round trips a time. Churn, not selection, and the typical
+case rather than a tail.
+
+**Closed for the right reason.** A trigger keyed on a held position's own rank *percentile* rather than a
+gap against the day's extreme would avoid the order-statistic bias — but that is close to Arm C's
+`RANK_DROPPED`, tested and underperforming Arm B in both pools. A **minimum holding period before
+displaceability** is the one variant these numbers leave genuinely open, though it converts displacement
+into scheduled re-evaluation, which the two rebalancing studies already failed on deployment grounds.
+
+**Caveat, and what it does not weaken.** This measures OPPORTUNITY, not outcome — displacement never
+happened in the source backtest, and firing it changes everything downstream via capacity cascade. The
+frequency and cost figures are robust to that (cost is incurred per firing regardless of outcome), as is
+the churn result. What remains unknowable is whether the specific trades would be good ones — which the
+cost makes moot at every frequency where it would matter.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
