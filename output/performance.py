@@ -1034,16 +1034,53 @@ ADMISSION_SHADOW_MIN_CLOSED_FOR_STATS = 5
 # ~77-79% of all admissions (research/relative_ranking_prereg_2026-08-09/
 # REPORT.md's own A-vs-B overlap finding, 21.8-23.1%) — meaning most real
 # admissions ARE active-mode-unique, the population this floor counts.
-# 30 is chosen as roughly 6x the house 5-closed-position "show something at
-# all" gate — enough that a single win/loss no longer swings the win rate
-# by ±20 percentage points (at 30, one trade moves it ±3.3pp) — while
-# staying reachable within a realistic multi-month window given this
-# system's own historical turnover (~180 trades/year across the full
-# candidate pool). Deliberately a REPORTING threshold, not a trading
-# parameter — lives here, not in analysis/decision.py or config.yaml.
-ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES = 30
+#
+# RAISED 30 -> 50 on 2026-08-10, BEFORE any forward data exists, and this
+# timing is the point: revising a review threshold once results are partly
+# in is exactly what pre-registration discipline exists to prevent, so the
+# only legitimate moment to change it is before the clock starts.
+#
+# 30 was originally chosen as roughly 6x the house 5-closed-position "show
+# something at all" gate — enough that one trade moves the win rate only
+# ±3.3pp. That reasoning is sound for SAMPLING noise and misses the failure
+# mode this promotion actually has a documented precedent for: CONCENTRATION.
+# The robustness test (research/relranking_robustness_2026-08-09/REPORT.md)
+# found the direction of Arm B's advantage robust in 20/20 perturbation draws,
+# but its MAGNITUDE partly carried by one name — dropping AMAT alone
+# compressed the measured advantage from +1.993pp to +0.427pp, ~21% of
+# typical, out of a 607-ticker pool. At n=30 forward outcomes a single
+# position could plausibly carry the entire read, which is a different and
+# larger risk than the ±3.3pp per-trade swing the original figure was sized
+# against. 50 is not a precise number — it is "enough that no single outcome
+# is structurally capable of dominating," paired with the explicit
+# concentration guard below, which is what actually detects the AMAT case
+# rather than merely making it less likely.
+#
+# The cost of 50 over 30 is time, and it is real: with the account currently
+# fully deployed and the next admission wave gated on max-holding exits from
+# early September, 50 paired outcomes is plausibly a six-month proposition
+# rather than three. Accepted deliberately — the honest answer arriving slowly
+# is worth more than a fast answer a single name could have produced.
+# Deliberately a REPORTING threshold, not a trading parameter — lives here,
+# not in analysis/decision.py or config.yaml.
+ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES = 50
 
 ADMISSION_SHADOW_REVIEW_MIN_DAYS = 90
+
+# Single-ticker concentration ceiling for the review trigger (2026-08-10) —
+# the forward equivalent of the robustness test's own AMAT finding described
+# above. If one ticker accounts for more than this share of the measured
+# effect, the review REPORTS THAT AND WAITS rather than concluding: a result
+# one name could produce on its own is not evidence about a ranking rule.
+#
+# 0.40 is a judgement, not a derived figure, and is deliberately far stricter
+# than the AMAT precedent it is calibrated against (AMAT carried ~79% of the
+# backtest advantage). The asymmetry is intentional — the backtest had 607
+# tickers and thousands of trades to dilute one name, where 50 forward
+# outcomes do not, so the forward guard has to trip earlier to catch the same
+# shape of problem. A ticker sitting between 40% and 79% would have passed
+# unremarked in the backtest and is exactly the case worth pausing on here.
+ADMISSION_SHADOW_REVIEW_MAX_SINGLE_TICKER_SHARE = 0.40
 
 
 def get_admission_ranking_shadow_rows() -> list[dict]:
@@ -1057,6 +1094,29 @@ def get_admission_ranking_shadow_rows() -> list[dict]:
         return get_all_admission_ranking_shadow_rows()
     except Exception:
         return []
+
+
+def _classify_shadow_row_admission(row: dict) -> tuple:
+    """(own_admitted, other_admitted) for one shadow row, evaluated against
+    that row's OWN recorded `active_mode` rather than today's config — so
+    the classification stays correct across a mid-history
+    admission_ranking_mode change (rows recorded before a switch keep their
+    own original active mode).
+
+    Extracted 2026-08-10 so compute_admission_ranking_shadow_summary() and
+    compute_admission_ranking_shadow_concentration() cannot drift apart on
+    what "active-mode-unique" means — the two must agree exactly, since the
+    concentration guard is computed over precisely the population the
+    summary reports stats for. Per this project's standing "one
+    implementation of any given rule" invariant, this is one function rather
+    than two matching if/else blocks that are merely supposed to agree.
+    """
+    if row.get("active_mode") == "relative_rank":
+        return (bool(row.get("admitted_under_relative_rank")),
+                bool(row.get("admitted_under_absolute_momentum")))
+    # default / absolute_momentum / any unrecognised value
+    return (bool(row.get("admitted_under_absolute_momentum")),
+            bool(row.get("admitted_under_relative_rank")))
 
 
 def compute_admission_ranking_shadow_summary(rows: list[dict]) -> dict:
@@ -1101,13 +1161,7 @@ def compute_admission_ranking_shadow_summary(rows: list[dict]) -> dict:
     inactive_unique_rows: list[dict] = []
 
     for r in rows:
-        active_mode = r.get("active_mode")
-        if active_mode == "relative_rank":
-            own_admitted = bool(r.get("admitted_under_relative_rank"))
-            other_admitted = bool(r.get("admitted_under_absolute_momentum"))
-        else:  # default / absolute_momentum / any unrecognised value
-            own_admitted = bool(r.get("admitted_under_absolute_momentum"))
-            other_admitted = bool(r.get("admitted_under_relative_rank"))
+        own_admitted, other_admitted = _classify_shadow_row_admission(r)
 
         if own_admitted and other_admitted:
             shared_count += 1
@@ -1146,39 +1200,167 @@ def compute_admission_ranking_shadow_summary(rows: list[dict]) -> dict:
     }
 
 
+def compute_admission_ranking_shadow_concentration(rows: list[dict]) -> dict:
+    """How much of the measured effect rests on any single ticker — the
+    forward equivalent of the robustness test's own AMAT finding (see
+    ADMISSION_SHADOW_REVIEW_MAX_SINGLE_TICKER_SHARE's comment). Pure
+    aggregation over already-fetched shadow rows; no DB/network access.
+
+    Takes the FULL row list and does its own active-unique filtering via the
+    shared _classify_shadow_row_admission() — deliberately not a pre-filtered
+    list from the caller, which would make every call site re-implement the
+    classification and let the guard silently measure a different population
+    than the summary reports on.
+
+    Scope: ACTIVE-MODE-UNIQUE, CLOSED rows only — the same population
+    compute_admission_ranking_shadow_summary()'s `active_unique` bucket
+    reports on, and the only one carrying a discriminating signal (shared
+    rows would have been admitted by either ranking; inactive-unique rows
+    were never bought, so no outcome exists for them by construction).
+
+    **Metric, stated explicitly because several defensible definitions
+    exist and the choice changes what trips the guard**: each ticker's
+    share of the summed ABSOLUTE `pnl_pct` across those rows —
+    `sum(|pnl_pct|) for that ticker / sum(|pnl_pct|) for all of them`.
+    Absolute, not signed, because the question is "how much of the
+    measured movement does one name account for," and a large loser
+    dominates the read exactly as much as a large winner does; a signed
+    share would let a +40% and a −40% name cancel to zero and report a
+    concentrated sample as diverse. Grouped by TICKER, not by row, so a
+    name entered several times is correctly treated as one concentration
+    risk rather than several independent ones.
+
+    Two alternatives were considered and rejected. Share of trade COUNT
+    misses the case this guard exists for entirely — the AMAT precedent was
+    one name carrying the magnitude, not the frequency. Leave-one-out
+    recomputation of `mean_pnl_pct` is the most literal analogue of the
+    robustness test, but it measures sensitivity of a mean rather than
+    concentration of the underlying contribution, and it becomes unstable
+    when the full-sample mean sits near zero (the denominator collapses and
+    the ratio explodes) — a state this comparison could genuinely occupy if
+    the two rankings turn out to perform similarly, which is a live
+    possible outcome, not a remote edge case.
+
+    A load-bearing consequence worth stating rather than discovering later:
+    with fewer than three contributing names, some ticker necessarily holds
+    more than 40% arithmetically, so the guard always trips on a very small
+    sample. That is the correct answer, not an artefact — a two-name sample
+    cannot distinguish a ranking rule from one lucky position — and it means
+    this guard doubles as a diversity floor alongside the raw outcome count.
+    Do not special-case it away.
+
+    Returns {"top_ticker", "top_share", "concentrated", "measurable",
+    "ticker_count"}. `measurable` is False — and `concentrated` False, never
+    None-as-falsy-by-accident — when there is nothing to compute a share
+    from (no closed active-unique rows, no usable `pnl_pct`, or a total
+    absolute P&L of zero). An unmeasurable sample must not read as a clean
+    bill of health: callers gate on `sample_reached` separately, and the
+    review trigger below treats "cannot measure" as "cannot conclude."
+    """
+    closed = []
+    for r in rows:
+        own_admitted, other_admitted = _classify_shadow_row_admission(r)
+        if not (own_admitted and not other_admitted):
+            continue  # not active-mode-unique
+        if r.get("outcome_available") and r.get("pnl_pct") is not None:
+            closed.append(r)
+    if not closed:
+        return {"top_ticker": None, "top_share": None, "concentrated": False,
+                "measurable": False, "ticker_count": 0}
+
+    by_ticker: dict[str, float] = {}
+    for r in closed:
+        ticker = r.get("ticker")
+        if not ticker:
+            continue
+        by_ticker[ticker] = by_ticker.get(ticker, 0.0) + abs(float(r["pnl_pct"]))
+
+    total_abs = sum(by_ticker.values())
+    if not by_ticker or total_abs <= 0:
+        # Every closed outcome was exactly flat — a real possibility, and
+        # genuinely unmeasurable rather than perfectly diverse.
+        return {"top_ticker": None, "top_share": None, "concentrated": False,
+                "measurable": False, "ticker_count": len(by_ticker)}
+
+    top_ticker = max(by_ticker, key=lambda t: by_ticker[t])
+    top_share = by_ticker[top_ticker] / total_abs
+    return {
+        "top_ticker": top_ticker,
+        "top_share": top_share,
+        "concentrated": top_share > ADMISSION_SHADOW_REVIEW_MAX_SINGLE_TICKER_SHARE,
+        "measurable": True,
+        "ticker_count": len(by_ticker),
+    }
+
+
 def compute_admission_ranking_shadow_review_status(
-    active_unique_closed_count: int, first_decided_at,
+    active_unique_closed_count: int, first_decided_at, concentration: dict = None,
 ) -> dict:
     """Whether the forward shadow comparison's review trigger has fired —
-    WHICHEVER COMES LATER of (i) ADMISSION_SHADOW_REVIEW_MIN_DAYS (90)
-    days from the first recorded decision and (ii)
-    ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES (30) active-mode-unique
-    closed outcomes — see this module's own constant docstrings and
-    CLAUDE.md's "Forward shadow comparison" section for the full
-    justification. Deriving the review date from first_decided_at (never
-    hardcoded at build time) means a delay in shipping this feature does
-    not silently shorten the review window.
+    ALL THREE of (i) ADMISSION_SHADOW_REVIEW_MIN_DAYS (90) days from the
+    first recorded decision, (ii) ADMISSION_SHADOW_REVIEW_MIN_PAIRED_
+    OUTCOMES (50) active-mode-unique closed outcomes, and (iii) no single
+    ticker accounting for more than ADMISSION_SHADOW_REVIEW_MAX_SINGLE_
+    TICKER_SHARE (40%) of the measured effect — see this module's own
+    constant docstrings and CLAUDE.md's "Forward shadow comparison" section
+    for the full justification. Deriving the review date from
+    first_decided_at (never hardcoded at build time) means a delay in
+    shipping this feature does not silently shorten the review window.
+
+    Conditions (i) and (ii) are a WHICHEVER-COMES-LATER pair — both are
+    "has enough accumulated." Condition (iii) is different in kind: it is
+    not satisfied by waiting for a threshold to be crossed, it is a
+    property of whatever sample has accumulated, and it can flip back and
+    forth as outcomes land. A concentrated sample does not mean "not yet" in
+    the way the other two do — it means the sample that exists cannot answer
+    the question, and the honest response is to report the concentration and
+    keep accumulating (2026-08-10; the forward equivalent of the robustness
+    test's own AMAT finding, added before any forward data existed).
 
     active_unique_closed_count is the interpretable sample — the same
     figure compute_admission_ranking_shadow_summary()'s own
     active_unique["closed_count"] returns, not total_decisions (which
     includes shared/inactive-unique rows that carry no outcome signal).
 
-    Returns {"review_date", "days_reached", "sample_reached", "review_due",
-    "paired_outcomes", "floor"}. review_date is None (and every *_reached
-    flag False) if first_decided_at is None (no shadow data recorded
-    yet)."""
+    concentration is compute_admission_ranking_shadow_concentration()'s own
+    return dict, or None when a caller genuinely has no rows to compute it
+    from. **None is treated as "cannot conclude," never as "no concentration
+    problem"** — an unmeasurable sample must not read as a clean bill of
+    health, the same reasoning that function's own `measurable` flag exists
+    for. This is a keyword-defaulted parameter only so pre-existing callers
+    do not silently break; a caller that has the rows should always pass it.
+
+    Returns {"review_date", "days_reached", "sample_reached",
+    "concentration_ok", "review_due", "paired_outcomes", "floor",
+    "top_ticker", "top_share", "max_single_ticker_share"}. review_date is
+    None (and every *_reached flag False) if first_decided_at is None (no
+    shadow data recorded yet)."""
+    conc = concentration or {}
+    conc_measurable = bool(conc.get("measurable"))
+    # Only a MEASURED, non-concentrated sample clears this condition.
+    # Unmeasurable (no closed rows yet, or none carrying pnl_pct) is
+    # deliberately NOT ok -- see the docstring above.
+    concentration_ok = conc_measurable and not conc.get("concentrated", False)
+    base = {
+        "paired_outcomes": active_unique_closed_count,
+        "floor": ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES,
+        "concentration_ok": concentration_ok,
+        "top_ticker": conc.get("top_ticker"),
+        "top_share": conc.get("top_share"),
+        "max_single_ticker_share": ADMISSION_SHADOW_REVIEW_MAX_SINGLE_TICKER_SHARE,
+    }
     if first_decided_at is None:
         return {
+            **base,
             "review_date": None, "days_reached": False, "sample_reached": False,
-            "review_due": False, "paired_outcomes": active_unique_closed_count,
-            "floor": ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES,
+            "review_due": False,
         }
     review_date = first_decided_at + timedelta(days=ADMISSION_SHADOW_REVIEW_MIN_DAYS)
     days_reached = datetime.utcnow() >= review_date
     sample_reached = active_unique_closed_count >= ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES
     return {
-        "review_date": review_date, "days_reached": days_reached, "sample_reached": sample_reached,
-        "review_due": days_reached and sample_reached,
-        "paired_outcomes": active_unique_closed_count, "floor": ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES,
+        **base,
+        "review_date": review_date, "days_reached": days_reached,
+        "sample_reached": sample_reached,
+        "review_due": days_reached and sample_reached and concentration_ok,
     }

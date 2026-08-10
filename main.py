@@ -56,6 +56,7 @@ from data.scheduler import start_scheduler
 from output.performance import (
     POSITIONS_RULES_EXPLANATION,
     compute_admission_ranking_shadow_review_status,
+    compute_admission_ranking_shadow_concentration,
     compute_admission_ranking_shadow_summary,
     compute_position_context,
     compute_sector_breakdown,
@@ -1495,6 +1496,7 @@ def _render_dashboard_page(config: dict) -> None:
             review = compute_admission_ranking_shadow_review_status(
                 active_unique_closed_count=summary["active_unique"]["closed_count"],
                 first_decided_at=first_decided_at,
+                concentration=compute_admission_ranking_shadow_concentration(shadow_rows),
             )
             active_mode_label = (
                 "relative rank" if summary["current_active_mode"] == "relative_rank" else "absolute momentum"
@@ -1545,6 +1547,31 @@ def _render_dashboard_page(config: dict) -> None:
                 f"Review trigger: {review['paired_outcomes']}/{review['floor']} paired outcomes, "
                 f"due from {review_date_str} UK (whichever comes later). {due_str}"
             )
+            # Concentration is shown whenever it is measurable -- not only
+            # when it trips -- so a reader can watch one name's share
+            # building toward the ceiling rather than being surprised by a
+            # blocked review at the end.
+            if review["top_share"] is not None:
+                ceiling_pct = review["max_single_ticker_share"] * 100
+                share_pct = review["top_share"] * 100
+                if review["concentration_ok"]:
+                    st.caption(
+                        f"Single-ticker concentration: largest contributor **{review['top_ticker']}** "
+                        f"at {share_pct:.0f}% of the measured effect (ceiling {ceiling_pct:.0f}%)."
+                    )
+                else:
+                    st.caption(
+                        f"⚠️ Single-ticker concentration: **{review['top_ticker']}** accounts for "
+                        f"{share_pct:.0f}% of the measured effect, above the {ceiling_pct:.0f}% "
+                        f"ceiling. The review will report this and wait rather than conclude — a "
+                        f"result one name could produce on its own is not evidence about a ranking "
+                        f"rule. See CLAUDE.md's \"Forward shadow comparison\" section."
+                    )
+            elif summary["active_unique"]["closed_count"] > 0:
+                st.caption(
+                    "Single-ticker concentration: not yet measurable (no closed "
+                    "outcome carries a usable P&L %)."
+                )
 
     _render_footer()
 

@@ -1441,25 +1441,82 @@ Comparison" expander, pure DB reads (`get_admission_ranking_shadow_rows()`), con
 render-path test that patches both `Trading212Client` and `yfinance.Ticker` to raise if invoked at all.
 
 **THE REVIEW TRIGGER — derived from the first recorded decision, never hardcoded, because a CLAUDE.md note
-alone will not reach a human in 90 days.** Fires WHICHEVER COMES LATER of (i) 90 days from
+alone will not reach a human in 90 days.** Fires on ALL THREE of (i) 90 days from
 `data.database.get_admission_ranking_shadow_first_decided_at()` (the actual earliest recorded row, not a
-build-time constant — a delay in shipping this feature does not silently shorten the window) and (ii)
-`ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES = 30` active-mode-only closed outcomes (the only population
-that can ever carry real signal — see the structural-limitation paragraph above). **30, not the display's
-own smaller 5-closed gate, is the number that decides when the comparison is trustworthy enough to act on,
-not merely worth showing.** Chosen as roughly 6x the house 5-closed "show something at all" threshold —
-enough that one closed trade no longer swings the win rate by ±20 percentage points (at 30, one trade
-moves it ±3.3pp) — while staying reachable within a realistic window: the original study's own A-vs-B
-overlap finding (21.8–23.1%) means roughly 77–79% of real admissions are active-mode-unique, so at this
-system's historical turnover (~180 trades/year across the full candidate pool) 30 is expected to
-accumulate in a few months, keeping the two trigger conditions roughly aligned rather than one dominating
-by default.
+build-time constant — a delay in shipping this feature does not silently shorten the window), (ii)
+`ADMISSION_SHADOW_REVIEW_MIN_PAIRED_OUTCOMES = 50` active-mode-only closed outcomes (the only population
+that can ever carry real signal — see the structural-limitation paragraph above), and (iii) no single
+ticker accounting for more than `ADMISSION_SHADOW_REVIEW_MAX_SINGLE_TICKER_SHARE = 0.40` of the measured
+effect. **The sample floor, not the display's own smaller 5-closed gate, is the number that decides when
+the comparison is trustworthy enough to act on, not merely worth showing.**
+
+**Raised 30 → 50, and the concentration ceiling added, on 2026-08-10 — BEFORE the flip, before any
+forward data existed, and that timing is the whole point.** Revising a review threshold once results are
+partly in is precisely what pre-registration discipline exists to prevent, so the only legitimate moment
+to change it is before the clock starts. The original 30 was reasoned as roughly 6x the house 5-closed
+gate — enough that one closed trade moves the win rate only ±3.3pp — which is sound for SAMPLING noise
+and misses the failure mode this promotion has a documented precedent for: **CONCENTRATION**. The
+robustness test (`research/relranking_robustness_2026-08-09/REPORT.md`) found B's advantage robust in
+direction across 20/20 perturbation draws but partly carried in magnitude by one name — dropping AMAT
+alone compressed it from +1.993pp to +0.427pp (~21% of typical), out of a **607-ticker** pool. At n=30
+forward outcomes a single position could plausibly carry the entire read, a different and larger risk
+than the per-trade swing 30 was sized against.
+
+**Condition (iii) is different in kind from (i) and (ii), and the code says so explicitly.** The first
+two are "has enough accumulated" — monotonic, satisfied by waiting. Concentration is a property of
+whatever sample exists and can flip back and forth as outcomes land. A concentrated sample does not mean
+"not yet" in the same sense; it means the sample that exists cannot answer the question, so the review
+**reports the concentration and waits** rather than concluding. **The metric is stated exactly rather
+than left to a reader's inference** (per this file's own research-reproducibility standard): each
+ticker's share of summed **absolute** `pnl_pct` across active-mode-unique closed rows —
+`sum(|pnl_pct|) for that ticker / sum(|pnl_pct|) for all of them`, grouped by ticker so repeat entries of
+one name count once. Absolute, not signed, because a large loser dominates the read exactly as much as a
+large winner, and a signed share would let a +40% and a −40% name cancel to zero and report a
+concentrated sample as diverse. Two alternatives were considered and rejected: share of trade **count**
+(misses the case entirely — AMAT carried magnitude, not frequency) and leave-one-out recomputation of
+`mean_pnl_pct` (the most literal analogue, but it measures sensitivity of a mean rather than
+concentration of contribution, and becomes unstable when the full-sample mean sits near zero — a state
+this comparison could genuinely occupy if the two rankings perform similarly, which is a live possible
+outcome, not a remote edge case).
+
+**0.40 is a judgement, not a derived figure, and is deliberately far stricter than the AMAT precedent it
+is calibrated against** (AMAT carried ~79%). The asymmetry is intentional: the backtest had 607 tickers
+and thousands of trades to dilute one name, where 50 forward outcomes do not, so the forward guard must
+trip earlier to catch the same shape of problem. A ticker sitting between 40% and 79% would have passed
+unremarked in the backtest and is exactly the case worth pausing on here. **A load-bearing consequence,
+pinned by its own test so nobody special-cases it away later**: with fewer than three contributing names
+some ticker necessarily holds >40% arithmetically, so the guard always trips on a very small sample. That
+is the correct answer, not an artefact — a two-name sample cannot distinguish a ranking rule from one
+lucky position — and it means this guard doubles as a diversity floor alongside the raw outcome count.
+**"Cannot measure" is likewise never treated as "no concentration problem"**: an unmeasurable sample (no
+closed rows, none carrying `pnl_pct`, or every outcome exactly flat) blocks the trigger, as does omitting
+the concentration argument entirely — the same degenerate-case discipline the "check that reports clean
+for a reason unrelated to the thing it was checking" entry above requires.
+
+**The cost is time, and it is real and accepted.** With the account fully deployed and the next admission
+wave gated on max-holding exits from early September, 50 paired outcomes is plausibly a six-month
+proposition rather than three — which also means **the sample floor, not the 90-day date, is the binding
+constraint**, and the date is close to irrelevant in practice. Accepted deliberately: an honest answer
+arriving slowly is worth more than a fast one a single name could have produced.
+
+**One implementation, not two** — `_classify_shadow_row_admission()` was extracted so
+`compute_admission_ranking_shadow_summary()` and `compute_admission_ranking_shadow_concentration()`
+cannot drift apart on what "active-mode-unique" means. They must agree exactly, since the guard measures
+precisely the population the summary reports stats for, and the concentration function takes the FULL row
+list and filters internally rather than accepting a pre-filtered list — a caller-side filter would let
+every call site re-implement the classification, which is the duplication this project's own standing
+invariant forbids.
 
 **The weekly summary email carries this forward, since that's the mechanism actually intended to reach a
 reader within the window — a CLAUDE.md entry alone is not.** A single compact line, in both the plain-text
-and HTML bodies: `"Forward comparison: 47 paired outcomes (floor: 30) — next check from 2026-11-07."`
-before the trigger fires, changing to `"Forward comparison: trigger conditions met — 47 paired outcomes
-(floor 30 cleared), 2026-11-07 or later reached."` once both conditions clear. **Deliberately avoids the
+and HTML bodies: `"Forward comparison: 47 paired outcomes (floor: 50) — next check from 2026-11-07.
+Largest single contributor NVDA at 22% of the measured difference (ceiling 40%)."` before the trigger
+fires, changing to `"Forward comparison: trigger conditions met — 62 paired outcomes (floor 50 cleared),
+2026-11-07 or later reached. …"` once all three conditions clear. When concentration exceeds the ceiling
+the suffix instead reads `"AMAT accounts for 62% of the measured difference, above the 40% ceiling, so
+the sample cannot yet separate the two rankings."` — **the concentration figure is shown whenever it is
+measurable, not only when it blocks**, so a reader watches one name's share build toward the limit rather
+than being surprised by a blocked trigger at the end. **Deliberately avoids the
 word "review"** (and every other word in this project's own established, tested weekly-email tone
 standard's forbidden-word list — `tests/test_briefing.py`'s `_FORBIDDEN_WORDS`, which already bans
 "review" as call-to-action language) — the MEANING the review-trigger needs to convey is expressed in

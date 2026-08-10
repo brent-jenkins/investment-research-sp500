@@ -1419,7 +1419,7 @@ def test_gather_weekly_data_includes_admission_shadow_review(db_engine, mocker):
 
     data = _gather_weekly_data({})
     assert data["admission_shadow_review"]["review_date"] is not None
-    assert data["admission_shadow_review"]["floor"] == 30
+    assert data["admission_shadow_review"]["floor"] == 50  # raised from 30 on 2026-08-10
 
 
 def test_gather_weekly_data_admission_shadow_review_none_when_no_shadow_data(db_engine, mocker):

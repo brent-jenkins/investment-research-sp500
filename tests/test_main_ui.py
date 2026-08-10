@@ -1087,7 +1087,7 @@ def test_dashboard_shadow_comparison_shows_review_trigger_progress(db_engine, da
     assert not at.exception
     all_text = " ".join(m.value for m in at.caption)
     assert "Review trigger:" in all_text
-    assert "/30 paired outcomes" in all_text
+    assert "/50 paired outcomes" in all_text  # floor raised from 30 on 2026-08-10
 
 
 def test_dashboard_shadow_comparison_render_path_never_calls_t212_or_yfinance(db_engine, dashboard_app, mocker):

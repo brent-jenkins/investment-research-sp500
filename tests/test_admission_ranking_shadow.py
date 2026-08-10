@@ -593,14 +593,86 @@ def test_review_status_not_due_after_90_days_with_too_small_a_sample():
     assert status["review_due"] is False  # whichever comes LATER -- sample not yet reached
 
 
-def test_review_status_due_once_both_conditions_clear():
+_CLEAN_CONCENTRATION = {
+    "top_ticker": "AAA", "top_share": 0.20, "concentrated": False,
+    "measurable": True, "ticker_count": 9,
+}
+
+
+def test_review_status_due_once_all_three_conditions_clear():
     from output.performance import compute_admission_ranking_shadow_review_status
 
     first = datetime.utcnow() - timedelta(days=200)
-    status = compute_admission_ranking_shadow_review_status(active_unique_closed_count=45, first_decided_at=first)
+    status = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=55, first_decided_at=first,
+        concentration=_CLEAN_CONCENTRATION,
+    )
     assert status["days_reached"] is True
     assert status["sample_reached"] is True
+    assert status["concentration_ok"] is True
     assert status["review_due"] is True
+
+
+def test_review_status_sample_floor_is_50_not_30():
+    """Pins the 2026-08-10 raise. 45 cleared the old floor and must not
+    clear the new one -- asserted from behaviour at the boundary rather
+    than by reading the constant back, so an accidental revert fails."""
+    from output.performance import compute_admission_ranking_shadow_review_status
+
+    first = datetime.utcnow() - timedelta(days=200)
+    below = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=45, first_decided_at=first,
+        concentration=_CLEAN_CONCENTRATION,
+    )
+    at_floor = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=50, first_decided_at=first,
+        concentration=_CLEAN_CONCENTRATION,
+    )
+    assert below["sample_reached"] is False
+    assert below["review_due"] is False
+    assert at_floor["sample_reached"] is True
+    assert at_floor["review_due"] is True
+
+
+def test_review_status_blocked_when_one_ticker_dominates_the_effect():
+    """The AMAT-precedent guard: date and sample both cleared, but one name
+    carries more than the ceiling share, so the trigger must NOT fire."""
+    from output.performance import compute_admission_ranking_shadow_review_status
+
+    first = datetime.utcnow() - timedelta(days=200)
+    status = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=80, first_decided_at=first,
+        concentration={"top_ticker": "AMAT", "top_share": 0.62, "concentrated": True,
+                       "measurable": True, "ticker_count": 11},
+    )
+    assert status["days_reached"] is True
+    assert status["sample_reached"] is True
+    assert status["concentration_ok"] is False
+    assert status["review_due"] is False
+    # The blocking reason must be reportable, not just a bare False.
+    assert status["top_ticker"] == "AMAT"
+    assert status["top_share"] == 0.62
+
+
+def test_review_status_unmeasurable_concentration_does_not_count_as_clean():
+    """"Cannot measure" must never read as "no concentration problem" --
+    the same reasoning the compute function's own `measurable` flag exists
+    for. Both an explicitly-unmeasurable dict and an omitted one block."""
+    from output.performance import compute_admission_ranking_shadow_review_status
+
+    first = datetime.utcnow() - timedelta(days=200)
+    unmeasurable = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=80, first_decided_at=first,
+        concentration={"top_ticker": None, "top_share": None, "concentrated": False,
+                       "measurable": False, "ticker_count": 0},
+    )
+    omitted = compute_admission_ranking_shadow_review_status(
+        active_unique_closed_count=80, first_decided_at=first,
+    )
+    for status in (unmeasurable, omitted):
+        assert status["sample_reached"] is True
+        assert status["concentration_ok"] is False
+        assert status["review_due"] is False
 
 
 def test_review_status_date_is_derived_from_first_decided_at_not_hardcoded():
@@ -616,3 +688,151 @@ def test_review_status_date_is_derived_from_first_decided_at_not_hardcoded():
     assert status_a["review_date"] == first_a + timedelta(days=90)
     assert status_b["review_date"] == first_b + timedelta(days=90)
     assert status_a["review_date"] != status_b["review_date"]
+
+
+# ---------------------------------------------------------------------------
+# compute_admission_ranking_shadow_concentration() -- the AMAT-precedent guard
+# ---------------------------------------------------------------------------
+
+def _conc_row(ticker, pnl_pct, *, active_mode="relative_rank", own=True, other=False,
+              outcome_available=True):
+    """An active-mode-unique closed shadow row by default (own admitted,
+    other not) -- the only population the concentration guard measures."""
+    row = {"ticker": ticker, "active_mode": active_mode,
+           "outcome_available": outcome_available, "pnl_pct": pnl_pct,
+           "pnl_gbp": (pnl_pct or 0) * 100}
+    if active_mode == "relative_rank":
+        row["admitted_under_relative_rank"] = own
+        row["admitted_under_absolute_momentum"] = other
+    else:
+        row["admitted_under_absolute_momentum"] = own
+        row["admitted_under_relative_rank"] = other
+    return row
+
+
+def test_concentration_flags_a_single_dominant_ticker():
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    rows = [_conc_row("AMAT", 0.80)] + [_conc_row(f"T{i}", 0.02) for i in range(10)]
+    conc = compute_admission_ranking_shadow_concentration(rows)
+    assert conc["measurable"] is True
+    assert conc["top_ticker"] == "AMAT"
+    assert conc["top_share"] == pytest.approx(0.80 / (0.80 + 0.20))
+    assert conc["concentrated"] is True
+
+
+def test_concentration_clean_when_effect_is_spread_across_names():
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    conc = compute_admission_ranking_shadow_concentration(
+        [_conc_row(f"T{i}", 0.05) for i in range(10)]
+    )
+    assert conc["measurable"] is True
+    assert conc["concentrated"] is False
+    assert conc["top_share"] == pytest.approx(0.10)
+    assert conc["ticker_count"] == 10
+
+
+def test_concentration_uses_absolute_pnl_so_a_big_loser_counts_as_much_as_a_big_winner():
+    """A signed share would let one large loser look diluting rather than
+    dominating -- the question is how much of the measured MOVEMENT one name
+    accounts for, and a -60% name carries the read exactly as much as +60%."""
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    rows = [_conc_row("BIGLOSS", -0.60)] + [_conc_row(f"T{i}", 0.02) for i in range(5)]
+    conc = compute_admission_ranking_shadow_concentration(rows)
+    assert conc["top_ticker"] == "BIGLOSS"
+    assert conc["concentrated"] is True
+
+
+def test_concentration_groups_repeat_entries_of_one_ticker_together():
+    """A name entered several times is ONE concentration risk, not several
+    independent small ones -- grouping by row would hide exactly the case
+    this guard exists to catch."""
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    rows = [_conc_row("REPEAT", 0.20), _conc_row("REPEAT", 0.20), _conc_row("REPEAT", 0.20)]
+    rows += [_conc_row(f"T{i}", 0.05) for i in range(4)]
+    conc = compute_admission_ranking_shadow_concentration(rows)
+    assert conc["top_ticker"] == "REPEAT"
+    assert conc["top_share"] == pytest.approx(0.60 / 0.80)
+    assert conc["concentrated"] is True
+
+
+def test_concentration_ignores_shared_and_inactive_unique_rows():
+    """Only active-mode-unique rows carry a discriminating signal. A shared
+    row (both rankings admit) and an inactive-unique row (never traded) must
+    not enter the denominator, or a dominant name could be diluted by
+    outcomes that say nothing about which ranking is better."""
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    rows = [
+        _conc_row("DOMINANT", 0.90),
+        _conc_row("SHARED", 0.90, own=True, other=True),
+        _conc_row("INACTIVE", 0.90, own=False, other=True),
+        _conc_row("SMALL", 0.10),
+    ]
+    conc = compute_admission_ranking_shadow_concentration(rows)
+    assert conc["ticker_count"] == 2  # DOMINANT + SMALL only
+    assert conc["top_ticker"] == "DOMINANT"
+    assert conc["top_share"] == pytest.approx(0.90)
+    assert conc["concentrated"] is True
+
+
+def test_concentration_unmeasurable_with_no_closed_outcomes():
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    conc = compute_admission_ranking_shadow_concentration(
+        [_conc_row("A", None, outcome_available=False)]
+    )
+    assert conc["measurable"] is False
+    assert conc["concentrated"] is False
+    assert conc["top_ticker"] is None
+
+
+def test_concentration_all_flat_outcomes_is_unmeasurable_not_perfectly_diverse():
+    """Every outcome exactly 0% is a real possibility and genuinely carries
+    no information about concentration -- it must not report clean."""
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    conc = compute_admission_ranking_shadow_concentration(
+        [_conc_row(f"T{i}", 0.0) for i in range(6)]
+    )
+    assert conc["measurable"] is False
+    assert conc["concentrated"] is False
+
+
+def test_concentration_respects_each_rows_own_active_mode():
+    """Rows recorded before and after an admission_ranking_mode switch must
+    each be classified against their OWN active_mode, not today's config."""
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    rows = [
+        _conc_row("OLD", 0.50, active_mode="absolute_momentum"),
+        _conc_row("NEW", 0.50, active_mode="relative_rank"),
+        _conc_row("ALSO_OLD", 0.50, active_mode="absolute_momentum"),
+    ]
+    conc = compute_admission_ranking_shadow_concentration(rows)
+    # All three are active-unique under their OWN mode -- if the classifier
+    # wrongly used one fixed mode for every row, the two recorded under the
+    # other mode would fall out of the population entirely.
+    assert conc["ticker_count"] == 3
+    assert conc["top_share"] == pytest.approx(1 / 3)
+    assert conc["concentrated"] is False
+
+
+def test_concentration_structurally_trips_on_a_very_small_ticker_count():
+    """A deliberate, load-bearing property rather than an accident of the
+    numbers: with fewer than three contributing names, some ticker must hold
+    >40% arithmetically, so the guard always trips. That is the correct
+    answer -- a two-name sample cannot distinguish a ranking rule from one
+    lucky position, which is exactly what the guard exists to say. Pinned
+    explicitly so nobody 'fixes' it later by special-casing small samples."""
+    from output.performance import compute_admission_ranking_shadow_concentration
+
+    two_names = compute_admission_ranking_shadow_concentration(
+        [_conc_row("A", 0.50), _conc_row("B", 0.50)]
+    )
+    assert two_names["measurable"] is True
+    assert two_names["top_share"] == pytest.approx(0.50)
+    assert two_names["concentrated"] is True

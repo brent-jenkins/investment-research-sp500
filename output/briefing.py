@@ -118,6 +118,7 @@ def _gather_weekly_data(config: dict) -> dict:
     from data.ingestion import get_price_df
     from analysis import crisis
     from output.performance import (
+        compute_admission_ranking_shadow_concentration,
         compute_admission_ranking_shadow_review_status,
         compute_admission_ranking_shadow_summary,
         compute_sector_breakdown,
@@ -208,6 +209,7 @@ def _gather_weekly_data(config: dict) -> dict:
     shadow_review = compute_admission_ranking_shadow_review_status(
         active_unique_closed_count=shadow_summary["active_unique"]["closed_count"],
         first_decided_at=shadow_first_decided_at,
+        concentration=compute_admission_ranking_shadow_concentration(shadow_rows),
     )
 
     return {
@@ -233,9 +235,16 @@ def _admission_shadow_review_line(data: dict) -> str:
     plain-text and HTML bodies -- see CLAUDE.md's "Forward shadow
     comparison" section. This line is the mechanism actually intended to
     reach a reader within the 90-day window; a CLAUDE.md note alone would
-    not. Plainly states once both trigger conditions (see compute_
+    not. Plainly states once all three trigger conditions (see compute_
     admission_ranking_shadow_review_status()) are met, rather than
     continuing to show a not-yet-there progress line past that point.
+
+    Reports single-ticker concentration (2026-08-10) whenever it is
+    measurable, not only when it exceeds the ceiling — a reader watching one
+    name's share build toward the limit is better served than one told about
+    it only at the end. When it does exceed, the line states that the sample
+    cannot separate the two rankings yet, which is the honest description of
+    a measured effect one name could have produced alone.
 
     Deliberately avoids the word "review" (and every other word in
     tests/test_briefing.py's own _FORBIDDEN_WORDS list) -- this weekly
@@ -247,15 +256,35 @@ def _admission_shadow_review_line(data: dict) -> str:
     review = data.get("admission_shadow_review")
     if not review or review["review_date"] is None:
         return "Forward comparison: no shadow-comparison decisions recorded yet."
+    # Concentration suffix -- appended to whichever base line applies, so
+    # the figure travels with the progress statement rather than only
+    # appearing once it becomes a blocker.
+    conc = ""
+    if review.get("top_share") is not None:
+        share_pct = review["top_share"] * 100
+        ceiling_pct = review["max_single_ticker_share"] * 100
+        if review.get("concentration_ok"):
+            conc = (
+                f" Largest single contributor {review['top_ticker']} at {share_pct:.0f}% "
+                f"of the measured difference (ceiling {ceiling_pct:.0f}%)."
+            )
+        else:
+            conc = (
+                f" {review['top_ticker']} accounts for {share_pct:.0f}% of the measured "
+                f"difference, above the {ceiling_pct:.0f}% ceiling, so the sample cannot yet "
+                f"separate the two rankings."
+            )
+
     if review["review_due"]:
         return (
             f"Forward comparison: trigger conditions met -- {review['paired_outcomes']} paired "
             f"outcomes (floor {review['floor']} cleared), {review['review_date'].date().isoformat()} "
-            f"or later reached."
+            f"or later reached.{conc}"
         )
     return (
         f"Forward comparison: {review['paired_outcomes']} paired outcomes "
-        f"(floor: {review['floor']}) — next check from {review['review_date'].date().isoformat()}."
+        f"(floor: {review['floor']}) — next check from "
+        f"{review['review_date'].date().isoformat()}.{conc}"
     )
 
 
