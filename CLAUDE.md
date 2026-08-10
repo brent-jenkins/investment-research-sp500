@@ -1414,13 +1414,15 @@ real-money risk regardless of the config default. Full suite (1,059 tests) green
 
 **A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
 
-## A guard that holds in the expected case and fails silently in the degenerate one — a class, not three incidents (standing requirement, 2026-08-10)
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not five incidents (standing requirement, 2026-08-10)
 
-**Three separate findings this week share one shape, and naming the shape is more useful than
-recording them separately.** In each, a safeguard was reasoned about — correctly — for the case its
-author had in mind, shipped with that reasoning written down as a justification, and then failed
-silently in a degenerate case where the reasoning inverts rather than merely weakens. None was
+**Five separate findings this week share one shape, and naming the shape is more useful than
+recording them separately.** In each, a check was reasoned about — correctly — for the case its
+author had in mind, shipped with that reasoning written down as a justification, and then reported
+a clean, confident result in a case where the reasoning inverts rather than merely weakens. None was
 caught by a test, because each one's tests exercised the expected case the reasoning described.
+The class is broader than code guards: instances 4 and 5 are a documentation record and an
+operational poll loop, and they fail identically.
 
 1. **NULL-ordering collapse** (this file's "Candidate Queue ordering" entry below). *"SQLite sorts
    NULLs last in DESC, so an unknown-strength candidate is deprioritised."* True while SOME row
@@ -1438,22 +1440,50 @@ caught by a test, because each one's tests exercised the expected case the reaso
    expected to bind hardest at n5; it never bound at all, because n5 never concentrated enough to
    produce the effect the ceiling existed to catch. A threshold on a magnitude cannot fire when the
    mechanism that would generate the magnitude never engaged.
+4. **A rename accurately recorded in one place and stale in two others** (found while fixing
+   incident 1). The 2026-08-09 promotion's own CLAUDE.md entry correctly documented renaming the
+   sort column to `admission_rank_value`, while two older sections continued to describe the same
+   line as `ORDER BY momentum_pct DESC`. **This is worse than uniformly stale documentation, not
+   better**: the accurate entry is what supplies the confidence that stops anyone checking the
+   others. A reader who verifies the rename was handled finds the correct record, concludes yes,
+   and never reaches the two that still describe the old column. Uniformly wrong docs get
+   distrusted as a set; a correct record adjacent to stale ones vouches for them.
+5. **A poll loop that could only ever produce one answer** (during this incident's own deploy). A
+   background watcher was armed to wait for the server's `HEAD` to reach the newly pushed commit,
+   comparing against a **fabricated full SHA** — only the short `5ed6ef8` was known, and the
+   remaining characters were filled in rather than looked up. It would have polled for 15 minutes,
+   matched nothing, and reported a timeout that reads as *"the deploy failed"* when nothing had
+   failed. The purest instance in this list: not a check whose domain was too narrow, but a check
+   with no true-branch at all, whose single reachable output is indistinguishable from a real
+   finding. Caught before it reported, by noticing the SHA had been invented; the correct fix was
+   `git rev-parse HEAD`, which costs one command.
 
-**The common structure**: each guard is valid over a domain, the domain is narrower than the guard's
-stated justification implies, and the out-of-domain case produces a *confident clean result* rather
-than an error or an obvious anomaly. That last property is what makes this class expensive — a
-crash or an implausible number gets investigated; a plausible pass does not.
+**The common structure**: each check is valid over a domain, the domain is narrower than the check's
+stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
+*confident, plausible-looking result* rather than an error or an obvious anomaly. That last property
+is what makes this class expensive — a crash or an implausible number gets investigated; a plausible
+pass does not. Note the two directions it runs in: instances 1-4 report **clean when something is
+wrong**, instance 5 would have reported **failure when nothing was wrong**. Both are the same defect
+— an output uncorrelated with the state being checked — and the second is not the safer one, since
+a false alarm during a live deploy invites exactly the kind of unnecessary intervention that causes
+real damage.
 
-**The rule.** When writing or reviewing a guard, threshold, ordering rule, or invariant, state
-explicitly what happens in the degenerate case — all values NULL, all values identical, zero rows,
-the mechanism never engaging — and confirm the guard still means what its justification claims
-there. If the honest answer is "it silently reports clean," either the guard needs a companion that
-covers the degenerate case (as `backfill_admission_rank_value` now does for the NULL-ordering one,
-and as the realized-position-count instrument did for the deployment guard) or the justification
-must be rewritten to state the limit rather than imply coverage it doesn't have. **A comment
-asserting a safety property is a claim requiring the same evidence as any other claim in this
-project** — the NULL-ordering one had been read approvingly by multiple reviews before it caused a
-live defect, precisely because it reads as obviously true.
+**The rule.** When writing or reviewing a guard, threshold, ordering rule, invariant, or any check
+whose output will be believed, state explicitly what happens in the degenerate case — all values
+NULL, all values identical, zero rows, the mechanism never engaging, the compared-against value
+never obtainable — and confirm the check still means what its justification claims there. The
+sharpest single question, which would have caught instances 1 and 5 outright: **can this check
+produce the other answer at all, and what specifically would make it?** If the honest answer is "it
+silently reports clean," either the check needs a companion covering the degenerate case (as
+`backfill_admission_rank_value` now does for the NULL-ordering one, and as the realized-position-
+count instrument did for the deployment guard) or the justification must be rewritten to state the
+limit rather than imply coverage it doesn't have. **A comment asserting a safety property is a claim
+requiring the same evidence as any other claim in this project** — the NULL-ordering one had been
+read approvingly by multiple reviews before it caused a live defect, precisely because it reads as
+obviously true. This is the same discipline this file already requires for tests (verify a new test
+genuinely fails against the reintroduced bug, never merely that it passes) applied to every other
+kind of check: **a check that has not been observed producing both of its answers has been observed
+producing neither.**
 
 **A specific sub-case worth naming, since it is the sharpest instance so far: do not conflate
 *retention* with *resolution*.** The migration comment that caused incident 1 dismissed pre-existing
