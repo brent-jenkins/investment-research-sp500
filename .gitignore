@@ -81,10 +81,13 @@ logs/
 # deliberately NOT covered here — see CLAUDE.md's "Research reproducibility
 # standard" for why those stay committed.
 research/**/_cache*.pkl
-# Recomputed rank/gate/held matrices (2026-08-10): a derived intermediate,
-# rebuildable from the price cache by the script that made it. The durable
-# artifacts are results.json / margin_sweep.csv / daily_*.csv, which ARE
-# committed.
+# Per-arm run pickles and recomputed matrices (2026-08-10): derived
+# intermediates, rebuildable by the scripts that made them. The durable
+# artifacts are the trade/panel CSVs and results JSON, which ARE committed --
+# per the standing "preserve full trade-level output before a research clone is
+# deleted" requirement.
+research/**/_arm*.pkl
+research/**/_thresholds.pkl
 research/**/_matrices.npz
 research/**/_log_*.txt
 research/**/rejections_*.csv
