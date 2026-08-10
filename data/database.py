@@ -907,11 +907,12 @@ def _apply_migrations(engine) -> None:
         ("invest_orders", "stop_order_status", "TEXT"),
         ("invest_orders", "stop_order_note", "TEXT"),
         # Admission-ranking promotion (2026-08-09) -- see PendingOrder's own
-        # column comment. NULL for any row written before this migration;
-        # _load_pending_orders() defensively deprioritises a NULL exactly
-        # like it already did for momentum_pct, so an old unresolved row
-        # (should not exist in practice -- pending_orders has a bounded
-        # retention window) is never silently mis-prioritised.
+        # column comment. ALTER TABLE ADD COLUMN leaves this NULL for every
+        # pre-existing row, and that is NOT self-correcting: the paired
+        # backfill in _apply_data_fixes() (backfill_admission_rank_value) is
+        # what actually makes this column safe to sort by. See that fix's own
+        # comment for the 2026-08-10 incident that proved an unbackfilled
+        # sort key silently reorders the real live submission walk.
         ("pending_orders", "admission_rank_value", "REAL"),
         # Forward shadow comparison (2026-08-09) -- momentum_pct was already
         # stored; relative_rank_pct is the OTHER ranking's own value, needed
@@ -977,6 +978,46 @@ def _apply_data_fixes(engine) -> None:
         with engine.begin() as conn:
             conn.execute(text(
                 "DELETE FROM price_data WHERE close IS NULL OR close <= 0"
+            ))
+    except Exception:
+        pass
+
+    # --- backfill_admission_rank_value ---
+    # Populate pending_orders.admission_rank_value for rows written before
+    # that column existed (added by _apply_migrations() 2026-08-09, which
+    # like every ALTER TABLE ADD COLUMN leaves pre-existing rows NULL).
+    #
+    # Why this is required and not merely tidy (2026-08-10 incident): both
+    # the live submission walk (brokers/trading212.py:_load_pending_orders())
+    # and the Status page's Candidate Queue sort
+    # `ORDER BY admission_rank_value DESC, decided_at ASC`. The original
+    # migration shipped with a comment reasoning that a NULL sorts last in
+    # DESC and is therefore harmlessly deprioritised -- true only while SOME
+    # row carries a value. On the first deploy every unresolved row was
+    # pre-migration, so ALL 308 were NULL, the primary key contributed no
+    # ordering at all, and the sort collapsed onto the unique `decided_at`
+    # tiebreak -- i.e. EOD insertion order, which is the alphabetically
+    # sorted candidate pool. The live 14:30 UTC submission walk would have
+    # processed candidates in alphabetical order rather than by momentum.
+    # That same comment also assumed pre-existing unresolved rows "should not
+    # exist in practice"; they are in fact the normal steady state, since the
+    # queue is decided at 21:30 and not submitted until the next session.
+    #
+    # Backfilling from momentum_pct is unconditionally correct regardless of
+    # the configured admission_ranking_mode: a NULL means the row was decided
+    # before the column existed, i.e. by pre-promotion code, which ranked on
+    # absolute momentum by definition. It is NOT a stand-in for
+    # resolve_admission_rank_value() on new rows -- those are written with a
+    # real value at decide time by maybe_place_orders().
+    #
+    # Not keyed via _migration_applied(): this must also repair rows written
+    # by any future ALTER-only column addition to a sort key, and the UPDATE
+    # is a no-op once no NULL remains, so it is safe on every startup.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE pending_orders SET admission_rank_value = momentum_pct "
+                "WHERE admission_rank_value IS NULL AND momentum_pct IS NOT NULL"
             ))
     except Exception:
         pass

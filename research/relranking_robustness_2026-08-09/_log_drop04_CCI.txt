@@ -1,0 +1,4 @@
+[drop04_CCI] ptype=drop_ticker param=CCI start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop04_CCI] A: 4929 trades, pnl=124900.56, mean_deployed=63.72 (1194s)
+[drop04_CCI] B: 4876 trades, pnl=166830.11, mean_deployed=63.74 (2459s total)
+[drop04_CCI] wrote trades/panel A+B, meta (2459s total)

@@ -5320,3 +5320,101 @@ def test_capacity_fit_reason_matches_real_submission_rejection_for_the_same_inpu
     assert submitted == 0
     rejected = _pending_rows(db_engine, status="REJECTED_CAPACITY")
     assert len(rejected) == 1 and rejected[0]["ticker"] == "OVERCAP"
+
+
+# ---------------------------------------------------------------------------
+# admission_rank_value backfill -- regression for the 2026-08-10 incident
+# where an ALTER-only column addition silently reordered the live
+# submission walk. See data/database.py:_apply_data_fixes()'s
+# backfill_admission_rank_value comment and _load_pending_orders()'s own
+# corrected docstring for the full mechanism.
+# ---------------------------------------------------------------------------
+
+def _seed_premigration_pending_row(engine, *, ticker, momentum_pct, decided_at):
+    """A pending_orders row exactly as ALTER TABLE ADD COLUMN leaves it:
+    admission_rank_value NULL, momentum_pct populated. Takes an explicit
+    decided_at so insertion order can be made to disagree with momentum
+    order -- the real incident's rows were inserted alphabetically by the
+    EOD candidate loop, which is what the collapsed sort fell back to."""
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO pending_orders
+                (ticker, t212_ticker, is_etf, currency, decided_at, decided_price,
+                 position_gbp, momentum_pct, admission_rank_value, stop_price,
+                 var_pct, status, created_at)
+            VALUES (:ticker, :t212, 0, 'USD', :decided_at, 100.0,
+                    500.0, :momentum_pct, NULL, 90.0, 0.02, 'PENDING', :decided_at)
+        """), {
+            "ticker": ticker, "t212": f"{ticker}_US_EQ",
+            "decided_at": decided_at, "momentum_pct": momentum_pct,
+        })
+
+
+def test_backfill_populates_admission_rank_value_from_momentum(db_engine):
+    """The paired backfill for the ALTER-only column addition: every
+    pre-migration row ends up carrying its own momentum_pct, which is what
+    resolve_admission_rank_value() would have written in the default
+    absolute_momentum mode."""
+    from data.database import _apply_data_fixes
+
+    _seed_premigration_pending_row(db_engine, ticker="AAA", momentum_pct=0.10,
+                                   decided_at="2026-08-07T22:09:00")
+    _seed_premigration_pending_row(db_engine, ticker="ZZZ", momentum_pct=0.90,
+                                   decided_at="2026-08-07T22:10:00")
+
+    _apply_data_fixes(db_engine)
+
+    rows = {r["ticker"]: r["admission_rank_value"] for r in _pending_rows(db_engine)}
+    assert rows == {"AAA": 0.10, "ZZZ": 0.90}
+
+
+def test_submission_walk_orders_by_momentum_not_insertion_order_after_backfill(db_engine):
+    """The actual defect this backfill exists to prevent, asserted against
+    the REAL submission-priority loader rather than a re-derived query.
+
+    Rows are seeded alphabetically-ascending by decided_at while momentum
+    runs the opposite way, so insertion order and momentum order fully
+    disagree. Without the backfill every admission_rank_value is NULL, the
+    primary sort key contributes nothing, and the walk collapses onto the
+    unique decided_at tiebreak -- i.e. alphabetical order.
+    """
+    from brokers.trading212 import _load_pending_orders
+    from data.database import _apply_data_fixes
+
+    # Alphabetical insertion order, deliberately inverse to momentum.
+    for i, (ticker, momentum) in enumerate([
+        ("AAPL", 0.10), ("ADI", 0.40), ("ALB", 0.60), ("SNDK", 0.95),
+    ]):
+        _seed_premigration_pending_row(
+            db_engine, ticker=ticker, momentum_pct=momentum,
+            decided_at=f"2026-08-07T22:09:{i:02d}",
+        )
+
+    # Pre-backfill: confirm the degenerate collapse is real, so this test
+    # genuinely fails without the fix rather than passing for other reasons.
+    assert [r["ticker"] for r in _load_pending_orders(is_etf=False)] == [
+        "AAPL", "ADI", "ALB", "SNDK",
+    ], "expected the all-NULL sort key to collapse onto insertion order"
+
+    _apply_data_fixes(db_engine)
+
+    assert [r["ticker"] for r in _load_pending_orders(is_etf=False)] == [
+        "SNDK", "ALB", "ADI", "AAPL",
+    ], "after backfill the walk must run in momentum-descending order"
+
+
+def test_backfill_leaves_an_already_populated_rank_value_untouched(db_engine):
+    """The backfill must never overwrite a real decide-time value -- that
+    would silently rewrite a relative_rank-mode row's rank as its absolute
+    momentum, the one case where the two genuinely differ."""
+    from data.database import _apply_data_fixes
+
+    _seed_pending_order(db_engine, ticker="REL", t212_ticker="REL_US_EQ", is_etf=False,
+                        momentum_pct=0.10, admission_rank_value=0.99)
+
+    _apply_data_fixes(db_engine)
+
+    rows = _pending_rows(db_engine)
+    assert len(rows) == 1
+    assert rows[0]["admission_rank_value"] == 0.99
+    assert rows[0]["momentum_pct"] == 0.10

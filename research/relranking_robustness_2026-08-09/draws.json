@@ -1,0 +1,102 @@
+[
+  {
+    "draw_id": "drop01_CAG",
+    "ptype": "drop_ticker",
+    "param": "CAG"
+  },
+  {
+    "draw_id": "drop02_MTCH",
+    "ptype": "drop_ticker",
+    "param": "MTCH"
+  },
+  {
+    "draw_id": "drop03_AMAT",
+    "ptype": "drop_ticker",
+    "param": "AMAT"
+  },
+  {
+    "draw_id": "drop04_CCI",
+    "ptype": "drop_ticker",
+    "param": "CCI"
+  },
+  {
+    "draw_id": "drop05_SRE",
+    "ptype": "drop_ticker",
+    "param": "SRE"
+  },
+  {
+    "draw_id": "drop06_STE",
+    "ptype": "drop_ticker",
+    "param": "STE"
+  },
+  {
+    "draw_id": "drop07_TKO",
+    "ptype": "drop_ticker",
+    "param": "TKO"
+  },
+  {
+    "draw_id": "drop08_CNP",
+    "ptype": "drop_ticker",
+    "param": "CNP"
+  },
+  {
+    "draw_id": "drop09_EXR",
+    "ptype": "drop_ticker",
+    "param": "EXR"
+  },
+  {
+    "draw_id": "drop10_MAS",
+    "ptype": "drop_ticker",
+    "param": "MAS"
+  },
+  {
+    "draw_id": "shift1",
+    "ptype": "shift_start",
+    "param": 1
+  },
+  {
+    "draw_id": "shift2",
+    "ptype": "shift_start",
+    "param": 2
+  },
+  {
+    "draw_id": "shift3",
+    "ptype": "shift_start",
+    "param": 3
+  },
+  {
+    "draw_id": "shift5",
+    "ptype": "shift_start",
+    "param": 5
+  },
+  {
+    "draw_id": "shift7",
+    "ptype": "shift_start",
+    "param": 7
+  },
+  {
+    "draw_id": "shift10",
+    "ptype": "shift_start",
+    "param": 10
+  },
+  {
+    "draw_id": "shuffle1",
+    "ptype": "shuffle_tiebreak",
+    "param": 1
+  },
+  {
+    "draw_id": "shuffle2",
+    "ptype": "shuffle_tiebreak",
+    "param": 2
+  },
+  {
+    "draw_id": "shuffle3",
+    "ptype": "shuffle_tiebreak",
+    "param": 3
+  },
+  {
+    "draw_id": "shuffle4",
+    "ptype": "shuffle_tiebreak",
+    "param": 4
+  }
+]

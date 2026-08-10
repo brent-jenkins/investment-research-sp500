@@ -197,6 +197,60 @@ def test_get_membership_windows_is_cached_across_calls(db_engine, mocker):
     assert windows == [(date(1996, 1, 2), date(2026, 12, 31))]
 
 
+def test_get_membership_windows_bulk_loads_once_for_multiple_distinct_tickers(db_engine, mocker):
+    """The cold-start fix (2026-08-09): a single query populates the cache
+    for every ticker at once, not one query per ticker requested. Proven
+    by counting get_engine() calls across three DIFFERENT tickers' first-
+    ever lookups -- test_get_membership_windows_is_cached_across_calls
+    above only proves re-lookups of the SAME ticker are free; this proves
+    the fan-out itself is gone, which is the actual fix."""
+    v2u.seed_baseline_membership()
+
+    real_get_engine = v2u.get_engine
+    spy = mocker.patch.object(v2u, "get_engine", side_effect=real_get_engine)
+
+    v2u.get_membership_windows("AAPL")
+    v2u.get_membership_windows("MSFT")
+    v2u.get_membership_windows("TSLA")
+
+    assert spy.call_count == 1
+
+
+def test_get_membership_windows_bulk_load_matches_old_per_ticker_semantics(db_engine):
+    """A DB-backed ticker's windows come from the bulk query; a ticker with
+    zero DB rows still falls through to its STOCK_MEMBERSHIP baseline --
+    both populated correctly from the SAME bulk load, not two different
+    code paths that could silently diverge."""
+    v2u.seed_baseline_membership()
+
+    windows = v2u.get_membership_windows("AAPL")
+    assert windows == [(date(1996, 1, 2), date(2026, 12, 31))]
+
+    # GOLD has an empty STOCK_MEMBERSHIP baseline and (per
+    # test_gold_has_no_membership_window) no DB rows either.
+    assert v2u.get_membership_windows("GOLD") == []
+
+
+def test_clear_membership_cache_resets_bulk_load_flag_and_repopulates(db_engine, mocker):
+    """clear_membership_cache() must reset the bulk-load flag, not just the
+    dict -- otherwise a subsequent call would see _membership_cache_bulk_
+    loaded still True and silently skip reloading, returning stale (empty)
+    data forever after a clear. A fresh call after clearing must issue
+    exactly one new query and see the DB's current state."""
+    v2u.seed_baseline_membership()
+    v2u.get_membership_windows("AAPL")  # first bulk load
+
+    v2u.clear_membership_cache()
+    assert v2u._membership_cache == {}
+    assert v2u._membership_cache_bulk_loaded is False
+
+    real_get_engine = v2u.get_engine
+    spy = mocker.patch.object(v2u, "get_engine", side_effect=real_get_engine)
+    windows = v2u.get_membership_windows("AAPL")
+    assert spy.call_count == 1
+    assert windows == [(date(1996, 1, 2), date(2026, 12, 31))]
+
+
 def test_refresh_invalidates_the_cache(db_engine, mocker):
     mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"NEWCO": []})
     mocker.patch.object(v2u, "_fetch_source_csv", return_value=_SYNTHETIC_CSV)

@@ -189,6 +189,7 @@ def seed_baseline_membership() -> int:
 
 
 _membership_cache: dict[str, list[tuple[date, date]]] = {}
+_membership_cache_bulk_loaded = False
 
 
 def clear_membership_cache() -> None:
@@ -201,13 +202,66 @@ def clear_membership_cache() -> None:
     ticker viable at all; without it, every single day's is_member() check
     would be its own DB round-trip (verified directly: this made an
     18-run/73-ticker backtest project to take several hours instead of
-    under a minute)."""
+    under a minute).
+
+    Also resets the bulk-load flag (2026-08-09 — see
+    _bulk_load_membership_cache()'s own docstring) so the next
+    get_membership_windows() call re-triggers a fresh single-query load
+    rather than silently treating the now-cleared, empty dict as already
+    up to date."""
+    global _membership_cache_bulk_loaded
     _membership_cache.clear()
+    _membership_cache_bulk_loaded = False
+
+
+def _bulk_load_membership_cache() -> None:
+    """Populate _membership_cache for every ticker with at least one
+    universe_membership row, in ONE query — replaces the former
+    one-SELECT-per-ticker fan-out this cache used to fill lazily
+    (2026-08-09 fix; see CLAUDE.md's "get_live_stock_candidates() cold-
+    start cost" section for the full incident this closes). That fan-out
+    measured ~1,205 sequential round trips at ~17ms each — ~20-30s cold,
+    0.025s warm — on get_live_stock_candidates()'s first call in a fresh
+    process, hit independently at four render-path call sites (the
+    Status page's Data Coverage card and its T212 Invest Account section,
+    and the Backtest page's live_universe_snapshot(), on top of the one
+    call site the 2026-08-04 get_ticker_status() fix already bypassed).
+    Fixing the shared root cause here, rather than adding yet another
+    per-call-site bypass parameter, is what makes every current and
+    future caller benefit at once.
+
+    Rows arrive pre-sorted by (ticker, start_date) — matching the
+    original per-ticker query's own `ORDER BY start_date`, since sorting
+    by ticker first cannot reorder rows *within* a ticker's own group.
+    A ticker with zero rows is deliberately left OUT of _membership_cache
+    here — get_membership_windows() still needs to fall through to the
+    STOCK_MEMBERSHIP baseline (or an empty list) for that case, exactly
+    as it did before this change; only pre-populating what the DB
+    actually has preserves that fallback untouched.
+    """
+    global _membership_cache_bulk_loaded
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT ticker, start_date, end_date FROM universe_membership "
+                "ORDER BY ticker, start_date"
+            )
+        ).fetchall()
+    grouped: dict[str, list[tuple[date, date]]] = {}
+    for ticker, start_raw, end_raw in rows:
+        s = start_raw if isinstance(start_raw, date) else _parse_date(str(start_raw)[:10])
+        e = end_raw if isinstance(end_raw, date) else _parse_date(str(end_raw)[:10])
+        grouped.setdefault(ticker, []).append((s, e))
+    _membership_cache.update(grouped)
+    _membership_cache_bulk_loaded = True
 
 
 def get_membership_windows(ticker: str) -> list[tuple[date, date]]:
     """Read stored windows for *ticker*, oldest first — served from an
-    in-process cache after the first call (see clear_membership_cache()).
+    in-process cache, bulk-populated in one query on first access (see
+    _bulk_load_membership_cache()) and cleared by
+    clear_membership_cache().
 
     Falls back to STOCK_MEMBERSHIP's baseline (parsed inline) only if the
     DB has no rows at all for this ticker yet — i.e. before
@@ -215,25 +269,13 @@ def get_membership_windows(ticker: str) -> list[tuple[date, date]]:
     STOCK_MEMBERSHIP) always return an empty list; callers treat "no
     membership rows" as "always eligible" for those (see is_member()).
     """
+    if not _membership_cache_bulk_loaded:
+        _bulk_load_membership_cache()
+
     if ticker in _membership_cache:
         return _membership_cache[ticker]
 
-    engine = get_engine()
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT start_date, end_date FROM universe_membership "
-                "WHERE ticker = :t ORDER BY start_date"
-            ),
-            {"t": ticker},
-        ).fetchall()
-    if rows:
-        out = []
-        for start_raw, end_raw in rows:
-            s = start_raw if isinstance(start_raw, date) else _parse_date(str(start_raw)[:10])
-            e = end_raw if isinstance(end_raw, date) else _parse_date(str(end_raw)[:10])
-            out.append((s, e))
-    elif ticker in STOCK_MEMBERSHIP:
+    if ticker in STOCK_MEMBERSHIP:
         out = [(_parse_date(s), _parse_date(e)) for s, e in STOCK_MEMBERSHIP[ticker]]
     else:
         out = []

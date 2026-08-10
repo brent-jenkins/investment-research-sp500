@@ -1,0 +1,715 @@
+{
+  "rows": [
+    {
+      "draw_id": "drop01_CAG",
+      "ptype": "drop_ticker",
+      "param": "CAG",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.46,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.703,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.973,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.436,
+          "mean_pnl_pct": 0.0064
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "drop02_MTCH",
+      "ptype": "drop_ticker",
+      "param": "MTCH",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "drop03_AMAT",
+      "ptype": "drop_ticker",
+      "param": "AMAT",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4922,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 4.915,
+      "cost_adj_cagr_B": 5.342,
+      "excess_A": -6.248,
+      "excess_B": -5.821,
+      "delta_B_minus_A": 0.427,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1138,
+        "n_differing_total": 7522,
+        "usable": true,
+        "A_only": {
+          "n": 3784,
+          "win_rate": 0.4392,
+          "mean_pnl_pct": 0.0086
+        },
+        "B_only": {
+          "n": 3738,
+          "win_rate": 0.4422,
+          "mean_pnl_pct": 0.0094
+        }
+      }
+    },
+    {
+      "draw_id": "drop04_CCI",
+      "ptype": "drop_ticker",
+      "param": "CCI",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4929,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 4.159,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.004,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.274,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1100,
+        "n_differing_total": 7605,
+        "usable": true,
+        "A_only": {
+          "n": 3829,
+          "win_rate": 0.4382,
+          "mean_pnl_pct": 0.0066
+        },
+        "B_only": {
+          "n": 3776,
+          "win_rate": 0.4441,
+          "mean_pnl_pct": 0.0084
+        }
+      }
+    },
+    {
+      "draw_id": "drop05_SRE",
+      "ptype": "drop_ticker",
+      "param": "SRE",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "drop06_STE",
+      "ptype": "drop_ticker",
+      "param": "STE",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "drop07_TKO",
+      "ptype": "drop_ticker",
+      "param": "TKO",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4919,
+      "n_trades_B": 4870,
+      "cost_adj_cagr_A": 3.829,
+      "cost_adj_cagr_B": 5.612,
+      "excess_A": -7.334,
+      "excess_B": -5.551,
+      "delta_B_minus_A": 1.783,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1068,
+        "n_differing_total": 7653,
+        "usable": true,
+        "A_only": {
+          "n": 3851,
+          "win_rate": 0.4331,
+          "mean_pnl_pct": 0.0068
+        },
+        "B_only": {
+          "n": 3802,
+          "win_rate": 0.4435,
+          "mean_pnl_pct": 0.0092
+        }
+      }
+    },
+    {
+      "draw_id": "drop08_CNP",
+      "ptype": "drop_ticker",
+      "param": "CNP",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4919,
+      "n_trades_B": 4881,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 4.981,
+      "excess_A": -7.723,
+      "excess_B": -6.182,
+      "delta_B_minus_A": 1.541,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.73,
+      "deployed_gap": 0.01,
+      "paired": {
+        "n_shared_pairs": 1076,
+        "n_differing_total": 7648,
+        "usable": true,
+        "A_only": {
+          "n": 3843,
+          "win_rate": 0.4359,
+          "mean_pnl_pct": 0.0062
+        },
+        "B_only": {
+          "n": 3805,
+          "win_rate": 0.4378,
+          "mean_pnl_pct": 0.0082
+        }
+      }
+    },
+    {
+      "draw_id": "drop09_EXR",
+      "ptype": "drop_ticker",
+      "param": "EXR",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4930,
+      "n_trades_B": 4867,
+      "cost_adj_cagr_A": 3.541,
+      "cost_adj_cagr_B": 5.415,
+      "excess_A": -7.622,
+      "excess_B": -5.748,
+      "delta_B_minus_A": 1.874,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.73,
+      "deployed_B": 63.71,
+      "deployed_gap": -0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7657,
+        "usable": true,
+        "A_only": {
+          "n": 3860,
+          "win_rate": 0.4352,
+          "mean_pnl_pct": 0.0075
+        },
+        "B_only": {
+          "n": 3797,
+          "win_rate": 0.4443,
+          "mean_pnl_pct": 0.0103
+        }
+      }
+    },
+    {
+      "draw_id": "drop10_MAS",
+      "ptype": "drop_ticker",
+      "param": "MAS",
+      "start": "2007-01-01",
+      "n_usable": 607,
+      "n_trades_A": 4902,
+      "n_trades_B": 4878,
+      "cost_adj_cagr_A": 3.697,
+      "cost_adj_cagr_B": 5.133,
+      "excess_A": -7.466,
+      "excess_B": -6.03,
+      "delta_B_minus_A": 1.436,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.74,
+      "deployed_B": 63.69,
+      "deployed_gap": -0.05,
+      "paired": {
+        "n_shared_pairs": 1080,
+        "n_differing_total": 7620,
+        "usable": true,
+        "A_only": {
+          "n": 3822,
+          "win_rate": 0.4417,
+          "mean_pnl_pct": 0.0068
+        },
+        "B_only": {
+          "n": 3798,
+          "win_rate": 0.4415,
+          "mean_pnl_pct": 0.0087
+        }
+      }
+    },
+    {
+      "draw_id": "shift1",
+      "ptype": "shift_start",
+      "param": 1,
+      "start": "2007-01-02",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.73,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "shift2",
+      "ptype": "shift_start",
+      "param": 2,
+      "start": "2007-01-03",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.439,
+      "cost_adj_cagr_B": 5.432,
+      "excess_A": -7.724,
+      "excess_B": -5.73,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "shift3",
+      "ptype": "shift_start",
+      "param": 3,
+      "start": "2007-01-04",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4889,
+      "cost_adj_cagr_A": 3.438,
+      "cost_adj_cagr_B": 5.795,
+      "excess_A": -7.719,
+      "excess_B": -5.362,
+      "delta_B_minus_A": 2.357,
+      "dd_A": -46.28,
+      "dd_B": -43.18,
+      "dd_delta_B_minus_A": 3.1,
+      "deployed_A": 63.73,
+      "deployed_B": 63.73,
+      "deployed_gap": 0.0,
+      "paired": {
+        "n_shared_pairs": 1064,
+        "n_differing_total": 7680,
+        "usable": true,
+        "A_only": {
+          "n": 3855,
+          "win_rate": 0.4316,
+          "mean_pnl_pct": 0.0054
+        },
+        "B_only": {
+          "n": 3825,
+          "win_rate": 0.4345,
+          "mean_pnl_pct": 0.0083
+        }
+      }
+    },
+    {
+      "draw_id": "shift5",
+      "ptype": "shift_start",
+      "param": 5,
+      "start": "2007-01-06",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4884,
+      "cost_adj_cagr_A": 3.437,
+      "cost_adj_cagr_B": 6.082,
+      "excess_A": -7.747,
+      "excess_B": -5.102,
+      "delta_B_minus_A": 2.645,
+      "dd_A": -46.27,
+      "dd_B": -41.25,
+      "dd_delta_B_minus_A": 5.02,
+      "deployed_A": 63.76,
+      "deployed_B": 63.75,
+      "deployed_gap": -0.01,
+      "paired": {
+        "n_shared_pairs": 1061,
+        "n_differing_total": 7681,
+        "usable": true,
+        "A_only": {
+          "n": 3858,
+          "win_rate": 0.4326,
+          "mean_pnl_pct": 0.0055
+        },
+        "B_only": {
+          "n": 3823,
+          "win_rate": 0.4371,
+          "mean_pnl_pct": 0.0087
+        }
+      }
+    },
+    {
+      "draw_id": "shift7",
+      "ptype": "shift_start",
+      "param": 7,
+      "start": "2007-01-08",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4884,
+      "cost_adj_cagr_A": 3.436,
+      "cost_adj_cagr_B": 6.081,
+      "excess_A": -7.748,
+      "excess_B": -5.103,
+      "delta_B_minus_A": 2.645,
+      "dd_A": -46.27,
+      "dd_B": -41.25,
+      "dd_delta_B_minus_A": 5.02,
+      "deployed_A": 63.76,
+      "deployed_B": 63.75,
+      "deployed_gap": -0.01,
+      "paired": {
+        "n_shared_pairs": 1061,
+        "n_differing_total": 7681,
+        "usable": true,
+        "A_only": {
+          "n": 3858,
+          "win_rate": 0.4326,
+          "mean_pnl_pct": 0.0055
+        },
+        "B_only": {
+          "n": 3823,
+          "win_rate": 0.4371,
+          "mean_pnl_pct": 0.0087
+        }
+      }
+    },
+    {
+      "draw_id": "shift10",
+      "ptype": "shift_start",
+      "param": 10,
+      "start": "2007-01-11",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4882,
+      "cost_adj_cagr_A": 3.434,
+      "cost_adj_cagr_B": 5.765,
+      "excess_A": -7.711,
+      "excess_B": -5.38,
+      "delta_B_minus_A": 2.331,
+      "dd_A": -46.27,
+      "dd_B": -42.5,
+      "dd_delta_B_minus_A": 3.77,
+      "deployed_A": 63.8,
+      "deployed_B": 63.78,
+      "deployed_gap": -0.02,
+      "paired": {
+        "n_shared_pairs": 1062,
+        "n_differing_total": 7677,
+        "usable": true,
+        "A_only": {
+          "n": 3857,
+          "win_rate": 0.4325,
+          "mean_pnl_pct": 0.0055
+        },
+        "B_only": {
+          "n": 3820,
+          "win_rate": 0.4366,
+          "mean_pnl_pct": 0.0084
+        }
+      }
+    },
+    {
+      "draw_id": "shuffle1",
+      "ptype": "shuffle_tiebreak",
+      "param": 1,
+      "start": "2007-01-01",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "shuffle2",
+      "ptype": "shuffle_tiebreak",
+      "param": 2,
+      "start": "2007-01-01",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "shuffle3",
+      "ptype": "shuffle_tiebreak",
+      "param": 3,
+      "start": "2007-01-01",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    },
+    {
+      "draw_id": "shuffle4",
+      "ptype": "shuffle_tiebreak",
+      "param": 4,
+      "start": "2007-01-01",
+      "n_usable": 608,
+      "n_trades_A": 4919,
+      "n_trades_B": 4876,
+      "cost_adj_cagr_A": 3.44,
+      "cost_adj_cagr_B": 5.433,
+      "excess_A": -7.723,
+      "excess_B": -5.729,
+      "delta_B_minus_A": 1.993,
+      "dd_A": -46.28,
+      "dd_B": -47.8,
+      "dd_delta_B_minus_A": -1.52,
+      "deployed_A": 63.72,
+      "deployed_B": 63.74,
+      "deployed_gap": 0.02,
+      "paired": {
+        "n_shared_pairs": 1070,
+        "n_differing_total": 7655,
+        "usable": true,
+        "A_only": {
+          "n": 3849,
+          "win_rate": 0.4357,
+          "mean_pnl_pct": 0.0063
+        },
+        "B_only": {
+          "n": 3806,
+          "win_rate": 0.443,
+          "mean_pnl_pct": 0.0089
+        }
+      }
+    }
+  ],
+  "summary": {
+    "n_draws": 20,
+    "mean": 1.9111,
+    "median": 1.993,
+    "min": 0.427,
+    "min_draw": "drop03_AMAT",
+    "max": 2.645,
+    "max_draw": "shift5",
+    "n_positive": 20,
+    "n_total": 20
+  }
+}

@@ -70,7 +70,7 @@ None of these three was caught by a test — the test suite at the time tested e
 **The mechanism — `analysis/decision.py`.** `evaluate_exit_reason()` (crisis > index-removal > stop-loss > signal-off > max-holding, the exact validated priority) and `passes_entry_gate()` (signal on AND currently a member AND not crisis-blocked) are the two decisions with the widest blast radius, and were found independently hand-coded as the same if/elif chain / boolean expression in **five** places before this task: `brokers/trading212.py`'s `maybe_exit_positions()`/`maybe_place_orders()`, `analysis/backtest.py`'s `simulate_trades()`/`simulate_portfolio()`/`simulate_portfolio_compounding()`, and `output/performance.py`'s `get_brief_cards()` (a display-only recomputation for the Daily Briefing/Performance page's position-status badge — no order is placed there, but a UI showing "ON TRACK" for a position the live system is actually about to close is its own real bug). All five now call the two functions in `analysis/decision.py` instead. Every input tolerates `None` ("unknown, don't trigger this check") rather than relying on Python's `not None == True` coercion — live and the backtest engine never pass `None` for any of these (both only ever call these functions with confirmed values), but `output/performance.py`'s display path genuinely can (a ticker with insufficient history, a stale API read), and a naive `not sig_on`-style extraction would have silently misclassified "unknown" as a definite trigger.
 
 **What was reviewed and left duplicated, on purpose, with the reason recorded rather than silently accepted:**
-- **Candidate priority ranking** (momentum descending, tie-break by insertion order) is expressed once in SQL (`brokers/trading212.py:_load_pending_orders()`: `ORDER BY momentum_pct DESC, decided_at ASC`) and once in Python (`analysis/backtest.py:simulate_portfolio_compounding()`'s `_admit_group()`: `sort(key=lambda c: (-c[1], idx))`). These cannot literally share one function — one runs as a database query, the other as an in-memory sort over a day's candidate list — so this is accepted, reviewed duplication of a simple rule, not overlooked duplication. Both sides are covered by their own tests asserting momentum-descending order (`tests/test_execution.py`, `tests/test_portfolio_backtest.py`).
+- **Candidate priority ranking** (momentum descending, tie-break by insertion order) is expressed once in SQL (`brokers/trading212.py:_load_pending_orders()`: `ORDER BY admission_rank_value DESC, decided_at ASC` — **corrected 2026-08-10**; this read `momentum_pct DESC` until the 2026-08-09 admission-ranking promotion renamed the sort column, and this line was not updated alongside it, so it described the wrong column for a day) and once in Python (`analysis/backtest.py:simulate_portfolio_compounding()`'s `_admit_group()`: `sort(key=lambda c: (-c[1], idx))`). These cannot literally share one function — one runs as a database query, the other as an in-memory sort over a day's candidate list — so this is accepted, reviewed duplication of a simple rule, not overlooked duplication. Both sides are covered by their own tests asserting momentum-descending order (`tests/test_execution.py`, `tests/test_portfolio_backtest.py`).
 - **The deployment-cap arithmetic — this claim was WRONG, corrected 2026-08-01.** This bullet originally read: "`_submit_pending_orders()`'s `deployed_after_pct > max_deployed_pct` vs. `simulate_portfolio_compounding()`'s `would_deploy_pct > max_deployed_pct` is functionally the identical check but was left as two call sites rather than extracted... reviewed and left as-is." That verdict checked only that both sides used the same comparison operator and threshold — it never checked that both sides' `invested`/`deployed` numerator meant the same thing. They didn't: live's `deployed_after_pct` uses `invested = summary["investments"]["currentValue"]`, T212's genuine mark-to-market valuation of open positions; `simulate_portfolio_compounding()`'s `current_deployed` was pure cost basis — the sum of each open position's original entry-time `position_gbp`, never adjusted for any unrealized gain or loss for as long as the position stayed open. A winning position never "grew" for capacity purposes under the old backtest engine; a losing one never "shrank." This is exactly the class of divergence `tests/test_live_backtest_parity.py` was built to catch — but that suite's scope was `analysis/decision.py`'s two functions only (`evaluate_exit_reason`/`passes_entry_gate`); deployment-cap logic was never in its test matrix at all, so it was never positioned to catch this regardless of the review above. See "Live/backtest deployment-cap parity" below for the full investigation, the fix (`analysis/backtest.py:simulate_portfolio_compounding_mtm()`, a genuinely mark-to-market engine kept alongside the original cost-basis one, selectable via `analysis.validation.run_full_validation(..., mark_to_market=True)`), and which of today's validated findings needed re-verification as a result. The underlying reason two call sites exist at all (rather than one shared function) is unchanged and still correct: `simulate_portfolio()` deliberately uses a different, simpler, frozen formula for reproducibility reasons unrelated to this bug — extracting a shared helper still risks destabilizing that frozen engine. What was wrong was calling the two REMAINING sites (live's real submission check, backtest's compounding-mode check) "functionally identical" without verifying it.
 - **`analysis/universe.py` (`is_member`, `get_max_holding_days`), `analysis/signals.py` (`compute_signal_series`), `analysis/crisis.py` (`is_crisis_day`/`is_entry_blocked`/`compute_raw_trigger`/`extend_trigger`), and `analysis/volatility.py` (`_atr`, `_resolve_entry_stop`, `_var_position_size_core`)** were already single, shared implementations before this task — confirmed during the audit, not assumed. No changes were needed to any of them.
 
@@ -626,7 +626,10 @@ or a future scheduled pre-warm is added (deliberately not built now, see above).
 from a render path** — motivated directly by the sector-concentration fix above finding one instance
 of this bug class; the audit traced all five real pages (Dashboard, Instruments, Backtest, Status,
 Users — there is no separate Performance page; removed 2026-08-03, content relocated) for the same
-shape of problem. Full report: `investment-app-blocking-audit/UI_BLOCKING_AUDIT_2026-08-09.md`.
+shape of problem. Full report: CLAUDE_HISTORY.md's "UI render-path blocking audit" entry (moved
+there 2026-08-09 from a standalone root-level file once its two corrections, below, were folded
+into this file's own current-state sections — see that entry for the full findings table, both
+detail sections, and the caching/scheduled-jobs tables, not repeated here).
 Three real findings, two fixed same-day as separate, standalone changes per explicit direction; one
 left deliberately unfixed pending real-world measurement.
 
@@ -1237,6 +1240,28 @@ demo-only (`trading212_invest.live: false`) regardless, so nothing here is urgen
 standpoint — but the research-to-production gap is real and should not be skipped because this result
 looks strong.
 
+**Robustness test, 2026-08-09 — CONFIRMED ROBUST, with one named caveat.** Before Arm B goes anywhere
+near promotion, its result was stress-tested against the measurement toolkit's own perturbation method
+(drop one random ticker, shift the walk start date, reshuffle admission tie-breaks) — 20 paired draws,
+Arm A and Arm B run against the *identical* perturbed pool/date/tie-break state each time so the
+quantity of interest is the B-minus-A delta's own distribution, not two independent spreads. Full
+detail: `research/relranking_robustness_2026-08-09/REPORT.md` (dedicated worktree,
+`c:\GitHub\investment-app-relranking-robustness`). **20 of 20 draws favour B — no exceptions, no sign
+flips, no near-zero draws.** The unperturbed +1.993pp sits exactly at the distribution's median and is
+its single most common value (9/20 draws land on it exactly). Not dominated by one ticker the way the
+original noise-floor study's DHI finding was (most individual ticker drops are complete no-ops; nothing
+comes close to erasing the result) — **but dropping AMAT alone compresses the delta to +0.427pp, ~21%
+of typical, the one real named partial dependency for the result's *magnitude* (not its existence or
+direction)** — stated plainly since that single-draw figure sits below this project's own ~1.08pp
+noise-floor bar on its own, even though 19 of the other 20 draws clear it comfortably. A second,
+distinct, ticker-independent mechanism (shifting the walk's start date ≥3 days) reliably pushes the
+delta *higher* (+2.33pp to +2.65pp), via the same capacity-cascade sensitivity this project has
+repeatedly measured elsewhere. Deployment parity holds under every perturbation (gap −0.05pp to
++0.02pp) and — the strongest single result in this test — **B-only admissions beat A-only admissions on
+mean P&L% in all 20/20 draws**, corroborating the original study's central claim (B's edge traces to
+genuinely better decisions, not a cash-holding or cascade artefact) across twenty independently-
+perturbed configurations, not just the one original run.
+
 ## Relative-rank admission ordering promoted to production code — OPEN CANDIDATE, not adopted (2026-08-09)
 
 **The relative-ranking study's own mechanism (admission ordered by cross-sectional relative rank instead
@@ -1272,6 +1297,23 @@ throughout — see "There is exactly one implementation of any given trading dec
   by live's decide phase and read by the same submission-priority ordering that already existed) —
   behaviour-preserving in the default mode, since `admission_rank_value` equals `momentum_pct` whenever
   `admission_ranking_mode` is `"absolute_momentum"`.
+
+**Verified directly, not just argued, that `resolve_admission_rank_value()` is the ONLY place admission
+ordering happens on either side that this comparison could ever be run against — a targeted grep across
+`brokers/trading212.py` and `analysis/backtest.py` for every sort/`ORDER BY` involving momentum or rank,
+checked before merging this work, not after.** Two more hits turned up, both pre-existing and already
+outside the live-comparable scope, matching this project's own established frozen-engine exemption
+pattern (see "Backtest engines" above): `simulate_portfolio()`'s `priority_rank` predates momentum-based
+admission entirely (the old `(is_etf, config-order)` rule momentum priority itself superseded, unrelated
+to this promotion); `simulate_portfolio_compounding()` (the non-MTM variant) has its own internal
+momentum-sorted `_admit_group()`-shaped closure that genuinely bypasses the resolver — but this engine is
+one of the three explicitly FROZEN, historical-reproducibility-only engines already documented as exempt
+from every post-freeze fix (the 2026-08-03 re-entry-cooldown fix, the 2026-08-06 realistic-stop-fill fix,
+and now this one, by the same standing reasoning), never called by `run_full_validation()` or exercised by
+any live/backtest parity test — `simulate_portfolio_compounding_mtm()` is the one engine actually compared
+against live, and its own single admission sort is confirmed resolver-routed. Recorded here explicitly so
+a future reader auditing this promotion doesn't flag `simulate_portfolio_compounding()`'s own momentum
+sort as an overlooked gap — it was checked, and is accepted, not missed.
 
 **All four structural live/backtest parity layers got genuine new coverage, not a retrofit, per the
 promotion's own requirement.** Layer 1 (`tests/test_decision_logic_placement.py`)'s AST scanner keyword
@@ -1551,11 +1593,180 @@ review.
 
 **Part 2 — the render cost, measured, not assumed. The initial hypothesis (a per-row capacity walk) was wrong, and the measurement caught it before any code changed on that basis.** `project_pending_order_admission()` was suspected of recomputing the momentum-ranked capacity walk once per displayed row (308 walks/render). Reading the code first showed this wasn't true — it already walks the `PENDING` list exactly once, mutating running `invested`/`free_cash` state as it goes, called once per render via a `@st.cache_data` wrapper — and a direct isolated timing measurement against a real, freshly-copied local production DB confirmed it: ~0.075s for the single 308-row walk, vs. ~0.049s for `get_pending_candidates()`'s own SQL query alone. The dominant cost was neither query — it was `get_pending_candidates()` pulling and pandas-processing (`.apply()`, `.groupby().transform()`, two `.map()` calls) the **full 2,197-row table**, every resolved status included, on every cache-miss render. Measured end-to-end data-prep time, 5 runs each, real production-sized data: **0.301s mean (before) → 0.110s mean (after)**, driven entirely by narrowing query scope, not by hoisting an already-correct walk. Worth having fixed now rather than later: `pending_orders`' own steady-state size (per "Bounded retention for pending_orders" in CLAUDE_HISTORY.md) is expected to plateau around 6,000–7,000 rows under 30-day retention — the old full-table approach would only have gotten slower approaching that ceiling.
 
-**The fix — new, narrower functions in `output/performance.py`, main.py reduced to a thin renderer.** `get_pending_candidates_ranked()` — `PENDING`-only, `ORDER BY momentum_pct DESC, decided_at ASC`, the exact order `brokers/trading212.py:_load_pending_orders()` (the real submission walk) uses. `compute_queue_preview_cutoff()` — pure function, projected-`ADMIT` count + a fixed margin (8), clamped to `[20, 25]` (never more than the row count); falls back to a plain top-25 slice when no row carries a real projection at all (e.g. no stored snapshot yet). `compute_momentum_strength_bands()`/`momentum_strength_label()` — the qualitative Weak/Moderate/Strong/Very Strong label (originally built 2026-08-02, briefly dropped during the initial narrowing pass, restored the same day once corrected: a qualitative read on how a candidate ranks against today's pool is directly relevant to "what's likely to trade tomorrow," not investigation detail to be trimmed away) — moved here from `main.py` for the same testability reason every other display computation in this module already lives here. `get_candidate_queue_preview(config)` ties all of this together: reads the ranked `PENDING` pool, merges in `project_pending_order_admission()`'s projection (defaulting to `PROJECTION_UNAVAILABLE` per ticker exactly as before), computes `strength` bands over the **full** pool (not just the shown slice — a candidate near the cutoff boundary would otherwise be judged "Weak" against an already-truncated, high-momentum-only sample rather than the real day's distribution), and returns a `fully_deployed` flag (true only when every row carries a real, non-`PROJECTION_UNAVAILABLE` projection and none of them is `PROJECTED_ADMIT`).
+**The fix — new, narrower functions in `output/performance.py`, main.py reduced to a thin renderer.** `get_pending_candidates_ranked()` — `PENDING`-only, `ORDER BY admission_rank_value DESC, decided_at ASC` (**corrected 2026-08-10** — written as `momentum_pct DESC` here, but the shipped code was renamed to `admission_rank_value` by the 2026-08-09 promotion), the exact order `brokers/trading212.py:_load_pending_orders()` (the real submission walk) uses. `compute_queue_preview_cutoff()` — pure function, projected-`ADMIT` count + a fixed margin (8), clamped to `[20, 25]` (never more than the row count); falls back to a plain top-25 slice when no row carries a real projection at all (e.g. no stored snapshot yet). `compute_momentum_strength_bands()`/`momentum_strength_label()` — the qualitative Weak/Moderate/Strong/Very Strong label (originally built 2026-08-02, briefly dropped during the initial narrowing pass, restored the same day once corrected: a qualitative read on how a candidate ranks against today's pool is directly relevant to "what's likely to trade tomorrow," not investigation detail to be trimmed away) — moved here from `main.py` for the same testability reason every other display computation in this module already lives here. `get_candidate_queue_preview(config)` ties all of this together: reads the ranked `PENDING` pool, merges in `project_pending_order_admission()`'s projection (defaulting to `PROJECTION_UNAVAILABLE` per ticker exactly as before), computes `strength` bands over the **full** pool (not just the shown slice — a candidate near the cutoff boundary would otherwise be judged "Weak" against an already-truncated, high-momentum-only sample rather than the real day's distribution), and returns a `fully_deployed` flag (true only when every row carries a real, non-`PROJECTION_UNAVAILABLE` projection and none of them is `PROJECTED_ADMIT`).
 
 **What the Status page shows now.** Only still-`PENDING` decisions, ranked top-down in real submission-priority order with an explicit Rank column, cut off with a visible "showing top N of M pending" caption so a truncated view is never mistaken for an empty tail. Columns: Rank, Ticker, Momentum, Strength, Sized Position, Status. Resolved decisions (`REJECTED_CAPACITY`/`SUBMITTED`/`SKIPPED_*`/`SUPERSEDED`) are no longer queried or shown on this page at all — untouched in the database, still fully available for research via the unchanged `get_pending_candidates()` (e.g. the selection audit's own use of `REJECTED_CAPACITY` volume, see "Descriptive selection audit" above). The status-filter multiselect is gone (nothing left to filter, since only one status population is ever shown). **A real production edge case surfaced and handled explicitly, not just correctly computed**: this account is currently fully deployed, so every `PENDING` candidate projects `PROJECTED_REJECT_CAPACITY` and none `PROJECTED_ADMIT` — without the `fully_deployed` note, a wall of "reject" rows reads indistinguishably from a broken projection; the caption now states plainly that the account is full.
 
 **Tests and deploy.** 36 new/updated tests across `output/performance.py`'s and `main.py`'s test files, including a render-path test proving no T212 or yfinance call happens (patches both to raise if invoked at all), matching the sector/crisis/T212-snapshot pattern this project already established. No changes to `analysis/decision.py`, the submission path, or `config.yaml` — display-side only. Deployed via the standard GitHub Actions → signed webhook pipeline; independently re-verified post-deploy (not just trusted from the deploy log) via a direct SSH check that all three services were active and the live `main.py` on the server contained the new render code, not merely that `git rev-parse HEAD` had moved.
+
+## `get_live_stock_candidates()` cold-start cost — root-caused and fixed at the source (2026-08-09)
+
+**Symptom: the Status page took 20-30 seconds on first load, fine on every subsequent load.** Profiled directly (a fresh worktree, a cold in-process cache, real production-sized data) rather than guessed at — see the profiling task's own report for the full section-by-section breakdown. Two specific suspicions raised alongside the symptom (Scheduler Health's Wikipedia cross-check hitting the network at render time; the T212 instrument-mapping expander resolving instrument IDs per ticker) were both **ruled out directly**: the Wikipedia check reads a stored `system_metadata` value written only by the scheduled `membership_refresh` job, never called live from any render path; the instrument-mapping expander doesn't exist on the Status page at all — it was relocated to the Instruments page back on 2026-08-03, and where it lives now (`load_all_instrument_resolutions()`) is a single flat table read, no per-ticker resolution.
+
+**Root cause, measured precisely.** `analysis/universe.py:get_live_stock_candidates()` → `get_all_known_stock_tickers()` (cheap, one `SELECT DISTINCT`, ~0.06s, 1,205 tickers) → a loop calling `is_member()` → `get_membership_windows()` for every one of those tickers. `get_membership_windows()`'s own in-process cache (`_membership_cache`, a module-level dict) only ever gained an entry *after* that specific ticker's own individual query — meaning a cold process paid ~1,205 sequential `SELECT start_date, end_date FROM universe_membership WHERE ticker = :t` round trips, measured directly at ~17ms each, ~20-30s total. Warm (the cache persists for the process's entire life, cleared only by the daily 21:15 UTC `membership_refresh` job's `clear_membership_cache()` call): 0.025-0.05s — an 800-1000x difference, exactly matching the reported first-load/fine-thereafter shape. **Confirmed hitting four independent render-path call sites, not one**: the Status page's `_price_coverage()` (Data Coverage card), the Status page's T212 Invest Account section (a redundant second call — free only because the first one already warmed the cache in the same render), the Backtest page's `live_universe_snapshot()` (unconditional, before its own gating button — independently measured at 26.33s cold in its own fresh process), and `output/performance.py:get_ticker_status()`'s default `tickers=None` path (already bypassed for its one caller, `get_brief_cards()`, by an earlier, narrower 2026-08-04 fix — see below).
+
+**Not a new bug — the same root cause resurfacing at un-bypassed call sites.** `get_ticker_status()`'s own docstring already documents this exact function measured at ~11s on production back on 2026-08-04, and the fix at the time added a `tickers` parameter so its one real caller (Dashboard's `get_brief_cards()`) could skip the call entirely. That fix never touched `get_live_stock_candidates()`/`get_membership_windows()` themselves — only the one call site it was scoped to. The other three call sites were untouched, and the cost grew from ~11s then to ~23-30s now as `universe_membership` grew under the "Universe coverage remediation" broadening (see above). Per explicit instruction, this fix does not repeat that pattern: no new bypass parameter was added anywhere; the fix is at the shared root, so all four call sites (and any future one) benefit at once.
+
+**The fix — bulk-load `_membership_cache` in one query, not one query per ticker.** `analysis/universe.py:_bulk_load_membership_cache()` runs `SELECT ticker, start_date, end_date FROM universe_membership ORDER BY ticker, start_date` once, groups rows by ticker in Python, and populates `_membership_cache` for every ticker the table has at least one row for — triggered lazily on `get_membership_windows()`'s first call in a process (a new `_membership_cache_bulk_loaded` module-level flag), not eagerly at import time. `get_membership_windows()`'s own signature, return type, and STOCK_MEMBERSHIP-fallback/ETF-empty-list semantics are all unchanged — a ticker with zero DB rows still falls through to the STOCK_MEMBERSHIP baseline or `[]` exactly as before, since the bulk load only ever populates entries for tickers the query actually returned. `clear_membership_cache()` now resets both the dict and the bulk-load flag, so a post-refresh call correctly re-triggers one fresh query rather than silently serving a now-cleared-but-still-"loaded" empty cache.
+
+**Verified, not assumed — every one of the task's own required checks, before this was reported ready:**
+- **Correctness (the stated priority over speed)**: `get_live_stock_candidates()`'s full output, sorted, captured against the same real production DB copy both before (`git stash` back to the pre-fix code) and after the change — **byte-for-byte identical, 503 tickers, zero diff.** Not a count comparison.
+- **Timing, both affected pages, fresh processes**: Status page's `_price_coverage()` 30.40s → **0.99s**; Backtest page's `live_universe_snapshot()` 26.33s → **0.056s**.
+- **`clear_membership_cache()` + repopulation**: verified directly against the real DB — clears both the dict and the flag, a subsequent call re-triggers exactly one fresh query, and the repopulated output matches the original population exactly.
+- **A genuine test-isolation gap, found by the full suite and fixed, not worked around**: `tests/test_execution.py::test_get_all_watchlist_entries_retains_ticker_after_membership_ends` failed on the first full-suite run (passed in isolation) — the bulk load's module-level `_membership_cache_bulk_loaded` flag, once set `True` by an earlier test's own fresh in-memory DB, silently persisted into a later test using a *different* fresh DB (each `db_engine` fixture instance is its own isolated in-memory database), serving stale cached windows against the wrong DB. `test_universe.py` already had its own narrower autouse fixture clearing this cache, but no other test file did — the old per-ticker cache had the identical latent risk, just far less likely to collide since it only ever cached tickers a test explicitly named, where the new bulk load pulls in every ticker present in whichever DB triggered it. Fixed at the shared fixture level: `tests/conftest.py:db_engine` now calls `clear_membership_cache()` on both entry and exit, closing the gap for every test file that uses it, not just the one that happened to need it before. Full suite: **1,041 passed**, confirmed twice.
+
+**A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
+
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not five incidents (standing requirement, 2026-08-10)
+
+**Five separate findings this week share one shape, and naming the shape is more useful than
+recording them separately.** In each, a check was reasoned about — correctly — for the case its
+author had in mind, shipped with that reasoning written down as a justification, and then reported
+a clean, confident result in a case where the reasoning inverts rather than merely weakens. None was
+caught by a test, because each one's tests exercised the expected case the reasoning described.
+The class is broader than code guards: instances 4 and 5 are a documentation record and an
+operational poll loop, and they fail identically.
+
+1. **NULL-ordering collapse** (this file's "Candidate Queue ordering" entry below). *"SQLite sorts
+   NULLs last in DESC, so an unknown-strength candidate is deprioritised."* True while SOME row
+   carries a value. When EVERY row is NULL the key contributes no ordering at all and the sort
+   collapses onto whatever tiebreak exists — here, insertion order, i.e. alphabetical. The guard
+   didn't weaken at the edge; it reversed, from "deprioritise the unknown" to "ignore the signal
+   entirely."
+2. **The deployment guard passing n5/n10** (see "Position-count study" above). Mean deployment
+   tracked baseline within 0.45pp across every arm, so the guard reported clean — but two arms had
+   never built the portfolios their names described (realized ~12 positions against nominal targets
+   of 5 and 10). The guard measures capital deployed, which is genuinely invariant to how many
+   positions that capital is spread across, so it is structurally incapable of detecting the one
+   failure those arms actually had.
+3. **The drawdown ceiling comparing a gap rather than a direction** (same study). The ceiling was
+   expected to bind hardest at n5; it never bound at all, because n5 never concentrated enough to
+   produce the effect the ceiling existed to catch. A threshold on a magnitude cannot fire when the
+   mechanism that would generate the magnitude never engaged.
+4. **A rename accurately recorded in one place and stale in two others** (found while fixing
+   incident 1). The 2026-08-09 promotion's own CLAUDE.md entry correctly documented renaming the
+   sort column to `admission_rank_value`, while two older sections continued to describe the same
+   line as `ORDER BY momentum_pct DESC`. **This is worse than uniformly stale documentation, not
+   better**: the accurate entry is what supplies the confidence that stops anyone checking the
+   others. A reader who verifies the rename was handled finds the correct record, concludes yes,
+   and never reaches the two that still describe the old column. Uniformly wrong docs get
+   distrusted as a set; a correct record adjacent to stale ones vouches for them.
+5. **A poll loop that could only ever produce one answer** (during this incident's own deploy). A
+   background watcher was armed to wait for the server's `HEAD` to reach the newly pushed commit,
+   comparing against a **fabricated full SHA** — only the short `5ed6ef8` was known, and the
+   remaining characters were filled in rather than looked up. It would have polled for 15 minutes,
+   matched nothing, and reported a timeout that reads as *"the deploy failed"* when nothing had
+   failed. The purest instance in this list: not a check whose domain was too narrow, but a check
+   with no true-branch at all, whose single reachable output is indistinguishable from a real
+   finding. Caught before it reported, by noticing the SHA had been invented; the correct fix was
+   `git rev-parse HEAD`, which costs one command.
+
+**The common structure**: each check is valid over a domain, the domain is narrower than the check's
+stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
+*confident, plausible-looking result* rather than an error or an obvious anomaly. That last property
+is what makes this class expensive — a crash or an implausible number gets investigated; a plausible
+pass does not. Note the two directions it runs in: instances 1-4 report **clean when something is
+wrong**, instance 5 would have reported **failure when nothing was wrong**. Both are the same defect
+— an output uncorrelated with the state being checked — and the second is not the safer one, since
+a false alarm during a live deploy invites exactly the kind of unnecessary intervention that causes
+real damage.
+
+**The rule.** When writing or reviewing a guard, threshold, ordering rule, invariant, or any check
+whose output will be believed, state explicitly what happens in the degenerate case — all values
+NULL, all values identical, zero rows, the mechanism never engaging, the compared-against value
+never obtainable — and confirm the check still means what its justification claims there. The
+sharpest single question, which would have caught instances 1 and 5 outright: **can this check
+produce the other answer at all, and what specifically would make it?** If the honest answer is "it
+silently reports clean," either the check needs a companion covering the degenerate case (as
+`backfill_admission_rank_value` now does for the NULL-ordering one, and as the realized-position-
+count instrument did for the deployment guard) or the justification must be rewritten to state the
+limit rather than imply coverage it doesn't have. **A comment asserting a safety property is a claim
+requiring the same evidence as any other claim in this project** — the NULL-ordering one had been
+read approvingly by multiple reviews before it caused a live defect, precisely because it reads as
+obviously true. This is the same discipline this file already requires for tests (verify a new test
+genuinely fails against the reintroduced bug, never merely that it passes) applied to every other
+kind of check: **a check that has not been observed producing both of its answers has been observed
+producing neither.**
+
+**A specific sub-case worth naming, since it is the sharpest instance so far: do not conflate
+*retention* with *resolution*.** The migration comment that caused incident 1 dismissed pre-existing
+unresolved rows as something that "should not exist in practice — `pending_orders` has a bounded
+retention window." Retention bounds how long a row is *kept*; it says nothing about whether a row is
+*resolved*. Unresolved rows are in fact this queue's normal steady state (decided at 21:30, not
+submitted until the next session), so the dismissed case was not rare — it was every row in the
+queue at deploy time. The general form: when a comment dismisses a case as not occurring in
+practice, check whether the property being cited actually excludes that case, or merely sounds like
+it does.
+
+## Candidate Queue ordering — a migration that added a sort column without backfilling it silently reordered the live submission walk (2026-08-10)
+
+**Symptom**: the Status page's Candidate Queue displayed rows in alphabetical ticker order with the
+Rank column reading 1-20. Reported as a suspected display bug; it was not one.
+
+**Root cause.** The 2026-08-09 admission-ranking promotion (see "Relative-rank admission ordering
+promoted to production code" above) renamed the sort key in both the display path
+(`output/performance.py:get_pending_candidates_ranked()`) and the real live submission walk
+(`brokers/trading212.py:_load_pending_orders()`) from `momentum_pct` to `admission_rank_value`. The
+column was added by `data/database.py:_apply_migrations()`'s ALTER-only mechanism, which leaves
+every pre-existing row NULL. All 308 unresolved `PENDING` rows had been decided 2026-08-07T22:09,
+~46 hours before the promotion deployed, so **every** row's sort key was NULL. `decided_at` is
+unique per row (308 distinct of 308, millisecond-stamped by the EOD insert loop), so with the
+primary key contributing nothing the sort collapsed entirely onto that tiebreak — EOD insertion
+order, which is the alphabetically-sorted candidate pool. Verified by direct production query:
+the full 308-row order was exactly `sorted()`, and the reported screen positions reproduced to the
+row (A=1, AAPL=2, ADI=6, ALB=14, AMP=20) with matching momentum values.
+
+**This was a live behaviour defect, not cosmetic.** Both paths sort identically, so the submission
+walk was affected the same way, and `_submit_pending_orders()` has no `decided_at` staleness guard —
+that day's 14:30 UTC run would have processed candidates alphabetically rather than by momentum.
+Blast radius was contained only by luck: the account sat at 69.65% deployed against a 0.70 cap
+(£179.56 headroom against a £2,564.43 position size), so every candidate would have rejected on
+capacity regardless of order. Roughly £2,385 of exits — one or two of 22 positions — would have
+opened a slot for the alphabetically-first candidate instead of the highest-momentum one.
+
+**Fixes, all shipped 2026-08-10.** (1) Immediate production backfill,
+`UPDATE pending_orders SET admission_rank_value = momentum_pct WHERE admission_rank_value IS NULL`
+(2,197 rows), applied over SSH and independently re-queried on a fresh connection per this file's
+own standing requirement — zero NULLs remaining, `momentum_pct` checksum byte-identical before and
+after, confirming no collateral edit. Backfilling from `momentum_pct` is unconditionally correct
+regardless of configured mode: a NULL means the row predates the column, so it was decided by
+pre-promotion code, which ranked on absolute momentum by definition. (2) The durable fix —
+`backfill_admission_rank_value` in `data/database.py:_apply_data_fixes()`, deliberately NOT keyed
+via `_migration_applied()` so it also repairs any future ALTER-only addition to a sort key, and a
+no-op once no NULL remains. (3) `_load_pending_orders()`'s docstring safety claim corrected (see the
+degenerate-guard class entry above). Three regression tests in `tests/test_execution.py`, including
+one asserting the degenerate collapse *before* backfilling so it cannot pass for the wrong reason;
+verified to genuinely fail against the reverted fix. Full suite 1,065 passing.
+
+**A `COALESCE(admission_rank_value, momentum_pct)` in both `ORDER BY`s was considered and
+rejected** — it would fix the default mode while silently mixing two incommensurable scales the day
+`admission_ranking_mode` is switched to `relative_rank`, converting a loud, one-off migration gap
+into a quiet, permanent correctness hazard.
+
+**Incidental finding — SNDK's +2901.6% momentum is real, and the initial "data artifact"
+speculation was wrong.** Once ordering was fixed, SNDK became rank 1, and was checked on suspicion
+of being a `close`-vs-`adj_close` spinoff artifact of the class documented above. It is not: status
+`CLEAN`, not among the 14 recorded price-cliff exceptions, series contiguous from the real
+2025-02-13 Western Digital spinoff date with zero cliffs and zero gaps, largest single-day moves
+1.286x/0.787x (nothing resembling an unadjusted split), and a yfinance re-fetch agreeing to the
+penny (2025-08-05 = 41.93, 2026-08-06 = 1258.58, max 2335.0, `splits: none`). The decisive evidence
+is corroboration rather than any single check: WDC (+495%) and STX (+452%) are the other two
+storage names, all three large but differently sized — a coherent sector move, which no corruption
+mechanism produces. Recorded because the retraction is the useful part: "extreme value therefore
+suspect data" is a reasonable prior in this codebase given its quarantine history, and it was wrong
+here.
+
+**VaR sizing handled the extreme name correctly, contrary to the expectation that it would produce
+an oversized position.** SNDK was sized at **£827.61 — the smallest position in the entire 308-row
+queue** (255 of 308 sat at the £2,564.43 `per_trade_pct` ceiling; queue min/max £827.61/£2,564.43),
+because its `var_pct` of −0.6197 is by far the largest in the pool. Its ATR stop is correspondingly
+the widest at 29.9% below entry (vs. ALB 9.0%, STX 19.9%, WDC 24.7%). Worth recording as a concrete
+worked example: the volatility that makes a name look dangerous is the same input that shrinks its
+position, so "high-momentum volatile name wins the top slot" does not imply "large exposure to a
+volatile name." No action taken and none warranted — overriding momentum ranking on a judgement
+about one name would be exactly the discretionary curation this system was built to remove, and the
+intuition behind it ("extended, already well off its peak") is precisely what Arm C's rank-based
+de-selection exit tested and failed to improve on (see the relative-ranking study above).
 
 ## Current architecture (as of 2026-08-04)
 

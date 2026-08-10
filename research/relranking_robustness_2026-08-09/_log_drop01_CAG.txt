@@ -1,0 +1,4 @@
+[drop01_CAG] ptype=drop_ticker param=CAG start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop01_CAG] A: 4919 trades, pnl=104240.79, mean_deployed=63.72 (1190s)
+[drop01_CAG] B: 4876 trades, pnl=166830.11, mean_deployed=63.74 (2451s total)
+[drop01_CAG] wrote trades/panel A+B, meta (2452s total)

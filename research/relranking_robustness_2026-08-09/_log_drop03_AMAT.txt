@@ -1,0 +1,4 @@
+[drop03_AMAT] ptype=drop_ticker param=AMAT start=2007-01-01 n_tickers=611 n_usable=607 (1s)
+[drop03_AMAT] A: 4922 trades, pnl=149286.58, mean_deployed=63.72 (1195s)
+[drop03_AMAT] B: 4876 trades, pnl=163188.63, mean_deployed=63.74 (2461s total)
+[drop03_AMAT] wrote trades/panel A+B, meta (2461s total)

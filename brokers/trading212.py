@@ -1568,10 +1568,19 @@ def _load_pending_orders(is_etf: bool) -> list:
     two-pass-per-day structure in analysis/backtest.py:
     simulate_portfolio_compounding() for the same reasoning applied there.
 
-    SQLite's default NULL ordering puts a NULL admission_rank_value (should
-    not happen for a real queued entry, but defensively) last in a DESC
-    sort — an unknown-strength candidate is deprioritised, never crashes or
-    wins priority by accident.
+    A NULL admission_rank_value is NOT defended against here, and must not
+    be relied on to be (corrected 2026-08-10, after this docstring's earlier
+    claim to the contrary caused a real incident). SQLite does sort NULLs
+    last in DESC — but that only deprioritises an unknown-strength candidate
+    while SOME row carries a real value. When EVERY row is NULL the key
+    contributes no ordering at all and the sort silently collapses onto the
+    `decided_at` tiebreak, which is EOD insertion order — the alphabetically
+    sorted candidate pool. That is exactly what happened on the first deploy
+    of this column: all 308 unresolved rows predated the migration, and this
+    walk would have submitted in alphabetical rather than momentum order.
+    The guarantee that this column is populated comes from
+    data/database.py:_apply_data_fixes()'s backfill_admission_rank_value,
+    not from NULL-ordering semantics.
     """
     from sqlalchemy import text as sa_text
     from data.database import get_engine
