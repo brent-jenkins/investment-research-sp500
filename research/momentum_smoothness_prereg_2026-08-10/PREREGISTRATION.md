@@ -336,10 +336,21 @@ verification showed hundreds of spurious "mismatches" purely from raw insertion 
 trades revised by a boundary-date price update, and `VTRS`'s admission shifting with one more day of
 data. Any diff is diagnosed row by row and recorded in the report; an unexplained diff halts the study.
 
-**Pools reconfirmed fresh at run time**, not inherited: Pool 1 = `get_live_stock_candidates()`,
-Pool 2 CLEAN = `get_research_stock_candidates()`. Both counts and the `price_data` max date recorded in
-the report, per the derived-state standing rule (a worktree's DB copy is not current merely because
-some copy somewhere was refreshed).
+**Pools reconfirmed fresh at run time**, not inherited: Pool 1 = `get_live_stock_candidates()`
+(503), Pool 2 CLEAN = `SELECT ticker FROM ticker_data_quality WHERE status = 'CLEAN'` (612). Both
+counts and the `price_data` max date recorded in the report, per the derived-state standing rule (a
+worktree's DB copy is not current merely because some copy somewhere was refreshed).
+
+> **CORRECTION, 2026-08-10, made after commit `68326ac` but before any arm ran.** This section
+> originally named `get_research_stock_candidates()` as Pool 2 CLEAN. That is a **different pool** —
+> it returns `get_all_known_stock_tickers() − get_quarantined_tickers()` = **1,017** tickers
+> (including `NEEDS_REVIEW` and never-screened names), whereas the relative-ranking study's "Pool 2
+> CLEAN" is the **612** tickers with `ticker_data_quality.status = 'CLEAN'`, confirmed by reading that
+> study's own `step0_build_caches.py`. Using the wrong one would have made the §8 sanity gate fail
+> against 4,876 / £166,830.11 for an entirely benign reason, and the most likely response to a failing
+> gate — "the database has moved on" — would have been wrong. Recorded as a correction rather than
+> silently fixed, per the reproducibility standard; the pool definition is a stated input, not an
+> implementation detail.
 
 ---
 

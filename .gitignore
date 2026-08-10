@@ -81,5 +81,11 @@ logs/
 # deliberately NOT covered here — see CLAUDE.md's "Research reproducibility
 # standard" for why those stay committed.
 research/**/_cache*.pkl
+# Per-arm run pickles (2026-08-10): intermediate engine output. The durable
+# artifact is trades_*.csv / panel_*.csv, which ARE committed -- per the
+# standing "preserve full trade-level output before a research clone is
+# deleted" requirement. These pickles are just the same data pre-parse.
+research/**/_arm*.pkl
+research/**/_thresholds.pkl
 research/**/_log_*.txt
 research/**/rejections_*.csv
