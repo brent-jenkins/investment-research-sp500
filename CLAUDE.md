@@ -1490,8 +1490,10 @@ is the correct answer, not an artefact — a two-name sample cannot distinguish 
 lucky position — and it means this guard doubles as a diversity floor alongside the raw outcome count.
 **"Cannot measure" is likewise never treated as "no concentration problem"**: an unmeasurable sample (no
 closed rows, none carrying `pnl_pct`, or every outcome exactly flat) blocks the trigger, as does omitting
-the concentration argument entirely — the same degenerate-case discipline the "check that reports clean
-for a reason unrelated to the thing it was checking" entry above requires.
+the concentration argument entirely — the same degenerate-case discipline required by this file's
+"A check that reports clean for a reason unrelated to the thing it was checking" entry (no directional
+"above"/"below" here on purpose: these two sections arrived on separate branches and their relative
+order depends on merge sequence, which is exactly how a cross-reference goes stale).
 
 **The cost is time, and it is real and accepted.** With the account fully deployed and the next admission
 wave gated on max-holding exits from early September, 50 paired outcomes is plausibly a six-month
