@@ -670,6 +670,161 @@ def get_account_value_history(days: int, starting_balance_gbp: float = 50_000.0)
     return result
 
 
+# Minimum elapsed days before the benchmark spread is worth reading as
+# anything but noise. Nothing is hidden or gated on it — this only decides
+# whether the displayed caveat calls the number uninformative. 180 days is a
+# judgement: a shorter window is dominated by deployment level and market
+# direction rather than by selection, which is the thing the comparison is
+# nominally about.
+BENCHMARK_MEANINGFUL_MIN_DAYS = 180
+
+
+def get_benchmark_comparison_history(days: int = 3650) -> list[dict]:
+    """Stored account-vs-benchmark pairs for the last *days* calendar days
+    (benchmark_comparison — see data/database.py:BenchmarkComparison and
+    data/scheduler.py:_refresh_benchmark_comparison() for how it is
+    populated, once daily, from the EOD job).
+
+    A PURE DB READ. No yfinance call, no T212 call, no recomputation of the
+    benchmark ratio at render time — the render path reads stored state
+    only, matching the open-position-cards/sector/crisis pattern this
+    project adopted after repeated render-path stalls (see CLAUDE.md's UI
+    render-path audit entries).
+
+    Deliberately NOT anchored with a synthetic leading point the way
+    get_account_value_history() is: that function's anchor is the account's
+    own genuine starting balance on a known date, which is a real fact,
+    whereas prepending a benchmark point for a date before the account
+    existed would invent a comparison that never happened. If the account's
+    history is short, this series is short.
+
+    Returns [{"date", "account_value_gbp", "benchmark_value_gbp", ...}]
+    ascending by date. Never raises; returns [] on any failure or before the
+    first EOD run has computed anything.
+    """
+    from datetime import date as _date, timedelta as _timedelta
+    from sqlalchemy import text as sa_text
+
+    cutoff = _date.today() - _timedelta(days=days)
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT date, account_value_gbp, benchmark_value_gbp, anchor_date,
+                       anchor_balance_gbp, computed_at
+                FROM benchmark_comparison
+                WHERE date >= :cutoff ORDER BY date ASC
+            """), {"cutoff": cutoff.isoformat()}).mappings().all()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
+
+
+def _coerce_date(value):
+    """str/datetime/date -> date, or None. Local to the benchmark readers,
+    which see all three depending on whether a row came from SQLAlchemy's
+    Date type or a raw text query."""
+    from datetime import date as _date, datetime as _datetime
+    if value is None:
+        return None
+    if isinstance(value, _datetime):
+        return value.date()
+    if isinstance(value, _date):
+        return value
+    try:
+        return _datetime.fromisoformat(str(value)).date()
+    except Exception:
+        return None
+
+
+def compute_benchmark_spread(rows: list[dict]) -> dict:
+    """Pure aggregation over already-fetched benchmark_comparison rows (see
+    get_benchmark_comparison_history()) — no DB/network access itself,
+    matching compute_sector_breakdown()'s own pure-function pattern.
+
+    The spread is stated two ways, both from the SAME latest row:
+    `spread_gbp` (account minus benchmark, in £) and `spread_pct`
+    (account/benchmark − 1). The percentage is relative to the BENCHMARK's
+    value, not to the starting balance — "how far ahead or behind
+    buy-and-hold is this account right now" — which is the question this
+    system's stated objective is actually about.
+
+    Returns {"available", "as_of", "account_value_gbp",
+    "benchmark_value_gbp", "spread_gbp", "spread_pct", "anchor_date",
+    "anchor_balance_gbp", "elapsed_days", "is_meaningful_period"}.
+    `available` is False when no usable row exists yet (before the first EOD
+    run, or before ^SP500TR has been ingested) — a caller must render that
+    as "not computed yet", never as a £0.00 spread, which would read as the
+    account exactly matching the index.
+    """
+    empty = {
+        "available": False, "as_of": None, "account_value_gbp": None,
+        "benchmark_value_gbp": None, "spread_gbp": None, "spread_pct": None,
+        "anchor_date": None, "anchor_balance_gbp": None, "elapsed_days": 0,
+        "is_meaningful_period": False,
+    }
+    if not rows:
+        return empty
+    latest = rows[-1]
+    account_value = latest.get("account_value_gbp")
+    benchmark_value = latest.get("benchmark_value_gbp")
+    if account_value is None or benchmark_value is None or float(benchmark_value) <= 0:
+        return empty
+
+    account_value = float(account_value)
+    benchmark_value = float(benchmark_value)
+    as_of = _coerce_date(latest.get("date"))
+    anchor_date = _coerce_date(latest.get("anchor_date"))
+    elapsed_days = (as_of - anchor_date).days if (as_of and anchor_date) else 0
+
+    return {
+        "available": True,
+        "as_of": as_of,
+        "account_value_gbp": account_value,
+        "benchmark_value_gbp": benchmark_value,
+        "spread_gbp": account_value - benchmark_value,
+        "spread_pct": (account_value / benchmark_value) - 1.0,
+        "anchor_date": anchor_date,
+        "anchor_balance_gbp": (
+            float(latest["anchor_balance_gbp"])
+            if latest.get("anchor_balance_gbp") is not None else None
+        ),
+        "elapsed_days": elapsed_days,
+        "is_meaningful_period": elapsed_days >= BENCHMARK_MEANINGFUL_MIN_DAYS,
+    }
+
+
+def benchmark_spread_caveat(spread: dict) -> str:
+    """The MANDATORY caveat shown wherever the spread is — one sentence,
+    shared by the Dashboard and the weekly email so the two cannot drift
+    into describing the same number differently.
+
+    States the elapsed period and the structural reason a short reading is
+    uninformative: this system runs ~63% deployed on average, so it trails a
+    rising index and leads a falling one substantially regardless of how
+    well it selects. That is a property of the strategy, not evidence about
+    it, and the wording must not invite reading an early number as a verdict
+    in either direction — note it is deliberately symmetric, warning against
+    over-reading a good number exactly as much as a bad one.
+
+    Kept to one sentence on purpose: a paragraph-length disclaimer beside a
+    headline number gets skipped, which would defeat the point.
+    """
+    if not spread.get("available"):
+        return "No benchmark comparison computed yet."
+    days = spread.get("elapsed_days") or 0
+    if spread.get("is_meaningful_period"):
+        return (
+            f"{days} days elapsed. This account holds ~63% deployed on average, so it "
+            f"structurally trails a rising index and leads a falling one — read this "
+            f"against the market's own direction, not on its own."
+        )
+    return (
+        f"Only {days} days elapsed — too short to mean anything yet, in either direction. "
+        f"This account holds ~63% deployed on average, so over a short window the spread "
+        f"mostly reflects market direction and deployment level, not selection quality."
+    )
+
+
 def get_top_trades(limit: int = 5) -> tuple[list[dict], list[dict]]:
     """Top *limit* winning and bottom *limit* losing closed T212 trades by
     realised pnl_gbp (the pnl table — see get_pnl_rows()). Empty lists are

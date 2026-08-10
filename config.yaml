@@ -12,6 +12,17 @@
 # separate, deliberately untouched system.
 reference_tickers:
   - {ticker: "^GSPC", name: "S&P 500", exchange: "NYSE"}
+  # Benchmark for the account-vs-buy-and-hold comparison (2026-08-10).
+  # TOTAL RETURN, deliberately not ^GSPC: ^GSPC is price-only and excludes
+  # dividends, which flatters this system by roughly 1.5-2%/yr. ^SP500TR is
+  # the same series every research run in this project benchmarks against
+  # (see CLAUDE.md's measurement-toolkit entry), so the dashboard figure is
+  # directly comparable to the backtest figures rather than being a second,
+  # quietly-different baseline. Coverage confirmed by direct fetch before
+  # relying on it: 5,433 rows, 2005-01-03 to 2026-08-07.
+  # ^GSPC stays -- it is the crisis-trigger reference series (analysis/
+  # crisis.py) and the two are NOT interchangeable.
+  - {ticker: "^SP500TR", name: "S&P 500 Total Return", exchange: "NYSE"}
   - {ticker: "GBPUSD=X", name: "GBP/USD", exchange: "FX"}
   - {ticker: "EURUSD=X", name: "EUR/USD", exchange: "FX"}
 

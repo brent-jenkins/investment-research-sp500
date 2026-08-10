@@ -578,6 +578,58 @@ class AccountValueHistory(Base):
     captured_at      = Column(DateTime, default=datetime.utcnow)
 
 
+class BenchmarkComparison(Base):
+    """One row per day pairing the account's real total value against what
+    the SAME starting capital would be worth had it been bought and held in
+    ^SP500TR from the account's own start date — the buy-and-hold
+    comparison this system's actual objective is stated against (2026-08-10,
+    reporting only; see CLAUDE.md's "Benchmark-relative performance tracker"
+    section).
+
+    ^SP500TR, not ^GSPC, deliberately: price-only excludes dividends and
+    would flatter this system by roughly 1.5-2%/yr, and every research run
+    in this project already benchmarks against the total-return series, so
+    this keeps the dashboard figure comparable to the backtests rather than
+    introducing a second, quietly-different baseline. ^GSPC remains the
+    crisis-trigger series and the two are not interchangeable.
+
+    Written by the EOD job (data/scheduler.py:_refresh_benchmark_
+    comparison()), never computed at render time — the render path reads
+    these stored rows only, matching the open-position-cards/sector/crisis
+    pattern this project established after repeated render-path stalls. No
+    new scheduled job: this piggybacks on the EOD cycle that already writes
+    AccountValueHistory above.
+
+    ANCHORED, NEVER BACKFILLED. benchmark_value_gbp is always
+    `anchor_balance * (sp500tr_close(date) / sp500tr_close(anchor_date))`,
+    where anchor_date/anchor_balance come from the EARLIEST real
+    AccountValueHistory row. There is deliberately no synthetic history for
+    dates before the account existed — if the account's own history is
+    short, the comparison is short, and the display says so rather than
+    extending it. anchor_date/anchor_balance_gbp are stored on every row
+    rather than inferred at read time, so a row stays self-describing and a
+    future anchor change is visible in the data instead of silently
+    rewriting the whole series' meaning.
+
+    Upserted on `date`, matching AccountValueHistory's own convention — a
+    same-day re-run refreshes that day's row rather than duplicating it.
+    """
+
+    __tablename__ = "benchmark_comparison"
+
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
+    date                = Column(Date, nullable=False, unique=True)
+    account_value_gbp   = Column(Float)
+    benchmark_value_gbp = Column(Float)
+    # The raw ^SP500TR close used for this date, kept for auditability --
+    # so a surprising spread can be traced to the exact input without
+    # re-deriving it from price_data as it stands later.
+    benchmark_close     = Column(Float)
+    anchor_date         = Column(Date)
+    anchor_balance_gbp  = Column(Float)
+    computed_at         = Column(DateTime, default=datetime.utcnow)
+
+
 class User(Base):
     """A per-user web UI account — replaces the single shared Caddy
     basic-auth credential (see CLAUDE.md's per-user-accounts section).

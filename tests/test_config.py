@@ -101,7 +101,12 @@ def test_get_all_watchlist_entries_no_dynamic_candidates_falls_back_to_reference
     entries = get_all_watchlist_entries(config)
     tickers = [e["ticker"] for e in entries]
 
-    assert tickers == ["^GSPC", "GBPUSD=X", "EURUSD=X"]
+    # ^SP500TR added 2026-08-10 as the buy-and-hold benchmark series. It has
+    # to appear here specifically, because reference_tickers is exactly what
+    # makes the existing EOD ingestion pull it -- if it ever drops out, the
+    # comparison silently stops updating rather than failing loudly. Order
+    # follows config.yaml's own.
+    assert tickers == ["^GSPC", "^SP500TR", "GBPUSD=X", "EURUSD=X"]
 
 
 def test_get_all_tickers_matches_get_all_watchlist_entries(config):

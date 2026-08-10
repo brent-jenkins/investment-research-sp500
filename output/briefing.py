@@ -118,9 +118,12 @@ def _gather_weekly_data(config: dict) -> dict:
     from data.ingestion import get_price_df
     from analysis import crisis
     from output.performance import (
+        benchmark_spread_caveat,
         compute_admission_ranking_shadow_concentration,
         compute_admission_ranking_shadow_review_status,
         compute_admission_ranking_shadow_summary,
+        compute_benchmark_spread,
+        get_benchmark_comparison_history,
         compute_sector_breakdown,
         get_admission_ranking_shadow_rows,
         get_brief_cards,
@@ -218,6 +221,9 @@ def _gather_weekly_data(config: dict) -> dict:
         "open_positions": open_cards,
         "sector_breakdown": sector_breakdown,
         "admission_shadow_review": shadow_review,
+        # Benchmark-relative spread (2026-08-10, reporting only) -- a pure
+        # read of rows the EOD job computed; no network call from here.
+        "benchmark_spread": compute_benchmark_spread(get_benchmark_comparison_history()),
         "total_value_gbp": total_value_gbp,
         "closed_this_week": closed_this_week,
         "realized_pnl_gbp": realized_pnl_gbp,
@@ -228,6 +234,35 @@ def _gather_weekly_data(config: dict) -> dict:
         "eod_recent": eod_recent,
         "unresolved_error": unresolved_error,
     }
+
+
+def _benchmark_spread_line(data: dict) -> str:
+    """One compact line stating the account-vs-buy-and-hold spread, shared
+    by the plain-text and HTML bodies so the two cannot drift (2026-08-10 —
+    see CLAUDE.md's "Benchmark-relative performance tracker" section).
+
+    Carries the MANDATORY caveat from output/performance.py:
+    benchmark_spread_caveat() rather than restating it — one wording, used
+    by the Dashboard and this email alike, so a reader cannot get a
+    differently-hedged version of the same number depending on where they
+    saw it.
+
+    Respects this email's established forbidden-word tone standard
+    (tests/test_briefing.py:_FORBIDDEN_WORDS) — no call-to-action language,
+    and the caveat's own wording is deliberately symmetric so a favourable
+    spread is hedged exactly as firmly as an unfavourable one.
+    """
+    from output.performance import benchmark_spread_caveat
+
+    spread = data.get("benchmark_spread")
+    if not spread or not spread.get("available"):
+        return "vs buy & hold S&P 500 (TR): not computed yet."
+    return (
+        f"vs buy & hold S&P 500 (TR): account £{spread['account_value_gbp']:,.2f} "
+        f"against £{spread['benchmark_value_gbp']:,.2f} — "
+        f"£{spread['spread_gbp']:+,.2f} ({spread['spread_pct'] * 100:+.2f}%), "
+        f"as of {spread['as_of']}. {benchmark_spread_caveat(spread)}"
+    )
 
 
 def _admission_shadow_review_line(data: dict) -> str:
@@ -331,6 +366,9 @@ def _weekly_summary_text(data: dict) -> str:
             )
 
     lines.append("")
+    lines.append(_benchmark_spread_line(data))
+
+    lines.append("")
     lines.append(_admission_shadow_review_line(data))
 
     lines.append("")
@@ -411,6 +449,10 @@ def _weekly_summary_html(data: dict) -> str:
             f"<b>Sector concentration (by capital):</b> {' &middot; '.join(parts)}</p>"
         )
 
+    benchmark_spread_line = (
+        f'<p style="color:{_NEUTRAL};font-size:13px">{esc(_benchmark_spread_line(data))}</p>'
+    )
+
     admission_shadow_line = (
         f'<p style="color:{_NEUTRAL};font-size:13px">{esc(_admission_shadow_review_line(data))}</p>'
     )
@@ -449,6 +491,7 @@ def _weekly_summary_html(data: dict) -> str:
         {rows_open}
       </table>
       {sector_line}
+      {benchmark_spread_line}
       {admission_shadow_line}
 
       <h3 style="color:{_NEUTRAL}">Closed This Week ({len(data['closed_this_week'])})</h3>

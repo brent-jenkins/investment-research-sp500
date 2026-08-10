@@ -1768,6 +1768,124 @@ about one name would be exactly the discretionary curation this system was built
 intuition behind it ("extended, already well off its peak") is precisely what Arm C's rank-based
 de-selection exit tested and failed to improve on (see the relative-ranking study above).
 
+## Benchmark-relative performance tracker — reporting only (2026-08-10)
+
+**"Beat buy-and-hold" is this system's actual stated objective, and until now nothing in the interface
+reported against it — every displayed figure was absolute.** The Dashboard and weekly email now show the
+demo account against the same starting capital bought and held in the S&P 500, updated once daily.
+Reporting only: no trading behaviour, sizing, admission, or exit logic changed, and
+`trading212_invest.live` is untouched.
+
+**^SP500TR, not ^GSPC — total return, deliberately.** `^GSPC` is price-only and excludes dividends,
+which flatters this system by roughly 1.5–2%/yr. Every research run in this project already benchmarks
+against `^SP500TR` (see the measurement-toolkit entry above), so using the same series keeps the
+dashboard figure directly comparable to the backtest figures instead of introducing a second,
+quietly-different baseline. **`^GSPC` remains and is NOT interchangeable** — it is the crisis-trigger
+reference series (`analysis/crisis.py`). Coverage confirmed by direct fetch before being relied on, not
+assumed: **5,433 rows, 2005-01-03 → 2026-08-07**. Added to `config.yaml`'s `reference_tickers`, so the
+existing EOD price pull ingests it; a test pins its presence there, because if it silently dropped out
+the comparison would stop updating rather than fail loudly.
+
+**A real production defect was found and fixed as a prerequisite — the index would have been
+quarantined on first ingestion.** The task flagged the risk from the known `^GSPC`/ETF incident; the
+scoping turned out **not** to be safe, and this was confirmed by direct call rather than inferred:
+`verify_ticker_identity('^SP500TR')` returns `QUARANTINED`, reason `quote_type='INDEX'`. The 2026-08-08
+fix scoped `scan_unverified_tickers()` (the periodic backstop) but left `_screen_newly_backfilled_
+ticker()` — the **ingestion-time** screen, called from `pull_incremental()`'s and
+`backfill_price_history()`'s first-time-download branches — completely unscoped. Since
+`get_all_watchlist_entries()` merges `reference_tickers` first, simply adding the benchmark to
+`config.yaml` would have quarantined it the moment EOD first pulled it. Now scoped to
+`analysis.universe.get_all_known_stock_tickers()`, the same definition the backstop uses — one notion of
+"is this a stock", not two. **A lookup failure skips the screen rather than running it**: leaving a
+genuine stock unscreened merely defers it to the next backstop scan, whereas screening a non-stock
+writes a wrong, persistent `QUARANTINED` row no later pass would revisit. This is a third instance of
+the domain-scoping error already documented twice above — a check applied outside the population it was
+built for — and the fix is the same shape both previous ones took.
+
+**The recurrence is the actual problem, and scoping each caller does not solve it — the next caller
+added inherits the same trap.** Three instances now (the backstop scan, this ingestion-time screen, and
+the original one-off remediation), each fixed at its own call site. The durable fix is to move the guard
+INTO `verify_ticker_identity()` itself, returning a distinct outcome — `NOT_APPLICABLE`, or similar —
+so no caller can get it wrong by omission rather than by commission. **Not yet done**; recorded here as
+the recommended follow-up, deliberately kept out of the benchmark-tracker change so a verified changeset
+did not grow an unrelated refactor.
+
+**A trap in the obvious implementation, worth stating before anyone writes it.** The naive version —
+"return `NOT_APPLICABLE` whenever the resolved `quote_type` is not `EQUITY`" — would **silently break the
+detection this whole mechanism exists for**. A *stock* ticker resolving to a non-equity instrument is
+not an out-of-domain input; it is precisely the corruption signal: `MER`/`CAM`/`PCL`/`SPLS` all resolve
+to real but non-equity replacement products (a fund or an ETF) and are **correctly** `QUARANTINED` today
+as genuine recycled-symbol cases (see the recycled-ticker section above). Refusing on resolved type
+would turn all four into silent passes. **The discriminator has to be the ticker's EXPECTED class, not
+its resolved one** — i.e. the function must itself check membership in
+`analysis.universe.get_all_known_stock_tickers()` and return `NOT_APPLICABLE` for anything outside it,
+which is exactly the check the three call sites have each been applying separately. That preserves every
+existing quarantine (all four of those tickers are known stocks, so they stay in scope and still fail
+Check A on their resolved type) while making the out-of-domain case impossible to reach by accident.
+Any follow-up must be validated against those four tickers plus `FNMA` and `PALM` as controls before
+being trusted — the same "validate a classifier against known controls BEFORE applying it" discipline
+the contiguity work already established, and which caught the price-scale signal that would have
+false-positived `FNMA`.
+
+**Storage: `data/database.py:BenchmarkComparison`, written by the EOD job, read-only at render.**
+One row per day: `date`, `account_value_gbp`, `benchmark_value_gbp`, `benchmark_close` (the raw input,
+for auditability), `anchor_date`, `anchor_balance_gbp`. `data/scheduler.py:_refresh_benchmark_
+comparison()` runs inside `_eod_job()` immediately after `_fetch_t212_snapshot(record_history=True)`
+writes that day's `AccountValueHistory` row — **no new scheduled job**, since the EOD cycle already
+produces both inputs. It records `benchmark_rows_written` in the EOD completion record either way, so
+"did this step run" is answerable from the record rather than from the absence of an error — the gap
+that let the data-quality backstop fail silently for two days.
+
+**Anchored, never backfilled.** `benchmark_value = anchor_balance × close(date) / close(anchor_date)`,
+where the anchor is the **earliest real `AccountValueHistory` row**. No synthetic history is created for
+dates before the account existed: if the account's history is short, the comparison is short, and the
+display says so. A missing close falls back to the most recent **earlier** close, never a later one —
+a later close would leak future information into a historical row, and that guard has its own test
+rather than being left implicit in the fallback test. A date with no earlier close at all is skipped
+rather than written with a guessed value; if the *anchor itself* has no usable close, nothing is
+computed at all rather than silently re-anchoring on a later date. The whole series is recomputed each
+run (tens to hundreds of rows), which makes it self-healing: a day the EOD job missed, or ran before
+`^SP500TR` had that date's close, fills in on the next successful run instead of leaving a permanent
+hole.
+
+**The comparison is currently 7 days long, and that is the honest answer rather than a limitation to
+engineer around.** `account_value_history` begins 2026-08-02 at £50,000 — the account's real reset date.
+Verified end-to-end against a copy of the production database with `^SP500TR` seeded: account
+£51,362.06 vs benchmark £51,794.74, **−£432.68 (−0.84%) over 7 days** — precisely the shape predicted
+for a ~70%-deployed account in a rising market, and precisely why the caveat below is mandatory.
+
+**MANDATORY CAVEAT, one sentence, shared by both surfaces.** `output/performance.py:
+benchmark_spread_caveat()` is the single wording used by the Dashboard and the weekly email, so a reader
+cannot get a differently-hedged version of the same number depending on where they saw it. It states the
+elapsed period and the structural reason a short reading is uninformative: the account holds ~63%
+deployed on average, so it trails a rising index and leads a falling one substantially **regardless of
+selection quality** — a property of the strategy, not evidence about it. **Deliberately symmetric**,
+hedging a favourable spread exactly as firmly as an unfavourable one, with a test asserting the text
+does not vary with the sign. Below `BENCHMARK_MEANINGFUL_MIN_DAYS = 180` it opens "Only N days elapsed —
+too short to mean anything yet, in either direction"; past that the structural sentence remains and only
+the "too short" clause drops. Nothing is gated or hidden on that threshold — it only decides how the
+number is described. Kept to one sentence on purpose: a paragraph-length disclaimer beside a headline
+number gets skipped, which would defeat it.
+
+**Display.** Dashboard: the benchmark overlays the existing account-value chart as a dashed line with
+**no fill** (two filled areas on one axis read as stacked rather than compared), plotted on its own
+dates rather than reindexed onto the account's, since it genuinely starts later. Below it, three
+metrics — account, buy-and-hold, and the difference in £ and % — with the percentage measured against
+the **benchmark's** value, not the starting balance, since "how far ahead or behind buy-and-hold is this
+account" is the question the objective is stated against. `delta_color="off"`: no red/green, matching
+this project's established tone-neutral position-display convention. Weekly email: one compact line in
+both the plain-text and HTML bodies, carrying the same caveat, and tested against the email's existing
+forbidden-word tone standard for every wording branch. Both carry an explicit "as of" date. **When no
+row exists yet, both surfaces say "not computed yet" — never a £0.00 spread**, which would read as the
+account exactly matching the index.
+
+**Deploy note.** `benchmark_comparison` is a new table, created by `init_db()` on the first post-deploy
+service start (confirmed directly: a raw copy of the production database without `init_db()` having run
+makes `_refresh_benchmark_comparison()` return 0 and log, rather than raise). The comparison populates
+after the first EOD run that follows both the table's creation and `^SP500TR`'s first successful price
+pull — expect "not computed yet" on the Dashboard until then, which is the correct display, not a
+failure.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).

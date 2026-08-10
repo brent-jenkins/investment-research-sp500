@@ -757,7 +757,44 @@ def _screen_newly_backfilled_ticker(ticker: str, config: dict) -> None:
     script and the periodic backstop scan (scan_unverified_tickers())
     use, never a second implementation. Never raises -- a screening
     failure must not block ingestion itself; the ticker simply stays
-    unscreened until the next backstop scan picks it up."""
+    unscreened until the next backstop scan picks it up.
+
+    SCOPED TO STOCKS ONLY (2026-08-10) -- a non-stock ticker is skipped
+    entirely, not screened conservatively. verify_ticker_identity()'s
+    Check A can only ever affirm quote_type == "EQUITY", so an index
+    series, an ETF, or an FX pair fails it BY CONSTRUCTION rather than on
+    evidence. scan_unverified_tickers() (the periodic backstop) was scoped
+    for exactly this reason on 2026-08-08 after its first real run wrote
+    QUARANTINED for ^GSPC itself plus both FX pairs and ~33 ETFs -- but
+    that fix closed only the backstop path and left THIS one, the
+    ingestion-time screen, still unscoped. Found 2026-08-10 while adding
+    ^SP500TR as the benchmark reference series, and confirmed by direct
+    call rather than inferred: verify_ticker_identity('^SP500TR') returns
+    QUARANTINED, reason "quote_type='INDEX'". Without this scoping, simply
+    adding a new reference ticker to config.yaml would have quarantined
+    the benchmark series on its first EOD ingestion.
+
+    The stock check uses the same analysis.universe.get_all_known_stock_
+    tickers() the backstop scan does -- one definition of "is this a
+    stock", not two. A lookup failure falls through to SKIPPING the screen
+    (fail-safe): leaving a genuine stock unscreened merely defers it to
+    the next backstop scan, whereas screening a non-stock writes a wrong,
+    persistent QUARANTINED row that no later pass would revisit."""
+    try:
+        from analysis.universe import get_all_known_stock_tickers  # noqa: PLC0415
+        if ticker not in get_all_known_stock_tickers():
+            logger.debug(
+                "Skipping ingestion-time identity screen for non-stock ticker %s "
+                "(verify_ticker_identity() is EQUITY-only by construction).", ticker,
+            )
+            return
+    except Exception as exc:
+        logger.warning(
+            "Could not confirm %s is a stock — skipping the ingestion-time identity "
+            "screen rather than risk mislabelling a non-stock ticker: %s", ticker, exc,
+        )
+        return
+
     try:
         result = verify_ticker_identity(ticker, config)
         from data.database import write_data_quality_status  # noqa: PLC0415

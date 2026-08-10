@@ -460,6 +460,146 @@ def _record_account_value_history(summary: dict) -> None:
         logger.warning("Could not record account value history: %s", exc)
 
 
+BENCHMARK_TICKER = "^SP500TR"
+
+
+def _refresh_benchmark_comparison(config: dict = None) -> int:
+    """Recompute and upsert the account-vs-buy-and-hold benchmark series
+    (2026-08-10, reporting only — see data/database.py:BenchmarkComparison
+    and CLAUDE.md's "Benchmark-relative performance tracker" section).
+
+    Called from _eod_job() immediately after _fetch_t212_snapshot(
+    record_history=True) has written today's AccountValueHistory row, so
+    today's account value is already present when this runs. Deliberately
+    NOT a new scheduled job — it piggybacks on the EOD cycle that already
+    produces both inputs (that account row, and ^SP500TR via the same price
+    pull that fetches every other reference ticker).
+
+    Recomputes the WHOLE series each run rather than appending only today.
+    Cheap (the account's own history is the row count — tens to hundreds of
+    rows, two indexed reads and one upsert each) and self-healing: a day the
+    EOD job never ran, or ran before ^SP500TR had that date's close, gets
+    filled in on the next successful run instead of leaving a permanent hole
+    only a manual backfill would close.
+
+    Benchmark value is always
+    `anchor_balance * (close(date) / close(anchor_date))` — the same
+    starting capital bought and held from the account's own start date. NO
+    synthetic history is created for dates before the account existed (see
+    BenchmarkComparison's docstring): the series starts at the earliest real
+    AccountValueHistory row and no earlier.
+
+    A date whose ^SP500TR close is missing falls back to the most recent
+    EARLIER close, never a later one — a later close would leak future
+    information into a historical row. A date with no earlier close at all
+    is skipped entirely rather than written with a guessed value.
+
+    Never raises. Returns the number of rows written (0 on any failure, or
+    when there is nothing to compute) so the EOD completion record can show
+    whether this genuinely ran — the same "presence of the key proves the
+    step executed" pattern this project already relies on for the
+    price-cliff and data-quality scans.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from data.database import BenchmarkComparison, get_engine
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            account_rows = conn.execute(sa_text(
+                "SELECT date, total_value_gbp FROM account_value_history "
+                "WHERE total_value_gbp IS NOT NULL ORDER BY date ASC"
+            )).all()
+            bench_rows = conn.execute(sa_text(
+                "SELECT date, close FROM price_data "
+                "WHERE ticker = :t AND close IS NOT NULL ORDER BY date ASC"
+            ), {"t": BENCHMARK_TICKER}).all()
+
+        if not account_rows:
+            logger.info("Benchmark comparison: no account_value_history rows yet — nothing to compute.")
+            return 0
+        if not bench_rows:
+            logger.warning(
+                "Benchmark comparison: no %s price data — skipping. Expected on the first run "
+                "after adding the ticker; should resolve after the next price pull.",
+                BENCHMARK_TICKER,
+            )
+            return 0
+
+        def _as_date(value):
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, date):
+                return value
+            return datetime.fromisoformat(str(value)).date()
+
+        bench = [(_as_date(d), float(c)) for d, c in bench_rows]
+
+        anchor_date = _as_date(account_rows[0][0])
+        anchor_balance = float(account_rows[0][1])
+
+        def _close_on_or_before(target):
+            """Most recent close at or before *target*, or None if the
+            benchmark series does not reach back that far. Never looks
+            forward — a later close would leak future information."""
+            found = None
+            for d, c in bench:
+                if d <= target:
+                    found = c
+                else:
+                    break
+            return found
+
+        anchor_close = _close_on_or_before(anchor_date)
+        if anchor_close is None or anchor_close <= 0:
+            logger.warning(
+                "Benchmark comparison: no usable %s close at or before the account's own start "
+                "date (%s) — skipping rather than anchoring on a later price.",
+                BENCHMARK_TICKER, anchor_date,
+            )
+            return 0
+
+        now = datetime.utcnow()
+        written = 0
+        with engine.begin() as conn:
+            for raw_date, raw_value in account_rows:
+                row_date = _as_date(raw_date)
+                close = _close_on_or_before(row_date)
+                if close is None or close <= 0:
+                    continue
+                account_value = float(raw_value)
+                benchmark_value = anchor_balance * (close / anchor_close)
+                stmt = sqlite_insert(BenchmarkComparison).values(
+                    date=row_date, account_value_gbp=account_value,
+                    benchmark_value_gbp=benchmark_value, benchmark_close=close,
+                    anchor_date=anchor_date, anchor_balance_gbp=anchor_balance,
+                    computed_at=now,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["date"],
+                    set_={
+                        "account_value_gbp": account_value,
+                        "benchmark_value_gbp": benchmark_value,
+                        "benchmark_close": close,
+                        "anchor_date": anchor_date,
+                        "anchor_balance_gbp": anchor_balance,
+                        "computed_at": now,
+                    },
+                )
+                conn.execute(stmt)
+                written += 1
+
+        logger.info(
+            "Benchmark comparison refreshed: %d row(s), anchored %s at £%.2f (%s close %.2f).",
+            written, anchor_date, anchor_balance, BENCHMARK_TICKER, anchor_close,
+        )
+        return written
+    except Exception as exc:
+        logger.warning("Could not refresh benchmark comparison: %s", exc, exc_info=True)
+        return 0
+
+
 def _fetch_t212_snapshot(config: dict, record_history: bool = False) -> bool:
     """Fetch T212 account summary + positions and persist as JSON in system_metadata.
 
@@ -907,6 +1047,20 @@ def _eod_job() -> None:
         except Exception as exc:
             logger.error("T212 snapshot fetch after EOD failed: %s", exc)
             details["snapshot_error"] = str(exc)
+
+        try:
+            # Benchmark-relative comparison (2026-08-10, reporting only) --
+            # deliberately AFTER the snapshot above, which writes today's
+            # account_value_history row this reads. Own try/except so a
+            # failure here can never affect the EOD job's real work; the
+            # key is recorded either way, so "did this step run" is
+            # answerable from the completion record rather than only from
+            # the absence of an error (the same gap that let the
+            # data-quality backstop fail silently for two days).
+            details["benchmark_rows_written"] = _refresh_benchmark_comparison(config)
+        except Exception as exc:
+            logger.error("Benchmark comparison refresh after EOD failed: %s", exc)
+            details["benchmark_comparison_error"] = str(exc)
 
         try:
             # Bounded retention for pending_orders (2026-08-02) -- a

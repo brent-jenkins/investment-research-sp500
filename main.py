@@ -60,7 +60,10 @@ from output.performance import (
     compute_admission_ranking_shadow_summary,
     compute_position_context,
     compute_sector_breakdown,
+    benchmark_spread_caveat,
+    compute_benchmark_spread,
     get_account_value_history,
+    get_benchmark_comparison_history,
     get_admission_ranking_shadow_rows,
     get_candidate_queue_preview,
     get_crisis_status,
@@ -942,6 +945,16 @@ def _get_value_history(days: int) -> list[dict]:
     return get_account_value_history(days)
 
 
+@st.cache_data(ttl=300)
+def _get_benchmark_history(days: int) -> list[dict]:
+    """Thin cached wrapper around output/performance.py:
+    get_benchmark_comparison_history() (2026-08-10). A pure DB read — the
+    benchmark ratio is computed once daily by the EOD job, never here; the
+    TTL exists only to avoid a redundant SQL read on a widget rerun, not to
+    throttle anything expensive."""
+    return get_benchmark_comparison_history(days)
+
+
 @st.cache_data(ttl=60)
 def _get_candidate_queue_preview_cached(_config: dict) -> dict:
     """Thin cached wrapper around output/performance.py:
@@ -966,22 +979,48 @@ def _get_recent_orders_cached(limit: int = 10) -> list[dict]:
     return get_recent_orders(limit)
 
 
-def _value_history_chart(rows: list[dict]) -> go.Figure:
+def _value_history_chart(rows: list[dict], benchmark_rows: list[dict] = None) -> go.Figure:
     """£ account-value line chart — a filled area under the line so the
     real starting-balance anchor (see get_account_value_history()'s own
-    docstring) reads as a genuine floor, not a stray first point."""
+    docstring) reads as a genuine floor, not a stray first point.
+
+    benchmark_rows (2026-08-10, optional) overlays the buy-and-hold
+    ^SP500TR comparison from benchmark_comparison. Drawn as a plain dashed
+    line with NO fill, deliberately: two filled areas on one axis read as
+    stacked rather than compared, and the fill belongs to the account
+    series whose floor it describes. The benchmark is plotted on its OWN
+    dates, never reindexed onto the account's — it genuinely starts later
+    at the left edge (at the account's real anchor, with no synthetic
+    pre-history), and stretching it would misrepresent when the comparison
+    actually begins.
+    """
     df = pd.DataFrame(rows)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["total_value_gbp"], mode="lines+markers",
+        name="Account",
         line=dict(color="#00C2FF", width=2), marker=dict(size=4),
         fill="tozeroy", fillcolor="rgba(0,194,255,0.08)",
-        hovertemplate="%{x}<br>£%{y:,.2f}<extra></extra>",
+        hovertemplate="%{x}<br>Account £%{y:,.2f}<extra></extra>",
     ))
+    show_legend = False
+    if benchmark_rows:
+        bdf = pd.DataFrame(benchmark_rows)
+        bdf = bdf[bdf["benchmark_value_gbp"].notna()]
+        if not bdf.empty:
+            show_legend = True
+            fig.add_trace(go.Scatter(
+                x=[str(d) for d in bdf["date"]],
+                y=bdf["benchmark_value_gbp"],
+                mode="lines", name="Buy &amp; hold S&amp;P 500 (TR)",
+                line=dict(color="#FFB020", width=2, dash="dash"),
+                hovertemplate="%{x}<br>Buy &amp; hold £%{y:,.2f}<extra></extra>",
+            ))
     fig.update_layout(
         height=320, margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0),
         yaxis=dict(tickprefix="£", tickformat=",.0f"),
-        showlegend=False,
+        showlegend=show_legend,
     )
     return _apply_dark_theme(fig)
 
@@ -1216,12 +1255,46 @@ def _render_dashboard_page(config: dict) -> None:
         horizontal=True, label_visibility="collapsed", key="dashboard_value_range",
     )
     hist_rows = _get_value_history(_VALUE_CHART_RANGES[range_label])
-    st.plotly_chart(_value_history_chart(hist_rows), width="stretch")
+    bench_rows = _get_benchmark_history(_VALUE_CHART_RANGES[range_label])
+    st.plotly_chart(_value_history_chart(hist_rows, bench_rows), width="stretch")
     if len(hist_rows) <= 2:
         st.caption(
             "The account was reset to a clean £50,000 with no trading history yet — "
             "this chart fills in day by day as real T212 EOD snapshots accumulate, not an error."
         )
+
+    # --- vs buy-and-hold S&P 500 -------------------------------------------
+    # "Beat buy-and-hold" is this system's actual stated objective, and
+    # every other figure on this page is absolute (2026-08-10). Reporting
+    # only: nothing here feeds any trading decision. Reads stored rows
+    # written once daily by the EOD job -- no network call on this path.
+    spread = compute_benchmark_spread(bench_rows)
+    if not spread["available"]:
+        st.caption(
+            "**vs buy & hold S&P 500 (TR):** not computed yet — this populates after the "
+            "next EOD run once the benchmark series has been ingested."
+        )
+    else:
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Account", f"£{spread['account_value_gbp']:,.2f}")
+        b2.metric("Buy & hold S&P 500 (TR)", f"£{spread['benchmark_value_gbp']:,.2f}")
+        # Plain +/- on the spread, with no red/green conditional colouring:
+        # this project's own position-display convention deliberately keeps
+        # decision-relevant numbers tone-neutral (see output/performance.py:
+        # position_context_style()'s docstring), and the caveat below says
+        # in words that an early number should not be read as good or bad.
+        b3.metric(
+            "Difference",
+            f"£{spread['spread_gbp']:+,.2f}",
+            delta=f"{spread['spread_pct'] * 100:+.2f}%",
+            delta_color="off",
+        )
+        st.caption(
+            f"Same £{spread['anchor_balance_gbp']:,.0f} starting capital, bought and held in "
+            f"^SP500TR from {spread['anchor_date']} (the account's own start date) — total "
+            f"return, dividends included. As of {spread['as_of']}."
+        )
+        st.caption(f"⚖️ {benchmark_spread_caveat(spread)}")
 
     st.divider()
 
