@@ -1262,7 +1262,63 @@ mean P&L% in all 20/20 draws**, corroborating the original study's central claim
 genuinely better decisions, not a cash-holding or cascade artefact) across twenty independently-
 perturbed configurations, not just the one original run.
 
-## Relative-rank admission ordering promoted to production code — OPEN CANDIDATE, not adopted (2026-08-09)
+## Relative-rank admission ordering ADOPTED — `admission_ranking_mode: "relative_rank"` (2026-08-11)
+
+**Flipped on 2026-08-11.** Arm B's mechanism is now the ACTIVE admission ordering; absolute momentum
+becomes the shadowed alternative, still recorded in `admission_ranking_shadow` for comparison but no
+longer the ordering that trades. The section below documents the 2026-08-09 code promotion and remains
+accurate as history; this header supersedes its "OPEN CANDIDATE, not adopted" framing.
+
+**Nothing else changed.** `per_trade_pct`, `max_total_deployed`, `atr_stop_multiplier`,
+`stock_max_holding_days`, `min_momentum_pct` all unchanged, and **`trading212_invest.live` remains
+`false`** — this adoption carries no real-money risk. Arm C's `RANK_DROPPED` de-selection exit is
+deliberately NOT adopted; it underperformed Arm B in both pools.
+
+**Pre-flight checks, all four passed before the flip** (re-run 2026-08-11 after the 2026-08-10 EOD
+completed; two had failed earlier purely because that EOD had not yet run):
+1. `^SP500TR` — 4,930 rows, 2007-01-03 → 2026-08-07, **no `ticker_data_quality` row**, zero index
+   tickers quarantined table-wide. This was the only silent failure mode of the four (nothing on the
+   display path reads quarantine status), and it confirms the 2026-08-10 ingestion-screen scoping fix
+   works in production, not just in tests.
+2. `admission_ranking_shadow` — **308 rows** from the 2026-08-10 14:30 submission, against **308**
+   `pending_orders` rows for that decision date (2026-08-07); both `admitted_under_*` sums **0**, correct
+   for a fully-deployed account where neither ranking admitted anything.
+3. `benchmark_comparison` — 7 rows, anchored 2026-08-02 at £50,000.
+4. Config confirmed `absolute_momentum` / `live: false` immediately before the edit.
+
+**Forward validation is now a long-run background process, not pending work — this is a deliberate
+reframing, stated plainly rather than left ambiguous.** The forward shadow comparison keeps accruing and
+its review trigger (90 days AND 50 paired outcomes AND no single ticker above 40% of the measured
+effect) is unchanged. But with ~22 concurrent positions and admissions gated on max-holding exits, **50
+active-mode-unique closed outcomes is plausibly a multi-year proposition, not a multi-month one.**
+Waiting for it before adopting would mean deferring indefinitely a result that already cleared a
+pre-registered bar and a purpose-built robustness test. **Backtesting plus robustness testing is the
+standard this adoption rests on**; the forward record is corroboration that will arrive slowly, and
+should be read that way rather than as a gate that was skipped.
+
+**Multiple-comparisons scepticism is warranted, and is recorded rather than argued away.** This is one
+clearing result out of roughly 60 experiments across this project's research history — at that count,
+some false positives are expected on chance alone. Two things partially answer it, neither completely:
+(a) Arm B is a **construction change with a prior rationale** (Part 4 of the selection audit found
+rank-within-day predicts outcomes where raw momentum magnitude does not), not a parameter swept until
+something cleared; and (b) the 20-draw paired perturbation test was designed specifically to catch
+"got lucky on one configuration" — 20/20 draws favourable, with the unperturbed value at the
+distribution's median and mode, is not the signature of a chance finding. **The honest position: this is
+the best-evidenced change this project has made, and it is still one result among many.** The AMAT
+magnitude dependency (+1.99pp → +0.427pp when that single ticker is dropped) is the concrete reason to
+rely on the direction rather than the point estimate.
+
+**Flip date recorded for the shadow record: 2026-08-11.** The shadow comparison's own accrual under
+`relative_rank` starts from the first decision made after this deploy — every row before it carries
+`active_mode = "absolute_momentum"` and is classified against that, which is why
+`_classify_shadow_row_admission()` evaluates each row against its OWN recorded mode rather than today's
+config.
+
+## Relative-rank admission ordering promoted to production code (2026-08-09) — the code promotion
+
+**Superseded framing, kept as history**: when written, this section described an OPEN CANDIDATE whose
+config default still pointed at the old behaviour. That flip happened 2026-08-11 — see the section
+immediately above. The promotion detail below is unchanged and still accurate.
 
 **The relative-ranking study's own mechanism (admission ordered by cross-sectional relative rank instead
 of absolute momentum) is now a real, tested option in the production codebase — but the config default
@@ -2001,7 +2057,7 @@ cost makes moot at every frequency where it would matter.
 - `resolve_dynamic_max_position_gbp(...)` / `resolve_cash_constrained_position_gbp(...)` / `is_position_size_viable(...)` — VaR-based position sizing as a percentage of the account's real, current balance (`per_trade_pct: 0.05`, `max_total_deployed: 0.7`), with an `absolute_max_position_gbp` backstop (rarely binding) and a minimum-viable-order floor. `max_total_deployed`'s own "already deployed" figure is genuine mark-to-market (T212's `investments.currentValue`, unrealized gains/losses included) — confirmed, evidence-based (not switched to cost-basis, which real block-validated history shows is measurably worse), see history's "Deployment-cap accounting — mark-to-market vs cost-basis". **Raised from 0.5 to 0.8 on 2026-08-06 (a deliberate user decision, not a research-backed one), then reset back to 0.7 on 2026-08-07, also a deliberate user decision.** The deployment-cap sweep (`research/deployment_cap_sweep_2026-08-06`, "A cost is safe to defer only while it's constant across the arms being compared" above) tested only 0.50/0.70/0.95 and found cost-adjusted CAGR at every tested level *underperformed* the 0.50 baseline once FX/turnover costs (which scale with the higher trade count a bigger cap enables) were modelled — 0.7 was one of the tested levels, not an untested midpoint. Still safe to run as-is only because live trading remains demo-only (`live: false`); re-run `run_full_validation()` with this value before ever considering enabling real-money trading.
 - `is_asset_class_enabled(...)` — the ETF/stock trading-enabled switches (ETF path is permanently off; stock path is `stock_trading_enabled`).
 - `is_submission_price_move_blocked(...)` — the submission-time price-sanity check (see below).
-- `resolve_admission_ranking_mode(config)` / `resolve_admission_rank_value(...)` (2026-08-09) — the sort key used to order gate-passing candidates for capacity-constrained admission when more qualify than there is room for; does NOT touch the entry gate, `SIGNAL_OFF`, or any other exit reason, which stay keyed to absolute momentum regardless. `admission_ranking_mode` defaults to `"absolute_momentum"` (today's real behaviour, unchanged); `"relative_rank"` (cross-sectional 12-minus-1 rank, `analysis/signals.py:compute_relative_rank_series()`) is a promoted, tested, NOT-YET-ADOPTED alternative — see "Relative-rank admission ordering promoted to production code" below for the full record.
+- `resolve_admission_ranking_mode(config)` / `resolve_admission_rank_value(...)` (2026-08-09) — the sort key used to order gate-passing candidates for capacity-constrained admission when more qualify than there is room for; does NOT touch the entry gate, `SIGNAL_OFF`, or any other exit reason, which stay keyed to absolute momentum regardless. `admission_ranking_mode` is **`"relative_rank"` (ADOPTED 2026-08-11)** — the cross-sectional 12-minus-1 rank from `analysis/signals.py:compute_relative_rank_series()`. `"absolute_momentum"` (the trailing-12-month value the entry gate itself uses) was production behaviour until that date and is now the shadowed alternative, still recorded in `admission_ranking_shadow` but no longer the ordering that trades. See "Relative-rank admission ordering ADOPTED" below for the adoption record, the evidence, and the AMAT magnitude caveat.
 
 **Position count is emergent, not a separately-enforced cap** — it falls out of `per_trade_pct` and `max_total_deployed` together. There is no `max_open_positions` or flat `max_position_gbp` any more (both were removed in favour of the percentage-of-current-balance scheme — see history's "Live execution switched to the compounding two-parameter scheme").
 

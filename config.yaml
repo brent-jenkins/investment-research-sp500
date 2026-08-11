@@ -178,29 +178,49 @@ trading212_invest:
   # SIGNAL_OFF, or any other exit reason, which all stay keyed to absolute
   # momentum regardless of this setting.
   #
-  # "absolute_momentum" (default, current production behaviour): rank by
-  # trailing 12-month price return, same as the entry gate itself.
+  # "absolute_momentum": rank by trailing 12-month price return, same as the
+  # entry gate itself. This was production behaviour until 2026-08-11 and is
+  # now the SHADOWED alternative -- still recorded for comparison in
+  # admission_ranking_shadow, no longer the ordering that trades.
   #
-  # "relative_rank": rank by the 12-minus-1 cross-sectional value instead
-  # (analysis/signals.py:compute_relative_rank_series()) -- promoted
-  # 2026-08-09 from research/relative_ranking_prereg_2026-08-09/ after it
-  # cleared its pre-registered bar (+1.993pp cost-adjusted excess return
-  # over baseline, Pool 2 CLEAN, corroborated by the paired per-decision
-  # instrument showing its own unique admissions genuinely outperform
-  # baseline's) and a 20-draw paired robustness test (20/20 draws
-  # favourable, unperturbed value at the distribution's median and mode).
-  # CAVEAT, carried forward deliberately rather than left implicit: the
-  # DIRECTION of this result is robust across every perturbation tested,
-  # but the MAGNITUDE is partly dependent on one ticker (AMAT) -- dropping
-  # it alone compresses the measured advantage from +1.99pp to +0.427pp.
-  # Treat "relative-rank ordering admits better trades" as the finding to
-  # rely on, not the specific point estimate. See CLAUDE.md's "Relative-
-  # ranking (cross-sectional rank, daily admission) study" section (and its
-  # robustness-test and forward-shadow-comparison addenda) for the full
-  # record -- this remains an OPEN CANDIDATE pending forward validation,
-  # not a closed study, and this key is left at the default until that
-  # forward evidence is in and reviewed.
-  admission_ranking_mode: "absolute_momentum"
+  # "relative_rank" -- ADOPTED 2026-08-11, and the value set below. Ranks by
+  # the 12-minus-1 cross-sectional value instead (analysis/signals.py:
+  # compute_relative_rank_series()). Promoted to production CODE 2026-08-09
+  # from research/relative_ranking_prereg_2026-08-09/; activated here after
+  # four pre-flight checks passed (^SP500TR ingested and not quarantined,
+  # shadow recording confirmed writing rows, benchmark_comparison populated,
+  # config/live state confirmed).
+  #
+  # THE EVIDENCE THIS ADOPTION RESTS ON:
+  #   - Cleared its pre-registered +1.5pp bar at +1.993pp cost-adjusted
+  #     excess return over baseline on Pool 2 CLEAN (the decisive pool) --
+  #     nearly 2x the measured ~1.08pp noise floor.
+  #   - The paired per-decision instrument, built specifically to catch a
+  #     portfolio-level gain that does NOT trace to better individual
+  #     decisions, showed its own unique admissions beating baseline's on
+  #     both win rate and mean P&L%, in both pools.
+  #   - A 20-draw paired perturbation robustness test: 20/20 draws
+  #     favourable, the unperturbed +1.993pp sitting at the distribution's
+  #     median AND mode, and B-only admissions beating A-only on mean P&L%
+  #     in all 20 draws.
+  #
+  # CAVEAT, carried deliberately rather than left implicit: the DIRECTION of
+  # this result is robust across every perturbation tested, but the
+  # MAGNITUDE is partly dependent on one ticker (AMAT) -- dropping it alone
+  # compresses the measured advantage from +1.99pp to +0.427pp, which on its
+  # own would sit below this project's own ~1.08pp noise-floor bar. Treat
+  # "relative-rank ordering admits better trades" as the finding relied on,
+  # NOT the +1.99pp point estimate; a forward number should never be read as
+  # confirming or refuting that specific figure.
+  #
+  # Scope, unchanged by this flip: this controls ONLY the admission sort
+  # key. The entry gate, the 2% floor, SIGNAL_OFF and every other exit
+  # reason continue to read absolute momentum. Arm C's RANK_DROPPED
+  # de-selection exit is deliberately NOT adopted -- it underperformed this
+  # arm in both pools. See CLAUDE.md's "Relative-rank admission ordering
+  # ADOPTED" section for the adoption record and how forward validation is
+  # now framed.
+  admission_ranking_mode: "relative_rank"
   # Real, broker-side stop-loss orders (2026-08-04) -- see CLAUDE.md's
   # "Broker-side stop order" sections. brokers/trading212.py:
   # poll_placed_orders() places a genuine T212 POST /equity/orders/stop
