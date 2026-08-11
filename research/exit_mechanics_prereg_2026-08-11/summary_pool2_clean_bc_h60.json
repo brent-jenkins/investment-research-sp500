@@ -1,0 +1,32 @@
+{
+  "pool": "pool2_clean",
+  "cell_id": "bc_h60",
+  "stop": "3.0",
+  "hold": "60",
+  "trail": "none",
+  "trail_k": null,
+  "n_trades": 3125,
+  "total_pnl_gbp": 181686.86,
+  "win_pct": 44.1,
+  "mean_hold_days": 40.04,
+  "total_notional_gbp": 8985999.0,
+  "exit_mix": {
+    "MAX_HOLDING": 1505,
+    "STOP_LOSS": 1176,
+    "SIGNAL_OFF": 339,
+    "END_OF_DATA": 54,
+    "CRISIS_EXIT": 51
+  },
+  "exit_pnl_by_reason": {
+    "CRISIS_EXIT": -6972.46,
+    "END_OF_DATA": 7912.38,
+    "MAX_HOLDING": 561345.96,
+    "SIGNAL_OFF": -13254.98,
+    "STOP_LOSS": -367344.04
+  },
+  "n_trail_activated": 0,
+  "mean_deployed_pct": 63.798,
+  "mean_n_open": 17.47,
+  "final_equity": 231686.86,
+  "runtime_s": 968.0
+}
