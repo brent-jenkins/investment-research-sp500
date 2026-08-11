@@ -1,0 +1,55 @@
+{
+  "decided_2026-08-06": {
+    "date": "2026-08-06",
+    "close": 87.03,
+    "window_start": "2025-08-05",
+    "window_rows": 253,
+    "window_low": 26.73,
+    "peak_close": 141.8,
+    "peak_date": "2026-05-20",
+    "below_peak_pct": 38.625,
+    "days_since_peak": 53,
+    "momentum_at_entry_pct": 225.589,
+    "relative_rank_at_entry_pct": 260.195,
+    "close_252_rows_back": 26.73
+  },
+  "entry_2026-08-07": {
+    "date": "2026-08-07",
+    "close": 90.04,
+    "window_start": "2025-08-06",
+    "window_rows": 253,
+    "window_low": 26.99,
+    "peak_close": 141.8,
+    "peak_date": "2026-05-20",
+    "below_peak_pct": 36.502,
+    "days_since_peak": 54,
+    "momentum_at_entry_pct": 233.605,
+    "relative_rank_at_entry_pct": 262.949,
+    "close_252_rows_back": 26.99
+  },
+  "percentiles_vs_admitted": {
+    "below_peak_pct": {
+      "value": 36.502,
+      "percentile_among_admitted": 97.17
+    },
+    "days_since_peak": {
+      "value": 54,
+      "percentile_among_admitted": 79.55
+    },
+    "momentum_at_entry_pct": {
+      "value": 233.605,
+      "percentile_among_admitted": 94.87
+    }
+  },
+  "echo_bucket": {
+    "bucket": ">=30%",
+    "n": 283,
+    "win_pct": 47.7,
+    "mean_pnl_pct": 2.511
+  },
+  "path_check": {
+    "close_2025_08_07": 27.35,
+    "min_since_2023_08": 9.68,
+    "min_since_2023_08_date": "2023-11-16"
+  }
+}
