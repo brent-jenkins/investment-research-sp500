@@ -2177,6 +2177,71 @@ database writes of any kind (`^SP500TR`/`^IRX` were fetched read-only into a res
 since the research DB copy predates `^SP500TR`'s addition to `reference_tickers`). Nothing adopted,
 nothing deployed.
 
+## "Stale peak" admission pattern — read-only diagnostic, NOTHING ADOPTED (2026-08-11)
+
+**Prompted by a real live admission (ECHO, entered 2026-08-07); confirms the system worked as
+designed.** The mechanism is real and correctly identified:
+`analysis/signals.py:compute_momentum_series()` is a TWO-POINT calculation, `close(t)/close(t−252)−1`,
+so the entire path between its anchors is invisible — a steady climb and a spike-then-30%-decline
+produce an identical reading, and a name a third of the way down from its own peak can still rank near
+the top. Full detail: `research/stale_peak_diagnostic_2026-08-11/REPORT.md`. Read-only: no backtest
+re-run, no arms, no engine, no fix designed, no database writes. Metric defined as
+`below_peak_pct = (max(close) over rows [t−252, t] − close(t)) / max(close) × 100`, the window bounded
+by the momentum calculation's own two anchors.
+
+**The pattern is ubiquitous rather than exceptional, and is associated with BETTER outcomes, not
+worse.** **92.2%** of admitted positions were below their trailing-window peak at entry (median
+**8.6%** below) — entering at the peak is the rare case, so the bare fact distinguishes nothing.
+Outcomes then improve **monotonically across all five buckets**: win rate **41.4% → 47.7%**, mean P&L
+**+0.38% → +2.51%**, median **−3.30% → −0.57%** (0–5% through ≥30% below peak). **The decisive number
+is the P&L share**: positions ≥10% below peak are 43.6% of trades and take **50.8% of all gains against
+45.7% of all losses — net +£116,280, or 69.7% of total realised P&L**, a larger share of gains than
+losses at every cut point tested.
+
+**Robustness, because Part 1 established the top decile carries 257% of P&L and a difference in means
+can be one trade**: the monotonic ordering survives dropping each bucket's single largest winner,
+**strengthens** when 2008 is excluded (win 42.1%→51.9%, median turns positive), persists 2015-onward,
+and is **not a momentum proxy** — Spearman(below_peak, momentum) = **−0.269** (deeper-below-peak names
+have *lower* momentum), with the effect positive within every momentum quartile and largest in the
+lowest. Direction replicates in the independent absolute-momentum trade set, though that arm's extreme
+≥30% tail is single-trade-sensitive (mean turns −0.076% once its top winner is removed) — recorded
+rather than smoothed.
+
+**The correct reading is a third independent confirmation of a standing result, not a new
+opportunity.** Trade-level Spearman(below_peak_pct, pnl_pct) = **−0.028** — essentially zero, exactly
+as the selection audit's Part 2 predicted for entry information generally. **Three separate entry
+features have now been tested against outcome and all three came back the same way**: momentum
+magnitude (Part 2, Spearman −0.033), path smoothness (the momentum-smoothness study, NOT ADOPTED), and
+now peak-drawdown-at-entry. **The generalisation worth carrying forward: entry information does not
+predict individual trade outcome in this system, and the weak bucket-level signals that do exist have
+twice now pointed the OPPOSITE way from the intuition that motivated looking.** Absent a strong prior
+reason, a fourth entry feature should be expected to behave the same way.
+
+**The only negative sub-pattern found anywhere in the diagnostic**: positions whose trailing peak was
+more than 126 trading days ago (half the lookback) — 278 trades, win rate **37.05%**, mean −0.203%, net
+**−£292** against a £166,830 total. Real, consistent, and immaterial.
+
+**ECHO specifically — the system working as designed, plus one correction to the framing that prompted
+it.** Production `pending_orders` (read-only SSH query, 2026-08-11): `momentum_pct` =
+`admission_rank_value` = **2.2559** (+225.59%), **ranked 5th of 308** candidates in its own decision
+batch — admitted from the very top of the ranking, not from deep in it. `admission_rank_value` being
+*identical* to `momentum_pct` confirms it was admitted under **`absolute_momentum`** ordering (the
+relative-rank flip was 2026-08-11, five days later), so the motivating example comes from the
+**previous** ranking regime. On real stored data ECHO's trailing-window peak was **$141.80** (not the
+~$125 assumed), making the entry **36.5% below peak — the 97.2nd percentile** of all admitted
+positions, in the ≥30% bucket, which is the **best**-performing of the five.
+
+**One forward-looking observation, stated as an observation and not a concern**: relative-rank ordering
+admits *deeper*-below-peak positions than absolute momentum did (92.2% vs 87.6% below peak by any
+amount; 43.6% vs 33.8% at the ≥10% cut), so this pattern is becoming **more** common under the newly
+adopted live ordering — in the population whose historical record is the strongest of the five buckets.
+
+**On the capacity wall**: unlike a candidacy filter (see the smoothness study's §6 and Part 4's
+"92–93% of admissions are capacity-timed"), affected positions here are **top-of-ranking admissions**
+(median rank-within-day 3.9–5.2%), so a filter targeting them would genuinely displace admissions
+rather than being absorbed by capacity timing. That makes the capacity wall the wrong objection; the
+binding one is that such a filter would remove the population producing 69.7% of total P&L.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
