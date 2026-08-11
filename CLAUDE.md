@@ -1673,7 +1673,7 @@ review.
 
 **A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
 
-## A check that reports clean for a reason unrelated to the thing it was checking — a class, not five incidents (standing requirement, 2026-08-10)
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not six incidents (standing requirement, 2026-08-10, extended 2026-08-11)
 
 **Five separate findings this week share one shape, and naming the shape is more useful than
 recording them separately.** In each, a check was reasoned about — correctly — for the case its
@@ -1716,6 +1716,22 @@ operational poll loop, and they fail identically.
    with no true-branch at all, whose single reachable output is indistinguishable from a real
    finding. Caught before it reported, by noticing the SHA had been invented; the correct fix was
    `git rev-parse HEAD`, which costs one command.
+6. **A circuit breaker that fired correctly in the exact episode it was designed for, and was
+   structurally incapable of seeing another episode of the same kind** (the long/short study's rally
+   breaker, 2026-08-11 — see that study's own section below). It was built to catch momentum crashes
+   (a violent rally off a bottom, when the worst-performing names rebound hardest) and deliberately
+   gated on the index already being ≥20% below its trailing 252-day peak, because an ungated "exit
+   shorts on any strong up day" would fire constantly in ordinary bull markets. It fired exactly as
+   intended in the canonical case: 2009-03-13, four trading days after the 2009-03-09 bottom. **And
+   the single worst episode in the whole sample — 2020-06→2021-09, responsible for 26.8% of the short
+   sleeve's entire loss — produced ZERO firings**, because across those 310 trading days `^GSPC`'s
+   drawdown from its trailing peak reached a minimum of only −11.1% and was at or below the −20% gate
+   on **0 of 310 days**. The gating condition that made the breaker safe is precisely what made it
+   blind: a momentum crash occurring while the index is at all-time highs (beaten-down names ripping
+   upward) cannot satisfy a drawdown precondition, by construction. **The pre-registration explicitly
+   anticipated this class and guarded the wrong case** — it pre-committed to reading "0 fires" as
+   "untested, not safe", which would have caught a breaker that never fired at all, and had nothing to
+   say about one that fires correctly *somewhere* and is blind *elsewhere*.
 
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
@@ -1725,7 +1741,37 @@ pass does not. Note the two directions it runs in: instances 1-4 report **clean 
 wrong**, instance 5 would have reported **failure when nothing was wrong**. Both are the same defect
 — an output uncorrelated with the state being checked — and the second is not the safer one, since
 a false alarm during a live deploy invites exactly the kind of unnecessary intervention that causes
-real damage.
+real damage. **Instance 6 adds a third direction, and it is the most dangerous of the three: a check
+that reports correctly in one case and is silent in another of the same kind — where the correct
+report is what supplies the confidence that stops anyone checking the silence.**
+
+**THE GENERALISATION — passing the case a guard was designed for is not evidence it covers the class
+that case belongs to, and the pass is exactly what stops anyone looking further.** This is the
+sharpest lesson this class has produced, it generalises well beyond any one study, and it is the same
+confidence-supplying-correctness pattern as instance 4 (an accurate record adjacent to stale ones
+vouches for them) applied to behaviour rather than documentation. A guard is nearly always designed
+against a *motivating example* — the incident that prompted it, the canonical historical case, the
+failure someone actually saw. Validating it against that example feels like validation and is not:
+the motivating example is the one case the guard is guaranteed to handle, because it was built by
+looking at it.
+
+**The mechanism to watch for is a CONDITIONAL guard — one that fires only when some precondition
+holds.** The precondition is the guard's real domain, and it is almost never coextensive with the
+phenomenon the guard claims to cover. Instance 6 is the clean illustration: "momentum crash" is the
+phenomenon; "index ≥20% below its trailing peak" is the precondition; and the two coincide in 2009
+and come apart completely in 2020-21. Any precondition added to stop a guard from over-firing is
+simultaneously a restriction on what it can ever see, and those are the same edit.
+
+**The rule.** For any conditional guard, threshold, or breaker: **enumerate the full population of
+events it claims to cover, and measure the gating condition on every one of them independently of
+whether the guard fired.** Not the motivating example — all of them. If the guard's precondition is
+absent on events that plainly belong to the phenomenon, the guard's real coverage is narrower than
+its name, and the write-up must say so in the same breath as reporting that it works. A guard
+validated on one episode should be described as "validated on <that episode>", never as "validated" —
+the same discipline this file already requires for a database claim ("confirmed on production via
+SSH, <date>", never a bare count). Cheap to run: instance 6's blind spot was found by grouping one
+already-computed P&L column by block and noticing the worst block had a zero firing count, which cost
+one query against output that already existed.
 
 **The rule.** When writing or reviewing a guard, threshold, ordering rule, invariant, or any check
 whose output will be believed, state explicitly what happens in the degenerate case — all values
@@ -2039,6 +2085,97 @@ happened in the source backtest, and firing it changes everything downstream via
 frequency and cost figures are robust to that (cost is incurred per firing regardless of outcome), as is
 the churn result. What remains unknowable is whether the specific trades would be good ones — which the
 cost makes moot at every frequency where it would matter.
+
+## Long/short momentum (short sleeve) — pre-registered, tested, NOT ADOPTED (2026-08-11)
+
+**The first test in this project of a genuinely different return profile rather than another tuning of
+the long-only construction.** Motivated by the fact that ~60 experiments of incremental tuning had
+produced exactly one adopted improvement (relative-rank admission ordering) while the system still
+trails buy-and-hold `^SP500TR` after costs. Two allocations sharing ONE short signal so that
+allocation was the only variable between them: **B** long-biased (long ≤0.70 / short ≤0.30) and **C**
+market-neutral (0.50/0.50 with a `|net| ≤ 0.10` admission band). The short signal is the symmetric
+mirror of the existing gate — momentum < 0, a borrow-adjusted mirror of the 2% floor, ranked by
+cross-sectional relative rank ascending (mirroring the adopted live ordering). Full detail:
+`research/long_short_prereg_2026-08-11/PREREGISTRATION.md` / `REPORT.md`.
+
+**Verdict: NOT ADOPTED, decisively, in both pools.** Against a +1.5pp bar, Arm B lands **−7.17pp**
+(Pool 2 CLEAN) / **−9.17pp** (Pool 1) and Arm C **−9.96pp** / **−11.66pp** on cost-adjusted excess
+return over `^SP500TR` — five to nine times the measured ~1.08pp noise floor, wrong direction, at both
+the modelled and 2× stress borrow rates, monotonically worse under stress. Three walk-away clauses
+fire. **Nothing here was ever adoptable regardless: T212 Invest does not support shorting**, so venue
+was out of scope by design and a positive result would only have made "which venue" a real question.
+
+**The verdict does not rest on the modelled borrow assumption — the design's weakest input.** The
+short sleeve loses **£33,093 GROSS, before a penny of borrow cost** (borrow is 13% of the loss). The
+failure is in the short momentum signal itself, not in a cost nobody can measure, which makes the
+negative far more durable than a cost-sensitive result would have been. Short win rate 36.3% against
+the long sleeve's ~44%; over half of all shorts exit via `STOP_LOSS` (the squeeze signature).
+
+**The rally breaker's blind spot is the most transferable finding and is recorded as instance 6 of
+the "check that reports clean for an unrelated reason" class above — see that section for the
+generalisation, which is the part worth carrying forward.** In brief: it fired correctly in the
+canonical 2009 momentum crash (four days after the bottom) and the arms still lost 27–33% there; the
+worst episode was **not** 2009 but 2020-06→2021-09 (26.8% of the entire short-sleeve loss), where it
+fired **zero** times because `^GSPC` was never below the −20% drawdown gate (min −11.1%, 0 of 310
+days). The gate that stops it over-firing in bull markets is what blinds it to a momentum crash at
+index highs.
+
+**Arm C achieved genuine market neutrality and it was worthless — the cleanest possible answer to a
+criterion committed in advance.** Net exposure **0.8%**, monthly correlation to `^SP500TR` **−0.127**,
+at **90.3% gross** — so the pre-registered guard built to catch fake neutrality (correlation bought by
+sitting in cash, which would have shown as low gross) instead *certified the book as real*. It then
+failed 3 of the 4 pre-registered QUALIFIED POSITIVE conditions: cost-adjusted CAGR −4.96% (needed
+≥+3.0%), max drawdown −58.66% (needed ≤25%), and a catastrophic 2009 window. A neutral book that loses
+money with a 59% drawdown is a worse asset with a prettier correlation coefficient. **Recorded because
+the low-correlation result arrived exactly as hoped and was still worth nothing** — which is only
+legible because condition (i) was fixed in advance rather than argued afterwards.
+
+**Two priors confirmed and quantified, one refuted.** (4) The best short candidates really are the
+hardest to borrow: shorts actually taken were HTB at **26.59%** (Pool 2 CLEAN) / **22.94%** (Pool 1)
+against candidate-day base rates of 7.21% / 6.58% — a **3.5–3.7× concentration**, near-identical in two
+independently-built pools. (5) Pool 1, survivors-only by construction, structurally cannot contain a
+terminal-decline short winner, and its short sleeve accordingly loses **1.8× as much** (−£59,753 vs
+−£33,093 gross, 33.6% vs 36.3% win rate) — **so Pool 2 CLEAN is the pool most FAVOURABLE to the
+hypothesis, and the hypothesis loses there anyway.** (7) Refuted: Arm C was expected to be starved of
+short candidates in bull markets; supply was ample (mean 128/day), so C failed on signal, not
+starvation.
+
+**A mechanism worth remembering for any future two-sleeve design: the short sleeve does not merely
+lose its own money, it degrades the long book.** Arm B's long rules are byte-identical to baseline's,
+yet its long P&L collapses from £166,830 to £58,107 — short losses shrink account equity,
+`per_trade_pct` sizes every subsequent long position off that smaller equity, and the damage compounds
+across 19 years through the shared equity path.
+
+**Verification was unusually heavy because one production invariant could not be satisfied directly.**
+`analysis/decision.py:evaluate_exit_reason()` hardcodes the long stop comparison (`price <= stop_price`)
+and cannot be called for a short, and a live decision module must not grow a research-only branch — so
+the short evaluator is a research-side mirror, and the mirror is proven **mechanically** rather than by
+inspection via a **reflection test**: for a short at entry `E` with stop `E+d`, `P >= E+d` is
+algebraically identical to `2E-P <= E-d`, so the short evaluator must return byte-identical results to
+the real production function on reflected inputs. **200,360 cases (200,000 randomized + boundary +
+None-contract), 0 mismatches, all five exit outcomes exercised well above a pre-set coverage floor.**
+Also passed: degenerate parity byte-identical in **both** admission modes (4,876/£166,830.11 and
+4,919/£103,926.50, 0 row-level mismatches on a canonical sort), both sanity gates reproducing the
+relative-ranking study's published references **to the penny**, 40/40 short exit reasons recomputed,
+40/40 sizing checked against the engine's **own emitted pre-entry balance** (never a reconstructed
+proxy — the error that produced the cross-sectional study's false 21/30 failure), 20/20 borrow
+accruals recomputed by hand, and **0 short trades exiting via `CRISIS_EXIT`** (asserted directly, since
+the design blocks new short entries during a crisis but never force-exits existing shorts). Every
+§14 calibration threshold survived unchanged — nothing was re-tuned.
+
+**One methodological gap this study had to close before it could run at all, worth knowing about for
+any future short-side work:** `analysis/backtest.py:precompute_ticker()` returns `{close, atr, signal,
+momentum, relative_rank, open, low}` — it consumes `high` to compute ATR and then **discards** it. The
+short-side mirror of the realistic intraday stop fill needs `high` (fire off the day's high, fill at
+`max(stop, open)`); without it short stops could only fill at the close, reintroducing exactly the
+optimism the 2026-08-06 correction removed for longs at a cost of 73.75% of total P&L. The research
+cache adds `high` and was then verified cell-by-cell (2.6M cells, 80 tickers) against production rather
+than trusted.
+
+No changes to `analysis/signals.py`, `analysis/decision.py`, `config.yaml`, or any live path. No
+database writes of any kind (`^SP500TR`/`^IRX` were fetched read-only into a research-local cache,
+since the research DB copy predates `^SP500TR`'s addition to `reference_tickers`). Nothing adopted,
+nothing deployed.
 
 ## Current architecture (as of 2026-08-04)
 
