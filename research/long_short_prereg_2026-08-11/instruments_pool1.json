@@ -1,0 +1,1004 @@
+{
+  "A": {
+    "tag": "A",
+    "pool": "pool1",
+    "years": 19.59,
+    "n_trades": 4757,
+    "n_long": 4757,
+    "n_short": 0,
+    "final_equity": 317685.07,
+    "raw_cagr_incl_borrow": 9.897,
+    "fx_drag_pp_per_yr": 3.321,
+    "idle_credit_pp_per_yr": 0.558,
+    "borrow_cost_total_gbp": 0.0,
+    "cost_adjusted_cagr": 7.134,
+    "benchmark_cagr_sp500tr": 11.163,
+    "excess_vs_sp500tr": -4.029,
+    "max_drawdown_pct": -37.89,
+    "corr_monthly_sp500tr": 0.7324,
+    "corr_daily_sp500tr": 0.6685,
+    "mean_long_pct": 63.42,
+    "mean_short_pct": 0.0,
+    "mean_gross_pct": 63.42,
+    "mean_net_pct": 63.42,
+    "p10_gross_pct": 65.25,
+    "p90_gross_pct": 69.97,
+    "mean_n_long": 13.96,
+    "mean_n_short": 0.0,
+    "pct_days_short_sleeve_empty": 100.0,
+    "blocks": [
+      {
+        "block": 1,
+        "start": "2007-01-03",
+        "end": "2008-03-25",
+        "arm_return_pct": -8.33,
+        "bench_return_pct": -2.22,
+        "excess_pct": -6.11,
+        "beats_bench": false
+      },
+      {
+        "block": 2,
+        "start": "2008-03-25",
+        "end": "2009-06-15",
+        "arm_return_pct": -30.63,
+        "bench_return_pct": -28.9,
+        "excess_pct": -1.72,
+        "beats_bench": false
+      },
+      {
+        "block": 3,
+        "start": "2009-06-15",
+        "end": "2010-09-05",
+        "arm_return_pct": 24.54,
+        "bench_return_pct": 24.17,
+        "excess_pct": 0.37,
+        "beats_bench": true
+      },
+      {
+        "block": 4,
+        "start": "2010-09-05",
+        "end": "2011-11-27",
+        "arm_return_pct": 8.39,
+        "bench_return_pct": 8.8,
+        "excess_pct": -0.4,
+        "beats_bench": false
+      },
+      {
+        "block": 5,
+        "start": "2011-11-27",
+        "end": "2013-02-16",
+        "arm_return_pct": 27.39,
+        "bench_return_pct": 31.01,
+        "excess_pct": -3.62,
+        "beats_bench": false
+      },
+      {
+        "block": 6,
+        "start": "2013-02-16",
+        "end": "2014-05-09",
+        "arm_return_pct": 19.89,
+        "bench_return_pct": 25.88,
+        "excess_pct": -5.99,
+        "beats_bench": false
+      },
+      {
+        "block": 7,
+        "start": "2014-05-09",
+        "end": "2015-07-30",
+        "arm_return_pct": 14.02,
+        "bench_return_pct": 13.94,
+        "excess_pct": 0.08,
+        "beats_bench": true
+      },
+      {
+        "block": 8,
+        "start": "2015-07-30",
+        "end": "2016-10-20",
+        "arm_return_pct": 1.69,
+        "bench_return_pct": 4.58,
+        "excess_pct": -2.89,
+        "beats_bench": false
+      },
+      {
+        "block": 9,
+        "start": "2016-10-20",
+        "end": "2018-01-10",
+        "arm_return_pct": 21.15,
+        "bench_return_pct": 31.59,
+        "excess_pct": -10.44,
+        "beats_bench": false
+      },
+      {
+        "block": 10,
+        "start": "2018-01-10",
+        "end": "2019-04-02",
+        "arm_return_pct": 4.93,
+        "bench_return_pct": 6.13,
+        "excess_pct": -1.2,
+        "beats_bench": false
+      },
+      {
+        "block": 11,
+        "start": "2019-04-02",
+        "end": "2020-06-22",
+        "arm_return_pct": 14.66,
+        "bench_return_pct": 11.2,
+        "excess_pct": 3.46,
+        "beats_bench": true
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-13",
+        "arm_return_pct": 25.19,
+        "bench_return_pct": 45.4,
+        "excess_pct": -20.21,
+        "beats_bench": false
+      },
+      {
+        "block": 13,
+        "start": "2021-09-13",
+        "end": "2022-12-04",
+        "arm_return_pct": 5.3,
+        "bench_return_pct": -7.11,
+        "excess_pct": 12.41,
+        "beats_bench": true
+      },
+      {
+        "block": 14,
+        "start": "2022-12-04",
+        "end": "2024-02-24",
+        "arm_return_pct": 25.53,
+        "bench_return_pct": 29.79,
+        "excess_pct": -4.27,
+        "beats_bench": false
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "arm_return_pct": 12.8,
+        "bench_return_pct": 19.5,
+        "excess_pct": -6.7,
+        "beats_bench": false
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "arm_return_pct": 47.83,
+        "bench_return_pct": 31.96,
+        "excess_pct": 15.87,
+        "beats_bench": true
+      }
+    ],
+    "n_blocks_beating_bench": 5,
+    "momentum_crash_2009": {
+      "arm_return_pct": 6.79,
+      "bench_return_pct": 58.25,
+      "excess_pct": -51.45,
+      "max_drawdown_pct": -2.78,
+      "n_short_exits": 0,
+      "short_net_pnl_gbp": 0.0,
+      "n_rally_exits": 0
+    },
+    "unrealizable_risk": null,
+    "paired_long_sleeve": null
+  },
+  "B_s1x": {
+    "tag": "B_s1x",
+    "pool": "pool1",
+    "years": 19.59,
+    "n_trades": 7538,
+    "n_long": 4766,
+    "n_short": 2772,
+    "final_equity": 73114.27,
+    "raw_cagr_incl_borrow": 1.958,
+    "fx_drag_pp_per_yr": 4.751,
+    "idle_credit_pp_per_yr": 0.754,
+    "borrow_cost_total_gbp": 4119.12,
+    "cost_adjusted_cagr": -2.039,
+    "benchmark_cagr_sp500tr": 11.163,
+    "excess_vs_sp500tr": -13.202,
+    "max_drawdown_pct": -55.57,
+    "corr_monthly_sp500tr": 0.3022,
+    "corr_daily_sp500tr": 0.2564,
+    "mean_long_pct": 63.57,
+    "mean_short_pct": 26.9,
+    "mean_gross_pct": 90.48,
+    "mean_net_pct": 36.67,
+    "p10_gross_pct": 91.88,
+    "p90_gross_pct": 99.71,
+    "mean_n_long": 13.93,
+    "mean_n_short": 7.43,
+    "pct_days_short_sleeve_empty": 6.39,
+    "blocks": [
+      {
+        "block": 1,
+        "start": "2007-01-03",
+        "end": "2008-03-25",
+        "arm_return_pct": -15.12,
+        "bench_return_pct": -2.22,
+        "excess_pct": -12.9,
+        "beats_bench": false
+      },
+      {
+        "block": 2,
+        "start": "2008-03-25",
+        "end": "2009-06-15",
+        "arm_return_pct": -46.61,
+        "bench_return_pct": -28.9,
+        "excess_pct": -17.71,
+        "beats_bench": false
+      },
+      {
+        "block": 3,
+        "start": "2009-06-15",
+        "end": "2010-09-05",
+        "arm_return_pct": 7.38,
+        "bench_return_pct": 24.17,
+        "excess_pct": -16.79,
+        "beats_bench": false
+      },
+      {
+        "block": 4,
+        "start": "2010-09-05",
+        "end": "2011-11-27",
+        "arm_return_pct": 3.51,
+        "bench_return_pct": 8.8,
+        "excess_pct": -5.29,
+        "beats_bench": false
+      },
+      {
+        "block": 5,
+        "start": "2011-11-27",
+        "end": "2013-02-16",
+        "arm_return_pct": 17.07,
+        "bench_return_pct": 31.01,
+        "excess_pct": -13.94,
+        "beats_bench": false
+      },
+      {
+        "block": 6,
+        "start": "2013-02-16",
+        "end": "2014-05-09",
+        "arm_return_pct": 8.62,
+        "bench_return_pct": 25.88,
+        "excess_pct": -17.26,
+        "beats_bench": false
+      },
+      {
+        "block": 7,
+        "start": "2014-05-09",
+        "end": "2015-07-30",
+        "arm_return_pct": 18.53,
+        "bench_return_pct": 13.94,
+        "excess_pct": 4.6,
+        "beats_bench": true
+      },
+      {
+        "block": 8,
+        "start": "2015-07-30",
+        "end": "2016-10-20",
+        "arm_return_pct": -11.64,
+        "bench_return_pct": 4.58,
+        "excess_pct": -16.22,
+        "beats_bench": false
+      },
+      {
+        "block": 9,
+        "start": "2016-10-20",
+        "end": "2018-01-10",
+        "arm_return_pct": 7.2,
+        "bench_return_pct": 31.59,
+        "excess_pct": -24.39,
+        "beats_bench": false
+      },
+      {
+        "block": 10,
+        "start": "2018-01-10",
+        "end": "2019-04-02",
+        "arm_return_pct": 5.47,
+        "bench_return_pct": 6.13,
+        "excess_pct": -0.66,
+        "beats_bench": false
+      },
+      {
+        "block": 11,
+        "start": "2019-04-02",
+        "end": "2020-06-22",
+        "arm_return_pct": 17.87,
+        "bench_return_pct": 11.2,
+        "excess_pct": 6.67,
+        "beats_bench": true
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-13",
+        "arm_return_pct": -1.47,
+        "bench_return_pct": 45.4,
+        "excess_pct": -46.87,
+        "beats_bench": false
+      },
+      {
+        "block": 13,
+        "start": "2021-09-13",
+        "end": "2022-12-04",
+        "arm_return_pct": 16.61,
+        "bench_return_pct": -7.11,
+        "excess_pct": 23.72,
+        "beats_bench": true
+      },
+      {
+        "block": 14,
+        "start": "2022-12-04",
+        "end": "2024-02-24",
+        "arm_return_pct": 13.52,
+        "bench_return_pct": 29.79,
+        "excess_pct": -16.28,
+        "beats_bench": false
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "arm_return_pct": 0.95,
+        "bench_return_pct": 19.5,
+        "excess_pct": -18.55,
+        "beats_bench": false
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "arm_return_pct": 19.41,
+        "bench_return_pct": 31.96,
+        "excess_pct": -12.55,
+        "beats_bench": false
+      }
+    ],
+    "n_blocks_beating_bench": 3,
+    "momentum_crash_2009": {
+      "arm_return_pct": -25.42,
+      "bench_return_pct": 58.25,
+      "excess_pct": -83.66,
+      "max_drawdown_pct": -25.74,
+      "n_short_exits": 243,
+      "short_net_pnl_gbp": -8243.91,
+      "n_rally_exits": 17
+    },
+    "unrealizable_risk": {
+      "short_gross_profit_gbp": 137983.85,
+      "unrealizable_profit_gbp": 12861.63,
+      "unrealizable_share_pct": 9.32,
+      "n_flagged": 87,
+      "n_winners": 932
+    },
+    "paired_long_sleeve": {
+      "n_shared": 1957,
+      "overlap_pct_of_arm": 41.06,
+      "overlap_pct_of_baseline": 41.14,
+      "jaccard": 0.2587,
+      "n_a_only": 2800,
+      "n_arm_only": 2809,
+      "a_only_win_pct": 45.57,
+      "arm_only_win_pct": 44.14,
+      "a_only_mean_pnl_pct": 1.0,
+      "arm_only_mean_pnl_pct": 1.0208,
+      "meets_min_sample_floor": true
+    }
+  },
+  "B_s2x": {
+    "tag": "B_s2x",
+    "pool": "pool1",
+    "years": 19.59,
+    "n_trades": 7546,
+    "n_long": 4792,
+    "n_short": 2754,
+    "final_equity": 67824.15,
+    "raw_cagr_incl_borrow": 1.568,
+    "fx_drag_pp_per_yr": 4.721,
+    "idle_credit_pp_per_yr": 0.755,
+    "borrow_cost_total_gbp": 7330.21,
+    "cost_adjusted_cagr": -2.398,
+    "benchmark_cagr_sp500tr": 11.163,
+    "excess_vs_sp500tr": -13.561,
+    "max_drawdown_pct": -56.3,
+    "corr_monthly_sp500tr": 0.3067,
+    "corr_daily_sp500tr": 0.2549,
+    "mean_long_pct": 63.51,
+    "mean_short_pct": 26.89,
+    "mean_gross_pct": 90.4,
+    "mean_net_pct": 36.63,
+    "p10_gross_pct": 90.99,
+    "p90_gross_pct": 99.66,
+    "mean_n_long": 13.93,
+    "mean_n_short": 7.4,
+    "pct_days_short_sleeve_empty": 6.39,
+    "blocks": [
+      {
+        "block": 1,
+        "start": "2007-01-03",
+        "end": "2008-03-25",
+        "arm_return_pct": -15.34,
+        "bench_return_pct": -2.22,
+        "excess_pct": -13.12,
+        "beats_bench": false
+      },
+      {
+        "block": 2,
+        "start": "2008-03-25",
+        "end": "2009-06-15",
+        "arm_return_pct": -47.29,
+        "bench_return_pct": -28.9,
+        "excess_pct": -18.39,
+        "beats_bench": false
+      },
+      {
+        "block": 3,
+        "start": "2009-06-15",
+        "end": "2010-09-05",
+        "arm_return_pct": 1.11,
+        "bench_return_pct": 24.17,
+        "excess_pct": -23.06,
+        "beats_bench": false
+      },
+      {
+        "block": 4,
+        "start": "2010-09-05",
+        "end": "2011-11-27",
+        "arm_return_pct": 9.4,
+        "bench_return_pct": 8.8,
+        "excess_pct": 0.61,
+        "beats_bench": true
+      },
+      {
+        "block": 5,
+        "start": "2011-11-27",
+        "end": "2013-02-16",
+        "arm_return_pct": 16.63,
+        "bench_return_pct": 31.01,
+        "excess_pct": -14.37,
+        "beats_bench": false
+      },
+      {
+        "block": 6,
+        "start": "2013-02-16",
+        "end": "2014-05-09",
+        "arm_return_pct": 7.33,
+        "bench_return_pct": 25.88,
+        "excess_pct": -18.55,
+        "beats_bench": false
+      },
+      {
+        "block": 7,
+        "start": "2014-05-09",
+        "end": "2015-07-30",
+        "arm_return_pct": 13.46,
+        "bench_return_pct": 13.94,
+        "excess_pct": -0.47,
+        "beats_bench": false
+      },
+      {
+        "block": 8,
+        "start": "2015-07-30",
+        "end": "2016-10-20",
+        "arm_return_pct": -9.62,
+        "bench_return_pct": 4.58,
+        "excess_pct": -14.2,
+        "beats_bench": false
+      },
+      {
+        "block": 9,
+        "start": "2016-10-20",
+        "end": "2018-01-10",
+        "arm_return_pct": 7.12,
+        "bench_return_pct": 31.59,
+        "excess_pct": -24.47,
+        "beats_bench": false
+      },
+      {
+        "block": 10,
+        "start": "2018-01-10",
+        "end": "2019-04-02",
+        "arm_return_pct": -1.56,
+        "bench_return_pct": 6.13,
+        "excess_pct": -7.69,
+        "beats_bench": false
+      },
+      {
+        "block": 11,
+        "start": "2019-04-02",
+        "end": "2020-06-22",
+        "arm_return_pct": 14.12,
+        "bench_return_pct": 11.2,
+        "excess_pct": 2.92,
+        "beats_bench": true
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-13",
+        "arm_return_pct": -6.67,
+        "bench_return_pct": 45.4,
+        "excess_pct": -52.07,
+        "beats_bench": false
+      },
+      {
+        "block": 13,
+        "start": "2021-09-13",
+        "end": "2022-12-04",
+        "arm_return_pct": 4.0,
+        "bench_return_pct": -7.11,
+        "excess_pct": 11.11,
+        "beats_bench": true
+      },
+      {
+        "block": 14,
+        "start": "2022-12-04",
+        "end": "2024-02-24",
+        "arm_return_pct": 10.57,
+        "bench_return_pct": 29.79,
+        "excess_pct": -19.23,
+        "beats_bench": false
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "arm_return_pct": 10.07,
+        "bench_return_pct": 19.5,
+        "excess_pct": -9.44,
+        "beats_bench": false
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "arm_return_pct": 42.79,
+        "bench_return_pct": 31.96,
+        "excess_pct": 10.83,
+        "beats_bench": true
+      }
+    ],
+    "n_blocks_beating_bench": 4,
+    "momentum_crash_2009": {
+      "arm_return_pct": -25.92,
+      "bench_return_pct": 58.25,
+      "excess_pct": -84.16,
+      "max_drawdown_pct": -26.27,
+      "n_short_exits": 235,
+      "short_net_pnl_gbp": -8522.45,
+      "n_rally_exits": 15
+    },
+    "unrealizable_risk": {
+      "short_gross_profit_gbp": 123639.63,
+      "unrealizable_profit_gbp": 13414.59,
+      "unrealizable_share_pct": 10.85,
+      "n_flagged": 78,
+      "n_winners": 894
+    },
+    "paired_long_sleeve": {
+      "n_shared": 1899,
+      "overlap_pct_of_arm": 39.63,
+      "overlap_pct_of_baseline": 39.92,
+      "jaccard": 0.2482,
+      "n_a_only": 2858,
+      "n_arm_only": 2893,
+      "a_only_win_pct": 45.87,
+      "arm_only_win_pct": 45.11,
+      "a_only_mean_pnl_pct": 1.1505,
+      "arm_only_mean_pnl_pct": 1.1935,
+      "meets_min_sample_floor": true
+    }
+  },
+  "C_s1x": {
+    "tag": "C_s1x",
+    "pool": "pool1",
+    "years": 19.59,
+    "n_trades": 7644,
+    "n_long": 3377,
+    "n_short": 4267,
+    "final_equity": 40995.79,
+    "raw_cagr_incl_borrow": -1.008,
+    "fx_drag_pp_per_yr": 4.68,
+    "idle_credit_pp_per_yr": 1.163,
+    "borrow_cost_total_gbp": 4659.73,
+    "cost_adjusted_cagr": -4.524,
+    "benchmark_cagr_sp500tr": 11.163,
+    "excess_vs_sp500tr": -15.687,
+    "max_drawdown_pct": -47.72,
+    "corr_monthly_sp500tr": -0.131,
+    "corr_daily_sp500tr": -0.1354,
+    "mean_long_pct": 45.27,
+    "mean_short_pct": 44.5,
+    "mean_gross_pct": 89.77,
+    "mean_net_pct": 0.77,
+    "p10_gross_pct": 83.47,
+    "p90_gross_pct": 99.76,
+    "mean_n_long": 10.03,
+    "mean_n_short": 11.59,
+    "pct_days_short_sleeve_empty": 6.39,
+    "blocks": [
+      {
+        "block": 1,
+        "start": "2007-01-03",
+        "end": "2008-03-25",
+        "arm_return_pct": -14.35,
+        "bench_return_pct": -2.22,
+        "excess_pct": -12.14,
+        "beats_bench": false
+      },
+      {
+        "block": 2,
+        "start": "2008-03-25",
+        "end": "2009-06-15",
+        "arm_return_pct": -30.97,
+        "bench_return_pct": -28.9,
+        "excess_pct": -2.06,
+        "beats_bench": false
+      },
+      {
+        "block": 3,
+        "start": "2009-06-15",
+        "end": "2010-09-05",
+        "arm_return_pct": -9.8,
+        "bench_return_pct": 24.17,
+        "excess_pct": -33.98,
+        "beats_bench": false
+      },
+      {
+        "block": 4,
+        "start": "2010-09-05",
+        "end": "2011-11-27",
+        "arm_return_pct": 7.17,
+        "bench_return_pct": 8.8,
+        "excess_pct": -1.63,
+        "beats_bench": false
+      },
+      {
+        "block": 5,
+        "start": "2011-11-27",
+        "end": "2013-02-16",
+        "arm_return_pct": -0.08,
+        "bench_return_pct": 31.01,
+        "excess_pct": -31.09,
+        "beats_bench": false
+      },
+      {
+        "block": 6,
+        "start": "2013-02-16",
+        "end": "2014-05-09",
+        "arm_return_pct": 3.05,
+        "bench_return_pct": 25.88,
+        "excess_pct": -22.83,
+        "beats_bench": false
+      },
+      {
+        "block": 7,
+        "start": "2014-05-09",
+        "end": "2015-07-30",
+        "arm_return_pct": 12.42,
+        "bench_return_pct": 13.94,
+        "excess_pct": -1.51,
+        "beats_bench": false
+      },
+      {
+        "block": 8,
+        "start": "2015-07-30",
+        "end": "2016-10-20",
+        "arm_return_pct": -2.25,
+        "bench_return_pct": 4.58,
+        "excess_pct": -6.83,
+        "beats_bench": false
+      },
+      {
+        "block": 9,
+        "start": "2016-10-20",
+        "end": "2018-01-10",
+        "arm_return_pct": -7.12,
+        "bench_return_pct": 31.59,
+        "excess_pct": -38.71,
+        "beats_bench": false
+      },
+      {
+        "block": 10,
+        "start": "2018-01-10",
+        "end": "2019-04-02",
+        "arm_return_pct": 7.7,
+        "bench_return_pct": 6.13,
+        "excess_pct": 1.57,
+        "beats_bench": true
+      },
+      {
+        "block": 11,
+        "start": "2019-04-02",
+        "end": "2020-06-22",
+        "arm_return_pct": 21.23,
+        "bench_return_pct": 11.2,
+        "excess_pct": 10.03,
+        "beats_bench": true
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-13",
+        "arm_return_pct": -20.32,
+        "bench_return_pct": 45.4,
+        "excess_pct": -65.72,
+        "beats_bench": false
+      },
+      {
+        "block": 13,
+        "start": "2021-09-13",
+        "end": "2022-12-04",
+        "arm_return_pct": 9.56,
+        "bench_return_pct": -7.11,
+        "excess_pct": 16.67,
+        "beats_bench": true
+      },
+      {
+        "block": 14,
+        "start": "2022-12-04",
+        "end": "2024-02-24",
+        "arm_return_pct": 1.01,
+        "bench_return_pct": 29.79,
+        "excess_pct": -28.78,
+        "beats_bench": false
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "arm_return_pct": 1.65,
+        "bench_return_pct": 19.5,
+        "excess_pct": -17.85,
+        "beats_bench": false
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "arm_return_pct": 12.41,
+        "bench_return_pct": 31.96,
+        "excess_pct": -19.55,
+        "beats_bench": false
+      }
+    ],
+    "n_blocks_beating_bench": 3,
+    "momentum_crash_2009": {
+      "arm_return_pct": -28.18,
+      "bench_return_pct": 58.25,
+      "excess_pct": -86.43,
+      "max_drawdown_pct": -28.8,
+      "n_short_exits": 283,
+      "short_net_pnl_gbp": -10048.3,
+      "n_rally_exits": 12
+    },
+    "unrealizable_risk": {
+      "short_gross_profit_gbp": 186474.35,
+      "unrealizable_profit_gbp": 18576.37,
+      "unrealizable_share_pct": 9.96,
+      "n_flagged": 126,
+      "n_winners": 1472
+    },
+    "paired_long_sleeve": {
+      "n_shared": 961,
+      "overlap_pct_of_arm": 28.46,
+      "overlap_pct_of_baseline": 20.2,
+      "jaccard": 0.134,
+      "n_a_only": 3796,
+      "n_arm_only": 2416,
+      "a_only_win_pct": 44.68,
+      "arm_only_win_pct": 45.24,
+      "a_only_mean_pnl_pct": 1.0322,
+      "arm_only_mean_pnl_pct": 1.3072,
+      "meets_min_sample_floor": true
+    }
+  },
+  "C_s2x": {
+    "tag": "C_s2x",
+    "pool": "pool1",
+    "years": 19.59,
+    "n_trades": 7693,
+    "n_long": 3414,
+    "n_short": 4279,
+    "final_equity": 28451.34,
+    "raw_cagr_incl_borrow": -2.837,
+    "fx_drag_pp_per_yr": 4.615,
+    "idle_credit_pp_per_yr": 1.164,
+    "borrow_cost_total_gbp": 7788.79,
+    "cost_adjusted_cagr": -6.287,
+    "benchmark_cagr_sp500tr": 11.163,
+    "excess_vs_sp500tr": -17.45,
+    "max_drawdown_pct": -58.85,
+    "corr_monthly_sp500tr": -0.1372,
+    "corr_daily_sp500tr": -0.1302,
+    "mean_long_pct": 45.26,
+    "mean_short_pct": 44.59,
+    "mean_gross_pct": 89.85,
+    "mean_net_pct": 0.67,
+    "p10_gross_pct": 82.91,
+    "p90_gross_pct": 99.86,
+    "mean_n_long": 10.06,
+    "mean_n_short": 11.6,
+    "pct_days_short_sleeve_empty": 6.39,
+    "blocks": [
+      {
+        "block": 1,
+        "start": "2007-01-03",
+        "end": "2008-03-25",
+        "arm_return_pct": -14.58,
+        "bench_return_pct": -2.22,
+        "excess_pct": -12.37,
+        "beats_bench": false
+      },
+      {
+        "block": 2,
+        "start": "2008-03-25",
+        "end": "2009-06-15",
+        "arm_return_pct": -33.29,
+        "bench_return_pct": -28.9,
+        "excess_pct": -4.38,
+        "beats_bench": false
+      },
+      {
+        "block": 3,
+        "start": "2009-06-15",
+        "end": "2010-09-05",
+        "arm_return_pct": -10.38,
+        "bench_return_pct": 24.17,
+        "excess_pct": -34.55,
+        "beats_bench": false
+      },
+      {
+        "block": 4,
+        "start": "2010-09-05",
+        "end": "2011-11-27",
+        "arm_return_pct": 3.61,
+        "bench_return_pct": 8.8,
+        "excess_pct": -5.18,
+        "beats_bench": false
+      },
+      {
+        "block": 5,
+        "start": "2011-11-27",
+        "end": "2013-02-16",
+        "arm_return_pct": -3.52,
+        "bench_return_pct": 31.01,
+        "excess_pct": -34.53,
+        "beats_bench": false
+      },
+      {
+        "block": 6,
+        "start": "2013-02-16",
+        "end": "2014-05-09",
+        "arm_return_pct": 3.43,
+        "bench_return_pct": 25.88,
+        "excess_pct": -22.45,
+        "beats_bench": false
+      },
+      {
+        "block": 7,
+        "start": "2014-05-09",
+        "end": "2015-07-30",
+        "arm_return_pct": 5.6,
+        "bench_return_pct": 13.94,
+        "excess_pct": -8.33,
+        "beats_bench": false
+      },
+      {
+        "block": 8,
+        "start": "2015-07-30",
+        "end": "2016-10-20",
+        "arm_return_pct": -6.36,
+        "bench_return_pct": 4.58,
+        "excess_pct": -10.94,
+        "beats_bench": false
+      },
+      {
+        "block": 9,
+        "start": "2016-10-20",
+        "end": "2018-01-10",
+        "arm_return_pct": -1.67,
+        "bench_return_pct": 31.59,
+        "excess_pct": -33.27,
+        "beats_bench": false
+      },
+      {
+        "block": 10,
+        "start": "2018-01-10",
+        "end": "2019-04-02",
+        "arm_return_pct": -8.87,
+        "bench_return_pct": 6.13,
+        "excess_pct": -15.0,
+        "beats_bench": false
+      },
+      {
+        "block": 11,
+        "start": "2019-04-02",
+        "end": "2020-06-22",
+        "arm_return_pct": 18.14,
+        "bench_return_pct": 11.2,
+        "excess_pct": 6.94,
+        "beats_bench": true
+      },
+      {
+        "block": 12,
+        "start": "2020-06-22",
+        "end": "2021-09-13",
+        "arm_return_pct": -23.24,
+        "bench_return_pct": 45.4,
+        "excess_pct": -68.64,
+        "beats_bench": false
+      },
+      {
+        "block": 13,
+        "start": "2021-09-13",
+        "end": "2022-12-04",
+        "arm_return_pct": 9.22,
+        "bench_return_pct": -7.11,
+        "excess_pct": 16.33,
+        "beats_bench": true
+      },
+      {
+        "block": 14,
+        "start": "2022-12-04",
+        "end": "2024-02-24",
+        "arm_return_pct": 2.79,
+        "bench_return_pct": 29.79,
+        "excess_pct": -27.01,
+        "beats_bench": false
+      },
+      {
+        "block": 15,
+        "start": "2024-02-24",
+        "end": "2025-05-16",
+        "arm_return_pct": 4.49,
+        "bench_return_pct": 19.5,
+        "excess_pct": -15.02,
+        "beats_bench": false
+      },
+      {
+        "block": 16,
+        "start": "2025-05-16",
+        "end": "2026-08-07",
+        "arm_return_pct": 10.33,
+        "bench_return_pct": 31.96,
+        "excess_pct": -21.63,
+        "beats_bench": false
+      }
+    ],
+    "n_blocks_beating_bench": 2,
+    "momentum_crash_2009": {
+      "arm_return_pct": -28.64,
+      "bench_return_pct": 58.25,
+      "excess_pct": -86.88,
+      "max_drawdown_pct": -29.28,
+      "n_short_exits": 287,
+      "short_net_pnl_gbp": -10652.23,
+      "n_rally_exits": 12
+    },
+    "unrealizable_risk": {
+      "short_gross_profit_gbp": 148506.3,
+      "unrealizable_profit_gbp": 14486.11,
+      "unrealizable_share_pct": 9.75,
+      "n_flagged": 125,
+      "n_winners": 1457
+    },
+    "paired_long_sleeve": {
+      "n_shared": 956,
+      "overlap_pct_of_arm": 28.0,
+      "overlap_pct_of_baseline": 20.1,
+      "jaccard": 0.1325,
+      "n_a_only": 3801,
+      "n_arm_only": 2458,
+      "a_only_win_pct": 44.88,
+      "arm_only_win_pct": 45.2,
+      "a_only_mean_pnl_pct": 1.0999,
+      "arm_only_mean_pnl_pct": 1.3042,
+      "meets_min_sample_floor": true
+    }
+  }
+}

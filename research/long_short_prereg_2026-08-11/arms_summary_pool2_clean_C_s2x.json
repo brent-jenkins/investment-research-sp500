@@ -1,0 +1,26 @@
+{
+  "C_s2x": {
+    "arm": "C",
+    "stress": 2.0,
+    "long_cap": 0.5,
+    "short_cap": 0.5,
+    "net_band": 0.1,
+    "admission_order": "short_first",
+    "n_trades": 7924,
+    "n_long": 3511,
+    "n_short": 4413,
+    "gross_pnl_gbp": -7044.72,
+    "borrow_cost_gbp": 9064.79,
+    "net_pnl_gbp": -16109.51,
+    "long_pnl_gbp": 30501.46,
+    "short_pnl_gbp": -46610.97,
+    "final_equity": 33890.49,
+    "mean_long_pct": 45.487,
+    "mean_short_pct": 44.716,
+    "mean_gross_pct": 90.204,
+    "mean_net_pct": 0.771,
+    "mean_n_long": 10.26,
+    "mean_n_short": 12.19,
+    "runtime_s": 1749.8
+  }
+}
