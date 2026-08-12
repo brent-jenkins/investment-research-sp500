@@ -89,6 +89,7 @@ from analysis.decision import (
     resolve_dynamic_max_position_gbp,
     resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
+    resolve_var_horizon_days,
 )
 from analysis.universe import get_max_holding_days
 from analysis.volatility import _MIN_VAR_RETURNS, _atr, _resolve_entry_stop, _var_position_size_core
@@ -3940,7 +3941,8 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             log_returns = np.log(prior_closes / prior_closes.shift(1)).dropna()
             if len(log_returns) >= _MIN_VAR_RETURNS:
                 position_gbp, _dv, holding_var = _var_position_size_core(
-                    log_returns, total_val, dynamic_max_position_gbp, max_hold,
+                    log_returns, total_val, dynamic_max_position_gbp,
+                    resolve_var_horizon_days(max_hold, config),
                     var_confidence, max_risk_pct, min_position_gbp,
                 )
             else:

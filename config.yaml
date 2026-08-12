@@ -85,6 +85,13 @@ backtest:
   # analysis/volatility.py:_resolve_entry_stop(), the single function both
   # live order placement and every backtest engine call -- there is no
   # separate live-side copy.
+  # 2.0 is the CURRENT, UNCHANGED behaviour. The exit-mechanics sweep found
+  # 3.0 better in both pools -- and NON-MONOTONIC (3.0 beat both 2.0 and no
+  # stop at all), inverting the earlier 2026-08-07 stop study's ordering,
+  # which was measured at 30-day holding under absolute-momentum ranking.
+  # 3.0 is only validated in combination with stock_max_holding_days: 0;
+  # the two dials interact and were swept as one mechanism. Flipping either
+  # is a separate, deliberate decision.
   atr_stop_multiplier: 2.0
 
 # Live execution config for the momentum + crisis-override system. See
@@ -126,7 +133,46 @@ trading212_invest:
   # Max holding days for every live candidate (analysis/universe.py:
   # get_max_holding_days() dispatches on ETF_TICKERS membership, not on
   # any config.yaml registration).
+  #
+  # ZERO MEANS DISABLED (2026-08-12): set to 0 and the age-based holding
+  # cap is switched off entirely -- get_max_holding_days() returns None,
+  # evaluate_exit_reason() treats that as "no age exit", and positions are
+  # governed only by CRISIS_EXIT / STOP_LOSS / SIGNAL_OFF. Zero is used as
+  # the switch because a literal 0-day cap has no coherent meaning (it
+  # would exit every position on its own entry day), so one integer key
+  # carries both settings with no second key that could contradict it.
+  #
+  # DO NOT "disable" THIS BY SETTING A LARGE NUMBER. A finite cap is ALSO the
+  # VaR sizing horizon (see var_horizon_days below), so e.g. 9999 scales every
+  # position by sqrt(9999) ~ 100 instead of sqrt(30) ~ 5.5 -- roughly 18x
+  # SMALLER, with some positions then falling below min_position_gbp and being
+  # rejected outright. A config set that way looks like the tested one and
+  # behaves nothing like it. Use 0, which disables the age EXIT while leaving
+  # SIZING on a real horizon. Measured and pinned by
+  # tests/test_comprehensive_replay_parity.py.
+  #
+  # 30 is the CURRENT, UNCHANGED behaviour. The exit-mechanics sweep
+  # (research/exit_mechanics_prereg_2026-08-11/) measured 0 combined with
+  # atr_stop_multiplier 3.0 at +6.443pp / +5.381pp cost-adjusted excess
+  # return over this baseline, ROBUST at 70/70 perturbation combinations
+  # and surviving force-close at 5/5 cutoffs -- but the capability is
+  # promoted here WITHOUT being enabled. Flipping it is a separate,
+  # deliberate decision. Two qualifications travel with that result: the
+  # absolute claim to beat ^SP500TR holds at only one window end date of
+  # seven, and 73.6% of its P&L sits in 10 of 238 tickers.
   stock_max_holding_days: 30
+  # Holding horizon (days) used ONLY by VaR position sizing
+  # (analysis/volatility.py:_var_position_size_core() scales daily VaR by
+  # sqrt(horizon)) when stock_max_holding_days is 0 and there is therefore
+  # no cap to scale by. Resolved via
+  # analysis/decision.py:resolve_var_horizon_days(), the single shared
+  # implementation live and backtest both call. Ignored whenever a finite
+  # cap is set -- the cap itself is used then.
+  #
+  # 30 is LOAD-BEARING for reproducibility, not arbitrary: the sweep
+  # measured its unlimited-holding arms with a sizing horizon of exactly
+  # 30, so a different value here would not reproduce those figures.
+  var_horizon_days: 30
   # Gates entry CANDIDACY -- whether a ticker is even considered a new
   # entry candidate at all (signal computed, VaR sized, queued). Defaults
   # true (absent = enabled). Never gates exits.

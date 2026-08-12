@@ -544,3 +544,88 @@ def test_entry_parity_stop_price_uses_configured_atr_multiplier_not_a_hardcoded_
     # otherwise this whole comparison would pass even against a hardcoded
     # constant that ignored config entirely.
     assert seen_stops[2.0] != pytest.approx(seen_stops[4.5])
+
+
+# ---------------------------------------------------------------------------
+# Disabled holding cap (stock_max_holding_days / max_holding_days == 0),
+# promoted 2026-08-12 from the exit-mechanics sweep.
+#
+# WHY THESE EXIST, specifically: Layer 4 confirms both live and backtest CALL
+# analysis/decision.py:resolve_var_horizon_days(); it does NOT confirm the two
+# sides AGREE about a position whose cap is switched off. That is exactly the
+# case a flip creates, and a divergence there would surface only in live
+# trading, on a position held past what used to be day 30 -- precisely when
+# nobody is watching for it. These two scenarios close that gap BEFORE any flip.
+# ---------------------------------------------------------------------------
+
+def test_exit_parity_disabled_cap_neither_side_exits_on_age(db_engine, mocker, monkeypatch):
+    """With the cap disabled, a position that WOULD have hit MAX_HOLDING must
+    stay open -- and live and backtest must agree it stays open.
+
+    Same frame as test_exit_parity_max_holding (a pure uptrend where nothing
+    else can fire); only the cap changes. That test exits MAX_HOLDING at
+    max_holding_days=100; here 0 must produce no exit at all on either side.
+    """
+    monkeypatch.setenv("T212_API_KEY", "test-key")
+    monkeypatch.setenv("T212_API_SECRET", "test-secret")
+    ticker, t212_ticker = "PXETF", "PXETF_EQ"
+    mocker.patch("analysis.universe.ETF_TICKERS", ("PXETF",))
+    frame = _price_frame(400, 100.0, 0.0015)
+    gspc = _calm_gspc_frame(400)
+    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=0,
+                  mocker=mocker, db_engine=db_engine)
+
+    gspc_close = gspc.set_index("date")["close"].astype(float)
+    gspc_close.index = pd.to_datetime(gspc_close.index)
+
+    # BACKTEST side: the position must survive, never exiting on age.
+    trade = _run_backtest_and_get_first_trade(frame, gspc_close, ticker, cfg, is_etf=True)
+    assert trade["exit_reason"] != "MAX_HOLDING", (
+        "backtest fired MAX_HOLDING with the cap disabled -- the None never "
+        "reached evaluate_exit_reason()"
+    )
+    entry_price = trade["entry_price"]
+    stop_price = entry_price * (1 - trade["stop_distance_pct"] / 100.0)
+
+    # LIVE side: held far past the old 30-day cap, must not close either.
+    held_days = 250
+    exit_close = float(frame["close"].iloc[-1])
+    mock_client = mocker.MagicMock()
+    mock_client.get_positions.return_value = [
+        {"ticker": t212_ticker, "quantity": 10.0, "currentPrice": exit_close},
+    ]
+    mocker.patch("brokers.trading212.Trading212Client", return_value=mock_client)
+    mocker.patch("brokers.trading212.time.sleep", lambda *_a, **_k: None)
+
+    def _fake_get_price_df(t, days=8000):
+        return {ticker: frame, "^GSPC": gspc}[t].copy()
+    mocker.patch("brokers.trading212.get_price_df", side_effect=_fake_get_price_df)
+
+    _seed_buy_row(db_engine, ticker=ticker, t212_ticker=t212_ticker, is_etf=True,
+                  entry_date=datetime.utcnow() - timedelta(days=held_days),
+                  stop_price=stop_price)
+
+    from brokers.trading212 import maybe_exit_positions
+    maybe_exit_positions(cfg)
+
+    assert _sell_exit_reason(db_engine, ticker) is None, (
+        f"live closed a position after {held_days} days with the holding cap "
+        "DISABLED -- live and backtest disagree on the disabled-cap path"
+    )
+
+
+def test_exit_parity_disabled_cap_still_exits_on_signal_off(db_engine, mocker, monkeypatch):
+    """Disabling the age cap must not disable the OTHER exit reasons.
+
+    The companion to the test above: without this, a bug that suppressed every
+    exit would pass that one, since it only asserts nothing fires.
+    """
+    ticker, t212_ticker = "PXETF", "PXETF_EQ"
+    mocker.patch("analysis.universe.ETF_TICKERS", ("PXETF",))
+    frame = _decline_after_rise_frame(rise_days=300, decline_days=220)
+    gspc = _calm_gspc_frame(520)
+    cfg = _config(ticker, t212_ticker, is_etf=True, max_holding_days=0,
+                  atr_stop_multiplier=50.0, mocker=mocker, db_engine=db_engine)
+    _assert_exit_parity(db_engine, mocker, monkeypatch, ticker=ticker,
+                        t212_ticker=t212_ticker, is_etf=True, frame=frame, gspc=gspc,
+                        cfg=cfg, expected_reason="SIGNAL_OFF")

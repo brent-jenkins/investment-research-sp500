@@ -1701,7 +1701,7 @@ review.
 
 **A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
 
-## A check that reports clean for a reason unrelated to the thing it was checking — a class, not six incidents (standing requirement, 2026-08-10, extended 2026-08-11)
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not seven incidents (standing requirement, 2026-08-10, extended 2026-08-11 and 2026-08-12)
 
 **Five separate findings this week share one shape, and naming the shape is more useful than
 recording them separately.** In each, a check was reasoned about — correctly — for the case its
@@ -1760,6 +1760,24 @@ operational poll loop, and they fail identically.
    anticipated this class and guarded the wrong case** — it pre-committed to reading "0 fires" as
    "untested, not safe", which would have caught a breaker that never fired at all, and had nothing to
    say about one that fires correctly *somewhere* and is blind *elsewhere*.
+7. **A comparison whose measuring instrument was structurally incapable of seeing the thing that
+   differed** (exit-mechanics promotion, 2026-08-12). A Layer 2 test asserted that
+   `stock_max_holding_days: 0` (the new disable sentinel) and `9999` (a cap longer than the test
+   window) were behaviourally identical — both should mean "never exit on age". The **backtest half
+   of the assertion passed**; the **live half failed**. The backtest comparison is a `Counter` of
+   `(ticker, direction)` events, which is **size-blind by construction** — and size was precisely
+   what differed: a finite 9999 feeds VaR a 9999-day sizing horizon, scaling positions by
+   `sqrt(9999)≈100` instead of `sqrt(30)≈5.5`, roughly **18× smaller**, with some then falling below
+   `min_position_gbp` and rejected outright. **Had only the backtest been checked, a false premise
+   would have been confirmed** — the instrument would have reported "identical" not because the arms
+   were identical but because it could not represent the dimension on which they differed. This is
+   also the standing argument for Layer 2 driving BOTH sides rather than trusting either alone.
+
+   **The practical trap this leaves behind, worth knowing before touching the config**: the obvious
+   way to express "no holding cap" — set a large number — **silently shrinks every position ~18×**,
+   producing a configuration that *looks* like the tested one and behaves nothing like it. Use the
+   `0` sentinel, which disables the age EXIT while leaving SIZING on a real horizon. Warned about
+   directly in `config.yaml` at the key itself, where the edit would actually be made.
 
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
@@ -2400,6 +2418,91 @@ it is in not churning the ones it already holds.**
 and four-parity-layer work the relative-rank promotion required. **The force-close variant that was
 listed here as a prerequisite has now been run (2026-08-12) and passed — see the WITHDRAWN
 QUALIFICATION above; it removed a caveat rather than adding one.**
+
+## Exit-mechanics promoted to production code — CAPABILITY ONLY, NOT FLIPPED (2026-08-12)
+
+**The exit-mechanics winner is now expressible through config, and the config still ships the CURRENT
+behaviour.** `atr_stop_multiplier: 2.0` and `stock_max_holding_days: 30` are unchanged; flipping them
+to `3.0` / `0` is a separate, deliberate decision. A test
+(`tests/test_max_holding_disabled.py::test_shipped_config_still_has_a_finite_stock_holding_cap`)
+asserts the shipped config keeps a finite cap, so the promotion cannot silently become a flip.
+
+**`atr_stop_multiplier` needed no code at all** — it was already a config value read by the shared
+`_resolve_entry_stop()`. All the work was for the holding cap.
+
+**THE ZERO-MEANS-DISABLED CONVENTION.** `stock_max_holding_days: 0` (or `max_holding_days: 0` for
+ETFs) disables the age-based holding cap: `analysis/universe.py:get_max_holding_days()` returns
+**`None`**, which `evaluate_exit_reason()` already treats as "unknown, don't trigger this check" under
+its standing None-tolerance contract, so no age exit fires and positions are governed only by
+`CRISIS_EXIT`/`STOP_LOSS`/`SIGNAL_OFF`. Zero is the switch because it is the one value for which a cap
+has no coherent meaning (a 0-day cap would exit every position on its own entry day), so one integer
+key carries both settings with no second key that could contradict it.
+
+**THE NON-OBVIOUS PART, and the whole reason this needed real code: ONE config value feeds TWO
+consumers whose semantics diverge the moment it is disabled.**
+1. **`evaluate_exit_reason(max_holding_days=...)` — an EXIT GATE.** `None` is meaningful and already
+   handled.
+2. **`_var_position_size_core(..., holding_days=...)` — a SIZING HORIZON**, at **five call sites** (4
+   in `analysis/backtest.py`, 1 in `brokers/trading212.py`). It scales daily VaR by
+   `sqrt(holding_days)`. **`None` is not meaningful here** — `sqrt(None)` is not a number, and "size
+   for an infinite horizon" would drive every position to the minimum.
+
+So a disabled cap needs **no** horizon for exits and a **real** one for sizing.
+**`analysis/decision.py:resolve_var_horizon_days()`** supplies it and is the single shared
+implementation both live and every backtest engine call — never re-derived inline, per the "exactly
+one implementation of any given trading decision" invariant. `trading212_invest.var_horizon_days`
+(default **30**) overrides it.
+
+**The default 30 is LOAD-BEARING for reproducibility, not arbitrary**: the sweep measured its
+unlimited-holding arms with a sizing horizon of exactly 30 (the then-current
+`stock_max_holding_days`). Any other fallback would produce different position sizes and would NOT
+reproduce the study. Pinned by its own test with that reasoning attached.
+
+**REPRODUCTION VERIFIED END-TO-END — the decisive promotion check.** Raw, unmodified production
+`simulate_portfolio_compounding_mtm()`, driven **only by config**, against Pool 2 CLEAN
+(`research/exit_mechanics_promotion_verify_2026-08-12/`):
+
+| arm | promoted production code | study reference | |
+|---|---|---|---|
+| baseline (2.0×, 30d) | 4,876 trades, £166,830.11 | 4,876, £166,830.11 | **MATCH** |
+| winner (3.0×, cap 0) | 565 trades, £348,548.74 | 565, £348,548.74 | **MATCH** |
+
+The winner's exit mix contains **zero `MAX_HOLDING`**. **The baseline match is the more important of
+the two**: rerouting five VaR call sites is exactly where a fractional sizing slip would compound
+invisibly across 19 years rather than failing loudly, and it reproduces to the penny — so the
+promotion is **behaviour-preserving at defaults**, which is what makes it safe to merge independently
+of any flip.
+
+**ALL FOUR PARITY LAYERS COVERED, and the two that mattered were added deliberately:**
+- **Layers 1 and 4** (structural) — pass; the new resolver is genuinely called by both live and
+  backtest, so no one-sided-decision exemption is needed.
+- **Layer 3** (`tests/test_live_backtest_parity.py`) — two new scenarios. One asserts a position held
+  **250 days** with the cap disabled stays open on **both** sides; its **companion** asserts
+  `SIGNAL_OFF` still fires with the cap disabled. **The companion is the point**: a bug suppressing
+  *every* exit would sail through a test that only asserts nothing fires — the vacuous-pass shape this
+  session already hit once, anticipated this time rather than discovered.
+- **Layer 2** (`tests/test_comprehensive_replay_parity.py`) — the full ~320-day, two-ticker,
+  capacity-sharing walk re-run with the cap disabled. **A genuinely different question from Layer 3**:
+  with the cap off, positions are held far longer, capacity frees rarely, and admission ordering
+  interacts with a much smaller stream of exits. A divergence of that kind cannot be written as a
+  targeted scenario, because nobody knows in advance which day it would appear on.
+
+**Every new test was verified to FAIL against the reintroduced bug** (sentinel ignored, raw `0`
+returned) and to pass again after restoring — 2 Layer 3 scenarios, 2 Layer 2 scenarios, 4 unit tests.
+Full suite **1,165 passing**.
+
+**A false premise caught by Layer 2, recorded because it argues FOR the design.** An initial test
+asserted `0` (disabled) and `9999` (a cap longer than the window) were behaviourally identical.
+**They are not.** A finite 9999 feeds VaR a 9999-day horizon, scaling positions by `sqrt(9999)≈100`
+instead of `sqrt(30)≈5.5` — **roughly 18× smaller**, with some then falling below `min_position_gbp`
+and rejected outright. So the obvious pre-promotion workaround for "no holding cap" — set a huge
+number — **silently shrinks every position**, while the sentinel disables the exit and leaves sizing on
+a real horizon. The test now asserts the true property (they agree on exits, deliberately differ on
+sizing) rather than the false one.
+
+**Not yet done, and required before any flip is trusted in production**: nothing about live
+*operation* under a disabled cap has been observed — only simulated. Unlimited holding interacts with
+the live re-entry, membership and reconciliation paths in ways no backtest exercises.
 
 ## Current architecture (as of 2026-08-04)
 

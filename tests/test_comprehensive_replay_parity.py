@@ -122,7 +122,8 @@ def _calm_gspc_frame() -> pd.DataFrame:
     return pd.DataFrame({"date": dates, "open": closes, "high": highs, "low": lows, "close": closes})
 
 
-def _config(admission_ranking_mode: str | None = None) -> dict:
+def _config(admission_ranking_mode: str | None = None,
+            holding_cap: int | None = None) -> dict:
     """admission_ranking_mode=None leaves the key absent entirely, matching
     production's own default fallback (resolve_admission_ranking_mode()
     resolves an absent key to "absolute_momentum") -- the original,
@@ -157,6 +158,11 @@ def _config(admission_ranking_mode: str | None = None) -> dict:
     }
     if admission_ranking_mode is not None:
         cfg["trading212_invest"]["admission_ranking_mode"] = admission_ranking_mode
+    if holding_cap is not None:
+        # 0 is the DISABLED sentinel (2026-08-12) -- see
+        # analysis/decision.py:MAX_HOLDING_DISABLED_SENTINEL.
+        cfg["trading212_invest"]["max_holding_days"] = holding_cap
+        cfg["trading212_invest"]["stock_max_holding_days"] = holding_cap
     return cfg
 
 
@@ -363,7 +369,7 @@ def replay_mocks(db_engine, monkeypatch, mocker):
 
 
 def _run_scenario(
-    mocker, admission_ranking_mode: str | None = None,
+    mocker, admission_ranking_mode: str | None = None, holding_cap: int | None = None,
 ) -> tuple["Counter[tuple[str, str]]", "Counter[tuple[str, str]]"]:
     """Builds the standard two-ticker, ~320-simulated-day scenario, runs it
     through both live's real replay and the backtest engine, and returns
@@ -382,7 +388,7 @@ def _run_scenario(
     from analysis.volatility import _atr
     from collections import Counter
 
-    config = _config(admission_ranking_mode)
+    config = _config(admission_ranking_mode, holding_cap)
     t212_by_ticker = {"ETFA": "ETFA_EQ", "STKA": "STKA_EQ"}
 
     frame_etfa = _rising_frame()
@@ -533,4 +539,86 @@ def test_replay_actually_fails_on_a_deliberately_injected_live_bug(replay_mocks,
         "Comprehensive replay failed to detect a deliberately injected live-side bug "
         "(evaluate_exit_reason forced to always return None) -- the mechanism itself "
         "is not working."
+    )
+
+
+def test_comprehensive_replay_matches_backtest_with_the_holding_cap_DISABLED(replay_mocks, mocker):
+    """Layer 2 coverage of the disabled holding cap (stock_max_holding_days: 0),
+    promoted 2026-08-12 from the exit-mechanics sweep.
+
+    WHY THIS IS A DIFFERENT QUESTION FROM LAYER 3's disabled-cap scenarios:
+    those prove a SINGLE position behaves consistently across live and backtest
+    with the cap off. This drives the full ~320-day, two-ticker walk in which
+    the tickers genuinely compete for shared deployment capacity. With the cap
+    disabled that dynamic changes materially -- positions are held far longer,
+    capacity frees rarely, and admission ordering therefore interacts with a
+    much smaller stream of exits than any existing replay exercises. A
+    divergence of that kind cannot be written as a targeted scenario because it
+    is not known in advance which day it would appear on; a comprehensive walk
+    is the only thing that catches it.
+    """
+    live_events, backtest_events = _run_scenario(mocker, holding_cap=0)
+
+    assert sum(live_events.values()) > 0, "Replay recorded zero live events"
+    assert sum(backtest_events.values()) > 0, "Backtest recorded zero events"
+    assert any(d == "SELL" for _t, d in live_events), (
+        "Scenario never exercises a genuine exit on the live side -- with the "
+        "holding cap disabled this test would otherwise pass vacuously by both "
+        "sides simply never closing anything"
+    )
+    assert any(d == "SELL" for _t, d in backtest_events), (
+        "Scenario never exercises a genuine exit on the backtest side"
+    )
+
+    assert live_events == backtest_events, (
+        f"Live replay and backtest diverged with the holding cap DISABLED.\n"
+        f"Live:     {{dict(sorted(live_events.items()))}}\n"
+        f"Backtest: {{dict(sorted(backtest_events.items()))}}"
+    )
+
+
+def test_disabled_cap_agrees_with_a_huge_cap_ON_EXITS_but_deliberately_not_on_SIZING():
+    """`0` (disabled) and `9999` (a cap longer than the window) both produce NO
+    age-based exit -- but they are NOT interchangeable, and the difference is
+    intended.
+
+    An earlier version of this test asserted the two were behaviourally
+    identical. They are not, and the failure was informative rather than a bug:
+    a finite cap of 9999 feeds VaR sizing a 9999-day horizon, scaling positions
+    by sqrt(9999) ~ 100 instead of sqrt(30) ~ 5.5 -- roughly 18x smaller. Some
+    then fall below min_position_gbp and are rejected outright, so the live
+    event sequence genuinely differs.
+
+    This is an argument FOR the sentinel rather than against it: the obvious
+    workaround for "no holding cap" before this promotion -- set a huge number
+    -- silently shrinks every position. `0` disables the EXIT while leaving
+    SIZING on a real, configurable horizon
+    (analysis/decision.py:resolve_var_horizon_days()).
+    """
+    from analysis import universe
+    from analysis.decision import evaluate_exit_reason, resolve_var_horizon_days
+
+    disabled = {"trading212_invest": {"stock_max_holding_days": 0, "max_holding_days": 0}}
+    huge = {"trading212_invest": {"stock_max_holding_days": 9999, "max_holding_days": 9999}}
+
+    cap_disabled = universe.get_max_holding_days("STKA", disabled)
+    cap_huge = universe.get_max_holding_days("STKA", huge)
+
+    # They AGREE on exits: neither fires MAX_HOLDING over any realistic hold.
+    for days in (1, 30, 320, 5000):
+        assert evaluate_exit_reason(
+            crisis_now=False, price=100.0, stop_price=90.0, sig_on=True,
+            holding_days=days, max_holding_days=cap_disabled) is None
+        assert evaluate_exit_reason(
+            crisis_now=False, price=100.0, stop_price=90.0, sig_on=True,
+            holding_days=days, max_holding_days=cap_huge) is None
+
+    # They DISAGREE on sizing, deliberately, and by a large factor.
+    h_disabled = resolve_var_horizon_days(cap_disabled, disabled)
+    h_huge = resolve_var_horizon_days(cap_huge, huge)
+    assert h_disabled == 30, "disabled cap must size on the real fallback horizon"
+    assert h_huge == 9999, "a finite cap must size on itself"
+    assert h_huge > h_disabled * 300, (
+        "the sizing gap between a huge pseudo-cap and the disable sentinel is "
+        "the whole reason resolve_var_horizon_days() exists"
     )
