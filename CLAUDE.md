@@ -2312,16 +2312,59 @@ because 73.6% of P&L sits in 10 of 238 tickers and random drops would have been 
 **NVDA is the largest named dependency at 67% retained** — materially stronger than the relative-rank
 study's AMAT precedent (~21%, below the floor).
 
-**THREE QUALIFICATIONS THAT MUST TRAVEL WITH ANY ADOPTION, none of which perturbation testing
-addresses:**
-1. **Realised P&L is WORSE than baseline.** 59.9% of the winning cell's P&L is unrealised
-   mark-to-market on 34 positions still open when the walk ends (baseline: 7.6%); on realised P&L alone
-   it is **£139,863 vs baseline's £154,234**.
-2. **The absolute claim is NOT supported.** The cell clears `^SP500TR` at exactly one end date of seven
+**TWO QUALIFICATIONS THAT MUST TRAVEL WITH ANY ADOPTION** (a third was withdrawn 2026-08-12 — see
+immediately below):
+1. **The absolute claim is NOT supported.** The cell clears `^SP500TR` at exactly one end date of seven
    and trails at the other six. "Beats buy-and-hold" is not a supportable statement; the robust claim
    is the relative one.
-3. **Concentration is real**: 565 positions over 19 years at 149-day mean holds, 73.6% of P&L in 10 of
-   238 names. A robust *comparison* does not diversify the *portfolio*.
+2. **Concentration is real**: 565 positions over 19 years at 149-day mean holds, 73.6% of P&L in 10 of
+   238 names, NVDA alone 17.0%. A robust *comparison* does not diversify the *portfolio*.
+
+**WITHDRAWN QUALIFICATION — "realised P&L is worse than baseline" (2026-08-12). A future session
+reading the original wording would reasonably decline to promote this result; it was wrong, and the
+error was in the comparison rather than in the strategy.** Full detail:
+`research/force_close_2026-08-12/REPORT.md`.
+
+<details><summary>Original qualification 1 (struck through, preserved for the record)</summary>
+
+> ~~1. **Realised P&L is WORSE than baseline.** 59.9% of the winning cell's P&L is unrealised
+> mark-to-market on 34 positions still open when the walk ends (baseline: 7.6%); on realised P&L alone
+> it is **£139,863 vs baseline's £154,234**.~~
+
+</details>
+
+**Why it was wrong.** `simulate_portfolio_compounding_mtm()` — and every engine derived from it —
+**already force-closes every open position at the walk's end** via `END_OF_DATA` at the final close,
+and the sweep's headline cost-adjusted CAGR is computed from that equity curve. Verified to the penny,
+both arms: `final equity − £50,000 = Σ pnl_gbp`, **diff +0.00**. **So +6.443pp was already the
+fully-realised comparison — there was no unrealised overhang in it.** The 59.9% figure describes
+**which positions the strategy itself chose to exit**, not **whether the gain was booked**; those are
+different concerns and conflating them produced the caveat. Worse, the comparison was **structurally
+unfair rather than conservative**: excluding `END_OF_DATA` removed **59.9% of the winner's P&L and only
+7.6% of baseline's**, deleting the winner's largest positions, keeping nearly all of baseline's, then
+reporting the winner as behind.
+
+**What the force-close test found.** Force-closing both arms identically at five cutoffs
+(2022-08-05 → 2026-08-07), fully-realised: the winner leads **5/5 in both pools** (Pool 2 CLEAN
++5.606 to +6.673pp; Pool 1 +3.868 to +5.677pp) with total P&L **2.0–2.3× baseline's** at every cutoff.
+**Decisively, its RULE-CLOSED P&L alone leads baseline at every intermediate cutoff** — 1.97×, 1.76×,
+1.17×, 1.08× — **and by the widest margin exactly where the force-closed block is smallest** (16.0%,
+15.1%). An unrealised-marks artefact predicts the opposite, so this falsifies the hypothesis rather
+than merely failing to confirm it. The method was validated rather than trusted: two genuine
+truncated-cache re-runs × two arms reproduce the equity-truncation totals **4/4 penny-exact** (the
+rule-closed/force-closed *split* carries ~±0.3% boundary uncertainty; totals do not).
+
+**The mechanism behind the lower strategy-chosen total, confirmed size-neutrally**: strategy-chosen
+exits are **4,836 at +0.827% mean (baseline) vs 531 at +8.060% (winner)** — a **trade-count ratio of
+9.1× against a per-trade quality ratio of 9.7×**, which nearly cancel. The winner's mean position is
+*smaller* (£2,770 vs £3,347), so sizing understates rather than inflates its per-trade advantage.
+Baseline reaches a marginally higher strategy-chosen total by making nine times as many decisions at a
+tenth the per-decision return — **a restatement of what the change does, not a caveat about it.**
+
+**Standing lesson, of general relevance beyond this study**: when comparing two arms that differ in how
+often they exit, any metric that excludes a category of exit will hit them asymmetrically. Check the
+exclusion's share of EACH arm before treating the comparison as conservative — here it was 59.9%
+against 7.6%, and the asymmetry alone produced the wrong sign.
 
 **The end-date axis did settle one open concern on evidence**: the advantage is **weakest at the
 earliest windows** (2022–2023) and strongest at 2025-08-01, consistently across all 14 draws — the
@@ -2354,9 +2397,9 @@ it is in not churning the ones it already holds.**
 
 **Status: research finding only.** No changes to `analysis/signals.py`, `analysis/decision.py`,
 `config.yaml`, or any live path; no database writes. Promotion would need the same production-module
-and four-parity-layer work the relative-rank promotion required, and a force-close variant (a finite
-cap that closes positions by rule rather than by the data running out) should be run first, since
-realised-only comparison is the one question neither the sweep nor the perturbation test touches.
+and four-parity-layer work the relative-rank promotion required. **The force-close variant that was
+listed here as a prerequisite has now been run (2026-08-12) and passed — see the WITHDRAWN
+QUALIFICATION above; it removed a caveat rather than adding one.**
 
 ## Current architecture (as of 2026-08-04)
 

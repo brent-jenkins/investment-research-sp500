@@ -141,9 +141,16 @@ noise floor.
 
 **Does not establish**, and these are unchanged by any amount of perturbation testing:
 
-1. **The unrealised-marks qualification stands.** 59.9% of the cell's P&L is still mark-to-market on
+1. ~~**The unrealised-marks qualification stands.** 59.9% of the cell's P&L is still mark-to-market on
    34 positions open at the walk's end; on realised P&L alone it remains worse than baseline
-   (£139,863 vs £154,234). Perturbation testing measures stability, not realisation.
+   (£139,863 vs £154,234). Perturbation testing measures stability, not realisation.~~
+   **WITHDRAWN 2026-08-12** — correct on its own terms (perturbation testing does not measure
+   realisation) but the underlying caveat was wrong. The engine already force-closes at the walk's
+   end and the headline derives from that equity curve, so +6.443pp was already fully realised; the
+   "realised" figure excluded `END_OF_DATA` trades, removing 59.9% of the winner's P&L against 7.6%
+   of baseline's. A dedicated force-close test (`research/force_close_2026-08-12/REPORT.md`) leaves
+   the winner ahead **5/5 cutoffs in both pools**, total P&L 2.0–2.3× baseline's, rule-closed P&L
+   alone ahead at every intermediate cutoff. Items 2–5 below are unaffected.
 2. **The absolute claim remains unsupportable.** s3.0 clears `^SP500TR` at exactly one end date and
    trails at the other six. The robust claim is relative, not absolute.
 3. **Concentration is a real risk property**, not a measurement artefact: 565 positions over 19 years

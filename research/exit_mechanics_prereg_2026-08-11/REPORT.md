@@ -11,10 +11,21 @@ would additionally need the production-module and four-parity-layer work the rel
 required.
 
 **Two findings qualify the headline and must travel with it** (§6 and §7): the winning cell holds
-**565 positions over 19 years at a mean 149 days**, and **59.9% of its P&L is unrealised
-mark-to-market on 34 positions still open when the walk ends**. On realised P&L alone it is *worse*
-than baseline. The advantage over baseline is robust to end date; the claim to beat the index outright
-is not.
+**565 positions over 19 years at a mean 149 days**, and 73.6% of its P&L sits in 10 of 238 tickers.
+The advantage over baseline is robust to end date; the claim to beat the index outright is not.
+
+> **CAVEAT WITHDRAWN 2026-08-12 — "on realised P&L alone it is worse than baseline" was WRONG, and
+> the error was in the comparison, not the strategy.** See `research/force_close_2026-08-12/REPORT.md`.
+> The engine already force-closes every open position at the walk's end (`END_OF_DATA` at the final
+> close) and this report's own headline CAGR derives from that equity curve — verified to the penny
+> (final equity − £50,000 = Σ`pnl_gbp`, diff +0.00, both arms). **+6.443pp was already the
+> fully-realised comparison.** The "realised" figure excluded `END_OF_DATA` trades, which removed
+> **59.9% of the winner's P&L and only 7.6% of baseline's** — deleting the winner's largest positions,
+> keeping nearly all of baseline's, then reporting the winner as behind. Force-closing both arms
+> identically at five cutoffs leaves the winner ahead **5/5 in both pools**, with total P&L **2.0–2.3×
+> baseline's**, and its **rule-closed P&L alone ahead at every intermediate cutoff** (1.97×, 1.76×,
+> 1.17×, 1.08×) — by the widest margin exactly where the force-closed block is smallest. §7 below is
+> retained struck-through for the record.
 
 ---
 
@@ -194,22 +205,44 @@ weakly; the portfolio result stands substantially on its own.**
 
 ---
 
-## 7. The qualification that must travel with the headline
+## 7. The qualification that must travel with the headline — SUBSTANTIALLY WITHDRAWN 2026-08-12
 
-**59.9% of the winning cell's P&L is unrealised mark-to-market on 34 positions still open when the
-walk ends** (baseline: 7.6%).
+**What survives**: the winning cell's top 10 trades are 64% of total P&L, and 73.6% sits in 10 of 238
+tickers. Concentration is real and remains a standing qualification.
 
-| cell | total P&L | `END_OF_DATA` share | **realised P&L** |
-|---|---|---|---|
-| h30 baseline | £166,830 | 7.6% | **£154,234** |
-| hunlimited | £194,790 | 62.1% | £73,844 |
-| **s3.0** | £348,549 | **59.9%** | **£139,863** |
+**What was withdrawn, and why** — full detail in `research/force_close_2026-08-12/REPORT.md`:
 
-**On realised P&L alone, s3.0 (£139,863) is worse than baseline (£154,234).** Its top 10 trades are
-64% of total P&L; most exit on 2026-08-07, the last day of data (NVDA held 1,198 days at +722%, still
-open). This is not an engine error — production marks open positions identically, and a real account
-holding NVDA up 722% genuinely would be worth that — but it is a real concentration and
-realisation-risk property.
+The `END_OF_DATA` share (59.9% for s3.0 vs 7.6% for baseline) describes **which positions the
+strategy itself chose to exit**, not **whether the gains were booked**. Every position is closed and
+every gain counted — the engine force-closes at the walk's end and this report's headline derives
+from that equity curve. Comparing arms after excluding `END_OF_DATA` removed 59.9% of the winner's
+P&L against 7.6% of baseline's: an asymmetric exclusion, not a conservative one.
+
+Force-closing both arms identically at five cutoffs: the winner leads **5/5 in both pools**, total
+P&L **2.0–2.3× baseline's**, and its **rule-closed P&L alone leads at every intermediate cutoff**
+(1.97×, 1.76×, 1.17×, 1.08×) — widest exactly where the force-closed block is smallest (16.0%,
+15.1%), the opposite of what an unrealised-marks artefact would produce. The mechanism behind the
+lower strategy-chosen total is a **trade-count ratio of 9.1× against a per-trade quality ratio of
+9.7×**, with the winner's mean position *smaller* (£2,770 vs £3,347).
+
+<details><summary>Original §7 text (struck through, preserved for the record)</summary>
+
+> ~~**59.9% of the winning cell's P&L is unrealised mark-to-market on 34 positions still open when the
+> walk ends** (baseline: 7.6%).~~
+>
+> | cell | total P&L | `END_OF_DATA` share | ~~realised P&L~~ |
+> |---|---|---|---|
+> | h30 baseline | £166,830 | 7.6% | ~~£154,234~~ |
+> | hunlimited | £194,790 | 62.1% | ~~£73,844~~ |
+> | **s3.0** | £348,549 | **59.9%** | ~~£139,863~~ |
+>
+> ~~**On realised P&L alone, s3.0 (£139,863) is worse than baseline (£154,234).**~~ Its top 10 trades
+> are 64% of total P&L; most exit on 2026-08-07, the last day of data (NVDA held 1,198 days at +722%,
+> still open). ~~This is not an engine error — production marks open positions identically, and a real
+> account holding NVDA up 722% genuinely would be worth that — but it is a real concentration and
+> realisation-risk property.~~
+
+</details>
 
 **End-date sensitivity, run to test whether the advantage is a window artefact.** Each arm's own
 equity curve truncated at seven successively earlier end dates, Δ vs baseline at the same cutoff:

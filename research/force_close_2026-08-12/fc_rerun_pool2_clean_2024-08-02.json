@@ -1,0 +1,22 @@
+{
+  "pool": "pool2_clean",
+  "cutoff": "2024-08-02",
+  "h30": {
+    "n_trades": 4283,
+    "total_pnl_gbp": 72083.25,
+    "final_equity": 122083.25,
+    "n_force_closed": 25,
+    "force_closed_pnl_gbp": 88.84,
+    "strategy_closed_pnl_gbp": 71994.41,
+    "runtime_s": 639.4
+  },
+  "s3.0": {
+    "n_trades": 544,
+    "total_pnl_gbp": 156499.85,
+    "final_equity": 206499.85,
+    "n_force_closed": 27,
+    "force_closed_pnl_gbp": 71958.22,
+    "strategy_closed_pnl_gbp": 84541.63,
+    "runtime_s": 555.8
+  }
+}
