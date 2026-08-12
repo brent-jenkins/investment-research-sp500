@@ -51,6 +51,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from data.database import UniverseMembership, get_engine
+from analysis.decision import MAX_HOLDING_DISABLED_SENTINEL
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +386,7 @@ def get_research_stock_candidates() -> set[str]:
     return get_all_known_stock_tickers() - get_quarantined_tickers()
 
 
-def get_max_holding_days(ticker: str, config: dict) -> int:
+def get_max_holding_days(ticker: str, config: dict) -> Optional[int]:
     """Return the max holding days for *ticker*, matching live automation limits.
 
     is_etf is resolved from the universe's OWN categorization — ETF_TICKERS
@@ -436,8 +437,18 @@ def get_max_holding_days(ticker: str, config: dict) -> int:
     stock_cap = int(t212_cfg.get("stock_max_holding_days", 30))
 
     if ticker in ETF_TICKERS:
-        return int(t212_cfg.get("max_holding_days", stock_cap))
-    return stock_cap
+        cap = int(t212_cfg.get("max_holding_days", stock_cap))
+    else:
+        cap = stock_cap
+
+    # Zero means DISABLED (2026-08-12, promoted from the exit-mechanics sweep):
+    # returning None hands evaluate_exit_reason() its standing "unknown, do not
+    # trigger this check" contract, so no age-based exit fires. Sizing does NOT
+    # use this value directly -- see analysis/decision.py:resolve_var_horizon_days()
+    # for why the VaR horizon is resolved separately.
+    if cap == MAX_HOLDING_DISABLED_SENTINEL:
+        return None
+    return cap
 
 
 # ---------------------------------------------------------------------------

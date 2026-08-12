@@ -335,6 +335,63 @@ def resolve_reentry_cooldown_days(config: dict) -> int:
     return int(t212_cfg.get("reentry_cooldown_days", REENTRY_COOLDOWN_DAYS))
 
 
+MAX_HOLDING_DISABLED_SENTINEL = 0
+"""`stock_max_holding_days: 0` (or `max_holding_days: 0` for ETFs) means the
+per-ticker holding cap is DISABLED -- positions are then governed only by
+CRISIS_EXIT/STOP_LOSS/SIGNAL_OFF and are never closed for age alone.
+
+Zero, rather than a magic string or a separate boolean, because it is the one
+value for which the cap has no coherent meaning: a 0-day cap would exit every
+position on its own entry day. Reusing it as the disable switch keeps a single
+integer config key rather than adding a second key that could contradict it.
+
+Promoted 2026-08-12 from the exit-mechanics sweep, where unlimited holding was
+the single largest contributor to the measured result. THE DEFAULT IS UNCHANGED
+-- config.yaml still ships stock_max_holding_days: 30, and enabling this is a
+separate, deliberate flip.
+"""
+
+DEFAULT_VAR_HORIZON_DAYS = 30
+"""Fallback holding horizon for VaR position sizing when the holding cap is
+disabled. See resolve_var_horizon_days() for why this is needed at all."""
+
+
+def resolve_var_horizon_days(max_holding_days: Optional[int], config: dict) -> int:
+    """Return the holding horizon (in days) VaR position sizing should scale by,
+    given a possibly-disabled holding cap.
+
+    WHY THIS EXISTS, and why it is NOT simply max_holding_days: the per-ticker
+    holding cap has TWO consumers with genuinely different semantics, and they
+    diverge the moment the cap is disabled.
+
+      1. evaluate_exit_reason(max_holding_days=...) -- an EXIT GATE. None means
+         "no age-based exit", which that function already handles through its
+         standing None-tolerance contract. Nothing further is needed there.
+      2. _var_position_size_core(..., holding_days=...) -- a SIZING HORIZON. It
+         scales daily VaR by sqrt(holding_days) so the position is sized such
+         that a holding-period adverse move loses at most max_risk_pct. None is
+         not meaningful here: sqrt(None) is not a number, and "size for an
+         infinite horizon" would drive every position to the minimum.
+
+    So a disabled cap needs a real horizon for SIZING while having none for
+    EXITS. This function supplies it, and is the single shared implementation
+    both live order placement (brokers/trading212.py) and every backtest engine
+    (analysis/backtest.py) call -- never re-derived inline, per this project's
+    "exactly one implementation of any given trading decision" invariant.
+
+    THE FALLBACK VALUE IS LOAD-BEARING FOR REPRODUCIBILITY, not arbitrary: the
+    exit-mechanics sweep measured its unlimited-holding arms with a sizing
+    horizon of exactly 30 days (the then-current stock_max_holding_days). A
+    different fallback would produce different position sizes and would NOT
+    reproduce that study's published figures. trading212_invest.var_horizon_days
+    overrides it; the default reproduces the research exactly.
+    """
+    if max_holding_days is not None:
+        return int(max_holding_days)
+    t212_cfg = config.get("trading212_invest", {}) or {}
+    return int(t212_cfg.get("var_horizon_days", DEFAULT_VAR_HORIZON_DAYS))
+
+
 def resolve_dynamic_max_position_gbp(
     account_value_gbp: float, per_trade_pct: float, absolute_max_position_gbp: float,
 ) -> float:
