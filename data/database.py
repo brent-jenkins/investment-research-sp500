@@ -377,6 +377,140 @@ class TickerSector(Base):
     fetched_at = Column(DateTime, default=datetime.utcnow)
 
 
+class TickerFundamentals(Base):
+    """Point-in-time raw quarterly fundamentals, captured going forward.
+
+    NOTHING READS THIS BACK INTO ANY TRADING DECISION. It is not consulted by
+    candidacy, ranking, sizing, or exits, and must not be. If fundamentals are
+    ever used in a decision it will be after a pre-registered study, not by
+    accretion -- see CLAUDE.md's "Point-in-time fundamentals recorder" section.
+    This is a data-collection option bought cheaply, not a study.
+
+    WHY THIS TABLE EXISTS AT ALL: point-in-time fundamentals (what was actually
+    knowable on a historical date, not today's restated figures) are not
+    obtainable free, which makes the idea untestable retrospectively. The only
+    way to get a vintage-correct dataset for this universe is to start
+    recording one. Every row therefore carries BOTH `reporting_period` (the
+    fiscal period the figures describe) and `fetched_at` (when we could first
+    have known them). Without the reporting period the data is not
+    point-in-time, it is merely undated.
+
+    PROVENANCE IS THE MOST IMPORTANT COLUMN HERE, and the two kinds must NEVER
+    be pooled in an analysis:
+
+      'point_in_time' -- captured forward, at candidate-list time, before the
+          outcome existed. The ONLY rows that can ever test whether
+          fundamentals predict outcome.
+      'restated'      -- backfilled historical quarters fetched today. These
+          are the CURRENT version of a past quarter, not what was published and
+          knowable at the time. Companies revise prior periods, and acquisitive
+          companies revise them retrospectively.
+
+    Pooling them would reproduce exactly the lookahead contamination that closed
+    the FTSE and curated-list ideas -- and, the part that actually matters,
+    **restated and original figures look identical in the data**, so the
+    contamination would be undetectable after the fact. There is no way to
+    recover the distinction later; it exists only because it is recorded at
+    write time.
+
+    What each kind is good for:
+      * restated  -- characterising the DATA: coverage depth per ticker, label
+        stability over time, field-presence rates. NOT usable for any claim
+        about what was knowable on a historical decision date.
+      * point_in_time -- the only sample that can support an outcome study.
+
+    RAW FIELDS ONLY, NEVER DERIVED SCORES. Ratios are computable later from raw
+    values; a stored "quality score" would permanently lock in whichever
+    definition happened to be current the night it was written.
+
+    QUARTERLY, not annual -- decided by measurement, not preference. The
+    2026-08-12 coverage probe found annual statements carry a median reporting
+    lag of 224 days against quarterly's 43, i.e. the typical annual figure
+    describes a fiscal year that ended over seven months before the decision
+    sitting beside it. For a point-in-time dataset that is self-defeating. The
+    cost is 6-8pp lower field coverage on revenue/net_income, which self-heals
+    at the next quarterly fetch, whereas a stale vintage never does.
+
+    `field_aliases` records WHICH yfinance row label produced each value.
+    Labels have changed between yfinance versions ("Total Stockholder Equity"
+    -> "Stockholders Equity"), so a future rename shows up as a coverage drop
+    against a known baseline rather than as silent nulls in a table nobody
+    looks at for two years -- which is how several of this project's worst
+    problems started.
+
+    DELIBERATELY never routed through verify_ticker_identity() or
+    scan_unverified_tickers(). That mechanism catches recycled-ticker-symbol
+    identity fraud in the historical/delisted population; fundamentals capture
+    is an unrelated concern on a live-candidate population, and conflating the
+    two would repeat a domain-scoping error this project has now made three
+    times.
+    """
+
+    __tablename__ = "ticker_fundamentals"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    ticker           = Column(String(20), nullable=False, index=True)
+    reporting_period = Column(String(10), nullable=False)   # fiscal period END (YYYY-MM-DD)
+    statement_type   = Column(String(16), nullable=False, default="quarterly")
+    provenance       = Column(String(16), nullable=False, default="point_in_time", index=True)
+
+    total_debt          = Column(Float)
+    total_equity        = Column(Float)
+    total_assets        = Column(Float)
+    revenue             = Column(Float)
+    net_income          = Column(Float)
+    operating_cash_flow = Column(Float)
+    free_cash_flow      = Column(Float)
+    shares_outstanding  = Column(Float)
+
+    field_aliases       = Column(Text)   # JSON: field -> yfinance row label that matched
+    period_by_statement = Column(Text)   # JSON: balance/income/cash -> period end
+    source              = Column(String(32), default="yfinance")
+    fetched_at          = Column(DateTime, default=datetime.utcnow)
+
+    # NO uniqueness on (ticker, reporting_period): a re-fetch whose values
+    # DIFFER appends a new row rather than updating in place, so a restatement
+    # becomes observable data instead of a silent change. Flag-don't-delete,
+    # applied to values rather than rows. Costs rows and nothing else.
+
+
+class CandidateFundamentalsSnapshot(Base):
+    """Which fundamentals row was CURRENT for each gate-passing candidate on
+    each decision night -- the point-in-time link.
+
+    Captured at CANDIDATE-LIST time, not entry time, and deliberately so:
+    recording only admitted positions would yield ~30 observations a year under
+    the current configuration and give no control group at all. Recording every
+    gate-passing candidate (~300/night) preserves both the admitted and the
+    rejected populations, which is what makes any future comparison possible.
+
+    Kept as a thin link rather than a copy of the figures: `pending_orders`
+    already records the nightly candidate population, but it is PURGED on a
+    30-day retention window, so it cannot serve as the durable candidate
+    history this needs. These rows have no retention limit.
+
+    `fundamentals_id` is NULLABLE on purpose -- a candidate whose fundamentals
+    have not been fetched yet (the pool refreshes in nightly chunks) is recorded
+    with NULL rather than skipped, so "we had no data for this candidate on this
+    night" is a durable, queryable fact rather than an absence indistinguishable
+    from the job never having run.
+
+    READ BY NOTHING IN THE DECISION PATH. See TickerFundamentals above.
+    """
+
+    __tablename__ = "candidate_fundamentals_snapshot"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    decision_date   = Column(String(10), nullable=False, index=True)   # YYYY-MM-DD
+    ticker          = Column(String(20), nullable=False, index=True)
+    fundamentals_id = Column(Integer)      # NULL = no fundamentals known that night
+    recorded_at     = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("decision_date", "ticker", name="uq_cand_fund_date_ticker"),
+    )
+
+
 class AdmissionRankingShadow(Base):
     """Forward-only evidence for the relative-ranking promotion's OPEN
     CANDIDATE decision (2026-08-09) — see CLAUDE.md's "Relative-rank
@@ -1163,6 +1297,8 @@ def init_db() -> None:
         InstrumentResolution,
         TickerDataQuality,
         TickerSector,
+        TickerFundamentals,
+        CandidateFundamentalsSnapshot,
         AdmissionRankingShadow,
         AccountValueHistory,
         User,

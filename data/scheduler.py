@@ -1063,6 +1063,56 @@ def _eod_job() -> None:
             details["benchmark_comparison_error"] = str(exc)
 
         try:
+            # Point-in-time fundamentals capture (2026-08-12) -- DATA ONLY.
+            # Nothing here is read back into candidacy, ranking, sizing or
+            # exits; see data/database.py:TickerFundamentals's docstring.
+            #
+            # Own try/except, and every function below is itself
+            # never-raising, so a failure here CANNOT reach the order
+            # decisions this job already made above -- proven directly by
+            # tests/test_fundamentals_recorder.py's isolation test rather
+            # than assumed from the wrapping.
+            #
+            # Bounded and chunked: FUNDAMENTALS_CHUNK_SIZE tickers/night,
+            # ~90s at the measured rate, self-resuming with no progress
+            # table (never-fetched first, then oldest fetched_at). The
+            # data-quality backstop's ~19-minute unbroken loop, which
+            # silently never completed for two days, is the precedent this
+            # deliberately avoids.
+            from data.ingestion import (  # noqa: PLC0415
+                refresh_fundamentals_chunk, snapshot_candidate_fundamentals,
+            )
+            fres = refresh_fundamentals_chunk(config)
+            details["fundamentals_fetch"] = fres
+
+            # The candidate list is read back from the rows the decide phase
+            # ITSELF just wrote, rather than recomputing the gate: a second
+            # evaluation could disagree with what actually happened, which is
+            # precisely the "two hand-written copies that are merely supposed
+            # to agree" shape this project's standing invariant forbids.
+            from sqlalchemy import text as _sa_text  # noqa: PLC0415
+            from data.database import get_engine as _get_engine  # noqa: PLC0415
+            with _get_engine().connect() as _conn:
+                cands = [r[0] for r in _conn.execute(_sa_text(
+                    "SELECT DISTINCT ticker FROM pending_orders "
+                    "WHERE date(decided_at) = :d"), {"d": run_date.isoformat()})]
+            sres = snapshot_candidate_fundamentals(cands, run_date.isoformat())
+            details["fundamentals_snapshot"] = sres
+            logger.info(
+                "Fundamentals: fetched %s/%s tickers (%s no-data), snapshotted %s "
+                "candidates (%s linked, %s unlinked).",
+                fres.get("written"), fres.get("attempted"), fres.get("no_data"),
+                sres.get("candidates"), sres.get("linked"), sres.get("unlinked"),
+            )
+        except Exception as exc:
+            # Recorded either way, so "did this step run" is answerable from
+            # the completion record rather than only from the absence of an
+            # error -- the exact gap that let the data-quality backstop fail
+            # silently for two days.
+            logger.error("Fundamentals capture after EOD failed: %s", exc)
+            details["fundamentals_error"] = str(exc)
+
+        try:
             # Bounded retention for pending_orders (2026-08-02) -- a
             # deliberate, scoped exception to "flag, don't delete": this
             # table's resolved rows (SKIPPED_*/REJECTED_CAPACITY/SUPERSEDED)

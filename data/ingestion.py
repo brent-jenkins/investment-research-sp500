@@ -1482,3 +1482,341 @@ def get_price_df(ticker: str, days: int = 365) -> pd.DataFrame:
         return pd.DataFrame(records)
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Point-in-time fundamentals recorder (2026-08-12)
+#
+# DATA CAPTURE ONLY. Nothing here is read back into candidacy, ranking, sizing
+# or exits, and nothing may be -- see data/database.py:TickerFundamentals's own
+# docstring and CLAUDE.md's "Point-in-time fundamentals recorder" section.
+#
+# DELIBERATELY never routed through verify_ticker_identity() or
+# scan_unverified_tickers(). Those exist to catch recycled-ticker-symbol
+# identity fraud in the historical/delisted population; this is an unrelated
+# concern on a live-candidate population, and conflating them would repeat a
+# domain-scoping error this project has already made three times.
+# ---------------------------------------------------------------------------
+
+FUNDAMENTALS_CHUNK_SIZE = 25
+"""Tickers fetched per EOD run. At the measured ~3.66s/ticker (2.5s rate limit
+plus ~1.1s fetch) this is ~90 seconds -- bounded, resumable, and incapable of
+growing with the pool. The data-quality backstop's ~19-minute unbroken loop,
+which silently never completed for two days, is the precedent being avoided."""
+
+_FUNDAMENTAL_FIELD_ALIASES = {
+    "total_debt":          (["Total Debt", "TotalDebt"], "balance"),
+    "total_equity":        (["Stockholders Equity", "Total Stockholder Equity",
+                             "StockholdersEquity", "Total Equity Gross Minority Interest"], "balance"),
+    "total_assets":        (["Total Assets", "TotalAssets"], "balance"),
+    "revenue":             (["Total Revenue", "TotalRevenue", "Operating Revenue"], "income"),
+    "net_income":          (["Net Income", "NetIncome", "Net Income Common Stockholders"], "income"),
+    "operating_cash_flow": (["Operating Cash Flow", "Total Cash From Operating Activities",
+                             "OperatingCashFlow"], "cash"),
+    "free_cash_flow":      (["Free Cash Flow", "FreeCashFlow"], "cash"),
+    "shares_outstanding":  (["Ordinary Shares Number", "Share Issued"], "balance"),
+}
+
+
+def _latest_from_statement(df, aliases):
+    """Return (value, alias_used, period_end) from the most recent column."""
+    if df is None or not hasattr(df, "columns") or getattr(df, "empty", True):
+        return None, None, None
+    cols = sorted(list(df.columns), reverse=True)
+    if not cols:
+        return None, None, None
+    latest = cols[0]
+    period = latest.date().isoformat() if hasattr(latest, "date") else str(latest)
+    for a in aliases:
+        if a in df.index:
+            v = df.loc[a, latest]
+            try:
+                if pd.notna(v):
+                    return float(v), a, period
+            except Exception:  # noqa: BLE001
+                continue
+    return None, None, period
+
+
+def fetch_ticker_fundamentals(ticker: str) -> Optional[dict]:
+    """Fetch raw QUARTERLY fundamentals for *ticker*. Never raises.
+
+    Quarterly rather than annual, decided by measurement rather than
+    preference: the 2026-08-12 coverage probe measured a median reporting lag
+    of 43 days for quarterly against 224 for annual, i.e. the typical annual
+    figure describes a fiscal year that ended over seven months before the
+    decision beside it. Returns None only when nothing usable came back.
+    """
+    try:
+        t = yf.Ticker(ticker)
+        stmts = {"balance": t.quarterly_balance_sheet,
+                 "income": t.quarterly_financials,
+                 "cash": t.quarterly_cashflow}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fundamentals fetch failed for %s: %s", ticker, exc)
+        return None
+
+    values, aliases, periods = {}, {}, {}
+    for field, (alias_list, which) in _FUNDAMENTAL_FIELD_ALIASES.items():
+        v, alias, period = _latest_from_statement(stmts.get(which), alias_list)
+        values[field] = v
+        if alias:
+            aliases[field] = alias
+        if period:
+            periods[which] = period
+
+    if not any(v is not None for v in values.values()):
+        return None
+
+    # Stored per ticker, never assumed from a job-level "as of" date: fiscal
+    # calendars genuinely differ (AAPL quarter-end 06-30 vs NVDA 04-30), and a
+    # shared date would silently mix vintages across tickers.
+    reporting_period = max(periods.values()) if periods else None
+    if not reporting_period:
+        return None
+
+    return {"ticker": ticker, "reporting_period": reporting_period,
+            "statement_type": "quarterly", "values": values,
+            "field_aliases": aliases, "period_by_statement": periods}
+
+
+def write_ticker_fundamentals(record: dict, provenance: str = "point_in_time") -> Optional[int]:
+    """Append-on-difference. Never raises. Returns the row id in use.
+
+    RE-FETCH APPENDS, NEVER OVERWRITES (2026-08-12 amendment). If the same
+    ticker/quarter/provenance is fetched again and ANY stored value differs, a
+    NEW row is written rather than the existing one being updated. That turns a
+    restatement into observable data instead of a silent change -- this
+    project's flag-don't-delete principle applied to values rather than rows.
+    If every value is identical, no row is written and the existing id is
+    returned, so unchanged re-fetches cost nothing.
+
+    `provenance` must be 'point_in_time' (forward capture at candidate-list
+    time) or 'restated' (backfilled history). The two must never be pooled in
+    an analysis -- see data/database.py:TickerFundamentals's docstring for why
+    the distinction is unrecoverable if not recorded at write time.
+    """
+    if not record:
+        return None
+    if provenance not in ("point_in_time", "restated"):
+        logger.warning("write_ticker_fundamentals: bad provenance %r", provenance)
+        return None
+    try:
+        engine = get_engine()
+        fields = list(_FUNDAMENTAL_FIELD_ALIASES)
+        with engine.begin() as conn:
+            prior = conn.execute(text(
+                "SELECT id, " + ", ".join(fields) + " FROM ticker_fundamentals "
+                "WHERE ticker=:t AND reporting_period=:p AND statement_type=:s "
+                "AND provenance=:pr ORDER BY fetched_at DESC, id DESC LIMIT 1"),
+                {"t": record["ticker"], "p": record["reporting_period"],
+                 "s": record["statement_type"], "pr": provenance}).fetchone()
+
+            new_vals = [record["values"].get(k) for k in fields]
+            if prior is not None:
+                old_vals = list(prior[1:])
+                if _values_equal(old_vals, new_vals):
+                    return int(prior[0])   # unchanged -- no new row
+
+            payload = {
+                "t": record["ticker"], "p": record["reporting_period"],
+                "s": record["statement_type"], "pr": provenance,
+                "fa": json.dumps(record.get("field_aliases") or {}),
+                "pbs": json.dumps(record.get("period_by_statement") or {}),
+                "now": datetime.utcnow(),
+            }
+            payload.update({k: record["values"].get(k) for k in fields})
+            cols = ", ".join(fields)
+            binds = ", ".join(":" + k for k in fields)
+            res = conn.execute(text(
+                "INSERT INTO ticker_fundamentals (ticker, reporting_period, statement_type, "
+                "provenance, " + cols + ", field_aliases, period_by_statement, source, "
+                "fetched_at) VALUES (:t, :p, :s, :pr, " + binds +
+                ", :fa, :pbs, 'yfinance', :now)"), payload)
+            return int(res.lastrowid)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("write_ticker_fundamentals failed for %s: %s",
+                       record.get("ticker"), exc)
+        return None
+
+
+def _values_equal(a, b) -> bool:
+    """Tolerant float comparison -- yfinance returns floats, and a re-fetch of
+    genuinely unchanged data must not append a row through rounding noise."""
+    if len(a) != len(b):
+        return False
+    for x, y in zip(a, b):
+        if x is None and y is None:
+            continue
+        if x is None or y is None:
+            return False
+        try:
+            if abs(float(x) - float(y)) > max(1e-6, abs(float(x)) * 1e-9):
+                return False
+        except (TypeError, ValueError):
+            if x != y:
+                return False
+    return True
+
+
+def fetch_ticker_fundamentals_history(ticker: str, max_quarters: int = 12) -> list:
+    """Every quarter yfinance currently returns for *ticker*, most recent first.
+
+    Used ONLY by the restated backfill. Every row this produces is the CURRENT
+    version of a past quarter -- it is NOT what was knowable then, and must be
+    written with provenance='restated'. Never raises.
+    """
+    try:
+        t = yf.Ticker(ticker)
+        stmts = {"balance": t.quarterly_balance_sheet,
+                 "income": t.quarterly_financials,
+                 "cash": t.quarterly_cashflow}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fundamentals history fetch failed for %s: %s", ticker, exc)
+        return []
+
+    periods = set()
+    for df in stmts.values():
+        if df is not None and hasattr(df, "columns") and not getattr(df, "empty", True):
+            for c in df.columns:
+                periods.add(c.date().isoformat() if hasattr(c, "date") else str(c))
+    out = []
+    for period in sorted(periods, reverse=True)[:max_quarters]:
+        values, aliases, pbs = {}, {}, {}
+        for field, (alias_list, which) in _FUNDAMENTAL_FIELD_ALIASES.items():
+            df = stmts.get(which)
+            v = None
+            if df is not None and hasattr(df, "columns") and not getattr(df, "empty", True):
+                col = next((c for c in df.columns
+                            if (c.date().isoformat() if hasattr(c, "date") else str(c)) == period),
+                           None)
+                if col is not None:
+                    pbs[which] = period
+                    for a in alias_list:
+                        if a in df.index:
+                            raw = df.loc[a, col]
+                            try:
+                                if pd.notna(raw):
+                                    v, aliases[field] = float(raw), a
+                                    break
+                            except Exception:  # noqa: BLE001
+                                continue
+            values[field] = v
+        if any(v is not None for v in values.values()):
+            out.append({"ticker": ticker, "reporting_period": period,
+                        "statement_type": "quarterly", "values": values,
+                        "field_aliases": aliases, "period_by_statement": pbs})
+    return out
+
+
+def backfill_fundamentals_chunk(config: dict, chunk_size: int = FUNDAMENTALS_CHUNK_SIZE,
+                                max_quarters: int = 12) -> dict:
+    """Backfill RESTATED historical quarters for the next chunk of candidates.
+
+    Every row written here is flagged 'restated' and is NOT usable for any
+    claim about what was knowable on a historical date -- only for
+    characterising the data itself (coverage depth, label stability,
+    field-presence rates).
+
+    Operator-driven, like prewarm_sector_data.py -- deliberately NOT a
+    scheduled job, per the standing constraint against adding one. Never raises.
+    """
+    from analysis import universe
+
+    out = {"tickers": 0, "rows_written": 0, "no_data": 0, "error": None}
+    try:
+        pool = sorted(universe.get_live_stock_candidates())
+        engine = get_engine()
+        with engine.connect() as conn:
+            seen = {r[0] for r in conn.execute(text(
+                "SELECT DISTINCT ticker FROM ticker_fundamentals WHERE provenance='restated'"))}
+        queue = [t for t in pool if t not in seen][:chunk_size]
+
+        rate = float(config.get("data", {}).get("rate_limit_seconds", 2.5))
+        for tk in queue:
+            out["tickers"] += 1
+            recs = fetch_ticker_fundamentals_history(tk, max_quarters=max_quarters)
+            if not recs:
+                out["no_data"] += 1
+            for rec in recs:
+                if write_ticker_fundamentals(rec, provenance="restated") is not None:
+                    out["rows_written"] += 1
+            time.sleep(rate)
+        out["pool_size"] = len(pool)
+        out["remaining"] = max(0, len([t for t in pool if t not in seen]) - len(queue))
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(type(exc).__name__) + ": " + str(exc)
+        logger.warning("backfill_fundamentals_chunk failed: %s", exc)
+    return out
+
+
+def refresh_fundamentals_chunk(config: dict, chunk_size: int = FUNDAMENTALS_CHUNK_SIZE) -> dict:
+    """Fetch fundamentals for the next chunk of live candidates. Never raises.
+
+    Selection is never-fetched first, then oldest fetched_at -- so the chunk is
+    self-resuming with no progress table of its own: a ticker refreshed tonight
+    simply drops to the back of the queue. Bounded by chunk_size regardless of
+    how large the candidate pool grows.
+    """
+    from analysis import universe
+
+    out = {"attempted": 0, "written": 0, "no_data": 0, "error": None}
+    try:
+        pool = sorted(universe.get_live_stock_candidates())
+        engine = get_engine()
+        with engine.connect() as conn:
+            seen = {r[0]: str(r[1]) for r in conn.execute(text(
+                "SELECT ticker, MAX(fetched_at) FROM ticker_fundamentals GROUP BY ticker"))}
+        never = [t for t in pool if t not in seen]
+        stale = sorted([t for t in pool if t in seen], key=lambda t: seen[t])
+        queue = (never + stale)[:chunk_size]
+
+        rate = float(config.get("data", {}).get("rate_limit_seconds", 2.5))
+        for tk in queue:
+            out["attempted"] += 1
+            rec = fetch_ticker_fundamentals(tk)
+            if rec is None:
+                out["no_data"] += 1
+            elif write_ticker_fundamentals(rec, provenance="point_in_time") is not None:
+                out["written"] += 1
+            time.sleep(rate)
+        out["pool_size"] = len(pool)
+        out["never_fetched_remaining"] = max(0, len(never) - len(queue))
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(type(exc).__name__) + ": " + str(exc)
+        logger.warning("refresh_fundamentals_chunk failed: %s", exc)
+    return out
+
+
+def snapshot_candidate_fundamentals(tickers, decision_date: str) -> dict:
+    """Record which fundamentals row was current for each gate-passing
+    candidate tonight. Never raises.
+
+    fundamentals_id is NULL when nothing is stored for that ticker yet --
+    recorded rather than skipped, so "no data for this candidate on this night"
+    remains a durable, queryable fact rather than an absence indistinguishable
+    from the job never having run.
+    """
+    out = {"candidates": 0, "linked": 0, "unlinked": 0, "error": None}
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            latest = {r[0]: r[1] for r in conn.execute(text(
+                "SELECT ticker, id FROM ticker_fundamentals f "
+                "WHERE f.provenance = 'point_in_time' AND f.id = "
+                "(SELECT x.id FROM ticker_fundamentals x WHERE x.ticker = f.ticker "
+                " AND x.provenance = 'point_in_time' "
+                " ORDER BY x.reporting_period DESC, x.fetched_at DESC LIMIT 1)"))}
+            for tk in tickers:
+                out["candidates"] += 1
+                fid = latest.get(tk)
+                out["linked" if fid is not None else "unlinked"] += 1
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO candidate_fundamentals_snapshot "
+                    "(decision_date, ticker, fundamentals_id, recorded_at) "
+                    "VALUES (:d, :t, :f, :now)"),
+                    {"d": decision_date, "t": tk, "f": fid, "now": datetime.utcnow()})
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(type(exc).__name__) + ": " + str(exc)
+        logger.warning("snapshot_candidate_fundamentals failed: %s", exc)
+    return out

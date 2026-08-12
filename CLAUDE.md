@@ -2544,6 +2544,130 @@ placed.** It is technically possible in the window before `poll_placed_orders()`
 kind of fix that looks fine and is not — it puts hand-written values where the engine's own
 computation belongs, in production, with no test covering the result.
 
+## Point-in-time fundamentals recorder — DATA CAPTURE ONLY, nothing reads it (2026-08-12)
+
+**Records raw quarterly fundamentals for gate-passing candidates, going forward. It changes no
+trading decision, no sizing, no exit, and nothing reads it back into the decision path.** This is an
+option bought cheaply, not a study.
+
+**Why it exists.** Four investigations have now found that price-derived entry information does not
+predict individual trade outcome (momentum magnitude, path smoothness, peak drawdown, and a
+16-feature screen). Fundamentals are genuinely different data — not contained in the price series —
+and the quality factor has real published support. But **point-in-time fundamentals are not
+obtainable free**, which makes the idea untestable retrospectively. The only way to get a
+vintage-correct dataset for this universe is to start recording one.
+
+**THE CONSTRAINT, stated in the table's own docstring and here: nothing reads this into candidacy,
+ranking, sizing or exits.** If fundamentals are ever used in a decision it will be after a
+pre-registered study, not by accretion. `tests/test_fundamentals_recorder.py` enforces this
+structurally — it greps every decision-path module for any reference to the tables or capture
+functions and fails if one appears. That test failing is the intended alarm, not an inconvenience.
+
+### Coverage was measured first, and it decided a design question
+
+`research/fundamentals_coverage_2026-08-12/` probed 50 live candidates before anything was built.
+**50/50 returned usable data, zero hard errors, zero empty responses**, with all eight raw fields at
+92–100% (quarterly) / 98–100% (annual). The "coverage may be too sparse to bother" risk did not
+materialise for this universe — though that says nothing about delisted names, where this project's
+price coverage has repeatedly failed. Capture is at candidate-list time, so only live candidates are
+ever fetched and the measured population is the relevant one.
+
+**The decisive measurement was staleness, not presence.** Median reporting lag: **quarterly 43 days,
+annual 224 days**. An annual figure typically describes a fiscal year that ended over seven months
+before the decision beside it — self-defeating for a point-in-time dataset. **Quarterly only.** The
+6–8pp coverage cost on `revenue`/`net_income` self-heals at the next quarterly fetch; a stale vintage
+never does.
+
+**The consequence for any eventual study, so nobody later mistakes this for current-condition data**:
+even quarterly means the fundamentals are always ~6 weeks behind the decision. Any study can only ever
+test whether **last quarter's** financial position predicts outcome. That is the real question anyone
+could act on — you cannot trade on figures that do not exist yet — but it is not "the company's
+condition today."
+
+**The 43-day probe figure is the REPORTING lag alone and is NOT this dataset's real staleness — quote
+the combined figure instead.** Forward capture cycles the pool at 25 tickers/night, so a newly-filed
+quarter waits up to **~20 further days** for its ticker's turn. **The honest number is therefore
+roughly 43 + 20 ≈ two months behind the decision at worst**, not 43 days. Acceptable for a dataset
+whose entire purpose is being honestly point-in-time, and it is the figure any eventual study must
+quote. **The ~20-night cycle is the operational number to watch**: if the candidate pool grows
+materially, or `FUNDAMENTALS_CHUNK_SIZE` is ever reduced, capture lag grows with it and this combined
+figure moves — the reporting lag will not.
+
+**Fiscal calendars genuinely differ** (AAPL quarter-end 2026-06-30, NVDA 2026-04-30), so the reporting
+period is stored **per ticker, per fetch**. A job-level "as of" date would silently mix vintages.
+
+### PROVENANCE is the load-bearing column
+
+Every row is flagged `point_in_time` or `restated`, and **the two must never be pooled in an
+analysis**:
+
+- **`point_in_time`** — captured forward, at candidate-list time, before the outcome existed. **The
+  only rows that can ever test whether fundamentals predict outcome.**
+- **`restated`** — backfilled historical quarters fetched today. These are the *current* version of a
+  past quarter, not what was published and knowable then. Companies revise prior periods, and
+  acquisitive companies revise them retrospectively.
+
+Pooling them would reproduce the same lookahead contamination that closed the FTSE and curated-list
+ideas — and **restated and original figures look identical in the data**, so the contamination would
+be undetectable after the fact. The distinction is unrecoverable unless recorded at write time.
+The nightly snapshot therefore links **only `point_in_time` rows**, keeping the forward sample clean
+by construction rather than by discipline.
+
+**What each kind is good for:** `restated` characterises the DATA (coverage depth per ticker, label
+stability over time, field-presence rates) and is **not usable for any claim about what was knowable
+on a historical date**. `point_in_time` is the only outcome-study sample.
+
+### Re-fetch APPENDS, never overwrites
+
+If the same ticker/quarter/provenance is fetched again and **any** value differs, a **new row** is
+written rather than the existing one updated — flag-don't-delete applied to values rather than rows.
+That makes a restatement observable data instead of a silent change. An identical re-fetch writes
+nothing and costs nothing, so rows accumulate only on genuine change.
+
+### Volume and isolation
+
+**Forward capture**: `FUNDAMENTALS_CHUNK_SIZE = 25` tickers/night from the existing EOD job — **no new
+scheduled job** — at a measured ~3.66s/ticker, so **~90 seconds**. Self-resuming with no progress
+table (never-fetched first, then oldest `fetched_at`); a full 503-pool cycle every ~20 nights, so each
+quarterly filing is captured within ~20 days of appearing. Bounded by chunk size regardless of pool
+growth. **The data-quality backstop's ~19-minute unbroken loop, which silently never completed for two
+days, is the precedent deliberately avoided.** A completion record (`fundamentals_fetch` /
+`fundamentals_snapshot` / `fundamentals_error`) is written either way, so "did this step run" is
+answerable from the record rather than only from the absence of an error.
+
+**Backfill (restated)**: operator-driven like `prewarm_sector_data.py`, not scheduled. Same 3
+calls/ticker, so a 25-ticker run is also ~90s and writes ~125 rows.
+
+**yfinance's history depth is ~5 quarters per ticker, NOT the 12 the `max_quarters` ceiling allows —
+measured, and it changes what the backfill is.** Roughly **15 months** of restated data is available
+per ticker, so the backfill is a **shallow one-pass job, not a deep history pull and not an ongoing
+project**: once a ticker has been backfilled there is no further history to go back for, and
+re-running it later yields the same ~5 quarters (plus whatever has since been filed, which forward
+capture already has). **Recorded explicitly so nobody later assumes more history is available than
+there is** — the `max_quarters=12` parameter is a ceiling the source never reaches, not a target. The
+practical consequence: `restated` is thin enough that its stated purpose (characterising the DATA —
+coverage depth, label stability, field-presence rates) is roughly the *most* it can support, which is
+less than hoped for even that.
+
+**Isolation is fail-verified, not assumed.** Both entry points never raise internally, and the EOD
+call site wraps them again. Five injected-defect runs confirmed the tests actually fail: raising
+instead of capturing, referencing the table from `decision.py`, skipping unlinked candidates,
+overwriting instead of appending, and letting the snapshot link a restated row. All green after
+restore.
+
+**Joinability confirmed by test**: the snapshot keys on `(ticker, decision_date)` and `price_data` on
+`(ticker, date)`, so candidates — **including the rejected control population** — join to their
+subsequent price paths with no migration.
+
+### The honest timeline
+
+**This will not support a study for years.** At ~30 admissions a year under the current configuration,
+with multi-month holds, the forward sample accumulates slowly — and when it is eventually large
+enough it will represent **one market regime with a few hundred decisions**, not a 16-block
+validation. Recording all ~300 gate-passing candidates nightly (rather than only admissions) is what
+gives it both a treated and a control population, and is the only reason the timeline is years rather
+than decades. **It is recorded so the option exists, not because it is close to usable.**
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).

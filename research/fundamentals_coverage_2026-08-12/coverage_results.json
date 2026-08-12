@@ -1,0 +1,5242 @@
+{
+  "QUARTERLY": {
+    "summary": {
+      "n": 50,
+      "errors": 0,
+      "nodata": 0,
+      "usable": 50,
+      "field_presence": {
+        "total_debt": 48,
+        "total_equity": 49,
+        "total_assets": 49,
+        "revenue": 47,
+        "net_income": 47,
+        "operating_cash_flow": 50,
+        "free_cash_flow": 49,
+        "shares_outstanding": 50
+      }
+    },
+    "rows": [
+      {
+        "ticker": "AME",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "AOS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EFX",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "UHS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "REG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-03-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-03-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-03-31"
+          },
+          "revenue": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "free_cash_flow": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-03-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-03-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-03-31",
+          "income": "2026-06-30",
+          "cash": "2026-03-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "TMUS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "NCLH",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MPC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PFE",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "GPC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "SW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "TAP",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "WSM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-04-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-04-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-04-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-04-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-04-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-04-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-04-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-04-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-04-30",
+          "income": "2026-04-30",
+          "cash": "2026-04-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MCD",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EBAY",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CVNA",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ALB",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "INTC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CINF",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-03-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-03-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-03-31"
+          },
+          "revenue": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-03-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-03-31",
+          "income": "2026-06-30",
+          "cash": "2026-03-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PANW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-04-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-04-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-04-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-04-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-04-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-04-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-04-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-04-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-04-30",
+          "income": "2026-04-30",
+          "cash": "2026-04-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ODFL",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "HUM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MCO",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "FDS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-05-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-05-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-05-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-05-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-05-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-05-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-05-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-05-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-05-31",
+          "income": "2026-05-31",
+          "cash": "2026-05-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CHRW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-03-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CHTR",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MGM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "COF",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ALLE",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EA",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "DHI",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PFG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CBOE",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "SCHW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "IBKR",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PEG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "LHX",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CI",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "HWM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "KMI",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ORCL",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-05-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-05-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-05-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-05-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-05-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-05-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-05-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-05-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-05-31",
+          "income": "2026-05-31",
+          "cash": "2026-05-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ANET",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": false,
+            "alias": null,
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "IFF",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MRNA",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CSGP",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EXC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PKG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "HUBB",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "GNRC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-06-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-06-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-06-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-06-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-06-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-06-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-06-30"
+          }
+        },
+        "periods": {
+          "balance": "2026-06-30",
+          "income": "2026-06-30",
+          "cash": "2026-06-30"
+        },
+        "any_data": true
+      }
+    ]
+  },
+  "ANNUAL": {
+    "summary": {
+      "n": 50,
+      "errors": 0,
+      "nodata": 0,
+      "usable": 50,
+      "field_presence": {
+        "total_debt": 49,
+        "total_equity": 50,
+        "total_assets": 50,
+        "revenue": 50,
+        "net_income": 50,
+        "operating_cash_flow": 50,
+        "free_cash_flow": 50,
+        "shares_outstanding": 50
+      }
+    },
+    "rows": [
+      {
+        "ticker": "AME",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "AOS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EFX",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "UHS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "REG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "TMUS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "NCLH",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MPC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PFE",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "GPC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "SW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "TAP",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "WSM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-01-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-01-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-01-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-01-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-01-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-01-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-01-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-01-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-01-31",
+          "income": "2026-01-31",
+          "cash": "2026-01-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MCD",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EBAY",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CVNA",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ALB",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "INTC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CINF",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PANW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-07-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-07-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-07-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-07-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-07-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-07-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-07-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-07-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-07-31",
+          "income": "2025-07-31",
+          "cash": "2025-07-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ODFL",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "HUM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MCO",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "FDS",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-08-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-08-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-08-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-08-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-08-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-08-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-08-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-08-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-08-31",
+          "income": "2025-08-31",
+          "cash": "2025-08-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CHRW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CHTR",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MGM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "COF",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ALLE",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EA",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-03-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-03-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-03-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-03-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-03-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-03-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-03-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-03-31",
+          "income": "2026-03-31",
+          "cash": "2026-03-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "DHI",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-09-30"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-09-30"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-09-30"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-09-30"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-09-30"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-09-30"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-09-30"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-09-30"
+          }
+        },
+        "periods": {
+          "balance": "2025-09-30",
+          "income": "2025-09-30",
+          "cash": "2025-09-30"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PFG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CBOE",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "SCHW",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "IBKR",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PEG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "LHX",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CI",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "HWM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "KMI",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PM",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ORCL",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2026-05-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2026-05-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2026-05-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2026-05-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2026-05-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2026-05-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2026-05-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2026-05-31"
+          }
+        },
+        "periods": {
+          "balance": "2026-05-31",
+          "income": "2026-05-31",
+          "cash": "2026-05-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "ANET",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": false,
+            "alias": null,
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "IFF",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "MRNA",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "CSGP",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "EXC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "PKG",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "HUBB",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      },
+      {
+        "ticker": "GNRC",
+        "error": null,
+        "fields": {
+          "total_debt": {
+            "present": true,
+            "alias": "Total Debt",
+            "period_end": "2025-12-31"
+          },
+          "total_equity": {
+            "present": true,
+            "alias": "Stockholders Equity",
+            "period_end": "2025-12-31"
+          },
+          "total_assets": {
+            "present": true,
+            "alias": "Total Assets",
+            "period_end": "2025-12-31"
+          },
+          "revenue": {
+            "present": true,
+            "alias": "Total Revenue",
+            "period_end": "2025-12-31"
+          },
+          "net_income": {
+            "present": true,
+            "alias": "Net Income",
+            "period_end": "2025-12-31"
+          },
+          "operating_cash_flow": {
+            "present": true,
+            "alias": "Operating Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "free_cash_flow": {
+            "present": true,
+            "alias": "Free Cash Flow",
+            "period_end": "2025-12-31"
+          },
+          "shares_outstanding": {
+            "present": true,
+            "alias": "Ordinary Shares Number",
+            "period_end": "2025-12-31"
+          }
+        },
+        "periods": {
+          "balance": "2025-12-31",
+          "income": "2025-12-31",
+          "cash": "2025-12-31"
+        },
+        "any_data": true
+      }
+    ]
+  }
+}
