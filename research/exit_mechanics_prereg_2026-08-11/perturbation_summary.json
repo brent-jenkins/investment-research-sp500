@@ -1,0 +1,228 @@
+{
+  "n_draws": 14,
+  "n_combinations": 70,
+  "unperturbed": 6.443,
+  "noise_floor": 1.08,
+  "all_min": 3.4,
+  "all_median": 6.0482,
+  "all_max": 6.9495,
+  "n_positive": 70,
+  "n_above_floor": 70,
+  "full_window": {
+    "min": 4.316,
+    "median": 6.2857,
+    "max": 6.7059
+  },
+  "rows": [
+    {
+      "draw": "d01",
+      "kind": "drop_ticker",
+      "arg": "NVDA",
+      "vals": [
+        3.9173,
+        3.4,
+        4.3214,
+        4.8837,
+        4.316
+      ],
+      "min": 3.4,
+      "full": 4.316,
+      "s30_n_trades": 594
+    },
+    {
+      "draw": "d02",
+      "kind": "drop_ticker",
+      "arg": "AVGO",
+      "vals": [
+        4.6259,
+        4.4542,
+        4.9809,
+        5.3934,
+        4.3691
+      ],
+      "min": 4.3691,
+      "full": 4.3691,
+      "s30_n_trades": 592
+    },
+    {
+      "draw": "d03",
+      "kind": "drop_ticker",
+      "arg": "MU",
+      "vals": [
+        5.8496,
+        5.6055,
+        6.0653,
+        6.7607,
+        6.045
+      ],
+      "min": 5.6055,
+      "full": 6.045,
+      "s30_n_trades": 568
+    },
+    {
+      "draw": "d04",
+      "kind": "drop_ticker",
+      "arg": "GE",
+      "vals": [
+        5.8378,
+        5.4799,
+        6.7057,
+        6.8204,
+        6.1285
+      ],
+      "min": 5.4799,
+      "full": 6.1285,
+      "s30_n_trades": 563
+    },
+    {
+      "draw": "d05",
+      "kind": "drop_ticker",
+      "arg": "GEV",
+      "vals": [
+        5.8515,
+        5.6061,
+        6.1483,
+        6.71,
+        6.0827
+      ],
+      "min": 5.6061,
+      "full": 6.0827,
+      "s30_n_trades": 565
+    },
+    {
+      "draw": "d06",
+      "kind": "drop_ticker",
+      "arg": "WDC",
+      "vals": [
+        5.1827,
+        4.9781,
+        5.4728,
+        5.8581,
+        5.5251
+      ],
+      "min": 4.9781,
+      "full": 5.5251,
+      "s30_n_trades": 573
+    },
+    {
+      "draw": "d07",
+      "kind": "drop_ticker",
+      "arg": "STX",
+      "vals": [
+        5.3788,
+        5.1559,
+        6.0875,
+        6.5787,
+        6.0514
+      ],
+      "min": 5.1559,
+      "full": 6.0514,
+      "s30_n_trades": 576
+    },
+    {
+      "draw": "d08",
+      "kind": "drop_ticker",
+      "arg": "CAH",
+      "vals": [
+        5.8515,
+        5.8382,
+        6.5924,
+        6.4682,
+        6.4862
+      ],
+      "min": 5.8382,
+      "full": 6.4862,
+      "s30_n_trades": 575
+    },
+    {
+      "draw": "d09",
+      "kind": "shift_start",
+      "arg": "3",
+      "vals": [
+        6.1673,
+        5.9031,
+        6.4299,
+        6.9411,
+        6.6984
+      ],
+      "min": 5.9031,
+      "full": 6.6984,
+      "s30_n_trades": 565
+    },
+    {
+      "draw": "d10",
+      "kind": "shift_start",
+      "arg": "7",
+      "vals": [
+        6.1693,
+        5.9047,
+        6.4315,
+        6.9429,
+        6.6999
+      ],
+      "min": 5.9047,
+      "full": 6.6999,
+      "s30_n_trades": 565
+    },
+    {
+      "draw": "d11",
+      "kind": "shift_start",
+      "arg": "14",
+      "vals": [
+        6.1763,
+        5.911,
+        6.438,
+        6.9495,
+        6.7059
+      ],
+      "min": 5.911,
+      "full": 6.7059,
+      "s30_n_trades": 565
+    },
+    {
+      "draw": "d12",
+      "kind": "shuffle_tiebreak",
+      "arg": "1",
+      "vals": [
+        5.8515,
+        5.6061,
+        6.1483,
+        6.6733,
+        6.4429
+      ],
+      "min": 5.6061,
+      "full": 6.4429,
+      "s30_n_trades": 565
+    },
+    {
+      "draw": "d13",
+      "kind": "shuffle_tiebreak",
+      "arg": "2",
+      "vals": [
+        5.8515,
+        5.6061,
+        6.1483,
+        6.6733,
+        6.4429
+      ],
+      "min": 5.6061,
+      "full": 6.4429,
+      "s30_n_trades": 565
+    },
+    {
+      "draw": "d14",
+      "kind": "shuffle_tiebreak",
+      "arg": "3",
+      "vals": [
+        5.8515,
+        5.6061,
+        6.1483,
+        6.6733,
+        6.4429
+      ],
+      "min": 5.6061,
+      "full": 6.4429,
+      "s30_n_trades": 565
+    }
+  ]
+}

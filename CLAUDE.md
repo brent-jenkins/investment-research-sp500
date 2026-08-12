@@ -1262,6 +1262,30 @@ mean P&L% in all 20/20 draws**, corroborating the original study's central claim
 genuinely better decisions, not a cash-holding or cascade artefact) across twenty independently-
 perturbed configurations, not just the one original run.
 
+**RETROSPECTIVE CORRECTION, 2026-08-12 — the draw count above overstates what was actually tested.
+"20 paired draws" is arithmetically right and evidentially wrong: 4 of the 20 were
+`shuffle_tiebreak` draws, and that dimension is INERT BY CONSTRUCTION in this system.** Admission
+sorts on `(-rank_value, insertion_idx)` where the rank value is a continuous float, so exact ties
+essentially never occur and the tie-break never binds — reshuffling insertion order changes nothing,
+and those four draws return the unperturbed value byte-identically rather than coincidentally. Found
+while running the same dimension in the exit-mechanics sweep's own perturbation test (below), where
+three shuffle draws returned exactly `+6.443pp` three times and the mechanism became obvious; the
+relative-rank report's own "9 of 20 draws land on it exactly" already disclosed the *symptom* and
+attributed it to no-op ticker drops and to the universe starting ~2007-01-03 regardless, but did not
+identify that the four tie-break draws test nothing at all. **Corrected count: roughly 11 informative
+draws of 20** (4 inert tie-breaks, 3 ticker drops the report itself flagged as complete no-ops, and 2
+start-date shifts of 1–2 days it flagged as reproducing baseline exactly).
+
+**This does NOT change Arm B's verdict or its adoption** — the direction held in every informative
+draw, AMAT remains the one named magnitude dependency, and no draw reversed. It is recorded because
+the alternative is a documented figure that overstates the evidence behind an already-adopted change,
+and because the general lesson is a member of the standing "check that reports clean for a reason
+unrelated to the thing it was checking" class: **a perturbation dimension that cannot bind is not a
+weak test, it is not a test, and counting its draws as confirmations inflates the apparent evidence.**
+Any future perturbation study in this project should verify each dimension actually moves the result
+before counting its draws — cheap to check (do the draws return byte-identical values?), and both
+studies that have used this dimension would have caught it immediately.
+
 ## Relative-rank admission ordering ADOPTED — `admission_ranking_mode: "relative_rank"` (2026-08-11)
 
 **Flipped on 2026-08-11.** Arm B's mechanism is now the ACTIVE admission ordering; absolute momentum
@@ -1421,7 +1445,11 @@ own comment on the key, not left implicit in either place.** The robustness test
 of this promotion) ran 20 paired perturbation draws (10 single-ticker drops, 6 start-date shifts, 4
 tie-break reshuffles) and found the DIRECTION of B's advantage robust in every single draw — 20/20
 positive, the unperturbed +1.993pp sitting exactly at the distribution's median and mode, B-only
-admissions beating A-only admissions on mean P&L% in all 20 draws with no exception. **But the MAGNITUDE
+admissions beating A-only admissions on mean P&L% in all 20 draws with no exception. **(Corrected
+2026-08-12: ~11 of those 20 draws are informative — the 4 `shuffle_tiebreak` draws are inert by
+construction, since admission sorts on a continuous float and exact ties never bind. See the
+RETROSPECTIVE CORRECTION under the robustness-test section above. The verdict is unchanged; the draw
+count was overstated.)** **But the MAGNITUDE
 is partly dependent on one ticker**: dropping AMAT alone compresses the measured advantage from +1.993pp
 to +0.427pp — about 21% of the typical value, by far the largest compression any single perturbation
 produced, and on its own (if it were the only data point available) below this project's own ~1.08pp
@@ -2241,6 +2269,94 @@ adopted live ordering — in the population whose historical record is the stron
 (median rank-within-day 3.9–5.2%), so a filter targeting them would genuinely displace admissions
 rather than being absorbed by capacity timing. That makes the capacity wall the wrong objection; the
 binding one is that such a filter would remove the population producing 69.7% of total P&L.
+
+## Exit-mechanics sweep — pre-registered, tested, ROBUST, NOT ADOPTED (2026-08-11/12)
+
+**The largest research result this project has produced, and the first to find a lever that clearly
+works — but NOT adopted, and three qualifications travel with it permanently.** Swept the three dials
+that govern when a position closes: `atr_stop_multiplier` (2.0/3.0/none), `stock_max_holding_days`
+(30/60/90/unlimited), and a trailing stop (activation none/+5%/+10%, distance fixed at the cell's own
+ATR multiplier). Full detail: `research/exit_mechanics_prereg_2026-08-11/PREREGISTRATION.md` /
+`REPORT.md` / `ROBUSTNESS.md`.
+
+**Winner: `stop 3.0× ATR + unlimited max-holding + no trailing stop`, at +6.443pp (Pool 2 CLEAN) /
++5.381pp (Pool 1) cost-adjusted excess return over the current live baseline.** Both pools produce the
+identical ranking. No walk-away clause fires.
+
+**Baseline was the CURRENT LIVE system (relative-rank, adopted 2026-08-11), and re-testing rather than
+inheriting the 2026-08-07 stop study was vindicated**: that study's ranking (no-stop > 3.0× > 2.0×)
+**INVERTS here to 3.0× > none > 2.0×**, in both pools. The stop's optimum depends on the holding regime
+it sits in — which is exactly why the three dials were swept as one mechanism rather than separately.
+
+**STAGE 0 — a read-only measurement run before any sweep cell, and the finding that sized the whole
+study.** `MAX_HOLDING` is **48.9% of all exits**; **78.6% are re-entered into the same ticker within 30
+trading days and 37.4% within ONE day** (median gap 2 days), paying **£38,236** in round-trip FX ≈ 23%
+of the strategy's entire realised P&L. **The asymmetry against the stop is the point**: re-running the
+2026-08-07 study's whipsaw method on the same trade set, `STOP_LOSS` re-entry pairs combine to
+**−£399,571** (that study's result, replicated) while `MAX_HOLDING` pairs combine to **+£710,791**. The
+stop fires on positions that are genuinely deteriorating; the holding cap fires on positions that are
+still working, and a third of them are re-bought the next day.
+
+**The trailing stop FAILS decisively, exactly as its pre-registered honest prior predicted** — costs
+~5.4pp at both activation thresholds, collapsing the winning construction to barely above baseline.
+**Win rate RISES (28.85% → 42.46%) while returns fall**, replicating Arm C's finding precisely: cutting
+winners short produces more frequent, smaller wins in a strategy that lives on the right tail.
+
+**ROBUSTNESS: 70 of 70 (draw × end-date) combinations positive, every one above the ~1.08pp noise
+floor**, worst value +3.400pp (3.1× the floor), unperturbed +6.443 sitting just above the distribution
+median rather than at an extreme. Two dimensions were added beyond the standard method and both earned
+their place: **end-date as a formal axis** (5 windows per draw, exact rather than approximate — a
+sequential walk truncated at D yields trades identical to the full run up to D), and **single-ticker
+dominance TARGETED at the top-10 P&L contributors rather than randomised**, which was necessary
+because 73.6% of P&L sits in 10 of 238 tickers and random drops would have been mostly no-ops.
+**NVDA is the largest named dependency at 67% retained** — materially stronger than the relative-rank
+study's AMAT precedent (~21%, below the floor).
+
+**THREE QUALIFICATIONS THAT MUST TRAVEL WITH ANY ADOPTION, none of which perturbation testing
+addresses:**
+1. **Realised P&L is WORSE than baseline.** 59.9% of the winning cell's P&L is unrealised
+   mark-to-market on 34 positions still open when the walk ends (baseline: 7.6%); on realised P&L alone
+   it is **£139,863 vs baseline's £154,234**.
+2. **The absolute claim is NOT supported.** The cell clears `^SP500TR` at exactly one end date of seven
+   and trails at the other six. "Beats buy-and-hold" is not a supportable statement; the robust claim
+   is the relative one.
+3. **Concentration is real**: 565 positions over 19 years at 149-day mean holds, 73.6% of P&L in 10 of
+   238 names. A robust *comparison* does not diversify the *portfolio*.
+
+**The end-date axis did settle one open concern on evidence**: the advantage is **weakest at the
+earliest windows** (2022–2023) and strongest at 2025-08-01, consistently across all 14 draws — the
+opposite of what an artefact of ending the walk with AI-rally names near highs would look like.
+
+**Method notes worth carrying forward.** The paired instrument initially looked damning (shared-key
+win rate 11.96%) and two walk-away clauses appeared live; both were **tested rather than argued**. A
+randomization null showed the observed overlap (326) is ~4× chance (81.8), so low overlap is forced by
+construction; and the shared set proved a **biased slice** — baseline's short, failing positions
+(median hold 9d vs 30d, `MAX_HOLDING` share 27.9% vs 50.4%), i.e. structurally where longer holding has
+nothing to offer. Of 326 shared keys **235 are byte-identical trades**; only 91 genuinely diverged, and
+on those P&L goes £20,669 → £85,379. The 11.96% headline was scoring identical trades as "not better".
+**The 91-decision subset is small and was deliberately NOT promoted to strong evidence.**
+
+**The §5.4 back-check passed**: the max-holding ranking at final settings is identical to Stage 1
+(unlimited > h60 > h90 > h30), so the staged design's own truncation did not bias the outcome — the
+guard that makes a staged sweep honest, and the reason a 20-cell staged design was run instead of a
+72-cell grid.
+
+**A verification failure worth recording, because it is the standing class occurring inside the
+verification itself**: the first trailing-stop unit-test run **passed vacuously on empty trade lists**
+(`is_member()` rejected the synthetic tickers), surfacing only because a later test indexed `[0]` and
+raised. Fixed at the cause and at the class — a `_require()` guard now asserts every test produced a
+trade. **A test that has not been observed producing a non-empty result has not been observed at all.**
+
+**The broadest result.** Four independent investigations found that **entry** information does not
+predict individual trade outcome. This study finds **exit mechanics matter enormously** — a 6.4pp
+cost-adjusted swing from two parameters. **The edge in this system is not in choosing better positions;
+it is in not churning the ones it already holds.**
+
+**Status: research finding only.** No changes to `analysis/signals.py`, `analysis/decision.py`,
+`config.yaml`, or any live path; no database writes. Promotion would need the same production-module
+and four-parity-layer work the relative-rank promotion required, and a force-close variant (a finite
+cap that closes positions by rule rather than by the data running out) should be run first, since
+realised-only comparison is the one question neither the sweep nor the perturbation test touches.
 
 ## Current architecture (as of 2026-08-04)
 

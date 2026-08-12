@@ -1,0 +1,450 @@
+{
+  "h30": {
+    "pool": "pool1",
+    "cell": "h30",
+    "n_trades": 4757,
+    "final_equity": 317685.07,
+    "frictionless_cagr": 9.897,
+    "fx_drag_pp": 3.321,
+    "idle_credit_pp": 0.558,
+    "cost_adjusted_cagr": 7.134,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -4.029,
+    "max_drawdown_pct": -37.89,
+    "win_pct": 44.78,
+    "mean_hold_days": 21.01,
+    "total_notional_gbp": 22107844.82,
+    "mean_deployed_pct": 63.424,
+    "mean_n_open": 13.96,
+    "exit_mix_pct": {
+      "MAX_HOLDING": 49.63,
+      "STOP_LOSS": 44.52,
+      "SIGNAL_OFF": 4.14,
+      "CRISIS_EXIT": 0.88,
+      "END_OF_DATA": 0.82
+    },
+    "exit_mix_n": {
+      "MAX_HOLDING": 2361,
+      "STOP_LOSS": 2118,
+      "SIGNAL_OFF": 197,
+      "CRISIS_EXIT": 42,
+      "END_OF_DATA": 39
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -8428.82,
+      "END_OF_DATA": 25067.7,
+      "MAX_HOLDING": 993918.64,
+      "SIGNAL_OFF": -11403.73,
+      "STOP_LOSS": -731468.72
+    },
+    "delta_vs_baseline_pp": 0.0
+  },
+  "h60": {
+    "pool": "pool1",
+    "cell": "h60",
+    "n_trades": 3593,
+    "final_equity": 273154.39,
+    "frictionless_cagr": 9.054,
+    "fx_drag_pp": 2.034,
+    "idle_credit_pp": 0.555,
+    "cost_adjusted_cagr": 7.575,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -3.588,
+    "max_drawdown_pct": -38.06,
+    "win_pct": 36.91,
+    "mean_hold_days": 33.31,
+    "total_notional_gbp": 11854355.96,
+    "mean_deployed_pct": 63.595,
+    "mean_n_open": 16.71,
+    "exit_mix_pct": {
+      "STOP_LOSS": 53.3,
+      "MAX_HOLDING": 36.65,
+      "SIGNAL_OFF": 7.4,
+      "END_OF_DATA": 1.34,
+      "CRISIS_EXIT": 1.31
+    },
+    "exit_mix_n": {
+      "STOP_LOSS": 1915,
+      "MAX_HOLDING": 1317,
+      "SIGNAL_OFF": 266,
+      "END_OF_DATA": 48,
+      "CRISIS_EXIT": 47
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -6579.83,
+      "END_OF_DATA": 12641.97,
+      "MAX_HOLDING": 686809.55,
+      "SIGNAL_OFF": -5686.75,
+      "STOP_LOSS": -464030.55
+    },
+    "paired": {
+      "n_shared_keys": 838,
+      "cell_better_on_shared_pct": 19.57,
+      "mean_shared_delta_pnl_pct": 0.1957,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 3919,
+      "n_cell_only": 2755,
+      "baseline_only_win_pct": 45.98,
+      "cell_only_win_pct": 38.0,
+      "baseline_only_mean_pnl_pct": 1.184,
+      "cell_only_mean_pnl_pct": 1.987,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0638,
+      "cell_pnl_share_from_non_shared": 84.29
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -1164,
+      "trade_count_delta_pct": -24.47,
+      "notional_delta_pct": -46.38
+    },
+    "delta_vs_baseline_pp": 0.441
+  },
+  "h90": {
+    "pool": "pool1",
+    "cell": "h90",
+    "n_trades": 3176,
+    "final_equity": 259643.58,
+    "frictionless_cagr": 8.772,
+    "fx_drag_pp": 1.534,
+    "idle_credit_pp": 0.555,
+    "cost_adjusted_cagr": 7.792,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -3.37,
+    "max_drawdown_pct": -33.09,
+    "win_pct": 33.22,
+    "mean_hold_days": 43.31,
+    "total_notional_gbp": 9772574.37,
+    "mean_deployed_pct": 63.591,
+    "mean_n_open": 19.21,
+    "exit_mix_pct": {
+      "STOP_LOSS": 56.2,
+      "MAX_HOLDING": 31.2,
+      "SIGNAL_OFF": 9.26,
+      "END_OF_DATA": 1.73,
+      "CRISIS_EXIT": 1.61
+    },
+    "exit_mix_n": {
+      "STOP_LOSS": 1785,
+      "MAX_HOLDING": 991,
+      "SIGNAL_OFF": 294,
+      "END_OF_DATA": 55,
+      "CRISIS_EXIT": 51
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -6369.2,
+      "END_OF_DATA": 19400.17,
+      "MAX_HOLDING": 600273.16,
+      "SIGNAL_OFF": -1965.75,
+      "STOP_LOSS": -401694.79
+    },
+    "paired": {
+      "n_shared_keys": 701,
+      "cell_better_on_shared_pct": 18.97,
+      "mean_shared_delta_pnl_pct": 0.9294,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 4056,
+      "n_cell_only": 2475,
+      "baseline_only_win_pct": 45.73,
+      "cell_only_win_pct": 33.78,
+      "baseline_only_mean_pnl_pct": 1.129,
+      "cell_only_mean_pnl_pct": 2.247,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0462,
+      "cell_pnl_share_from_non_shared": 77.86
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -1581,
+      "trade_count_delta_pct": -33.24,
+      "notional_delta_pct": -55.8
+    },
+    "delta_vs_baseline_pp": 0.659
+  },
+  "hunlimited": {
+    "pool": "pool1",
+    "cell": "hunlimited",
+    "n_trades": 660,
+    "final_equity": 343147.01,
+    "frictionless_cagr": 10.331,
+    "fx_drag_pp": 0.321,
+    "idle_credit_pp": 0.537,
+    "cost_adjusted_cagr": 10.547,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -0.616,
+    "max_drawdown_pct": -41.73,
+    "win_pct": 24.55,
+    "mean_hold_days": 125.46,
+    "total_notional_gbp": 2080967.13,
+    "mean_deployed_pct": 64.742,
+    "mean_n_open": 11.57,
+    "exit_mix_pct": {
+      "STOP_LOSS": 48.94,
+      "SIGNAL_OFF": 40.3,
+      "CRISIS_EXIT": 6.06,
+      "END_OF_DATA": 4.7
+    },
+    "exit_mix_n": {
+      "STOP_LOSS": 323,
+      "SIGNAL_OFF": 266,
+      "CRISIS_EXIT": 40,
+      "END_OF_DATA": 31
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": 2937.42,
+      "END_OF_DATA": 183506.05,
+      "SIGNAL_OFF": 187962.7,
+      "STOP_LOSS": -81259.17
+    },
+    "paired": {
+      "n_shared_keys": 307,
+      "cell_better_on_shared_pct": 10.1,
+      "mean_shared_delta_pnl_pct": 5.7679,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 4450,
+      "n_cell_only": 353,
+      "baseline_only_win_pct": 45.87,
+      "cell_only_win_pct": 27.76,
+      "baseline_only_mean_pnl_pct": 1.213,
+      "cell_only_mean_pnl_pct": 14.654,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0169,
+      "cell_pnl_share_from_non_shared": 84.72
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -4097,
+      "trade_count_delta_pct": -86.13,
+      "notional_delta_pct": -90.59
+    },
+    "delta_vs_baseline_pp": 3.413
+  },
+  "s3.0": {
+    "pool": "pool1",
+    "cell": "s3.0",
+    "n_trades": 522,
+    "final_equity": 479108.58,
+    "frictionless_cagr": 12.226,
+    "fx_drag_pp": 0.244,
+    "idle_credit_pp": 0.533,
+    "cost_adjusted_cagr": 12.515,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": 1.352,
+    "max_drawdown_pct": -40.41,
+    "win_pct": 29.5,
+    "mean_hold_days": 160.73,
+    "total_notional_gbp": 2008017.3,
+    "mean_deployed_pct": 65.06,
+    "mean_n_open": 11.72,
+    "exit_mix_pct": {
+      "SIGNAL_OFF": 54.6,
+      "STOP_LOSS": 32.18,
+      "CRISIS_EXIT": 7.47,
+      "END_OF_DATA": 5.75
+    },
+    "exit_mix_n": {
+      "SIGNAL_OFF": 285,
+      "STOP_LOSS": 168,
+      "CRISIS_EXIT": 39,
+      "END_OF_DATA": 30
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": 5234.47,
+      "END_OF_DATA": 238585.35,
+      "SIGNAL_OFF": 258004.67,
+      "STOP_LOSS": -72715.9
+    },
+    "paired": {
+      "n_shared_keys": 220,
+      "cell_better_on_shared_pct": 15.91,
+      "mean_shared_delta_pnl_pct": 9.3947,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 4537,
+      "n_cell_only": 302,
+      "baseline_only_win_pct": 45.62,
+      "cell_only_win_pct": 33.11,
+      "baseline_only_mean_pnl_pct": 1.153,
+      "cell_only_mean_pnl_pct": 18.436,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0096,
+      "cell_pnl_share_from_non_shared": 84.52
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -4235,
+      "trade_count_delta_pct": -89.03,
+      "notional_delta_pct": -90.92
+    },
+    "delta_vs_baseline_pp": 5.381
+  },
+  "snone": {
+    "pool": "pool1",
+    "cell": "snone",
+    "n_trades": 419,
+    "final_equity": 369471.76,
+    "frictionless_cagr": 10.748,
+    "fx_drag_pp": 0.207,
+    "idle_credit_pp": 0.537,
+    "cost_adjusted_cagr": 11.077,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -0.085,
+    "max_drawdown_pct": -40.19,
+    "win_pct": 34.61,
+    "mean_hold_days": 201.69,
+    "total_notional_gbp": 1446312.9,
+    "mean_deployed_pct": 64.785,
+    "mean_n_open": 11.8,
+    "exit_mix_pct": {
+      "SIGNAL_OFF": 82.34,
+      "CRISIS_EXIT": 10.02,
+      "END_OF_DATA": 7.64
+    },
+    "exit_mix_n": {
+      "SIGNAL_OFF": 345,
+      "CRISIS_EXIT": 42,
+      "END_OF_DATA": 32
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -1739.93,
+      "END_OF_DATA": 175076.13,
+      "SIGNAL_OFF": 146135.56
+    },
+    "paired": {
+      "n_shared_keys": 205,
+      "cell_better_on_shared_pct": 17.56,
+      "mean_shared_delta_pnl_pct": 8.9978,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 4552,
+      "n_cell_only": 214,
+      "baseline_only_win_pct": 45.56,
+      "cell_only_win_pct": 41.59,
+      "baseline_only_mean_pnl_pct": 1.144,
+      "cell_only_mean_pnl_pct": 21.407,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0098,
+      "cell_pnl_share_from_non_shared": 77.09
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -4338,
+      "trade_count_delta_pct": -91.19,
+      "notional_delta_pct": -93.46
+    },
+    "delta_vs_baseline_pp": 3.944
+  },
+  "t05": {
+    "pool": "pool1",
+    "cell": "t05",
+    "n_trades": 2326,
+    "final_equity": 232443.73,
+    "frictionless_cagr": 8.159,
+    "fx_drag_pp": 1.596,
+    "idle_credit_pp": 0.554,
+    "cost_adjusted_cagr": 7.118,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -4.045,
+    "max_drawdown_pct": -38.24,
+    "win_pct": 44.2,
+    "mean_hold_days": 42.2,
+    "total_notional_gbp": 8650591.74,
+    "mean_deployed_pct": 63.632,
+    "mean_n_open": 13.71,
+    "exit_mix_pct": {
+      "TRAILING_STOP": 59.03,
+      "STOP_LOSS": 28.29,
+      "SIGNAL_OFF": 9.11,
+      "CRISIS_EXIT": 1.81,
+      "END_OF_DATA": 1.76
+    },
+    "exit_mix_n": {
+      "TRAILING_STOP": 1373,
+      "STOP_LOSS": 658,
+      "SIGNAL_OFF": 212,
+      "CRISIS_EXIT": 42,
+      "END_OF_DATA": 41
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -7541.89,
+      "END_OF_DATA": 10618.33,
+      "SIGNAL_OFF": -9560.74,
+      "STOP_LOSS": -268115.99,
+      "TRAILING_STOP": 457044.02
+    },
+    "paired": {
+      "n_shared_keys": 619,
+      "cell_better_on_shared_pct": 27.3,
+      "mean_shared_delta_pnl_pct": 0.5184,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 4138,
+      "n_cell_only": 1707,
+      "baseline_only_win_pct": 45.14,
+      "cell_only_win_pct": 45.99,
+      "baseline_only_mean_pnl_pct": 1.046,
+      "cell_only_mean_pnl_pct": 2.002,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0505,
+      "cell_pnl_share_from_non_shared": 68.34
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -2431,
+      "trade_count_delta_pct": -51.1,
+      "notional_delta_pct": -60.87
+    },
+    "delta_vs_baseline_pp": -0.016
+  },
+  "t10": {
+    "pool": "pool1",
+    "cell": "t10",
+    "n_trades": 1988,
+    "final_equity": 288842.13,
+    "frictionless_cagr": 9.365,
+    "fx_drag_pp": 1.366,
+    "idle_credit_pp": 0.553,
+    "cost_adjusted_cagr": 8.552,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -2.611,
+    "max_drawdown_pct": -40.34,
+    "win_pct": 46.08,
+    "mean_hold_days": 49.45,
+    "total_notional_gbp": 8159737.84,
+    "mean_deployed_pct": 63.727,
+    "mean_n_open": 13.73,
+    "exit_mix_pct": {
+      "TRAILING_STOP": 47.89,
+      "STOP_LOSS": 36.12,
+      "SIGNAL_OFF": 11.82,
+      "CRISIS_EXIT": 2.16,
+      "END_OF_DATA": 2.01
+    },
+    "exit_mix_n": {
+      "TRAILING_STOP": 952,
+      "STOP_LOSS": 718,
+      "SIGNAL_OFF": 235,
+      "CRISIS_EXIT": 43,
+      "END_OF_DATA": 40
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -8510.76,
+      "END_OF_DATA": 12149.03,
+      "SIGNAL_OFF": -15917.74,
+      "STOP_LOSS": -341714.13,
+      "TRAILING_STOP": 592835.73
+    },
+    "paired": {
+      "n_shared_keys": 561,
+      "cell_better_on_shared_pct": 24.6,
+      "mean_shared_delta_pnl_pct": 0.5591,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 4196,
+      "n_cell_only": 1427,
+      "baseline_only_win_pct": 45.61,
+      "cell_only_win_pct": 48.91,
+      "baseline_only_mean_pnl_pct": 1.063,
+      "cell_only_mean_pnl_pct": 2.854,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.045,
+      "cell_pnl_share_from_non_shared": 78.28
+    },
+    "capacity_turnover": {
+      "trade_count_delta": -2769,
+      "trade_count_delta_pct": -58.21,
+      "notional_delta_pct": -63.09
+    },
+    "delta_vs_baseline_pp": 1.418
+  }
+}

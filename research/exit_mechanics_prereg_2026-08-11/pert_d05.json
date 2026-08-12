@@ -1,0 +1,39 @@
+{
+  "draw_id": "d05",
+  "kind": "drop_ticker",
+  "arg": "GEV",
+  "n_tickers": 607,
+  "base_n_trades": 4870,
+  "base_pnl": 176960.0,
+  "s30_n_trades": 565,
+  "s30_pnl": 340917.5,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -8.2757,
+      "s30_excess": -2.4242,
+      "delta": 5.8515
+    },
+    "2023-08-04": {
+      "base_excess": -7.8138,
+      "s30_excess": -2.2077,
+      "delta": 5.6061
+    },
+    "2024-08-02": {
+      "base_excess": -7.5893,
+      "s30_excess": -1.441,
+      "delta": 6.1483
+    },
+    "2025-08-01": {
+      "base_excess": -7.1267,
+      "s30_excess": -0.4167,
+      "delta": 6.71
+    },
+    "2026-08-07": {
+      "base_excess": -5.9128,
+      "s30_excess": 0.1699,
+      "delta": 6.0827
+    }
+  },
+  "delta_full_window": 6.0827,
+  "runtime_s": 1854.1
+}

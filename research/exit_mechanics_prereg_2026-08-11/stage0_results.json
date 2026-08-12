@@ -1,0 +1,192 @@
+{
+  "pool2_clean": {
+    "label": "pool2_clean",
+    "n_trades": 4876,
+    "exit_reason_mix": {
+      "MAX_HOLDING": 2383,
+      "STOP_LOSS": 2189,
+      "SIGNAL_OFF": 217,
+      "CRISIS_EXIT": 47,
+      "END_OF_DATA": 40
+    },
+    "n_max_holding_exits": 2383,
+    "max_holding_pnl_gbp": 729826.47,
+    "n_max_holding_with_any_later_reentry": 2177,
+    "by_gap": [
+      {
+        "within_trading_days": 1,
+        "n": 890,
+        "pct_of_max_holding_exits": 37.35,
+        "max_holding_leg_pnl_gbp": 309555.41,
+        "reentry_leg_pnl_gbp": 38716.57,
+        "combined_pnl_gbp": 348271.98,
+        "fx_paid_on_roundtrip_gbp": 18183.5,
+        "n_pairs_net_positive": 661,
+        "n_pairs_net_negative": 229,
+        "median_gap_td": 1.0
+      },
+      {
+        "within_trading_days": 5,
+        "n": 1502,
+        "pct_of_max_holding_exits": 63.03,
+        "max_holding_leg_pnl_gbp": 523406.53,
+        "reentry_leg_pnl_gbp": 64823.71,
+        "combined_pnl_gbp": 588230.24,
+        "fx_paid_on_roundtrip_gbp": 30517.23,
+        "n_pairs_net_positive": 1139,
+        "n_pairs_net_negative": 363,
+        "median_gap_td": 1.0
+      },
+      {
+        "within_trading_days": 10,
+        "n": 1701,
+        "pct_of_max_holding_exits": 71.38,
+        "max_holding_leg_pnl_gbp": 590488.18,
+        "reentry_leg_pnl_gbp": 74313.55,
+        "combined_pnl_gbp": 664801.72,
+        "fx_paid_on_roundtrip_gbp": 34717.1,
+        "n_pairs_net_positive": 1296,
+        "n_pairs_net_negative": 405,
+        "median_gap_td": 1.0
+      },
+      {
+        "within_trading_days": 21,
+        "n": 1832,
+        "pct_of_max_holding_exits": 76.88,
+        "max_holding_leg_pnl_gbp": 623219.79,
+        "reentry_leg_pnl_gbp": 75194.79,
+        "combined_pnl_gbp": 698414.58,
+        "fx_paid_on_roundtrip_gbp": 37328.04,
+        "n_pairs_net_positive": 1392,
+        "n_pairs_net_negative": 440,
+        "median_gap_td": 2.0
+      },
+      {
+        "within_trading_days": 30,
+        "n": 1872,
+        "pct_of_max_holding_exits": 78.56,
+        "max_holding_leg_pnl_gbp": 632925.88,
+        "reentry_leg_pnl_gbp": 77865.57,
+        "combined_pnl_gbp": 710791.45,
+        "fx_paid_on_roundtrip_gbp": 38236.23,
+        "n_pairs_net_positive": 1423,
+        "n_pairs_net_negative": 449,
+        "median_gap_td": 2.0
+      }
+    ],
+    "gap_distribution": {
+      "p10": 1.0,
+      "p25": 1.0,
+      "p50": 2.0,
+      "p75": 8.0,
+      "p90": 114.80000000000018
+    },
+    "reentry_exit_reasons_within_30td": {
+      "STOP_LOSS": 935,
+      "MAX_HOLDING": 903,
+      "SIGNAL_OFF": 23,
+      "END_OF_DATA": 7,
+      "CRISIS_EXIT": 4
+    },
+    "stop_loss_reference_within_30td": {
+      "n": 1756,
+      "pct_of_stop_exits": 80.22,
+      "combined_pnl_gbp": -399570.94
+    }
+  },
+  "pool1": {
+    "label": "pool1",
+    "n_trades": 4757,
+    "exit_reason_mix": {
+      "MAX_HOLDING": 2361,
+      "STOP_LOSS": 2118,
+      "SIGNAL_OFF": 197,
+      "CRISIS_EXIT": 42,
+      "END_OF_DATA": 39
+    },
+    "n_max_holding_exits": 2361,
+    "max_holding_pnl_gbp": 993918.64,
+    "n_max_holding_with_any_later_reentry": 2174,
+    "by_gap": [
+      {
+        "within_trading_days": 1,
+        "n": 882,
+        "pct_of_max_holding_exits": 37.36,
+        "max_holding_leg_pnl_gbp": 422732.04,
+        "reentry_leg_pnl_gbp": 61239.58,
+        "combined_pnl_gbp": 483971.61,
+        "fx_paid_on_roundtrip_gbp": 24312.27,
+        "n_pairs_net_positive": 663,
+        "n_pairs_net_negative": 219,
+        "median_gap_td": 1.0
+      },
+      {
+        "within_trading_days": 5,
+        "n": 1469,
+        "pct_of_max_holding_exits": 62.22,
+        "max_holding_leg_pnl_gbp": 689061.87,
+        "reentry_leg_pnl_gbp": 86445.53,
+        "combined_pnl_gbp": 775507.4,
+        "fx_paid_on_roundtrip_gbp": 41359.37,
+        "n_pairs_net_positive": 1121,
+        "n_pairs_net_negative": 348,
+        "median_gap_td": 1.0
+      },
+      {
+        "within_trading_days": 10,
+        "n": 1664,
+        "pct_of_max_holding_exits": 70.48,
+        "max_holding_leg_pnl_gbp": 779742.12,
+        "reentry_leg_pnl_gbp": 105902.58,
+        "combined_pnl_gbp": 885644.69,
+        "fx_paid_on_roundtrip_gbp": 47155.42,
+        "n_pairs_net_positive": 1279,
+        "n_pairs_net_negative": 385,
+        "median_gap_td": 1.0
+      },
+      {
+        "within_trading_days": 21,
+        "n": 1789,
+        "pct_of_max_holding_exits": 75.77,
+        "max_holding_leg_pnl_gbp": 830923.13,
+        "reentry_leg_pnl_gbp": 106741.31,
+        "combined_pnl_gbp": 937664.43,
+        "fx_paid_on_roundtrip_gbp": 50816.5,
+        "n_pairs_net_positive": 1368,
+        "n_pairs_net_negative": 421,
+        "median_gap_td": 2.0
+      },
+      {
+        "within_trading_days": 30,
+        "n": 1841,
+        "pct_of_max_holding_exits": 77.98,
+        "max_holding_leg_pnl_gbp": 848177.31,
+        "reentry_leg_pnl_gbp": 115560.54,
+        "combined_pnl_gbp": 963737.85,
+        "fx_paid_on_roundtrip_gbp": 52204.76,
+        "n_pairs_net_positive": 1409,
+        "n_pairs_net_negative": 432,
+        "median_gap_td": 2.0
+      }
+    ],
+    "gap_distribution": {
+      "p10": 1.0,
+      "p25": 1.0,
+      "p50": 2.0,
+      "p75": 9.0,
+      "p90": 148.70000000000005
+    },
+    "reentry_exit_reasons_within_30td": {
+      "STOP_LOSS": 917,
+      "MAX_HOLDING": 898,
+      "SIGNAL_OFF": 15,
+      "END_OF_DATA": 7,
+      "CRISIS_EXIT": 4
+    },
+    "stop_loss_reference_within_30td": {
+      "n": 1725,
+      "pct_of_stop_exits": 81.44,
+      "combined_pnl_gbp": -488617.72
+    }
+  }
+}

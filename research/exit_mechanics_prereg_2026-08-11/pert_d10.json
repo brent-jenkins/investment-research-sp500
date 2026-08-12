@@ -1,0 +1,39 @@
+{
+  "draw_id": "d10",
+  "kind": "shift_start",
+  "arg": "7",
+  "n_tickers": 608,
+  "base_n_trades": 4898,
+  "base_pnl": 157501.38,
+  "s30_n_trades": 565,
+  "s30_pnl": 348588.6,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -8.6044,
+      "s30_excess": -2.4351,
+      "delta": 6.1693
+    },
+    "2023-08-04": {
+      "base_excess": -8.1226,
+      "s30_excess": -2.2179,
+      "delta": 5.9047
+    },
+    "2024-08-02": {
+      "base_excess": -7.8814,
+      "s30_excess": -1.4499,
+      "delta": 6.4315
+    },
+    "2025-08-01": {
+      "base_excess": -7.2203,
+      "s30_excess": -0.2774,
+      "delta": 6.9429
+    },
+    "2026-08-07": {
+      "base_excess": -6.4282,
+      "s30_excess": 0.2717,
+      "delta": 6.6999
+    }
+  },
+  "delta_full_window": 6.6999,
+  "runtime_s": 1640.7
+}

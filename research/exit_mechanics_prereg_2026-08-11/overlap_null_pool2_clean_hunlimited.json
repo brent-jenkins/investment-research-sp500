@@ -1,0 +1,53 @@
+{
+  "pool": "pool2_clean",
+  "cell": "hunlimited",
+  "observed_shared": 326,
+  "null_mean": 81.79,
+  "null_sd": 5.77,
+  "null_p5": 73.0,
+  "null_p95": 92.0,
+  "observed_percentile_of_null": 100.0,
+  "test1_verdict": "AT OR ABOVE the null -- low overlap is FORCED BY CONSTRUCTION, the clause must not fire on it",
+  "slice": [
+    {
+      "subset": "SHARED (both arms held)",
+      "n": 326,
+      "mean_hold_days": 14.38,
+      "median_hold_days": 9.0,
+      "win_pct": 26.69,
+      "mean_pnl_pct": -1.945,
+      "median_pnl_pct": -4.035,
+      "exit_mix_pct": {
+        "SIGNAL_OFF": 34.05,
+        "STOP_LOSS": 29.14,
+        "MAX_HOLDING": 27.91,
+        "CRISIS_EXIT": 6.75,
+        "END_OF_DATA": 2.15
+      }
+    },
+    {
+      "subset": "NOT shared (baseline only)",
+      "n": 4550,
+      "mean_hold_days": 21.42,
+      "median_hold_days": 30.0,
+      "win_pct": 44.95,
+      "mean_pnl_pct": 1.063,
+      "median_pnl_pct": -2.775,
+      "exit_mix_pct": {
+        "MAX_HOLDING": 50.37,
+        "STOP_LOSS": 46.02,
+        "SIGNAL_OFF": 2.33,
+        "END_OF_DATA": 0.73,
+        "CRISIS_EXIT": 0.55
+      }
+    }
+  ],
+  "test2_verdict": "BIASED SLICE CONFIRMED -- the shared set is systematically the population the 30-day cap did NOT bind on, i.e. where unlimited holding has least to offer",
+  "shared_delta": {
+    "n": 326,
+    "better_pct": 11.96,
+    "mean": 7.563,
+    "median": 0.0,
+    "sum": 2465.55
+  }
+}
