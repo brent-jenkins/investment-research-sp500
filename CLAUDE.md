@@ -2504,6 +2504,46 @@ sizing) rather than the false one.
 *operation* under a disabled cap has been observed — only simulated. Unlimited holding interacts with
 the live re-entry, membership and reconciliation paths in ways no backtest exercises.
 
+## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
+
+**`pending_orders.stop_price` is computed at DECIDE time (21:30 EOD) and used verbatim at SUBMIT time
+(14:30 the next day). Any change to `atr_stop_multiplier` landing between those two points has no
+effect on the orders already queued — they are placed at the OLD multiplier.** This is the
+decide-then-submit architecture working as designed, not a defect: recomputing the stop at submission
+would mean the position is sized and stopped against different information than the decision was made
+on, and would introduce its own class of live/backtest divergence.
+
+**Found the hard way on the exit-mechanics flip.** `atr_stop_multiplier: 3.0` deployed 12:15; the
+book was flushed; the 14:30 submission then rebuilt it from decisions made at **21:05–21:06 the
+previous night**, so all 18 new positions were stopped at **exactly 2.000× ATR**. Confirmed by
+recomputing ATR from `price_data` per ticker and dividing — the implied multiplier was 2.000 for all
+18, min/median/max identical.
+
+**THE CHECK THAT CAUGHT IT, and the one that would not have.** Reading `config.yaml` on the server
+returns `3.0` and looks like proof; it only proves the file deployed. **The stops sitting at 3.0×
+is a different claim**, and the only way to test it is to recompute ATR from stored prices and divide
+`(entry − stop) / ATR`. Stop distance as a raw percentage cannot distinguish the two either — it is
+`multiplier × ATR/price`, and ATR varies enough across tickers that a 2.0× book and a 3.0× book
+overlap heavily in percentage terms (here 6.05%–22.78%, entirely plausible under either). **This is
+another instance of the standing "check that reports clean for a reason unrelated to the thing it
+was checking" class** — the config read is a valid check of deployment and a worthless check of
+behaviour.
+
+**The operational implication, stated so a future session does not rediscover it:** change any
+stop-related config, then **expect one day of stale-stop admissions**, and flush the affected
+positions if it matters. It matters more now than it used to: with `stock_max_holding_days: 0` a
+mis-stopped position **no longer ages out** — under the previous 30-day cap it self-corrected within
+a month, whereas now it exits only on stop/signal/crisis, and the winning arm's own mean hold was
+149 days. So a one-day configuration lag can occupy account capacity for months.
+
+**The remedy that was used, and the one that was rejected.** Used: flush the affected positions
+through the system's own exit path (temporarily set `stock_max_holding_days: 1`, let `MAX_HOLDING`
+close them, restore), which cancels each broker-side stop before selling. **Rejected: hand-editing
+the stored `stop_price` values in `pending_orders`/`invest_orders` before the broker-side stops are
+placed.** It is technically possible in the window before `poll_placed_orders()` runs, and it is the
+kind of fix that looks fine and is not — it puts hand-written values where the engine's own
+computation belongs, in production, with no test covering the result.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).
