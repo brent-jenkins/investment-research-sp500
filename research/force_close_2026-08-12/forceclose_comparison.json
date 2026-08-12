@@ -1,0 +1,316 @@
+{
+  "pool2_clean": [
+    {
+      "cutoff": "2022-08-05",
+      "delta_excess_pp": 5.852,
+      "total_pnl_ratio": 2.18,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 3763,
+          "n_force_closed": 17,
+          "total_pnl": 42075.71,
+          "strategy_closed_pnl": 39016.8,
+          "force_closed_pnl": 3058.91,
+          "force_closed_share_pct": 7.27,
+          "cost_adj_cagr": 1.049,
+          "excess": -8.276,
+          "maxdd": -47.51,
+          "fx_pp": 3.242
+        },
+        "s3.0": {
+          "n_closed_by_rule": 472,
+          "n_force_closed": 16,
+          "total_pnl": 91742.22,
+          "strategy_closed_pnl": 77030.33,
+          "force_closed_pnl": 14711.89,
+          "force_closed_share_pct": 16.04,
+          "cost_adj_cagr": 6.9,
+          "excess": -2.424,
+          "maxdd": -43.88,
+          "fx_pp": 0.302
+        }
+      }
+    },
+    {
+      "cutoff": "2023-08-04",
+      "delta_excess_pp": 5.606,
+      "total_pnl_ratio": 2.02,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4026,
+          "n_force_closed": 16,
+          "total_pnl": 52437.19,
+          "strategy_closed_pnl": 51187.51,
+          "force_closed_pnl": 1249.68,
+          "force_closed_share_pct": 2.38,
+          "cost_adj_cagr": 1.546,
+          "excess": -7.814,
+          "maxdd": -47.51,
+          "fx_pp": 3.246
+        },
+        "s3.0": {
+          "n_closed_by_rule": 505,
+          "n_force_closed": 15,
+          "total_pnl": 105905.29,
+          "strategy_closed_pnl": 89922.61,
+          "force_closed_pnl": 15982.68,
+          "force_closed_share_pct": 15.09,
+          "cost_adj_cagr": 7.152,
+          "excess": -2.208,
+          "maxdd": -43.88,
+          "fx_pp": 0.309
+        }
+      }
+    },
+    {
+      "cutoff": "2024-08-02",
+      "delta_excess_pp": 6.148,
+      "total_pnl_ratio": 2.171,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4258,
+          "n_force_closed": 14,
+          "total_pnl": 72083.25,
+          "strategy_closed_pnl": 71994.41,
+          "force_closed_pnl": 88.84,
+          "force_closed_share_pct": 0.12,
+          "cost_adj_cagr": 2.413,
+          "excess": -7.589,
+          "maxdd": -47.51,
+          "fx_pp": 3.253
+        },
+        "s3.0": {
+          "n_closed_by_rule": 518,
+          "n_force_closed": 11,
+          "total_pnl": 156499.85,
+          "strategy_closed_pnl": 84295.33,
+          "force_closed_pnl": 72204.52,
+          "force_closed_share_pct": 46.14,
+          "cost_adj_cagr": 8.561,
+          "excess": -1.441,
+          "maxdd": -43.88,
+          "fx_pp": 0.285
+        }
+      }
+    },
+    {
+      "cutoff": "2025-08-01",
+      "delta_excess_pp": 6.673,
+      "total_pnl_ratio": 2.292,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4525,
+          "n_force_closed": 17,
+          "total_pnl": 104521.9,
+          "strategy_closed_pnl": 100490.15,
+          "force_closed_pnl": 4031.75,
+          "force_closed_share_pct": 3.86,
+          "cost_adj_cagr": 3.488,
+          "excess": -6.943,
+          "maxdd": -47.51,
+          "fx_pp": 3.288
+        },
+        "s3.0": {
+          "n_closed_by_rule": 522,
+          "n_force_closed": 11,
+          "total_pnl": 239579.56,
+          "strategy_closed_pnl": 108208.59,
+          "force_closed_pnl": 131370.97,
+          "force_closed_share_pct": 54.83,
+          "cost_adj_cagr": 10.162,
+          "excess": -0.27,
+          "maxdd": -43.88,
+          "fx_pp": 0.251
+        }
+      }
+    },
+    {
+      "cutoff": "2026-08-07",
+      "delta_excess_pp": 6.443,
+      "total_pnl_ratio": 2.089,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4876,
+          "n_force_closed": 0,
+          "total_pnl": 166830.11,
+          "strategy_closed_pnl": 166830.11,
+          "force_closed_pnl": 0.0,
+          "force_closed_share_pct": 0.0,
+          "cost_adj_cagr": 4.998,
+          "excess": -6.165,
+          "maxdd": -47.51,
+          "fx_pp": 3.331
+        },
+        "s3.0": {
+          "n_closed_by_rule": 565,
+          "n_force_closed": 0,
+          "total_pnl": 348548.74,
+          "strategy_closed_pnl": 348548.74,
+          "force_closed_pnl": 0.0,
+          "force_closed_share_pct": 0.0,
+          "cost_adj_cagr": 11.441,
+          "excess": 0.278,
+          "maxdd": -43.88,
+          "fx_pp": 0.268
+        }
+      }
+    }
+  ],
+  "pool1": [
+    {
+      "cutoff": "2022-08-05",
+      "delta_excess_pp": 4.128,
+      "total_pnl_ratio": 1.287,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 3657,
+          "n_force_closed": 16,
+          "total_pnl": 92554.32,
+          "strategy_closed_pnl": 89137.36,
+          "force_closed_pnl": 3416.96,
+          "force_closed_share_pct": 3.69,
+          "cost_adj_cagr": 4.018,
+          "excess": -5.307,
+          "maxdd": -37.89,
+          "fx_pp": 3.234
+        },
+        "s3.0": {
+          "n_closed_by_rule": 435,
+          "n_force_closed": 15,
+          "total_pnl": 119162.9,
+          "strategy_closed_pnl": 109767.0,
+          "force_closed_pnl": 9395.9,
+          "force_closed_share_pct": 7.88,
+          "cost_adj_cagr": 8.146,
+          "excess": -1.179,
+          "maxdd": -40.41,
+          "fx_pp": 0.278
+        }
+      }
+    },
+    {
+      "cutoff": "2023-08-04",
+      "delta_excess_pp": 3.868,
+      "total_pnl_ratio": 1.225,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 3913,
+          "n_force_closed": 15,
+          "total_pnl": 110687.23,
+          "strategy_closed_pnl": 110511.85,
+          "force_closed_pnl": 175.38,
+          "force_closed_share_pct": 0.16,
+          "cost_adj_cagr": 4.434,
+          "excess": -4.926,
+          "maxdd": -37.89,
+          "fx_pp": 3.235
+        },
+        "s3.0": {
+          "n_closed_by_rule": 468,
+          "n_force_closed": 15,
+          "total_pnl": 135549.73,
+          "strategy_closed_pnl": 114032.9,
+          "force_closed_pnl": 21516.83,
+          "force_closed_share_pct": 15.87,
+          "cost_adj_cagr": 8.302,
+          "excess": -1.058,
+          "maxdd": -40.41,
+          "fx_pp": 0.29
+        }
+      }
+    },
+    {
+      "cutoff": "2024-08-02",
+      "delta_excess_pp": 5.028,
+      "total_pnl_ratio": 1.543,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4151,
+          "n_force_closed": 14,
+          "total_pnl": 131672.16,
+          "strategy_closed_pnl": 130658.0,
+          "force_closed_pnl": 1014.16,
+          "force_closed_share_pct": 0.77,
+          "cost_adj_cagr": 4.822,
+          "excess": -5.18,
+          "maxdd": -37.89,
+          "fx_pp": 3.254
+        },
+        "s3.0": {
+          "n_closed_by_rule": 475,
+          "n_force_closed": 13,
+          "total_pnl": 203200.85,
+          "strategy_closed_pnl": 110781.67,
+          "force_closed_pnl": 92419.18,
+          "force_closed_share_pct": 45.48,
+          "cost_adj_cagr": 9.85,
+          "excess": -0.152,
+          "maxdd": -40.41,
+          "fx_pp": 0.261
+        }
+      }
+    },
+    {
+      "cutoff": "2025-08-01",
+      "delta_excess_pp": 5.677,
+      "total_pnl_ratio": 1.725,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4404,
+          "n_force_closed": 16,
+          "total_pnl": 180036.67,
+          "strategy_closed_pnl": 173225.81,
+          "force_closed_pnl": 6810.86,
+          "force_closed_share_pct": 3.78,
+          "cost_adj_cagr": 5.814,
+          "excess": -4.618,
+          "maxdd": -37.89,
+          "fx_pp": 3.267
+        },
+        "s3.0": {
+          "n_closed_by_rule": 481,
+          "n_force_closed": 11,
+          "total_pnl": 310642.13,
+          "strategy_closed_pnl": 146705.31,
+          "force_closed_pnl": 163936.82,
+          "force_closed_share_pct": 52.77,
+          "cost_adj_cagr": 11.491,
+          "excess": 1.059,
+          "maxdd": -40.41,
+          "fx_pp": 0.228
+        }
+      }
+    },
+    {
+      "cutoff": "2026-08-07",
+      "delta_excess_pp": 5.381,
+      "total_pnl_ratio": 1.603,
+      "arms": {
+        "h30": {
+          "n_closed_by_rule": 4757,
+          "n_force_closed": 0,
+          "total_pnl": 267685.07,
+          "strategy_closed_pnl": 267685.07,
+          "force_closed_pnl": 0.0,
+          "force_closed_share_pct": 0.0,
+          "cost_adj_cagr": 7.134,
+          "excess": -4.029,
+          "maxdd": -37.89,
+          "fx_pp": 3.321
+        },
+        "s3.0": {
+          "n_closed_by_rule": 522,
+          "n_force_closed": 0,
+          "total_pnl": 429108.58,
+          "strategy_closed_pnl": 429108.58,
+          "force_closed_pnl": 0.0,
+          "force_closed_share_pct": 0.0,
+          "cost_adj_cagr": 12.515,
+          "excess": 1.352,
+          "maxdd": -40.41,
+          "fx_pp": 0.244
+        }
+      }
+    }
+  ]
+}
