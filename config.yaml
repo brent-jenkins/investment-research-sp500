@@ -160,7 +160,7 @@ trading212_invest:
   # deliberate decision. Two qualifications travel with that result: the
   # absolute claim to beat ^SP500TR holds at only one window end date of
   # seven, and 73.6% of its P&L sits in 10 of 238 tickers.
-  stock_max_holding_days: 30
+  stock_max_holding_days: 1
   # Holding horizon (days) used ONLY by VaR position sizing
   # (analysis/volatility.py:_var_position_size_core() scales daily VaR by
   # sqrt(horizon)) when stock_max_holding_days is 0 and there is therefore

@@ -33,12 +33,19 @@ def test_shipped_config_still_has_a_finite_stock_holding_cap():
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     cap = cfg["trading212_invest"]["stock_max_holding_days"]
+    # TRANSIENT (2026-08-12): 1 is a deliberate, short-lived MECHANISM, not a
+    # setting. Every open position is 4-8 days old, so a 1-day cap flushes the
+    # whole book through the system's own tested exit path -- which cancels each
+    # resting broker-side stop before selling, unlike a raw SELL, which would
+    # leave 22 orphaned stops that could later fire against a re-entered
+    # position. The very next commit sets the adopted value. If this value is
+    # still 1 when you read it, the flip did not complete -- see CLAUDE.md's
+    # exit-mechanics promotion entry.
     assert cap != MAX_HOLDING_DISABLED_SENTINEL, (
-        "stock_max_holding_days is 0 in the shipped config -- the holding cap is "
-        "DISABLED. That is a real behaviour change and must be a deliberate, "
-        "separate flip, not a side effect of the promotion."
+        "stock_max_holding_days is 0 -- that is the ADOPTED state, not the "
+        "transient flush state this assertion is pinned to."
     )
-    assert cap == 30
+    assert cap == 1
 
 
 def test_default_config_resolves_to_the_unchanged_finite_cap():
