@@ -42,13 +42,19 @@ Force-closing means every position still open at a cutoff is closed at that date
 sound — and is exactly the kind of sound argument that can hide an off-by-one in exit handling at the
 boundary, so it was **validated empirically** rather than trusted.
 
-**Two genuine re-runs**, cache truncated so the engine closes positions at the cutoff as real
-simulated exits:
+**Two genuine re-runs × both arms = four validations**, cache truncated so the engine closes positions
+at the cutoff as real simulated exits:
 
-| cutoff | genuine re-run total | truncation shortcut | closed-by-rule trades |
-|---|---|---|---|
-| 2022-08-05 | **£42,075.71** | **£42,075.71** | 3,763 both |
-| 2024-08-02 | **£72,083** | **£72,083** | match |
+| cutoff | arm | genuine re-run total | truncation shortcut | match |
+|---|---|---|---|---|
+| 2022-08-05 | h30 | **£42,075.71** | **£42,075.71** | exact |
+| 2022-08-05 | s3.0 | **£91,742.22** | **£91,742.22** | exact |
+| 2024-08-02 | h30 | **£72,083.25** | **£72,083.25** | exact |
+| 2024-08-02 | s3.0 | **£156,499.85** | **£156,499.85** | exact |
+
+**4 of 4 penny-exact.** Admissions up to the cutoff are a strict superset in the re-run (488 → 502 for
+s3.0@2022): **14 extra, all entered on the cutoff day, all worth exactly £0.00**, and **zero
+admissions present in the full run but missing from the re-run**.
 
 **A real boundary artefact was found, and it is economically inert.** The re-run reports 28
 force-closed positions where the full run shows 17 open at that date. Decomposed: **14 entered before
@@ -57,7 +63,15 @@ were force-closed the same day at exactly £0.00**, because the truncated walk's
 capacity in Phase A and then admits in Phase B at a price identical to the exit. Real, fully
 explained, moves nothing. Totals match to the penny.
 
-The shortcut is therefore validated, and the remaining cutoffs use it.
+**One limit on the DECOMPOSITION specifically, stated rather than glossed.** While every *total* is
+exact, the split between rule-closed and force-closed carries a small boundary difference: for
+s3.0@2022-08-05 the re-run attributes £77,276.64 to rule-closed against the truncation method's
+£77,030.33 — **a £246 reclassification on £91,742, or 0.27%**, with one trade landing in a different
+bucket. The totals are unaffected (both £91,742.22), so no headline or verdict depends on it, but
+**§3's decomposition should be read as carrying roughly ±0.3% boundary uncertainty, not as exact.**
+The direction and magnitude of §3's conclusion are far larger than that.
+
+The shortcut is therefore validated for totals, and the remaining cutoffs use it.
 
 ---
 
