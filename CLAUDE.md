@@ -1701,7 +1701,7 @@ review.
 
 **A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
 
-## A check that reports clean for a reason unrelated to the thing it was checking — a class, not six incidents (standing requirement, 2026-08-10, extended 2026-08-11)
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not seven incidents (standing requirement, 2026-08-10, extended 2026-08-11 and 2026-08-12)
 
 **Five separate findings this week share one shape, and naming the shape is more useful than
 recording them separately.** In each, a check was reasoned about — correctly — for the case its
@@ -1760,6 +1760,24 @@ operational poll loop, and they fail identically.
    anticipated this class and guarded the wrong case** — it pre-committed to reading "0 fires" as
    "untested, not safe", which would have caught a breaker that never fired at all, and had nothing to
    say about one that fires correctly *somewhere* and is blind *elsewhere*.
+7. **A comparison whose measuring instrument was structurally incapable of seeing the thing that
+   differed** (exit-mechanics promotion, 2026-08-12). A Layer 2 test asserted that
+   `stock_max_holding_days: 0` (the new disable sentinel) and `9999` (a cap longer than the test
+   window) were behaviourally identical — both should mean "never exit on age". The **backtest half
+   of the assertion passed**; the **live half failed**. The backtest comparison is a `Counter` of
+   `(ticker, direction)` events, which is **size-blind by construction** — and size was precisely
+   what differed: a finite 9999 feeds VaR a 9999-day sizing horizon, scaling positions by
+   `sqrt(9999)≈100` instead of `sqrt(30)≈5.5`, roughly **18× smaller**, with some then falling below
+   `min_position_gbp` and rejected outright. **Had only the backtest been checked, a false premise
+   would have been confirmed** — the instrument would have reported "identical" not because the arms
+   were identical but because it could not represent the dimension on which they differed. This is
+   also the standing argument for Layer 2 driving BOTH sides rather than trusting either alone.
+
+   **The practical trap this leaves behind, worth knowing before touching the config**: the obvious
+   way to express "no holding cap" — set a large number — **silently shrinks every position ~18×**,
+   producing a configuration that *looks* like the tested one and behaves nothing like it. Use the
+   `0` sentinel, which disables the age EXIT while leaving SIZING on a real horizon. Warned about
+   directly in `config.yaml` at the key itself, where the edit would actually be made.
 
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a

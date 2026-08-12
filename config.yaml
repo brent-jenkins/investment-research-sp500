@@ -142,6 +142,15 @@ trading212_invest:
   # would exit every position on its own entry day), so one integer key
   # carries both settings with no second key that could contradict it.
   #
+  # DO NOT "disable" THIS BY SETTING A LARGE NUMBER. A finite cap is ALSO the
+  # VaR sizing horizon (see var_horizon_days below), so e.g. 9999 scales every
+  # position by sqrt(9999) ~ 100 instead of sqrt(30) ~ 5.5 -- roughly 18x
+  # SMALLER, with some positions then falling below min_position_gbp and being
+  # rejected outright. A config set that way looks like the tested one and
+  # behaves nothing like it. Use 0, which disables the age EXIT while leaving
+  # SIZING on a real horizon. Measured and pinned by
+  # tests/test_comprehensive_replay_parity.py.
+  #
   # 30 is the CURRENT, UNCHANGED behaviour. The exit-mechanics sweep
   # (research/exit_mechanics_prereg_2026-08-11/) measured 0 combined with
   # atr_stop_multiplier 3.0 at +6.443pp / +5.381pp cost-adjusted excess
