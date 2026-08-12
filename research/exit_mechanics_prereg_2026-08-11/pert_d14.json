@@ -1,0 +1,39 @@
+{
+  "draw_id": "d14",
+  "kind": "shuffle_tiebreak",
+  "arg": "3",
+  "n_tickers": 608,
+  "base_n_trades": 4876,
+  "base_pnl": 166830.11,
+  "s30_n_trades": 565,
+  "s30_pnl": 348548.74,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -8.2757,
+      "s30_excess": -2.4242,
+      "delta": 5.8515
+    },
+    "2023-08-04": {
+      "base_excess": -7.8138,
+      "s30_excess": -2.2077,
+      "delta": 5.6061
+    },
+    "2024-08-02": {
+      "base_excess": -7.5893,
+      "s30_excess": -1.441,
+      "delta": 6.1483
+    },
+    "2025-08-01": {
+      "base_excess": -6.9435,
+      "s30_excess": -0.2702,
+      "delta": 6.6733
+    },
+    "2026-08-07": {
+      "base_excess": -6.1649,
+      "s30_excess": 0.278,
+      "delta": 6.4429
+    }
+  },
+  "delta_full_window": 6.4429,
+  "runtime_s": 1425.6
+}

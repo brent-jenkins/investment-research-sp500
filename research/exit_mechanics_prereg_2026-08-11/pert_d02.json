@@ -1,0 +1,39 @@
+{
+  "draw_id": "d02",
+  "kind": "drop_ticker",
+  "arg": "AVGO",
+  "n_tickers": 607,
+  "base_n_trades": 4867,
+  "base_pnl": 177460.45,
+  "s30_n_trades": 592,
+  "s30_pnl": 240902.04,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -8.6099,
+      "s30_excess": -3.984,
+      "delta": 4.6259
+    },
+    "2023-08-04": {
+      "base_excess": -8.129,
+      "s30_excess": -3.6748,
+      "delta": 4.4542
+    },
+    "2024-08-02": {
+      "base_excess": -7.9291,
+      "s30_excess": -2.9482,
+      "delta": 4.9809
+    },
+    "2025-08-01": {
+      "base_excess": -7.2016,
+      "s30_excess": -1.8082,
+      "delta": 5.3934
+    },
+    "2026-08-07": {
+      "base_excess": -5.8808,
+      "s30_excess": -1.5117,
+      "delta": 4.3691
+    }
+  },
+  "delta_full_window": 4.3691,
+  "runtime_s": 1595.9
+}

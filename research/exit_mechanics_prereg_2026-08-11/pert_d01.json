@@ -1,0 +1,39 @@
+{
+  "draw_id": "d01",
+  "kind": "drop_ticker",
+  "arg": "NVDA",
+  "n_tickers": 607,
+  "base_n_trades": 4892,
+  "base_pnl": 134397.19,
+  "s30_n_trades": 594,
+  "s30_pnl": 183645.22,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -9.2668,
+      "s30_excess": -5.3495,
+      "delta": 3.9173
+    },
+    "2023-08-04": {
+      "base_excess": -8.4615,
+      "s30_excess": -5.0615,
+      "delta": 3.4
+    },
+    "2024-08-02": {
+      "base_excess": -8.5575,
+      "s30_excess": -4.2361,
+      "delta": 4.3214
+    },
+    "2025-08-01": {
+      "base_excess": -7.847,
+      "s30_excess": -2.9633,
+      "delta": 4.8837
+    },
+    "2026-08-07": {
+      "base_excess": -7.0493,
+      "s30_excess": -2.7333,
+      "delta": 4.316
+    }
+  },
+  "delta_full_window": 4.316,
+  "runtime_s": 1596.7
+}

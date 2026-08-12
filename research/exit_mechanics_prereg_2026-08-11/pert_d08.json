@@ -1,0 +1,39 @@
+{
+  "draw_id": "d08",
+  "kind": "drop_ticker",
+  "arg": "CAH",
+  "n_tickers": 607,
+  "base_n_trades": 4867,
+  "base_pnl": 154161.31,
+  "s30_n_trades": 575,
+  "s30_pnl": 329895.43,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -8.2757,
+      "s30_excess": -2.4242,
+      "delta": 5.8515
+    },
+    "2023-08-04": {
+      "base_excess": -8.0781,
+      "s30_excess": -2.2399,
+      "delta": 5.8382
+    },
+    "2024-08-02": {
+      "base_excess": -8.0962,
+      "s30_excess": -1.5038,
+      "delta": 6.5924
+    },
+    "2025-08-01": {
+      "base_excess": -7.0417,
+      "s30_excess": -0.5735,
+      "delta": 6.4682
+    },
+    "2026-08-07": {
+      "base_excess": -6.4851,
+      "s30_excess": 0.0011,
+      "delta": 6.4862
+    }
+  },
+  "delta_full_window": 6.4862,
+  "runtime_s": 1851.6
+}

@@ -1,0 +1,39 @@
+{
+  "draw_id": "d06",
+  "kind": "drop_ticker",
+  "arg": "WDC",
+  "n_tickers": 607,
+  "base_n_trades": 4893,
+  "base_pnl": 161501.26,
+  "s30_n_trades": 573,
+  "s30_pnl": 281242.76,
+  "by_end_date": {
+    "2022-08-05": {
+      "base_excess": -8.7391,
+      "s30_excess": -3.5564,
+      "delta": 5.1827
+    },
+    "2023-08-04": {
+      "base_excess": -8.2508,
+      "s30_excess": -3.2727,
+      "delta": 4.9781
+    },
+    "2024-08-02": {
+      "base_excess": -7.9304,
+      "s30_excess": -2.4576,
+      "delta": 5.4728
+    },
+    "2025-08-01": {
+      "base_excess": -7.1035,
+      "s30_excess": -1.2454,
+      "delta": 5.8581
+    },
+    "2026-08-07": {
+      "base_excess": -6.2952,
+      "s30_excess": -0.7701,
+      "delta": 5.5251
+    }
+  },
+  "delta_full_window": 5.5251,
+  "runtime_s": 1858.2
+}
