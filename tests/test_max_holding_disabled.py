@@ -33,19 +33,24 @@ def test_shipped_config_still_has_a_finite_stock_holding_cap():
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     cap = cfg["trading212_invest"]["stock_max_holding_days"]
-    # TRANSIENT (2026-08-12): 1 is a deliberate, short-lived MECHANISM, not a
-    # setting. Every open position is 4-8 days old, so a 1-day cap flushes the
-    # whole book through the system's own tested exit path -- which cancels each
-    # resting broker-side stop before selling, unlike a raw SELL, which would
-    # leave 22 orphaned stops that could later fire against a re-entered
-    # position. The very next commit sets the adopted value. If this value is
-    # still 1 when you read it, the flip did not complete -- see CLAUDE.md's
-    # exit-mechanics promotion entry.
-    assert cap != MAX_HOLDING_DISABLED_SENTINEL, (
-        "stock_max_holding_days is 0 -- that is the ADOPTED state, not the "
-        "transient flush state this assertion is pinned to."
+    # ADOPTED 2026-08-12. The holding cap is now DISABLED deliberately, per the
+    # exit-mechanics sweep (+6.443pp / +5.381pp cost-adjusted excess over the
+    # prior baseline, ROBUST at 70/70 perturbation combinations, surviving
+    # force-close at 5/5 cutoffs). This assertion no longer guards "must be
+    # finite" -- it now pins the ADOPTED state, so an accidental revert is as
+    # loud as an accidental flip was.
+    assert cap == MAX_HOLDING_DISABLED_SENTINEL, (
+        f"stock_max_holding_days is {cap}, not the adopted 0. Reverting the "
+        "holding cap is a real behaviour change and must be deliberate."
     )
-    assert cap == 1
+
+
+def test_shipped_config_uses_the_adopted_atr_multiplier():
+    """3.0x is only validated in combination with the disabled cap -- the two
+    dials interact and were swept as one mechanism, so they move together."""
+    with open("config.yaml", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    assert cfg["backtest"]["atr_stop_multiplier"] == 3.0
 
 
 def test_default_config_resolves_to_the_unchanged_finite_cap():

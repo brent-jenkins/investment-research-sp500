@@ -92,7 +92,7 @@ backtest:
   # 3.0 is only validated in combination with stock_max_holding_days: 0;
   # the two dials interact and were swept as one mechanism. Flipping either
   # is a separate, deliberate decision.
-  atr_stop_multiplier: 2.0
+  atr_stop_multiplier: 3.0
 
 # Live execution config for the momentum + crisis-override system. See
 # CLAUDE.md's "V2 architecture" section for the validation history behind
@@ -160,7 +160,7 @@ trading212_invest:
   # deliberate decision. Two qualifications travel with that result: the
   # absolute claim to beat ^SP500TR holds at only one window end date of
   # seven, and 73.6% of its P&L sits in 10 of 238 tickers.
-  stock_max_holding_days: 1
+  stock_max_holding_days: 0
   # Holding horizon (days) used ONLY by VaR position sizing
   # (analysis/volatility.py:_var_position_size_core() scales daily VaR by
   # sqrt(horizon)) when stock_max_holding_days is 0 and there is therefore
