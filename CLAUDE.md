@@ -2640,6 +2640,57 @@ placed.** It is technically possible in the window before `poll_placed_orders()`
 kind of fix that looks fine and is not — it puts hand-written values where the engine's own
 computation belongs, in production, with no test covering the result.
 
+**THE FLUSH REMEDY HAS TWO TRAPS, BOTH FOUND 2026-08-13 BEFORE USING IT A SECOND TIME. Read this
+before reaching for `stock_max_holding_days: 1` again — the paragraph above describes the remedy as
+though it is simply available, and it is conditionally available at best.**
+
+**Trap 1 — it cannot flush a position less than ~24h old, and fails SILENTLY by doing nothing.**
+`brokers/trading212.py:2739` computes `holding_days = (datetime.utcnow() - entry_date).days` —
+**integer truncation** — and `evaluate_exit_reason()` fires on `holding_days >= max_holding_days`. A
+position filled at 14:30:29 yesterday is still `.days == 0` at 14:00 today and only becomes `1` at
+14:30:29, so with the hourly exit check running at `:00` the first check that can fire is **15:00**.
+Measured directly on the 18 positions this was considered for: filled 2026-08-12 14:30:29–14:36, so
+13:00 → 0 days, 14:00 → 0 days, 15:00 → 1 day. **The consequence is that the flush lands AFTER the
+14:30 submission, so capacity is not free when the submission runs and the book is not rebuilt until
+the following day** — the opposite of the 2026-08-12 flush, which rebuilt same-day only because its
+target positions were already several days old and fired at the very next hourly check. Same
+mechanism, opposite outcome, entirely determined by target age. **A flush that fires zero exits is
+indistinguishable from a flush that has not run yet**, which is this file's own recurring
+degenerate-check class — verify by checking `.days` against the real `filled_at` values first, not by
+waiting to see whether anything closes.
+
+**Trap 2 — `stock_max_holding_days: 1` silently MIS-SIZES anything decided while it is set, and this
+is the more dangerous of the two.** The cap's second consumer is
+`resolve_var_horizon_days()`, which returns the cap verbatim when it is not the `0` sentinel — so `1`
+gives VaR a **1-day** sizing horizon, scaling by `sqrt(1)` instead of `sqrt(30)≈5.48`, i.e. **~5.5×
+LARGER** positions before the `per_trade_pct` ceiling clamps them. Names already at the ceiling are
+unaffected; names below it (the volatile ones — e.g. SNDK sized at £827 against a £2,564 ceiling) are
+not. **This is instance 7's `9999` trap arriving from the opposite direction** — the same two-consumer
+divergence that made the sentinel necessary, and the reason `0` is not merely a tidier way of writing
+a large number. **Operationally: the restore to `0` is not housekeeping, it is a hard deadline before
+the 21:30 EOD decide phase**, or that night's entire batch is sized on the wrong horizon. Confirmed
+the 2026-08-12 flush did not hit this — it ran 11:15→12:10 UTC, comfortably clear — so the decisions
+made that night are clean.
+
+**And the harm this remedy exists to fix is smaller than the paragraph above implies — corrected
+2026-08-13.** The stated worry is that a mis-stopped position "no longer ages out" and so "can occupy
+account capacity for months". That reasoning holds for a stop that is too WIDE. The actual stale case
+is a stop left at the OLD, **tighter** 2.0× after a flip to 3.0× — and a tighter stop fires *more*
+readily, so those positions exit *sooner*, not later. They are self-clearing through ordinary
+stop-outs. The real cost is running the configuration the exit-mechanics sweep found inferior
+(premature exits and churn, which that study identifies as the single largest drag) — not indefinite
+capacity occupation.
+
+**Decision taken 2026-08-13, recorded with its reasoning because the conclusion inverts the
+2026-08-12 precedent**: 18 positions carrying stale 2.0× stops were **deliberately left to ride**
+rather than flushed. Weighing a self-clearing suboptimal configuration against a timed two-deploy
+sequence carrying a 5.5× sizing landmine with a hard pre-21:30 restore deadline — where a missed or
+failed restore deploy mis-sizes an entire night's batch — the flush was judged the riskier operation
+for the smaller problem. **This is not a reversal of the 2026-08-12 flush being correct**: that one
+targeted older positions (so it worked same-day) and ran nowhere near the EOD window. The lesson is
+that the remedy's cost/benefit depends on target age and proximity to 21:30, and must be re-derived
+each time rather than inherited from the precedent.
+
 ## Point-in-time fundamentals recorder — DATA CAPTURE ONLY, nothing reads it (2026-08-12)
 
 **Records raw quarterly fundamentals for gate-passing candidates, going forward. It changes no
