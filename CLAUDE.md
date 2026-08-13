@@ -1338,6 +1338,33 @@ rely on the direction rather than the point estimate.
 `_classify_shadow_row_admission()` evaluates each row against its OWN recorded mode rather than today's
 config.
 
+**CONFIRMED IN RUNNING CODE, 2026-08-13 — the adoption had never actually been verified against
+production data until this check, and the only prior evidence pointed the other way.** Until now the
+adoption rested on the config file reading `relative_rank`, which proves the file deployed and
+nothing about what the decide phase computed — the same worthless-check trap as reading
+`atr_stop_multiplier` to verify a stop (see "Stop config changes carry a ONE-DAY LAG" above). The
+one concrete data point on record actively looked like a contradiction: ECHO's row showed
+`admission_rank_value` and `momentum_pct` **identical** at 2.2559. Verified directly against
+`pending_orders`, per decide date:
+
+| decide date | n | `admission_rank_value == momentum_pct` | `== relative_rank_pct` |
+|---|---|---|---|
+| 2026-08-12 | 276 | 0 | **276** |
+| 2026-08-11 | 299 | 0 | **299** |
+| 2026-08-10 | 301 | **301** | 1 |
+| 2026-08-07 | 308 | **308** | 0 |
+
+A clean single-day transition landing exactly on the documented flip date, and ECHO's identical
+values are fully explained by its **2026-08-07** decide date — pre-flip, so the two columns coincided
+by construction rather than contradicting the adoption. (The lone `== relative_rank_pct` row on
+2026-08-10 is coincidental numeric equality on one ticker in a 301/301 momentum batch, not a partial
+mode change.) The orderings also differ in substance, not just in which column is copied: on
+2026-08-12 the top 5 by `momentum_pct` (`NUE, CRL, NTAP, PSX, FDX`) and by `admission_rank_value`
+(`ADI, CMI, FDX, HAL, MPWR`) share only FDX, at different ranks — e.g. `CHRW` ranks 7th on relative
+rank off a momentum of just 0.262. **Worth generalising: a config value and the behaviour it is
+supposed to produce are two separate claims, and this project has now been caught assuming the second
+from the first twice in two days.**
+
 ## Relative-rank admission ordering promoted to production code (2026-08-09) — the code promotion
 
 **Superseded framing, kept as history**: when written, this section described an OPEN CANDIDATE whose
@@ -1779,6 +1806,51 @@ operational poll loop, and they fail identically.
    `0` sentinel, which disables the age EXIT while leaving SIZING on a real horizon. Warned about
    directly in `config.yaml` at the key itself, where the edit would actually be made.
 
+8. **A result PRE-AUTHORISED as benign, which then occurred for a completely different reason**
+   (post-EOD verification pass, 2026-08-13). The point-in-time fundamentals recorder shipped
+   2026-08-12; the verification pass written for its first cycle stated in advance that
+   `candidate_fundamentals_snapshot` "may legitimately be LOW OR ZERO — the forward cycle covered ~25
+   tickers against ~300 candidates, so overlap on night one could be small. That is correct
+   behaviour, not a failure." The table was **zero**. It was zero because
+   `snapshot_candidate_fundamentals()` was **never reached**: a `NameError` on an undefined `run_date`
+   (the in-scope name in `_eod_job()` is `today_utc`) fired on the line building its argument list.
+   **The pre-authorised explanation was also quantitatively plausible** — had the code run, 15 of 276
+   candidates would have linked and 261 would have been unlinked, a genuinely sparse night-one
+   result. A deterministic crash that would have recurred **every night, silently producing no
+   dataset ever**, was one accepted assumption away from being invisible.
+
+   **What makes this instance distinct from 1-7: the blind spot was installed deliberately, in
+   advance, by the person doing the checking.** Instances 1-7 are guards whose domain turned out
+   narrower than their author realised. This one is a guard that was **explicitly told not to fire**.
+   Pre-authorising a result as benign removes exactly the scrutiny that would have caught it being
+   non-benign — and it is more dangerous than an ordinary blind spot, because it comes with a written
+   justification that suppresses the follow-up question at the moment it would otherwise be asked.
+
+   **The rule this yields, and it is the most portable thing in this entry: pre-register the
+   DISTINGUISHING CHECK, not the ACCEPTABLE VALUE.** "Zero is acceptable" is a statement about a
+   number and cannot separate the two ways of reaching it. "If zero, confirm the function was
+   actually reached" is a statement about a mechanism and separates them completely. Both cost the
+   same to write in advance; only the second survives contact with a benign-looking failure. Applied
+   here as `tests/test_fundamentals_recorder.py::test_the_eod_fundamentals_block_actually_succeeds_end_to_end`,
+   which asserts **key PRESENCE** (`fundamentals_snapshot` in the completion record) rather than
+   absence-of-error — the same discriminator, and for the same reason, as the data-quality backstop
+   fix that this project already made once (see "Data-quality backstop was silently broken since
+   deploy" above; that entry's own meta-lesson 2 — "a backstop that has not been *observed*
+   completing successfully isn't a backstop" — is this bug exactly, recurring in new code nine
+   months of project-time later).
+
+   **A second, independent cause worth separating out, because it generalises past this bug: the
+   existing test RE-IMPLEMENTED the code under test instead of executing it.**
+   `test_a_failure_in_fundamentals_capture_cannot_reach_order_decisions` — deliberately written as
+   "the single most important test here" — builds its own `details` dict and its own `try/except`
+   mirroring the scheduler's, then injects a failure into that. It passes whether or not the real
+   block works, and it passed throughout this incident. **A test that mirrors the code under test can
+   only ever confirm the mirror.** It proved the block is HARMLESS; nothing tested that the block
+   WORKS, and those are different claims. When a test's setup starts to look like a copy of the
+   production code path, that is the signal to drive the real path instead — verified here by
+   reintroducing the `NameError` and confirming the new test fails with the exact production error
+   message while the isolation test still passes.
+
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
 *confident, plausible-looking result* rather than an error or an obvious anomaly. That last property
@@ -1790,6 +1862,11 @@ a false alarm during a live deploy invites exactly the kind of unnecessary inter
 real damage. **Instance 6 adds a third direction, and it is the most dangerous of the three: a check
 that reports correctly in one case and is silent in another of the same kind — where the correct
 report is what supplies the confidence that stops anyone checking the silence.**
+**Instance 8 adds a fourth, and it is the only one that is self-inflicted at the point of checking:
+the check was told IN ADVANCE not to fire, by a written pre-authorisation that was itself plausible.
+The other seven are blind spots discovered after the fact; this one was installed on purpose, which
+is why the countermeasure is procedural (pre-register the distinguishing check, not the acceptable
+value) rather than a better guard.**
 
 **THE GENERALISATION — passing the case a guard was designed for is not evidence it covers the class
 that case belongs to, and the pass is exactly what stops anyone looking further.** This is the
@@ -2528,6 +2605,25 @@ overlap heavily in percentage terms (here 6.05%–22.78%, entirely plausible und
 another instance of the standing "check that reports clean for a reason unrelated to the thing it
 was checking" class** — the config read is a valid check of deployment and a worthless check of
 behaviour.
+
+**HOW TO RE-RUN THIS CHECK — the two config keys live in DIFFERENT sections, and reading both from
+one section silently produces garbage (recorded 2026-08-13).** The multiplier is
+**`config.backtest.atr_stop_multiplier`**; the ATR period is **`config.signals.atr_period`** (14).
+**`config.backtest.atr_period` exists as a lookup but is `None`** — so the natural-looking
+`config["backtest"]` for both would pass `None` as the period into `_atr()` and yield nonsense rather
+than failing loudly. The live decide phase itself reads them from the two separate places
+(`brokers/trading212.py:1834` takes the period from `signals`, `analysis/volatility.py:36` takes the
+multiplier from `backtest`), so any re-check must do the same or it is not reproducing what
+production actually did.
+
+**Worked confirmation, 2026-08-13 — the lag cleared exactly as this section predicts.** The
+2026-08-12 EOD's 276 queued decisions recomputed to **min = median = max = 3.0000×** across all 276
+rows (single bucket at 3dp), while the 18 positions actually open that morning — decided 2026-08-11,
+before the flip — recomputed to **2.0000×** against ATR truncated to their own decide date. Both
+halves matter: the second is what identifies the flush target unambiguously, and it requires
+truncating the price series to the decide date rather than using today's ATR (against today's ATR the
+same 18 positions scatter across 1.75–2.97 and look like neither multiplier). Alignment was confirmed
+rather than assumed by checking `decided_price` equals the last stored close for every row.
 
 **The operational implication, stated so a future session does not rediscover it:** change any
 stop-related config, then **expect one day of stale-stop admissions**, and flush the affected
