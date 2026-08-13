@@ -79,6 +79,114 @@ def test_a_failure_in_fundamentals_capture_cannot_reach_order_decisions(db_engin
     assert "fundamentals_error" in details, "the injected failure must be recorded, not swallowed"
 
 
+# --------------------------------------------------------------------------
+# THE COMPANION TO THE ISOLATION TEST -- added 2026-08-13, after a real defect
+# --------------------------------------------------------------------------
+#
+# The isolation test above proves a failure in this block CANNOT REACH the
+# order decisions. That is a claim about the block being harmless. It is NOT a
+# claim about the block WORKING, and only the first was ever tested -- so a
+# NameError on an undefined `run_date` (the in-scope name is `today_utc`) shipped
+# and killed the snapshot step on its very first production cycle. It would have
+# recurred silently every night: the try/except caught it, the EOD still recorded
+# COMPLETED, and tests/test_scheduler.py's own
+# test_eod_job_records_completed_on_the_normal_path passed throughout.
+#
+# Two things let it through, both worth naming because neither is specific to
+# this bug:
+#
+#   1. The isolation test RE-IMPLEMENTS the scheduler's try/except inline rather
+#      than executing it. A test that mirrors the code under test cannot catch a
+#      bug in the code it mirrors -- it can only ever confirm the mirror.
+#   2. Post-deploy, `candidate_fundamentals_snapshot` being empty on night one
+#      had been PRE-AUTHORISED as benign ("~25 rotated tickers vs ~300
+#      candidates, low overlap is correct"). That explanation was quantitatively
+#      plausible -- the real overlap was 15 of 276 -- so a zero would have been
+#      read as expected and the crash never investigated. Pre-authorising a
+#      result as benign removes exactly the scrutiny that would have caught it
+#      being non-benign.
+#
+# The generalisation: pre-register the DISTINGUISHING CHECK, not the acceptable
+# value. Here that is "if the snapshot is empty, confirm the function was
+# actually REACHED" -- which is what this test asserts, by driving the real
+# _eod_job() and requiring the fundamentals_snapshot key to be PRESENT.
+
+def _frozen_date_at(year: int, month: int, day: int, hour: int = 21, minute: int = 30):
+    """Local copy of tests/test_scheduler.py's helper, so this module stays
+    self-contained rather than importing across test files."""
+    fixed = datetime(year, month, day, hour, minute, 0)
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.replace(tzinfo=tz) if tz else fixed
+
+    return _Frozen
+
+
+def test_the_eod_fundamentals_block_actually_succeeds_end_to_end(db_engine, monkeypatch, mocker):
+    """Drive the REAL _eod_job() and require the snapshot step to have RUN.
+
+    Deliberately asserts on KEY PRESENCE rather than on an absent error, for
+    the same reason the data-quality backstop's own fix did: an absent error is
+    equally consistent with "succeeded" and "never reached". Presence is the
+    only form of the assertion that distinguishes them.
+
+    snapshot_candidate_fundamentals() is left UNMOCKED and runs for real against
+    the fixture database -- mocking it would re-create the exact blind spot this
+    test exists to close, since the bug was in the caller's argument
+    construction, not in the callee.
+    """
+    from data import scheduler
+
+    monkeypatch.setattr(scheduler, "datetime", _frozen_date_at(2026, 8, 4))  # ordinary trading Tuesday
+
+    with db_engine.begin() as conn:
+        for tk in ("AAA", "BBB"):
+            conn.execute(sa_text(
+                "INSERT INTO pending_orders (ticker, t212_ticker, is_etf, currency, "
+                "decided_at, decided_price, position_gbp, momentum_pct, stop_price, "
+                "var_pct, status, created_at) VALUES (:t, :tt, 0, 'USD', :d, 100.0, "
+                "1000.0, 0.5, 90.0, -0.2, 'PENDING', :d)"),
+                {"t": tk, "tt": tk + "_US_EQ", "d": "2026-08-04T21:30:00"})
+    write_ticker_fundamentals(_record(ticker="AAA"), provenance="point_in_time")
+
+    mocker.patch("data.scheduler._load_config", return_value={})
+    mocker.patch("data.scheduler._build_ticker_exchange_map", return_value={"^GSPC": "NYSE"})
+    mocker.patch("data.scheduler.pull_incremental", return_value={"^GSPC": 1})
+    mocker.patch("data.scheduler.get_all_tickers", return_value=["^GSPC"])
+    mocker.patch("data.scheduler._run_analysis_pipeline")
+    mocker.patch("data.scheduler._fetch_t212_snapshot")
+    mocker.patch("data.ingestion.detect_price_cliffs", return_value=[])
+    mocker.patch("data.ingestion.scan_unverified_tickers", return_value={
+        "checked": 0, "remaining": 0, "newly_quarantined": [], "newly_needs_review": [],
+        "errors": [],
+    })
+    # Only the network-touching fetch is stubbed. Everything downstream of it --
+    # the candidate read-back and the snapshot write, where the bug actually was
+    # -- runs for real.
+    mocker.patch("data.ingestion.refresh_fundamentals_chunk", return_value={
+        "attempted": 1, "written": 1, "no_data": 0, "error": None,
+    })
+
+    scheduler._eod_job()
+
+    status = scheduler.get_eod_completion_status()
+    assert "fundamentals_snapshot" in status, (
+        "the snapshot step must have RUN -- its key being absent is precisely the "
+        "signature of the 2026-08-12 NameError, which the isolation test could not see"
+    )
+    assert "fundamentals_error" not in status, status.get("fundamentals_error")
+    assert status["fundamentals_snapshot"]["candidates"] == 2
+
+    # The date the snapshot is keyed to is the point of the variable that was
+    # wrong, so pin it semantically rather than just asserting "no crash".
+    with db_engine.connect() as conn:
+        dates = [r[0] for r in conn.execute(sa_text(
+            "SELECT DISTINCT decision_date FROM candidate_fundamentals_snapshot"))]
+    assert dates == ["2026-08-04"]
+
+
 def test_capture_functions_never_raise_even_on_a_broken_database(mocker):
     """Both entry points are themselves never-raising, so the scheduler's
     try/except is a second line of defence rather than the only one."""

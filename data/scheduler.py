@@ -1095,8 +1095,8 @@ def _eod_job() -> None:
             with _get_engine().connect() as _conn:
                 cands = [r[0] for r in _conn.execute(_sa_text(
                     "SELECT DISTINCT ticker FROM pending_orders "
-                    "WHERE date(decided_at) = :d"), {"d": run_date.isoformat()})]
-            sres = snapshot_candidate_fundamentals(cands, run_date.isoformat())
+                    "WHERE date(decided_at) = :d"), {"d": today_utc.isoformat()})]
+            sres = snapshot_candidate_fundamentals(cands, today_utc.isoformat())
             details["fundamentals_snapshot"] = sres
             logger.info(
                 "Fundamentals: fetched %s/%s tickers (%s no-data), snapshotted %s "
