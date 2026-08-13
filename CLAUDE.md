@@ -2785,6 +2785,54 @@ answerable from the record rather than only from the absence of an error.
 **Backfill (restated)**: operator-driven like `prewarm_sector_data.py`, not scheduled. Same 3
 calls/ticker, so a 25-ticker run is also ~90s and writes ~125 rows.
 
+### The first production cycle half-failed — and how to verify a cycle actually worked (2026-08-13)
+
+**The recorder's very first EOD (2026-08-12) fetched 25/25 tickers and wrote ZERO snapshot rows.**
+`_eod_job()`'s fundamentals block referenced `run_date`, which does not exist in that scope (the
+in-scope name is `today_utc`; `run_date` is a parameter of `_record_eod_completion()`). A
+deterministic `NameError`, firing on the line that builds the snapshot's own argument list — after
+the fetch had already written its key. It would have recurred every night. Fixed and deployed
+2026-08-13; see the standing "check that reports clean for a reason unrelated to the thing it was
+checking" entry, instance 8, for the full account of why it survived.
+
+**The completion-record design above is what localised it, and it is the one thing that worked as
+intended** — `fundamentals_fetch` present, `fundamentals_snapshot` **absent**, `fundamentals_error`
+populated, pinpointing the failure to between those two calls without needing a log. Two things did
+NOT catch it, both worth knowing before trusting this path again: `tests/test_fundamentals_recorder.py`'s
+isolation test **re-implements** the scheduler's `try/except` inline rather than executing it, so it
+passes whether or not the real block works (a test that mirrors the code under test can only confirm
+the mirror); and an empty `candidate_fundamentals_snapshot` had been **pre-authorised as benign**
+("low overlap on night one"), an explanation that was also quantitatively plausible — 15 of 276 would
+have linked — so the zero read as expected. `test_the_eod_fundamentals_block_actually_succeeds_end_to_end`
+now drives the real `_eod_job()` and asserts the `fundamentals_snapshot` key is PRESENT.
+
+**THE VERIFICATION TRAP, and it will catch anyone checking this the obvious way.** Within the same
+EOD block, `refresh_fundamentals_chunk()` runs **BEFORE** `snapshot_candidate_fundamentals()` — so
+**tonight's rotation extends the fetched prefix before tonight's snapshot reads it.** Checking that
+linked tickers fall within the prefix observed *yesterday* therefore reports a failure on a perfectly
+healthy system: after the 2026-08-12 cycle the prefix was `A`→`AMAT` (25), and the very next cycle
+legitimately links names out to `AXP` (50). **Read the boundary from `ticker_fundamentals` itself,
+never from the previous night's figure or from memory.**
+
+**The four checks that actually verify a cycle, in order of what they can and cannot prove:**
+1. `fundamentals_snapshot` **present** in the completion record and `fundamentals_error` **absent** —
+   presence, not absence-of-error, since an absent error is equally consistent with "succeeded" and
+   "never reached".
+2. `candidate_fundamentals_snapshot` row count **non-zero** for that `decision_date`. Sparse is
+   correct and expected for many cycles; **zero now means something new**, because the path that
+   produced zero on night one is the one that was fixed.
+3. `SELECT COUNT(DISTINCT ticker), MIN(ticker), MAX(ticker) FROM ticker_fundamentals` must equal the
+   alphabetical prefix `sorted(get_live_stock_candidates())[:N]` for the number of cycles run — no
+   gaps, no strays.
+4. **The join-integrity check, the only one no row count can substitute for:**
+   ```sql
+   SELECT s.ticker FROM candidate_fundamentals_snapshot s
+     JOIN ticker_fundamentals f ON f.id = s.fundamentals_id
+    WHERE f.ticker != s.ticker;          -- must return zero rows
+   ```
+   A plausible count proves a number was produced, not that the right mechanism produced it — this
+   asserts each linked row points at **its own** ticker's fundamentals row.
+
 **yfinance's history depth is ~5 quarters per ticker, NOT the 12 the `max_quarters` ceiling allows —
 measured, and it changes what the backfill is.** Roughly **15 months** of restated data is available
 per ticker, so the backfill is a **shallow one-pass job, not a deep history pull and not an ongoing
