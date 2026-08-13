@@ -1,0 +1,349 @@
+{
+  "label": "B_relative_rank",
+  "n_pre2022": 3602,
+  "n_holdout": 1274,
+  "spearman_floor": 0.05,
+  "features": {
+    "adv20": {
+      "n": 3602,
+      "p10": 1023863.5,
+      "p50": 4763880.0,
+      "p90": 48467981.0,
+      "mean": 31752332.9497,
+      "sd": 110336831.6759,
+      "spearman": -0.0068,
+      "spearman_p": 0.68519,
+      "pearson": 0.0131,
+      "verdict": "NULL"
+    },
+    "adv60": {
+      "n": 3602,
+      "p10": 1066646.6667,
+      "p50": 4755847.2833,
+      "p90": 51022704.5,
+      "mean": 31874680.2041,
+      "sd": 109101831.4123,
+      "spearman": -0.0043,
+      "spearman_p": 0.79414,
+      "pearson": 0.0171,
+      "verdict": "NULL"
+    },
+    "vol_ratio_entry": {
+      "n": 3602,
+      "p10": 0.6182,
+      "p50": 1.0164,
+      "p90": 1.75,
+      "mean": 1.1334,
+      "sd": 0.5826,
+      "spearman": -0.0413,
+      "spearman_p": 0.01309,
+      "pearson": -0.0099,
+      "verdict": "NULL"
+    },
+    "vol_trend": {
+      "n": 3602,
+      "p10": 0.7687,
+      "p50": 0.9686,
+      "p90": 1.2511,
+      "mean": 0.9963,
+      "sd": 0.2048,
+      "spearman": -0.0363,
+      "spearman_p": 0.02925,
+      "pearson": -0.0144,
+      "verdict": "NULL"
+    },
+    "dollar_volume20": {
+      "n": 3602,
+      "p10": 80220826.834,
+      "p50": 220285803.6176,
+      "p90": 1065514560.2605,
+      "mean": 688481459.6523,
+      "sd": 2160306783.6395,
+      "spearman": -0.0472,
+      "spearman_p": 0.00458,
+      "pearson": -0.0054,
+      "verdict": "NULL"
+    },
+    "rsi14": {
+      "n": 3602,
+      "p10": 33.3488,
+      "p50": 49.9041,
+      "p90": 67.1784,
+      "mean": 50.0467,
+      "sd": 12.9152,
+      "spearman": -0.008,
+      "spearman_p": 0.62919,
+      "pearson": -0.055,
+      "verdict": "NULL"
+    },
+    "atr_pct": {
+      "n": 3602,
+      "p10": 0.019,
+      "p50": 0.0314,
+      "p90": 0.0521,
+      "mean": 0.0343,
+      "sd": 0.0149,
+      "spearman": -0.1444,
+      "spearman_p": 0.0,
+      "pearson": -0.0157,
+      "verdict": "INCONCLUSIVE",
+      "robustness": {
+        "monotonic_quintiles": false,
+        "monotonic_ex_top1": false,
+        "monotonic_excl_2008": false,
+        "spearman_excl_2008": -0.0918,
+        "monotonic_from_2015": true,
+        "spearman_from_2015": -0.0848,
+        "spearman_within_momentum_quartile": {
+          "M1": -0.1517,
+          "M2": -0.0795,
+          "M3": -0.157,
+          "M4": -0.175
+        },
+        "consistent_sign_within_quartiles": true,
+        "holdout_spearman": -0.138,
+        "holdout_monotonic": false,
+        "holdout_same_sign": true,
+        "verdict": "INCONCLUSIVE"
+      },
+      "quintiles_pre2022": [
+        {
+          "q": "Q1",
+          "n": 721,
+          "feat_min": 0.0099,
+          "feat_max": 0.0224,
+          "win_pct": 41.89,
+          "mean_pnl_pct": 0.261,
+          "median_pnl_pct": -2.866,
+          "mean_ex_top1": 0.222
+        },
+        {
+          "q": "Q2",
+          "n": 720,
+          "feat_min": 0.0224,
+          "feat_max": 0.0283,
+          "win_pct": 46.81,
+          "mean_pnl_pct": 0.961,
+          "median_pnl_pct": -1.615,
+          "mean_ex_top1": 0.916
+        },
+        {
+          "q": "Q3",
+          "n": 720,
+          "feat_min": 0.0283,
+          "feat_max": 0.0346,
+          "win_pct": 44.31,
+          "mean_pnl_pct": 0.498,
+          "median_pnl_pct": -2.95,
+          "mean_ex_top1": 0.454
+        },
+        {
+          "q": "Q4",
+          "n": 720,
+          "feat_min": 0.0346,
+          "feat_max": 0.0435,
+          "win_pct": 42.5,
+          "mean_pnl_pct": 0.656,
+          "median_pnl_pct": -3.394,
+          "mean_ex_top1": 0.565
+        },
+        {
+          "q": "Q5",
+          "n": 721,
+          "feat_min": 0.0435,
+          "feat_max": 0.1336,
+          "win_pct": 41.89,
+          "mean_pnl_pct": 0.561,
+          "median_pnl_pct": -3.145,
+          "mean_ex_top1": 0.397
+        }
+      ]
+    },
+    "realised_vol60": {
+      "n": 3602,
+      "p10": 0.2157,
+      "p50": 0.3581,
+      "p90": 0.5848,
+      "mean": 0.3855,
+      "sd": 0.1631,
+      "spearman": -0.1182,
+      "spearman_p": 0.0,
+      "pearson": -0.0119,
+      "verdict": "INCONCLUSIVE",
+      "robustness": {
+        "monotonic_quintiles": false,
+        "monotonic_ex_top1": false,
+        "monotonic_excl_2008": false,
+        "spearman_excl_2008": -0.0699,
+        "monotonic_from_2015": true,
+        "spearman_from_2015": -0.0503,
+        "spearman_within_momentum_quartile": {
+          "M1": -0.1282,
+          "M2": -0.0654,
+          "M3": -0.1133,
+          "M4": -0.1429
+        },
+        "consistent_sign_within_quartiles": true,
+        "holdout_spearman": -0.1396,
+        "holdout_monotonic": false,
+        "holdout_same_sign": true,
+        "verdict": "INCONCLUSIVE"
+      },
+      "quintiles_pre2022": [
+        {
+          "q": "Q1",
+          "n": 721,
+          "feat_min": 0.1172,
+          "feat_max": 0.2552,
+          "win_pct": 42.58,
+          "mean_pnl_pct": 0.224,
+          "median_pnl_pct": -2.866,
+          "mean_ex_top1": 0.193
+        },
+        {
+          "q": "Q2",
+          "n": 720,
+          "feat_min": 0.2552,
+          "feat_max": 0.3251,
+          "win_pct": 43.89,
+          "mean_pnl_pct": 0.504,
+          "median_pnl_pct": -2.908,
+          "mean_ex_top1": 0.454
+        },
+        {
+          "q": "Q3",
+          "n": 720,
+          "feat_min": 0.3251,
+          "feat_max": 0.3919,
+          "win_pct": 45.83,
+          "mean_pnl_pct": 0.838,
+          "median_pnl_pct": -2.217,
+          "mean_ex_top1": 0.79
+        },
+        {
+          "q": "Q4",
+          "n": 720,
+          "feat_min": 0.3921,
+          "feat_max": 0.488,
+          "win_pct": 43.47,
+          "mean_pnl_pct": 1.083,
+          "median_pnl_pct": -2.751,
+          "mean_ex_top1": 0.92
+        },
+        {
+          "q": "Q5",
+          "n": 721,
+          "feat_min": 0.4883,
+          "feat_max": 1.5899,
+          "win_pct": 41.61,
+          "mean_pnl_pct": 0.288,
+          "median_pnl_pct": -3.163,
+          "mean_ex_top1": 0.197
+        }
+      ]
+    },
+    "price_at_entry": {
+      "n": 3602,
+      "p10": 11.9673,
+      "p50": 43.285,
+      "p90": 183.04,
+      "mean": 85.4088,
+      "sd": 158.6849,
+      "spearman": -0.0343,
+      "spearman_p": 0.03961,
+      "pearson": -0.0399,
+      "verdict": "NULL"
+    },
+    "gap_to_ma50": {
+      "n": 3602,
+      "p10": -0.1,
+      "p50": 0.0161,
+      "p90": 0.1284,
+      "mean": 0.0146,
+      "sd": 0.0969,
+      "spearman": -0.0243,
+      "spearman_p": 0.1441,
+      "pearson": -0.0631,
+      "verdict": "NULL"
+    },
+    "gap_to_ma200": {
+      "n": 3602,
+      "p10": -0.0281,
+      "p50": 0.1763,
+      "p90": 0.4061,
+      "mean": 0.1888,
+      "sd": 0.1865,
+      "spearman": -0.005,
+      "spearman_p": 0.76376,
+      "pearson": -0.0262,
+      "verdict": "NULL"
+    },
+    "ma50_above_ma200": {
+      "n": 3602,
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "mean": 0.9292,
+      "sd": 0.2565,
+      "spearman": 0.0289,
+      "spearman_p": 0.08264,
+      "pearson": 0.0126,
+      "verdict": "NULL"
+    },
+    "up_day_fraction60": {
+      "n": 3602,
+      "p10": 0.45,
+      "p50": 0.5333,
+      "p90": 0.6167,
+      "mean": 0.5311,
+      "sd": 0.0605,
+      "spearman": 0.0165,
+      "spearman_p": 0.32093,
+      "pearson": -0.0339,
+      "verdict": "NULL"
+    },
+    "return_5d": {
+      "n": 3602,
+      "p10": -0.0951,
+      "p50": -0.0124,
+      "p90": 0.0514,
+      "mean": -0.0167,
+      "sd": 0.063,
+      "spearman": 0.002,
+      "spearman_p": 0.9039,
+      "pearson": -0.0412,
+      "verdict": "NULL"
+    },
+    "return_21d": {
+      "n": 3602,
+      "p10": -0.1232,
+      "p50": 0.0046,
+      "p90": 0.1372,
+      "mean": 0.0064,
+      "sd": 0.1146,
+      "spearman": -0.0235,
+      "spearman_p": 0.15806,
+      "pearson": -0.0536,
+      "verdict": "NULL"
+    },
+    "dist_from_52w_low": {
+      "n": 3602,
+      "p10": 0.3901,
+      "p50": 0.8272,
+      "p90": 2.0168,
+      "mean": 1.1132,
+      "sd": 1.0724,
+      "spearman": -0.0125,
+      "spearman_p": 0.45384,
+      "pearson": 0.0343,
+      "verdict": "NULL"
+    }
+  },
+  "rsi_degeneracy": {
+    "p25": 40.47,
+    "p75": 59.27,
+    "iqr": 18.8,
+    "max_20pt_band_share": 0.5328,
+    "degenerate": false
+  }
+}
