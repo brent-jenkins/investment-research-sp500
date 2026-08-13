@@ -2863,6 +2863,87 @@ validation. Recording all ~300 gate-passing candidates nightly (rather than only
 gives it both a treated and a control population, and is the only reason the timeline is years rather
 than decades. **It is recorded so the option exists, not because it is close to usable.**
 
+## Interactive Brokers unattended authentication — investigated, NOT FEASIBLE as documented (2026-08-11)
+
+**Investigation only — no code, no broker abstraction, no credential handling, no connection attempted,
+nothing touching the T212 path.** Full detail: `research/ib_unattended_auth_2026-08-11/REPORT.md`.
+
+**Motivation**: IB is of interest for instrument breadth (US-domiciled ETFs, futures, bonds), which
+would unblock the shelved sleeve study — that study died on **UCITS substitution problems** (no
+USD-denominated *distributing* sector equivalents; sector legs with no history before 2015; a 1.42–2.86
+pp/yr Acc/Dist accounting divergence larger than the effect being measured), **not on its hypothesis**.
+See "Sleeve-allocation study" above.
+
+**Verdict: unattended operation is NOT achievable for an individual account by any documented route.**
+IB's own Web API Authentication documentation lists eligibility by account type, and the split is
+decisive:
+
+| Method | Account types listed as eligible |
+|---|---|
+| **Client Portal Gateway** (session, username/password) | **Individual Accounts** |
+| **OAuth 1.0a** | Advisor · Broker & FCM · Proprietary Trading Group · Hedge & Mutual Fund · Institutional Hedge Fund Investors · Third Party Software Developers |
+| **OAuth 2.0** | The same organisational/institutional set |
+
+**Individual Accounts appear against the gateway and nowhere else.** Session auth requires an
+interactive login at least weekly — **security tokens invalidate every Sunday 01:00 ET** — and this
+account's login sends an SMS code, which cannot be automated by any legitimate means. Ceiling: **~6.5
+days unattended, then a human**. Poor fit for a system whose premise is removing discretionary human
+involvement from a daily cycle, and the failure mode is **silent**: a missed Sunday login simply stops
+trading, with no error.
+
+**Funding is NOT the blocker, which is the practically useful part.** An IBKR Pro live account plus
+funding does not grant OAuth to an Individual account. Funding on the assumption that unattended access
+follows would be paying to discover something a support ticket answers for free. The docs also state
+**no funding figure** — only "fully open and funded" and IBKR Pro type, applying *"whether accessing a
+live account or its associated simulated paper account"* — so the threshold needs confirming with IB
+rather than guessed at.
+
+**The one open question that would flip this, deliberately left open rather than assumed either way.**
+Community sources (notably the `ibind` project's OAuth guide) state individuals *can* register OAuth
+1.0a self-service for both live and paper, explicitly noting this *"contradicts the website and some
+IBKR support agents."* Not acted on: it contradicts IB's own eligibility list, undocumented paths can be
+withdrawn without notice, and this one would sit underneath live order placement. **The action is one
+support ticket** — may an Individual IBKR Pro account register OAuth 1.0a for first-party access to its
+own and associated paper account, and is that supported or merely tolerated? Ask the funding threshold
+in the same ticket. If IB confirms it, this reopens immediately and favourably; the OAuth mechanism
+itself is sound (permanent access token, ~24h live session token derived by RSA-SHA256 signed request
+plus Diffie-Hellman exchange, `/iserver/auth/ssodh/init` re-callable, no interactive login and no 2FA
+because the RSA key IS the factor — IB's own material calls the daily re-auth automatable).
+
+**A methodological note worth keeping, since it generalises beyond IB.** The first pass of this
+investigation leaned on the community guide and concluded OAuth *was* available to individuals; reading
+IB's actual Authentication documentation reversed it. **"Several practitioners report it works" and
+"the vendor documents it as available for your account type" are different classes of evidence, and
+only the second is a sound basis for an authentication mechanism sitting underneath live order
+placement.** Same shape as this file's other evidence-quality lessons — a plausible secondary source is
+not a substitute for the primary one.
+
+**Two findings retained regardless of the verdict:**
+- **OAuth 1.0a covers trading features only** — which would be sufficient here: order placement,
+  positions and account state are all Trading endpoints. IB's separate *Account Management* API
+  (onboarding, funding, statements) requires OAuth 2.0 and this system uses none of it.
+- **IB as a PRICE source is a different decision from IB as an execution venue, and a worse one.**
+  Pacing is adequate (50 req/s direct, but only 10 req/s via the gateway; `/iserver/marketdata/history`
+  capped at 5 concurrent; 429 → 10-minute IP penalty box, permanent block for repeat offenders). The
+  real objection is that **switching the price source from yfinance would invalidate every backtest
+  figure in this project** — the 19-year history, the ~1.08pp noise floor, the 16-block baseline, Arm
+  B's +1.993pp are all computed on yfinance `close`. Execution-venue adoption is contained; price-source
+  adoption silently re-bases everything the system has ever been validated against. Never bundle them.
+
+**On terms of service, for the record**: using OAuth would be IB's own sanctioned key-pair credential
+used as designed — the SMS challenge is never reached — which is categorically different from
+automating a response to one. The approach to avoid is third-party tooling that drives the gateway
+login form to inject a 2FA code; its own maintainers describe it as *"not using an officially supported
+automatic interface"*, best-effort, with account lock-out risk. **IBC cannot get past an SMS
+challenge** — it supports only IBKR Mobile push 2FA and still requires a human to acknowledge the
+alert. Nor can 2FA be reduced: it is **mandatory on all IB accounts including paper**, IB *"does not
+allow the ability to disable the Secure Login System"*, and the old second-user-without-2FA workaround
+has been withdrawn.
+
+**Integration scoping deliberately NOT done** — it was conditional on unattended operation being
+feasible, and on the documented evidence it is not. Reopen only if IB's answer to the support ticket
+is favourable.
+
 ## Current architecture (as of 2026-08-04)
 
 **What this is.** A live, automated trading system ("SP500Invest") that runs a single strategy — 12-month trailing momentum, long-only, on a dynamically-determined, point-in-time-correct S&P 500 universe — against a real Trading212 Invest account. Currently runs against the **demo** account only: `trading212_invest.live` is `false` in config, and `Trading212Client.place_market_order()`/`place_stop_order()` both raise if `live=True` is ever passed to the client constructor — a config change alone cannot enable real-money trading. No regime classifier, no multi-module confluence score, no manual watchlist curation. This is the result of a full V1→V2 rebuild (see `CLAUDE_HISTORY.md`'s "V2 architecture — phased rebuild, Stage 1" onward) — earlier sections of the history file describe the original six-module confluence/regime system; none of that exists in the current codebase (`analysis/confluence.py`, `analysis/engine.py`, `analysis/regime.py` are all gone).

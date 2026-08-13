@@ -1,0 +1,31 @@
+group,ticker,label,rows_n,first,last,currency,cliffs,worst_cliff,max_gap_days,note
+current,SHEL.L,Shell,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,AZN.L,AstraZeneca,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,HSBA.L,HSBC,6771,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,BP.L,BP,6771,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,GSK.L,GSK,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,RIO.L,Rio Tinto,6771,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,ULVR.L,Unilever,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,BATS.L,British American Tobacco,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,VOD.L,Vodafone,6771,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,LLOY.L,Lloyds,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,BARC.L,Barclays,6771,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,TSCO.L,Tesco,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+current,GLEN.L,Glencore,3845,2011-05-19,2026-08-11,GBp,0.0,,5.0,
+current,REL.L,RELX,6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+delisted,CBRY.L,Cadbury (Kraft 2010),0,,,,,,,NO DATA
+delisted,BOOT.L,Alliance Boots (2007),6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
+delisted,SCTN.L,Scottish & Newcastle (2008),0,,,,,,,NO DATA
+delisted,NRK.L,Northern Rock (nationalised 2008),0,,,,,,,NO DATA
+delisted,BB.L,Bradford & Bingley (2008),0,,,,,,,NO DATA
+delisted,HBOS.L,HBOS (Lloyds 2009),0,,,,,,,NO DATA
+delisted,BGY.L,British Energy (EDF 2009),0,,,,,,,NO DATA
+delisted,CW.L,Cable & Wireless,0,,,,,,,NO DATA
+delisted,AMFW.L,Amec Foster Wheeler (2017),0,,,,,,,NO DATA
+delisted,MRW.L,Wm Morrison (private 2021),0,,,,,,,NO DATA
+delisted,RSA.L,RSA Insurance (2021),0,,,,,,,NO DATA
+delisted,AGK.L,Aggreko (private 2021),0,,,,,,,NO DATA
+delisted,GFS.L,G4S (2021),0,,,,,,,NO DATA
+delisted,MGGT.L,Meggitt (2022),0,,,,,,,NO DATA
+delisted,MCRO.L,Micro Focus (2023),0,,,,,,,NO DATA
+delisted,PSN.L,"Persimmon (current, control)",6772,2000-01-03,2026-08-11,GBp,0.0,,5.0,
