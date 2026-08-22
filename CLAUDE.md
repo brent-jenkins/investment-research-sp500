@@ -2581,6 +2581,102 @@ sizing) rather than the false one.
 *operation* under a disabled cap has been observed — only simulated. Unlimited holding interacts with
 the live re-entry, membership and reconciliation paths in ways no backtest exercises.
 
+## High-threshold trailing stop — pre-registered, tested, NOT ADOPTED (2026-08-22)
+
+**Closes the one gap the exit-mechanics sweep left in the trailing-stop dimension.** That sweep
+tested activation at **+5%** and **+10%**; both cost ~5.4pp. The untested case was structurally
+different: **a stop fixed at entry goes inert exactly when a position has most to give back** — the
+live MRNA position sat at +136% with its stop 176% below price, i.e. no stop at all in practice. So
+the system has protection on every position *except* the ones that have run furthest. A high
+activation threshold touches only that handful. Arms: baseline (no trail) plus activation at
+**+30/+50/+100/+200%**, trail distance fixed at the live 3.0× ATR, ratchet up only. Full detail:
+`research/trailing_high_threshold_prereg_2026-08-22/`.
+
+**VERDICT: NOT ADOPTED. Cost-adjusted excess return over `^SP500TR` vs baseline: B30 −5.087pp,
+B50 −3.999pp, B100 −1.759pp (Pool 2 CLEAN); −2.511 / −2.069 / −1.435 (Pool 1).** Every arm negative,
+every one outside the ~1.08pp noise floor, both pools agreeing on sign and ordering. Monotone
+attenuation toward zero as the threshold rises, never a sign change — **there is no interior optimum,
+and the window between "fires enough to measure" and "fires little enough not to damage the tail" is
+empty.**
+
+**THE HEADLINE MECHANISM, and it is the most transferable thing here: the trail wins the count and
+loses the money.** It genuinely does protect gains — protection is simply worth an order of magnitude
+less than it costs. Mean **+£389 to +£765 per protected position against −£2,718 to −£3,092 per
+forgone one**. At B100 on Pool 2 it protects **exactly as many positions as it forgoes (14:14)** and
+still nets **−£27,488**; on Pool 1 it protects **more often than it forgoes (12:10)** and still nets
+−£18,403, with a *positive* median (+2.53pp) against a mean of −30.71pp. Portfolio win rate
+correspondingly **rises 28.85% → 34.64%** while cost-adjusted CAGR falls 11.44 → 6.35. **A win-rate
+read of any exit mechanism in this system is not merely uninformative, it is inverted** — this is
+Arm C's finding and the sweep's +5%/+10% finding replicated a third time, at thresholds nobody had
+tested.
+
+**A protective exit inside an always-redeploying portfolio buys turnover, not risk reduction — the
+finding worth carrying past this study.** Drawdown was pre-registered as a one-sided ceiling with
+improvement *expected* (protecting run-up gains is the mechanism's entire purpose) and explicitly
+barred from counting as evidence in favour. **It did not even improve**: −43.88% baseline against
+−45.15 / −44.74 / −43.88 (Pool 2), flat to slightly worse. The reason is that **mean deployment is
+essentially identical across every arm (63.9–65.1%, a 1.2pp spread)** — capital protected out of one
+position is immediately redeployed into another, so **position-level protection never becomes
+portfolio-level protection, because the book refills.** Any future protective-exit mechanism in this
+system should be expected to behave the same way unless it is *paired* with a rule keeping the freed
+capital out of the market — a pairing neither this study nor the sweep has tested, and one the two
+rebalancing studies' deployment findings argue against.
+
+**55–80% of the damage is CAPACITY TURNOVER, not truncation — the opposite of what was anticipated.**
+Total P&L Δ decomposes exactly into direct effect plus capacity residual: B30 −£221,843 = −£81,901
+direct + **−£139,942 capacity**; B100 −£95,363 = −£27,488 + **−£67,875**. The arms admit 421–1,000
+positions baseline never held, carrying real positive P&L (£110,893–£281,932) — yet the residual is
+strongly negative, because the capital was recovered from far better positions than it was redeployed
+into. **Freeing capacity locked since 2009 did not rescue the arms; it hurt more than cutting the
+winners short did.** The §5.3 walk-away condition (effect tracing mainly to capacity turnover) is met,
+though moot for adoption since the primary criterion already fires.
+
+**Top-decile Jaccard 0.057–0.153** against overall Jaccard 0.19–0.34 — the *tail* is disrupted about
+three times as much as the book as a whole, exactly as a mechanism acting only on run-up positions
+must, and exactly why it is fatal. 18–21 of baseline's ~56 top-decile positions are directly
+truncated.
+
+**B200 was NOT TESTED and its return figure is deliberately not estimated or interpreted.**
+`n_reached` = 29 (Pool 2) / 25 (Pool 1) against a materiality floor of **30 fixed before any number
+was seen** — a one-position miss on the decisive pool, and a clearer one on Pool 1. Per the
+position-count study's `n5`/`n10` precedent this is reported as NOT TESTED, never as a null. **The
+floor was not moved, and how tempting that was is precisely why it was pre-registered.** A read-only
+per-position path check showed `n_fired` would have been 29 of 29, so the failure is on the population
+half of the gate alone. **"NOT TESTED" is not "SAFE"**: B200 is simultaneously too small to measure
+and acting on **95.7% of total P&L**, which argues against deploying such a rule on thin evidence
+rather than for relaxing the gate.
+
+**THE STRUCTURAL ODDITY IS NOT DISSOLVED — a trailing stop is the wrong remedy, the giveback is
+real.** Stage 0 measured it precisely: **the median position reaching +30% surrenders 48.5pp, keeping
+only 45.5% of its peak** (79.3pp / 56.8% at +100%), with the trail armed for **78% of the holding
+period** at B30. But `SIGNAL_OFF` is **80–85% of exits in that population**, and a 252-day momentum
+reading *cannot* turn negative without a large fall from peak — so **the giveback is substantially
+the definitional price of admission to the right tail**, not carelessness. Pay it and you hold the
+winners carrying 124% of total P&L; refuse it and, as measured here, you lose far more than you save.
+
+**Two methodological notes worth keeping.** (1) **A specification gap was caught before the run that
+would have produced a decisive negative for a reason unrelated to the hypothesis**: the sweep's
+engine trails at `hwm − k × ATR_at_entry`, and with ATR frozen at entry the trail narrows by exactly
+the activation multiple (1.3× at +30%, 3.0× at +200%, 8.2× at NVDA's real +722%). At B200 that
+applies an effective **1.0×-equivalent** width — a multiplier the sweep already established is
+materially worse than 3.0× — so the arm would have tested stop *width* while claiming to test
+activation *threshold*. Ruled to **recompute ATR at the current date** before any cell ran; the
+frozen convention is retained in `trail_engine.py` only so the sweep's own cells stay reproducible.
+(2) **A verification failure that was the harness, not the engine**: V1 reported 90 mismatched rows
+on identical trade sets, traced to comparing in-memory `float64` against a CSV-round-tripped
+reference with exact `!=`. Measured directly, **the default `to_csv`/`read_csv` round trip is not
+bit-exact and alters 16.2% of float64 values**; V1 observed 15.9% (90/565). Like-for-like re-run:
+**0 mismatches across all 12 columns, both pools**. Standing lesson: **a float that has been through
+a text format and one that has not are not the same number, and comparing them with `==` tests the
+serializer, not the computation** — the neighbouring version of this (row *ordering*) already bit the
+relative-rank promotion once.
+
+**Research only. No change to `analysis/signals.py`, `analysis/decision.py`, `config.yaml`, or any
+live path. No database writes. Nothing adopted, nothing merged into the trading logic, nothing
+deployed.** Perturbation robustness was not run and was not required — it is earned by an arm that
+fires no walk-away clause, and none qualified.
+
+
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
 
 **`pending_orders.stop_price` is computed at DECIDE time (21:30 EOD) and used verbatim at SUBMIT time

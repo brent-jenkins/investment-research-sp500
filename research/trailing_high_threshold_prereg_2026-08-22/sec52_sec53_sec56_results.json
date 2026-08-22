@@ -1,0 +1,316 @@
+{
+  "pool2_clean": {
+    "b30": {
+      "sec52": {
+        "threshold": 0.3,
+        "n_reached_in_baseline": 127,
+        "n_reached_and_shared": 51,
+        "n_byte_identical": 2,
+        "n_genuinely_diverged": 49,
+        "n_protected": 20,
+        "n_forgone": 29,
+        "protected_sum_pp": 444.51,
+        "forgone_sum_pp": -2634.1,
+        "net_sum_pp": -2189.59,
+        "protected_sum_gbp": 7772.32,
+        "forgone_sum_gbp": -89673.64,
+        "net_sum_gbp": -81901.32,
+        "median_delta_pp": -9.04,
+        "mean_delta_pp": -44.69,
+        "meets_10_diverged_floor": true
+      },
+      "sec53": {
+        "n_trades_base": 565,
+        "n_trades_arm": 1299,
+        "trade_count_delta": 734,
+        "n_arm_only_admissions": 1000,
+        "arm_only_pnl_gbp": 110893.3,
+        "n_baseline_only": 266,
+        "baseline_only_pnl_gbp": 256466.67,
+        "arm_only_by_decade": {
+          "2020s": 480,
+          "2010s": 457,
+          "2000s": 63
+        },
+        "total_pnl_base": 348548.74,
+        "total_pnl_arm": 126705.6,
+        "total_pnl_delta": -221843.13,
+        "direct_effect_gbp": -81901.32,
+        "capacity_residual_gbp": -139941.81,
+        "direct_share_of_delta_pct": 36.9
+      },
+      "sec56": {
+        "shared_pct_of_base": 52.9,
+        "shared_pct_of_arm": 23.0,
+        "jaccard_all": 0.1911,
+        "top_decile_n_base": 56,
+        "top_decile_n_arm": 129,
+        "top_decile_shared": 10,
+        "top_decile_jaccard": 0.0571,
+        "arm_pnl_share_from_non_shared_pct": 87.5,
+        "n_top_decile_baseline_truncated": 21,
+        "top_decile_truncated_delta_gbp": -86720.09
+      }
+    },
+    "b50": {
+      "sec52": {
+        "threshold": 0.5,
+        "n_reached_in_baseline": 92,
+        "n_reached_and_shared": 36,
+        "n_byte_identical": 0,
+        "n_genuinely_diverged": 36,
+        "n_protected": 11,
+        "n_forgone": 25,
+        "protected_sum_pp": 326.69,
+        "forgone_sum_pp": -2022.25,
+        "net_sum_pp": -1695.55,
+        "protected_sum_gbp": 5844.07,
+        "forgone_sum_gbp": -75204.4,
+        "net_sum_gbp": -69360.33,
+        "median_delta_pp": -11.45,
+        "mean_delta_pp": -47.1,
+        "meets_10_diverged_floor": true
+      },
+      "sec53": {
+        "n_trades_base": 565,
+        "n_trades_arm": 1042,
+        "trade_count_delta": 477,
+        "n_arm_only_admissions": 737,
+        "arm_only_pnl_gbp": 141423.39,
+        "n_baseline_only": 260,
+        "baseline_only_pnl_gbp": 266599.34,
+        "arm_only_by_decade": {
+          "2010s": 353,
+          "2020s": 337,
+          "2000s": 47
+        },
+        "total_pnl_base": 348548.74,
+        "total_pnl_arm": 158001.52,
+        "total_pnl_delta": -190547.22,
+        "direct_effect_gbp": -69360.33,
+        "capacity_residual_gbp": -121186.89,
+        "direct_share_of_delta_pct": 36.4
+      },
+      "sec56": {
+        "shared_pct_of_base": 54.0,
+        "shared_pct_of_arm": 29.3,
+        "jaccard_all": 0.2343,
+        "top_decile_n_base": 56,
+        "top_decile_n_arm": 104,
+        "top_decile_shared": 12,
+        "top_decile_jaccard": 0.0811,
+        "arm_pnl_share_from_non_shared_pct": 89.5,
+        "n_top_decile_baseline_truncated": 19,
+        "top_decile_truncated_delta_gbp": -73662.02
+      }
+    },
+    "b100": {
+      "sec52": {
+        "threshold": 1.0,
+        "n_reached_in_baseline": 55,
+        "n_reached_and_shared": 28,
+        "n_byte_identical": 0,
+        "n_genuinely_diverged": 28,
+        "n_protected": 14,
+        "n_forgone": 14,
+        "protected_sum_pp": 640.43,
+        "forgone_sum_pp": -1409.63,
+        "net_sum_pp": -769.21,
+        "protected_sum_gbp": 10712.27,
+        "forgone_sum_gbp": -38200.44,
+        "net_sum_gbp": -27488.17,
+        "median_delta_pp": -1.53,
+        "mean_delta_pp": -27.47,
+        "meets_10_diverged_floor": true
+      },
+      "sec53": {
+        "n_trades_base": 565,
+        "n_trades_arm": 806,
+        "trade_count_delta": 241,
+        "n_arm_only_admissions": 460,
+        "arm_only_pnl_gbp": 205567.07,
+        "n_baseline_only": 219,
+        "baseline_only_pnl_gbp": 273640.29,
+        "arm_only_by_decade": {
+          "2020s": 249,
+          "2010s": 211
+        },
+        "total_pnl_base": 348548.74,
+        "total_pnl_arm": 253185.76,
+        "total_pnl_delta": -95362.98,
+        "direct_effect_gbp": -27488.17,
+        "capacity_residual_gbp": -67874.81,
+        "direct_share_of_delta_pct": 28.8
+      },
+      "sec56": {
+        "shared_pct_of_base": 61.2,
+        "shared_pct_of_arm": 42.9,
+        "jaccard_all": 0.3376,
+        "top_decile_n_base": 56,
+        "top_decile_n_arm": 80,
+        "top_decile_shared": 18,
+        "top_decile_jaccard": 0.1525,
+        "arm_pnl_share_from_non_shared_pct": 81.2,
+        "n_top_decile_baseline_truncated": 18,
+        "top_decile_truncated_delta_gbp": -30207.81
+      }
+    }
+  },
+  "pool1": {
+    "b30": {
+      "sec52": {
+        "threshold": 0.3,
+        "n_reached_in_baseline": 116,
+        "n_reached_and_shared": 43,
+        "n_byte_identical": 1,
+        "n_genuinely_diverged": 42,
+        "n_protected": 17,
+        "n_forgone": 25,
+        "protected_sum_pp": 324.69,
+        "forgone_sum_pp": -2210.78,
+        "net_sum_pp": -1886.09,
+        "protected_sum_gbp": 7855.87,
+        "forgone_sum_gbp": -70652.91,
+        "net_sum_gbp": -62797.04,
+        "median_delta_pp": -8.01,
+        "mean_delta_pp": -44.91,
+        "meets_10_diverged_floor": true
+      },
+      "sec53": {
+        "n_trades_base": 522,
+        "n_trades_arm": 1213,
+        "trade_count_delta": 691,
+        "n_arm_only_admissions": 941,
+        "arm_only_pnl_gbp": 265572.23,
+        "n_baseline_only": 250,
+        "baseline_only_pnl_gbp": 344785.86,
+        "arm_only_by_decade": {
+          "2010s": 443,
+          "2020s": 428,
+          "2000s": 70
+        },
+        "total_pnl_base": 429108.58,
+        "total_pnl_arm": 289145.96,
+        "total_pnl_delta": -139962.62,
+        "direct_effect_gbp": -62797.04,
+        "capacity_residual_gbp": -77165.58,
+        "direct_share_of_delta_pct": 44.9
+      },
+      "sec56": {
+        "shared_pct_of_base": 52.1,
+        "shared_pct_of_arm": 22.4,
+        "jaccard_all": 0.1859,
+        "top_decile_n_base": 52,
+        "top_decile_n_arm": 121,
+        "top_decile_shared": 9,
+        "top_decile_jaccard": 0.0549,
+        "arm_pnl_share_from_non_shared_pct": 91.8,
+        "n_top_decile_baseline_truncated": 18,
+        "top_decile_truncated_delta_gbp": -66947.79
+      }
+    },
+    "b50": {
+      "sec52": {
+        "threshold": 0.5,
+        "n_reached_in_baseline": 87,
+        "n_reached_and_shared": 33,
+        "n_byte_identical": 0,
+        "n_genuinely_diverged": 33,
+        "n_protected": 11,
+        "n_forgone": 22,
+        "protected_sum_pp": 251.72,
+        "forgone_sum_pp": -1827.73,
+        "net_sum_pp": -1576.01,
+        "protected_sum_gbp": 8649.37,
+        "forgone_sum_gbp": -63207.63,
+        "net_sum_gbp": -54558.26,
+        "median_delta_pp": -9.04,
+        "mean_delta_pp": -47.76,
+        "meets_10_diverged_floor": true
+      },
+      "sec53": {
+        "n_trades_base": 522,
+        "n_trades_arm": 991,
+        "trade_count_delta": 469,
+        "n_arm_only_admissions": 698,
+        "arm_only_pnl_gbp": 260550.81,
+        "n_baseline_only": 229,
+        "baseline_only_pnl_gbp": 329931.59,
+        "arm_only_by_decade": {
+          "2010s": 330,
+          "2020s": 323,
+          "2000s": 45
+        },
+        "total_pnl_base": 429108.58,
+        "total_pnl_arm": 305845.62,
+        "total_pnl_delta": -123262.95,
+        "direct_effect_gbp": -54558.26,
+        "capacity_residual_gbp": -68704.69,
+        "direct_share_of_delta_pct": 44.3
+      },
+      "sec56": {
+        "shared_pct_of_base": 56.1,
+        "shared_pct_of_arm": 29.6,
+        "jaccard_all": 0.2402,
+        "top_decile_n_base": 52,
+        "top_decile_n_arm": 99,
+        "top_decile_shared": 11,
+        "top_decile_jaccard": 0.0786,
+        "arm_pnl_share_from_non_shared_pct": 85.2,
+        "n_top_decile_baseline_truncated": 18,
+        "top_decile_truncated_delta_gbp": -60595.47
+      }
+    },
+    "b100": {
+      "sec52": {
+        "threshold": 1.0,
+        "n_reached_in_baseline": 54,
+        "n_reached_and_shared": 22,
+        "n_byte_identical": 0,
+        "n_genuinely_diverged": 22,
+        "n_protected": 12,
+        "n_forgone": 10,
+        "protected_sum_pp": 439.79,
+        "forgone_sum_pp": -1115.35,
+        "net_sum_pp": -675.56,
+        "protected_sum_gbp": 8777.76,
+        "forgone_sum_gbp": -27180.57,
+        "net_sum_gbp": -18402.8,
+        "median_delta_pp": 2.53,
+        "mean_delta_pp": -30.71,
+        "meets_10_diverged_floor": true
+      },
+      "sec53": {
+        "n_trades_base": 522,
+        "n_trades_arm": 732,
+        "trade_count_delta": 210,
+        "n_arm_only_admissions": 421,
+        "arm_only_pnl_gbp": 281931.75,
+        "n_baseline_only": 211,
+        "baseline_only_pnl_gbp": 355074.95,
+        "arm_only_by_decade": {
+          "2020s": 226,
+          "2010s": 195
+        },
+        "total_pnl_base": 429108.58,
+        "total_pnl_arm": 335958.34,
+        "total_pnl_delta": -93150.24,
+        "direct_effect_gbp": -18402.8,
+        "capacity_residual_gbp": -74747.44,
+        "direct_share_of_delta_pct": 19.8
+      },
+      "sec56": {
+        "shared_pct_of_base": 59.6,
+        "shared_pct_of_arm": 42.5,
+        "jaccard_all": 0.3298,
+        "top_decile_n_base": 52,
+        "top_decile_n_arm": 73,
+        "top_decile_shared": 12,
+        "top_decile_jaccard": 0.1062,
+        "arm_pnl_share_from_non_shared_pct": 83.9,
+        "n_top_decile_baseline_truncated": 13,
+        "top_decile_truncated_delta_gbp": -19315.18
+      }
+    }
+  }
+}

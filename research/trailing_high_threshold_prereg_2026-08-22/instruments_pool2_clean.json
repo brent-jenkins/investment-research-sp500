@@ -1,0 +1,219 @@
+{
+  "a_none": {
+    "pool": "pool2_clean",
+    "cell": "a_none",
+    "n_trades": 565,
+    "final_equity": 398548.74,
+    "frictionless_cagr": 11.177,
+    "fx_drag_pp": 0.268,
+    "idle_credit_pp": 0.532,
+    "cost_adjusted_cagr": 11.441,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": 0.278,
+    "max_drawdown_pct": -43.88,
+    "win_pct": 28.85,
+    "mean_hold_days": 149.27,
+    "total_notional_gbp": 1889528.56,
+    "mean_deployed_pct": 65.098,
+    "mean_n_open": 11.78,
+    "exit_mix_pct": {
+      "SIGNAL_OFF": 52.74,
+      "STOP_LOSS": 33.1,
+      "CRISIS_EXIT": 8.14,
+      "END_OF_DATA": 6.02
+    },
+    "exit_mix_n": {
+      "SIGNAL_OFF": 298,
+      "STOP_LOSS": 187,
+      "CRISIS_EXIT": 46,
+      "END_OF_DATA": 34
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -3375.32,
+      "END_OF_DATA": 208685.71,
+      "SIGNAL_OFF": 221450.21,
+      "STOP_LOSS": -78211.86
+    },
+    "delta_vs_baseline_pp": 0.0
+  },
+  "b30": {
+    "pool": "pool2_clean",
+    "cell": "b30",
+    "n_trades": 1299,
+    "final_equity": 176705.6,
+    "frictionless_cagr": 6.656,
+    "fx_drag_pp": 0.848,
+    "idle_credit_pp": 0.546,
+    "cost_adjusted_cagr": 6.354,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -4.809,
+    "max_drawdown_pct": -45.15,
+    "win_pct": 34.64,
+    "mean_hold_days": 77.89,
+    "total_notional_gbp": 3848217.51,
+    "mean_deployed_pct": 64.15,
+    "mean_n_open": 14.13,
+    "exit_mix_pct": {
+      "STOP_LOSS": 45.57,
+      "TRAILING_STOP": 26.94,
+      "SIGNAL_OFF": 20.55,
+      "CRISIS_EXIT": 3.62,
+      "END_OF_DATA": 3.31
+    },
+    "exit_mix_n": {
+      "STOP_LOSS": 592,
+      "TRAILING_STOP": 350,
+      "SIGNAL_OFF": 267,
+      "CRISIS_EXIT": 47,
+      "END_OF_DATA": 43
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -5973.35,
+      "END_OF_DATA": 6390.36,
+      "SIGNAL_OFF": -7121.06,
+      "STOP_LOSS": -230092.98,
+      "TRAILING_STOP": 363502.63
+    },
+    "paired": {
+      "n_shared_keys": 299,
+      "cell_better_on_shared_pct": 6.69,
+      "mean_shared_delta_pnl_pct": -7.3231,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 266,
+      "n_cell_only": 1000,
+      "baseline_only_win_pct": 32.33,
+      "cell_only_win_pct": 36.6,
+      "baseline_only_mean_pnl_pct": 16.69,
+      "cell_only_mean_pnl_pct": 3.331,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0571,
+      "cell_pnl_share_from_non_shared": 87.52
+    },
+    "capacity_turnover": {
+      "trade_count_delta": 734,
+      "trade_count_delta_pct": 129.91,
+      "notional_delta_pct": 103.66
+    },
+    "delta_vs_baseline_pp": -5.087
+  },
+  "b50": {
+    "pool": "pool2_clean",
+    "cell": "b50",
+    "n_trades": 1042,
+    "final_equity": 208001.52,
+    "frictionless_cagr": 7.547,
+    "fx_drag_pp": 0.648,
+    "idle_credit_pp": 0.543,
+    "cost_adjusted_cagr": 7.442,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -3.721,
+    "max_drawdown_pct": -44.74,
+    "win_pct": 31.67,
+    "mean_hold_days": 95.87,
+    "total_notional_gbp": 3151717.13,
+    "mean_deployed_pct": 64.388,
+    "mean_n_open": 13.95,
+    "exit_mix_pct": {
+      "STOP_LOSS": 44.43,
+      "SIGNAL_OFF": 29.46,
+      "TRAILING_STOP": 17.85,
+      "CRISIS_EXIT": 4.41,
+      "END_OF_DATA": 3.84
+    },
+    "exit_mix_n": {
+      "STOP_LOSS": 463,
+      "SIGNAL_OFF": 307,
+      "TRAILING_STOP": 186,
+      "CRISIS_EXIT": 46,
+      "END_OF_DATA": 40
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -4117.54,
+      "END_OF_DATA": 13675.77,
+      "SIGNAL_OFF": 1994.96,
+      "STOP_LOSS": -187470.12,
+      "TRAILING_STOP": 333918.45
+    },
+    "paired": {
+      "n_shared_keys": 305,
+      "cell_better_on_shared_pct": 3.61,
+      "mean_shared_delta_pnl_pct": -5.5592,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 260,
+      "n_cell_only": 737,
+      "baseline_only_win_pct": 33.46,
+      "cell_only_win_pct": 34.06,
+      "baseline_only_mean_pnl_pct": 18.616,
+      "cell_only_mean_pnl_pct": 4.937,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.0811,
+      "cell_pnl_share_from_non_shared": 89.51
+    },
+    "capacity_turnover": {
+      "trade_count_delta": 477,
+      "trade_count_delta_pct": 84.42,
+      "notional_delta_pct": 66.8
+    },
+    "delta_vs_baseline_pp": -3.999
+  },
+  "b100": {
+    "pool": "pool2_clean",
+    "cell": "b100",
+    "n_trades": 806,
+    "final_equity": 303185.76,
+    "frictionless_cagr": 9.636,
+    "fx_drag_pp": 0.496,
+    "idle_credit_pp": 0.542,
+    "cost_adjusted_cagr": 9.682,
+    "benchmark_cagr": 11.163,
+    "excess_vs_sp500tr": -1.481,
+    "max_drawdown_pct": -43.88,
+    "win_pct": 29.78,
+    "mean_hold_days": 119.7,
+    "total_notional_gbp": 2934566.08,
+    "mean_deployed_pct": 64.435,
+    "mean_n_open": 13.48,
+    "exit_mix_pct": {
+      "STOP_LOSS": 40.82,
+      "SIGNAL_OFF": 38.83,
+      "TRAILING_STOP": 9.55,
+      "CRISIS_EXIT": 5.71,
+      "END_OF_DATA": 5.09
+    },
+    "exit_mix_n": {
+      "STOP_LOSS": 329,
+      "SIGNAL_OFF": 313,
+      "TRAILING_STOP": 77,
+      "CRISIS_EXIT": 46,
+      "END_OF_DATA": 41
+    },
+    "exit_pnl_by_reason": {
+      "CRISIS_EXIT": -2036.81,
+      "END_OF_DATA": 29531.44,
+      "SIGNAL_OFF": 58518.11,
+      "STOP_LOSS": -176852.81,
+      "TRAILING_STOP": 344025.84
+    },
+    "paired": {
+      "n_shared_keys": 346,
+      "cell_better_on_shared_pct": 4.05,
+      "mean_shared_delta_pnl_pct": -2.2231,
+      "median_shared_delta_pnl_pct": 0.0,
+      "n_baseline_only": 219,
+      "n_cell_only": 460,
+      "baseline_only_win_pct": 36.07,
+      "cell_only_win_pct": 33.91,
+      "baseline_only_mean_pnl_pct": 21.065,
+      "cell_only_mean_pnl_pct": 8.528,
+      "meets_min_sample_floor": true,
+      "top_decile_jaccard": 0.1525,
+      "cell_pnl_share_from_non_shared": 81.19
+    },
+    "capacity_turnover": {
+      "trade_count_delta": 241,
+      "trade_count_delta_pct": 42.65,
+      "notional_delta_pct": 55.31
+    },
+    "delta_vs_baseline_pp": -1.759
+  }
+}
