@@ -2839,6 +2839,101 @@ clause; two clauses fire, so it was not run. No changes to `analysis/signals.py`
 `analysis/decision.py`, `config.yaml`, or any live path. No database writes. Nothing adopted, nothing
 deployed.
 
+## TPR instrument mapping — one hand-verified row, resolver deliberately unchanged (2026-08-22)
+
+**`TPR` (Tapestry) was the only FAILED row in `instrument_resolutions` — 1 of 503 — and it was a
+resolver matching failure, not an availability problem.** Tapestry is tradeable on T212 and was
+actively traded within the week. Full investigation: `research/tpr_mapping_2026-08-22/`.
+
+**ROOT CAUSE: T212's instrument id has the suffix segments TRANSPOSED — `TPR_EQ_US`, not
+`TPR_US_EQ`.** Confirmed against a live `get_instruments()` pull from the production box on
+2026-08-22, and independently against the cached 2026-08-08 pull; both agree exactly.
+
+```
+ticker TPR_EQ_US | shortName TPR | name Tapestry | currencyCode USD | type STOCK
+isin US8760301072 | addedOn 2019-06-26
+```
+
+Both of `resolve_instrument_candidate()`'s steps miss it: the convention guess `TPR_US_EQ` **does
+not exist**, and the fallback search filters on `_tid(i).endswith("_US_EQ")` **before** comparing
+shortName, so the one instrument whose shortName really is `TPR` never enters the candidate set.
+**This was a zero-match failure, not an ambiguity the resolver correctly declined to guess between.**
+
+### THE NOTE TEXT DESCRIBED THE SEARCH, NOT THE WORLD — worth recording separately from the fix
+
+The stored note read *"no US-listed equity instrument found with shortName == TPR"*. That is
+**accurate about what the resolver examined and false about reality**: an instrument with
+shortName `TPR` does exist, and was filtered out by the suffix test before the shortName test ran.
+A reader would reasonably conclude Tapestry is not on T212 — the opposite of the truth — and go
+looking for a listing problem instead of a matching one.
+
+**The generalisable point: a diagnostic message written from inside a filtered candidate set
+describes the SEARCH, not the WORLD, and the two diverge exactly when the filter is the thing at
+fault.** This is the same shape as the standing "a check that reports clean for a reason unrelated
+to the thing it was checking" class, in its message rather than its verdict: the verdict (FAILED)
+was correct and useful; the explanation attached to it pointed away from the cause. When a failure
+note names a criterion, it should say which candidates were considered, not imply the criterion was
+tested against everything.
+
+### The systematic question is closed: 3 of 17,403, one batch, not a pattern
+
+| suffix | count |
+|---|---|
+| `_US_EQ` | **6,926** |
+| `_EQ_US` (transposed) | **3** |
+
+The three are **TPR** (Tapestry), **ELF** (elf Beauty) and **LFUS** (Littelfuse) — all added within
+45 minutes of each other on **2019-06-26**. A single T212 data-entry batch artefact, not a naming
+variant the resolver should learn.
+
+**`resolve_instrument_candidate()` was therefore NOT modified**, and that is the deliberate call: at
+1 failure in 503, a stricter rule that fails visibly beats a looser one that maps wrongly. The
+XLF/XLK `MAPPING_CORRECTION` sitting in the closed-positions table at £0.00 is what the looser
+version costs. Widening the suffix test to catch three 2019 rows would trade a loud, correct,
+once-ever failure for a permanently weaker check.
+
+**FORWARD RISK, recorded so the next person meets a known case rather than a mystery: only TPR is in
+the current 503-ticker live pool. ELF and LFUS are not S&P 500 members today, and if either ever
+joins the index it will fail in exactly this way** — a visible FAILED row, correctly excluded from
+trading, needing the same one-row manual fix and no code change.
+
+### Unambiguous, and the same-ISIN duplicate was checked rather than ignored
+
+`shortName == TPR` returns **exactly one** instrument. A second Tapestry listing shares the ISIN
+`US8760301072` — **`COYd_EQ`, EUR, shortName `COY`, added 2025-01-24** — a European line, not a
+competing match: different shortName, different currency, not the US listing.
+
+It is flagged rather than passed over because **same-ISIN duplicates are precisely the shape the
+XLF/XLK incident had**. Here the discriminator is unambiguous; the point is that it was checked.
+
+### The fix, and how it was verified
+
+One row, hand-verified, values taken from T212's own metadata:
+`ticker TPR`, `t212_instrument_id TPR_EQ_US`, `currency USD`, `status VERIFIED`, with a note
+recording the manual resolution, the date, and why the automatic match failed.
+
+**`currency` is read from the instrument's own `currencyCode` field, not assumed** — the sleeve
+study established that instrument-level currency and account currency differ, and this account is
+GBP while the instrument is USD.
+
+**Applied and verified as two separate steps**, per the standing requirement that a DB-mutating
+script has a side effect rather than a result: `step2_apply_production.py` writes (refusing unless
+the existing row is exactly the expected FAILED row, so a re-run reports instead of overwriting),
+and `step3_verify_production.py` **re-queries on a fresh read-only connection** rather than trusting
+the apply script's own output. Verified: **503 VERIFIED, 0 FAILED, 503 total**; the TPR row carries
+`TPR_EQ_US`/`USD` specifically (asserted NOT to be `TPR_US_EQ` and NOT to be `GBP`); every other row
+still resolves via the `_US_EQ` convention; no row left with a NULL id or currency.
+
+No change to `resolve_instrument_candidate()`, no config change, no trading-logic change.
+
+### Operational note
+
+`get_instruments()` returns **17,403 rows** and is rate-limited — two calls in quick succession
+during this investigation triggered three back-offs and then a failure. **Cache-first is the right
+default**; the 2026-08-08 cached pull
+(`research/sleeve_allocation_prereg_2026-08-08/t212_instruments_2026-08-08.json`) answered the whole
+investigation, with the live pull used once at the end to confirm it still held.
+
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
 
 **`pending_orders.stop_price` is computed at DECIDE time (21:30 EOD) and used verbatim at SUBMIT time
