@@ -77,6 +77,7 @@ import requests
 from analysis import crisis, signals, universe
 from analysis.decision import (
     REENTRY_COOLDOWN_DAYS,
+    blocking_share_class_siblings,
     evaluate_exit_reason,
     is_asset_class_enabled,
     is_position_size_viable,
@@ -89,6 +90,7 @@ from analysis.decision import (
     resolve_dynamic_max_position_gbp,
     resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
+    resolve_share_class_exclusion_enabled,
     resolve_var_horizon_days,
 )
 from analysis.universe import get_max_holding_days
@@ -3307,6 +3309,50 @@ def get_held_research_tickers() -> set[str]:
     return {v["ticker"] for v in _locally_believed_open_positions().values()}
 
 
+def _intended_holding_tickers() -> set:
+    """Research tickers this system already has, or has just committed to,
+    exposure in: every FILLED open position PLUS every BUY still sitting at
+    PLACED that has no later FILLED SELL.
+
+    Deliberately WIDER than get_held_research_tickers(), which requires
+    status='FILLED'. A BUY is recorded PLACED at submission and only becomes
+    FILLED when poll_placed_orders() next runs (hourly, at :00) -- so between
+    a 14:30 submission and the following poll, a real, committed position is
+    invisible to the FILLED-only view. For "do I already have exposure to this
+    company", a placed order counts.
+
+    Added 2026-08-22 for the share-class exclusion, and NOT a speculative
+    widening: tests/test_comprehensive_replay_parity.py's binding variant
+    caught the FILLED-only version diverging from the backtest engine, which
+    treats a position opened earlier in the same day's admission as held
+    immediately. Kept as its own function rather than changing
+    get_held_research_tickers(), whose existing callers want the narrower
+    "actually held" meaning.
+
+    Never raises; returns an empty set on any failure.
+    """
+    tickers = set(get_held_research_tickers())
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        with get_engine().connect() as conn:
+            rows = conn.execute(sa_text("""
+                SELECT DISTINCT io.ticker
+                FROM invest_orders io
+                WHERE io.direction = 'BUY' AND io.status = 'PLACED'
+                AND NOT EXISTS (
+                    SELECT 1 FROM invest_orders s
+                    WHERE s.t212_ticker = io.t212_ticker
+                    AND s.direction = 'SELL' AND s.status = 'FILLED'
+                    AND s.created_at > io.created_at
+                )
+            """)).all()
+        tickers |= {r[0] for r in rows if r[0]}
+    except Exception as exc:
+        logger.warning("_intended_holding_tickers: PLACED-BUY query failed: %s", exc)
+    return tickers
+
+
 def _most_recent_sell_order_since(t212_ticker: str, since: Optional[str]) -> Optional[dict]:
     """The most recent SELL order (ANY status — PLACED/FILLED/FAILED/
     REJECTED/CANCELLED) for *t212_ticker* placed since *since* (the
@@ -4450,6 +4496,23 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
     account_label = "LIVE" if live else "DEMO"
     submitted = 0
 
+    # Share-class exclusion (2026-08-22) -- a candidacy filter only, gated off
+    # by default. `held_share_class_tickers` is seeded from what this system's
+    # own order history says is currently open, and is EXTENDED as this walk
+    # admits each ticker, so two share classes queued on the SAME night cannot
+    # both be admitted. That same-batch case is the one that actually occurred
+    # live (GOOG + GOOGL, both entered 2026-08-12) -- a check against only
+    # previously-held positions would not have caught it. See
+    # analysis/decision.py:blocking_share_class_siblings().
+    share_class_exclusion = resolve_share_class_exclusion_enabled(config)
+    held_share_class_tickers: set = set()
+    if share_class_exclusion:
+        try:
+            held_share_class_tickers = _intended_holding_tickers()
+        except Exception as exc:      # never block submission on this read
+            logger.error("Share-class held-set read failed — %s", exc, exc_info=True)
+            share_class_exclusion = False
+
     for idx, row in enumerate(pending):
         ticker = row["ticker"]
         t212_ticker = row["t212_ticker"]
@@ -4462,6 +4525,21 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
             if ticker in open_order_tickers:
                 logger.info("%s already has a recent order in DB — skipping.", ticker)
                 _resolve_pending(row["id"], "SKIPPED_ALREADY_HELD", note="recent order already exists in DB")
+                continue
+
+            # Share-class exclusion -- the SHARED check
+            # (analysis/decision.py:blocking_share_class_siblings()), also called by
+            # the backtest engine's _admit_group(). Candidacy only: never
+            # exits, resizes or re-ranks anything.
+            held_siblings = blocking_share_class_siblings(
+                siblings=universe.get_share_class_siblings(ticker),
+                held_tickers=held_share_class_tickers,
+                enabled=share_class_exclusion,
+            )
+            if held_siblings:
+                note = f"share class of already-held {', '.join(held_siblings)}"
+                logger.info("Skipping %s — %s.", ticker, note)
+                _resolve_pending(row["id"], "SKIPPED_SHARE_CLASS", note=note)
                 continue
 
             # Price-sanity check — compare the price at decide time against
@@ -4577,6 +4655,7 @@ def _submit_pending_orders(config: dict, *, is_etf: bool) -> int:
                 free_cash -= position_gbp
                 invested += est_value_gbp
                 submitted += 1
+                held_share_class_tickers.add(ticker)
                 logger.info("BUY %s (%s) qty=%s approx £%.0f id=%s",
                             ticker, t212_ticker, quantity, position_gbp, order_id)
             except Exception as order_exc:

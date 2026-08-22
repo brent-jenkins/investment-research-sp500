@@ -21,6 +21,7 @@ import pandas as pd
 from analysis import crisis, signals
 from analysis import universe
 from analysis.decision import (
+    blocking_share_class_siblings,
     evaluate_exit_reason,
     is_position_size_viable,
     is_reentry_blocked,
@@ -32,6 +33,7 @@ from analysis.decision import (
     resolve_dynamic_max_position_gbp,
     resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
+    resolve_share_class_exclusion_enabled,
     resolve_var_horizon_days,
 )
 from analysis.universe import get_max_holding_days
@@ -1368,6 +1370,10 @@ def simulate_portfolio_compounding_mtm(
     # unconditionally. See analysis/decision.py:resolve_admission_rank_
     # value()'s own docstring for the full scope statement.
     admission_ranking_mode = resolve_admission_ranking_mode(config)
+    # Share-class exclusion (2026-08-22) -- resolved ONCE per run, exactly
+    # like every other config-driven parameter above. Defaults False, so an
+    # unconfigured run is byte-identical to before this existed.
+    share_class_exclusion = resolve_share_class_exclusion_enabled(config)
 
     per_ticker: dict[str, dict] = {}
     events: list[tuple] = []
@@ -1501,6 +1507,31 @@ def simulate_portfolio_compounding_mtm(
                 break
 
             st = per_ticker[ticker]
+
+            # Share-class exclusion -- the SHARED check
+            # (analysis/decision.py:blocking_share_class_siblings()), also called by
+            # live order placement's own submission walk. Candidacy only:
+            # never exits, resizes or re-ranks anything. Checked BEFORE
+            # sizing, like the re-entry cooldown, since a blocked candidate
+            # should not consume a sizing computation.
+            #
+            # The held set is read fresh from open_trade on every candidate,
+            # so a sibling admitted EARLIER IN THIS SAME ranked loop already
+            # counts as held -- which is what makes this match live's own
+            # same-batch behaviour (see blocking_share_class_siblings()'s docstring;
+            # the live GOOG/GOOGL instance was a same-day admission).
+            if share_class_exclusion:
+                siblings = universe.get_share_class_siblings(ticker)
+                if siblings and blocking_share_class_siblings(
+                    siblings=siblings,
+                    held_tickers={
+                        s for s in siblings
+                        if s in per_ticker and per_ticker[s]["open_trade"] is not None
+                    },
+                    enabled=True,
+                ):
+                    continue
+
             row = st["rows"][dt]
             price = float(row["close"])
             atr = float(row["atr"]) if pd.notna(row["atr"]) else 0.0

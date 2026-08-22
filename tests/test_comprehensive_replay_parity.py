@@ -123,7 +123,8 @@ def _calm_gspc_frame() -> pd.DataFrame:
 
 
 def _config(admission_ranking_mode: str | None = None,
-            holding_cap: int | None = None) -> dict:
+            holding_cap: int | None = None,
+            share_class_exclusion: bool | None = None) -> dict:
     """admission_ranking_mode=None leaves the key absent entirely, matching
     production's own default fallback (resolve_admission_ranking_mode()
     resolves an absent key to "absolute_momentum") -- the original,
@@ -158,6 +159,8 @@ def _config(admission_ranking_mode: str | None = None,
     }
     if admission_ranking_mode is not None:
         cfg["trading212_invest"]["admission_ranking_mode"] = admission_ranking_mode
+    if share_class_exclusion is not None:
+        cfg["trading212_invest"]["share_class_exclusion"] = share_class_exclusion
     if holding_cap is not None:
         # 0 is the DISABLED sentinel (2026-08-12) -- see
         # analysis/decision.py:MAX_HOLDING_DISABLED_SENTINEL.
@@ -368,8 +371,26 @@ def replay_mocks(db_engine, monkeypatch, mocker):
     return None
 
 
+def _reset_replay_state(db_engine) -> None:
+    """Clear the order/decision tables so a SECOND _run_scenario() call in the
+    same test starts from a clean book. Without this the second run records
+    zero live events: every ticker is already held (or inside the re-entry
+    window) from the first run, so nothing is ever admitted again -- which
+    would make a baseline-vs-variant comparison silently vacuous rather than
+    wrong."""
+    from sqlalchemy import text as _sa_text
+    with db_engine.begin() as conn:
+        for table in ("invest_orders", "pending_orders", "pnl",
+                      "position_reconciliations", "admission_ranking_shadow"):
+            try:
+                conn.execute(_sa_text(f"DELETE FROM {table}"))
+            except Exception:
+                pass
+
+
 def _run_scenario(
     mocker, admission_ranking_mode: str | None = None, holding_cap: int | None = None,
+    share_class_exclusion: bool | None = None, sibling_group: frozenset | None = None,
 ) -> tuple["Counter[tuple[str, str]]", "Counter[tuple[str, str]]"]:
     """Builds the standard two-ticker, ~320-simulated-day scenario, runs it
     through both live's real replay and the backtest engine, and returns
@@ -388,7 +409,15 @@ def _run_scenario(
     from analysis.volatility import _atr
     from collections import Counter
 
-    config = _config(admission_ranking_mode, holding_cap)
+    config = _config(admission_ranking_mode, holding_cap, share_class_exclusion)
+    if sibling_group is not None:
+        # Patched at analysis.universe so BOTH sides see it -- live and the
+        # backtest engine each reach get_share_class_siblings() through the
+        # same module attribute.
+        mocker.patch(
+            "analysis.universe.get_share_class_siblings",
+            side_effect=lambda t: frozenset(sibling_group) - {t} if t in sibling_group else frozenset(),
+        )
     t212_by_ticker = {"ETFA": "ETFA_EQ", "STKA": "STKA_EQ"}
 
     frame_etfa = _rising_frame()
@@ -621,4 +650,78 @@ def test_disabled_cap_agrees_with_a_huge_cap_ON_EXITS_but_deliberately_not_on_SI
     assert h_huge > h_disabled * 300, (
         "the sizing gap between a huge pseudo-cap and the disable sentinel is "
         "the whole reason resolve_var_horizon_days() exists"
+    )
+
+
+def test_comprehensive_replay_matches_backtest_with_SHARE_CLASS_EXCLUSION_enabled(
+    db_engine, replay_mocks, mocker,
+):
+    """The SAME comprehensive ~320-day walk with
+    trading212_invest.share_class_exclusion = True (2026-08-22), against the
+    REAL shipped map, in which neither ETFA nor STKA is a share-class
+    sibling of anything.
+
+    The assertion is deliberately that the trade sequence is UNCHANGED from
+    the default-mode test: this is the "does flipping the config key silently
+    break something ELSE across a long, general, capacity-sharing walk"
+    check, exactly as the relative_rank Layer 2 variant above is. It is NOT a
+    test that the exclusion works -- the binding case is driven end-to-end
+    through both real paths in tests/test_share_class_parity.py.
+
+    NON-VACUITY, stated rather than assumed: the sub-assertion below records
+    that the exclusion genuinely CANNOT bind here (no sibling exists for
+    either replay ticker), so "unchanged" is an understood result rather than
+    an accidental pass. The separate binding variant that follows is what
+    proves the mechanism itself agrees across a long walk."""
+    from analysis import universe as _u
+    assert not _u.get_share_class_siblings("ETFA"), "replay ticker unexpectedly mapped"
+    assert not _u.get_share_class_siblings("STKA"), "replay ticker unexpectedly mapped"
+
+    baseline_live, baseline_backtest = _run_scenario(mocker)
+    assert sum(baseline_live.values()) > 0, "baseline run recorded nothing -- comparison vacuous"
+    _reset_replay_state(db_engine)
+    live_events, backtest_events = _run_scenario(mocker, share_class_exclusion=True)
+
+    assert sum(live_events.values()) > 0, "Replay recorded zero live events"
+    assert sum(backtest_events.values()) > 0, "Backtest recorded zero events"
+    assert any(d == "SELL" for _t, d in live_events), "Scenario never exercises a live exit"
+    assert live_events == backtest_events, (
+        f"Live and backtest diverged with share_class_exclusion enabled.\n"
+        f"Live:     {dict(sorted(live_events.items()))}\n"
+        f"Backtest: {dict(sorted(backtest_events.items()))}"
+    )
+    assert live_events == baseline_live, "enabling the flag changed live behaviour with no sibling present"
+    assert backtest_events == baseline_backtest, "enabling the flag changed backtest behaviour with no sibling present"
+
+
+def test_comprehensive_replay_matches_backtest_when_the_exclusion_ACTUALLY_BINDS(
+    db_engine, replay_mocks, mocker,
+):
+    """The binding counterpart: the same long walk with the two replay
+    tickers declared siblings of each other, so the exclusion genuinely
+    fires repeatedly across ~320 days of capacity-sharing admissions and
+    exits, and live and the backtest must STILL agree.
+
+    This is the variant that would catch a divergence nobody could write a
+    targeted scenario for -- e.g. the two sides disagreeing about when a
+    sibling stops counting as held after an exit.
+
+    NON-VACUITY: asserts the sequence actually DIFFERS from the unpatched
+    baseline, so a silent no-op cannot pass as agreement."""
+    baseline_live, _baseline_backtest = _run_scenario(mocker)
+    assert sum(baseline_live.values()) > 0, "baseline run recorded nothing -- comparison vacuous"
+    _reset_replay_state(db_engine)
+    live_events, backtest_events = _run_scenario(
+        mocker, share_class_exclusion=True, sibling_group=frozenset({"ETFA", "STKA"}),
+    )
+
+    assert sum(live_events.values()) > 0, "Replay recorded zero live events"
+    assert sum(backtest_events.values()) > 0, "Backtest recorded zero events"
+    assert live_events != baseline_live, (
+        "the exclusion did not bind -- this variant is vacuous as written"
+    )
+    assert live_events == backtest_events, (
+        f"Live and backtest diverged while the share-class exclusion was BINDING.\n"
+        f"Live:     {dict(sorted(live_events.items()))}\n"
+        f"Backtest: {dict(sorted(backtest_events.items()))}"
     )

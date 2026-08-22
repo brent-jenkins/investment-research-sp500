@@ -684,3 +684,88 @@ def resolve_admission_rank_value(
     if mode == ADMISSION_RANKING_MODE_RELATIVE_RANK:
         return relative_rank
     return momentum
+
+
+def resolve_share_class_exclusion_enabled(config: dict) -> bool:
+    """Whether admission excludes a candidate whose share-class sibling is
+    already held -- reads trading212_invest.share_class_exclusion, defaulting
+    to False, which is today's actual production behaviour (no exclusion).
+
+    Same config-driven-parameter pattern as resolve_admission_ranking_mode()
+    and the stock_max_holding_days sentinel: shipping the CODE is separable
+    from adopting the BEHAVIOUR. A config written before this key existed
+    behaves byte-identically to before, and flipping it is a distinct,
+    deliberate decision.
+
+    ADOPTED ON RISK GROUNDS, NOT RETURN EVIDENCE. The affected population is
+    a handful of dual-class pairs across 19 years, far below any materiality
+    floor this project uses, so this is NOT backtest-testable in any
+    meaningful way and no study is claimed for it -- see CLAUDE.md's
+    "Share-class exclusion at admission" entry.
+    """
+    t212_cfg = config.get("trading212_invest", {}) or {}
+    return bool(t212_cfg.get("share_class_exclusion", False))
+
+
+def blocking_share_class_siblings(
+    *,
+    siblings,
+    held_tickers,
+    enabled: bool,
+) -> tuple:
+    """The already-held share-class siblings of a candidate, sorted -- empty
+    when nothing blocks it, so it reads directly as a predicate at both call
+    sites (`if blocking_share_class_siblings(...): continue`).
+
+    THE single shared implementation, called identically by live order
+    placement (brokers/trading212.py:_submit_pending_orders()) and the
+    backtest engine (analysis/backtest.py:simulate_portfolio_compounding_mtm()
+    's _admit_group()), per CLAUDE.md's "exactly one implementation of any
+    given trading decision" invariant.
+
+    Returns the blocking siblings rather than a bare bool deliberately: live
+    records WHICH sibling blocked an admission in the pending_orders note, and
+    a separate bool wrapper would either have made that caller re-derive the
+    membership test inline (caught during development by
+    tests/test_decision_logic_placement.py's scanner) or added a second
+    decision function only one side calls (caught by
+    tests/test_one_sided_decision_rules.py). One function avoids both.
+
+    A CANDIDACY FILTER ONLY. Nothing here changes sizing, ranking, the
+    momentum gate, or any exit: a position already open is never force-exited
+    because a sibling exists, and this is never consulted on the exit path.
+    Its only effect is skipping one candidate at admission, exactly as the
+    re-entry cooldown and the momentum floor already do.
+
+    WHY: the S&P 500 lists dual-class companies as separate constituents, so
+    the universe treats GOOGL and GOOG as independent candidates. Their
+    momentum is near-identical by construction, so they rank adjacently and
+    are admitted together whenever either qualifies -- leaving the account
+    holding roughly double the intended exposure to one company while the
+    sizing model believes it holds two independent positions. Confirmed live
+    (GOOG + GOOGL, both entered 2026-08-12, ~GBP 2,531 each), not
+    hypothetical. ADOPTED ON RISK GROUNDS, NOT RETURN EVIDENCE -- see
+    CLAUDE.md's "Share-class exclusion at admission" entry.
+
+    "HELD" DELIBERATELY INCLUDES POSITIONS OPENED EARLIER IN THE SAME
+    ADMISSION WALK, and this is load-bearing rather than a detail: the live
+    instance that motivated this had both classes admitted on the SAME day, so
+    neither was held when the other was evaluated. A check against only the
+    previous day's holdings would not have prevented it. The backtest engine
+    gets this for free (a position opened earlier in _admit_group()'s ranked
+    loop is already in per_ticker[t]["open_trade"]); live's submission walk
+    adds each ticker to its own held set as it is admitted.
+
+    Argument contract, following this module's standing None-tolerance rule:
+    every input tolerates None as "unknown, don't trigger this check" rather
+    than relying on falsy coercion. `siblings` is whatever
+    analysis/universe.py:get_share_class_siblings() returned for the
+    candidate (empty for the overwhelming majority of tickers -- the fast
+    path). `held_tickers` is the set of research tickers currently held.
+    `enabled` is resolve_share_class_exclusion_enabled(config).
+    """
+    if not enabled:
+        return ()
+    if not siblings or not held_tickers:
+        return ()
+    return tuple(sorted(s for s in siblings if s in held_tickers))

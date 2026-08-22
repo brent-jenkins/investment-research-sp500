@@ -1,0 +1,93 @@
+a,b,a_has_prices,b_has_prices,a_in_universe,b_in_universe,overlap_days,return_corr,verdict
+GOOG,GOOGL,True,True,True,True,4750,0.9968,CONFIRMED
+FOX,FOXA,True,True,True,True,1793,0.9874,CONFIRMED
+UA,UAA,True,True,True,True,2512,0.9776,CONFIRMED
+NWS,NWSA,True,True,True,True,3181,0.9705,CONFIRMED
+XLB,XLK,True,True,False,False,4744,0.7205,REJECTED
+MAA,MAC,True,True,True,True,4750,0.6156,REJECTED
+TEK,TEL,True,True,True,True,431,0.5645,REJECTED
+EMB,EMC,True,True,False,True,775,0.5233,REJECTED
+MA,MAA,True,True,True,True,4750,0.4578,REJECTED
+BA,BAC,True,True,True,True,4750,0.4365,REJECTED
+ROK,ROL,True,True,True,True,4750,0.4281,REJECTED
+TE,TEK,True,True,True,True,431,0.4192,REJECTED
+UA,UAL,True,True,True,True,2511,0.4176,REJECTED
+MA,MAC,True,True,True,True,4750,0.4054,REJECTED
+CCK,CCL,True,True,True,True,4749,0.3988,REJECTED
+CCB,CCL,True,True,True,True,1947,0.3869,REJECTED
+WM,WMB,True,True,True,True,4750,0.3834,REJECTED
+ALK,ALL,True,True,True,True,4750,0.3739,REJECTED
+UAA,UAL,True,True,True,True,4749,0.3627,REJECTED
+ALB,ALK,True,True,True,True,4749,0.3515,REJECTED
+CCB,CCK,True,True,True,True,1948,0.3342,REJECTED
+ALB,ALL,True,True,True,True,4749,0.3328,REJECTED
+CR,CRL,True,True,True,True,809,0.3265,REJECTED
+EC,ECL,True,True,True,True,4334,0.301,REJECTED
+MET,META,True,True,True,True,3442,0.2748,REJECTED
+AAP,AAPL,True,True,True,True,4750,0.2677,REJECTED
+HRB,HRL,True,True,True,True,4750,0.2369,REJECTED
+TE,TEL,True,True,True,True,1590,0.2243,REJECTED
+CSR,CSRA,True,True,True,True,573,0.1578,REJECTED
+SW,SWK,True,True,True,True,4397,0.1483,REJECTED
+FMC,FMCC,True,True,True,True,4750,0.1411,REJECTED
+AS,ASC,True,True,True,True,607,0.1312,REJECTED
+APA,APC,True,True,True,True,114,0.1075,REJECTED
+GP,GPC,True,True,True,True,1435,0.1049,REJECTED
+OM,OMC,True,True,True,True,1425,0.1005,REJECTED
+MU,MUB,True,True,True,False,4578,0.0764,REJECTED
+UCC,UCL,True,True,True,True,1489,0.0665,REJECTED
+AV,AVB,True,True,True,True,60,0.0355,REJECTED
+HP,HPC,True,True,True,True,746,0.0315,REJECTED
+USB,USBC,True,True,True,True,4748,0.0255,REJECTED
+NC,NCC,True,True,True,True,2137,0.0202,REJECTED
+DE,DEC,True,True,True,True,1352,0.0163,REJECTED
+DEC,DECK,True,True,True,True,1352,0.0102,REJECTED
+GL,GLK,True,True,True,True,1938,0.0032,REJECTED
+CF,CFC,True,True,True,True,2934,0.0015,REJECTED
+MO,MOB,True,True,True,True,952,-0.041,REJECTED
+KM,KMB,True,True,True,True,201,-0.1084,REJECTED
+ADS,ADSK,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+AL,ALB,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+AL,ALK,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+AL,ALL,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+APC,APCC,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+APO,APOL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+AR,ARC,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+AW,AWK,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+BK,BKB,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+BLK,BLL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+BR,BRL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CA,CAL,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CB,CBB,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CF,CFL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CFC,CFL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CHA,CHK,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CMA,CMB,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CMCSA,CMCSK,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+CTB,CTL,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+DISCA,DISCK,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+DO,DOC,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+GR,GRA,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+HM,HMA,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+HON,HONA,True,True,True,True,33,,UNTESTABLE (insufficient overlapping price data)
+KR,KRB,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+LU,LUB,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+MEA,MEL,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+MI,MIL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+MTB,MTL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+NOV,NOVL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+PG,PGL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+PH,PHA,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+PH,PHB,True,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+PHA,PHB,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+SB,SBL,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+TMC,TMC.A,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+TMC,TMK,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+USH,USHC,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+VIAB,VIAC,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+WB,WBA,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+WLA,WLL,False,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+WRB,WRK,True,False,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+XEC,XEL,False,True,True,True,0,,UNTESTABLE (insufficient overlapping price data)
+XL,XLB,False,True,True,False,0,,UNTESTABLE (insufficient overlapping price data)
+XL,XLK,False,True,True,False,0,,UNTESTABLE (insufficient overlapping price data)

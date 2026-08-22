@@ -2839,6 +2839,157 @@ clause; two clauses fire, so it was not run. No changes to `analysis/signals.py`
 `analysis/decision.py`, `config.yaml`, or any live path. No database writes. Nothing adopted, nothing
 deployed.
 
+## Share-class exclusion at admission — CAPABILITY ONLY, NOT FLIPPED (2026-08-22)
+
+**ADOPTED ON RISK GROUNDS, NOT RETURN EVIDENCE, AND NO STUDY IS CLAIMED.** The affected population
+is a handful of dual-class pairs across 19 years — far below every materiality floor this project
+uses (the ~1.08pp cost-adjusted CAGR noise floor, the 3-block resolution floor, the 50-position
+evaluability floor). **This is NOT backtest-testable in any meaningful way**, no arm was run, no
+pre-registration was written, and nothing here should be read as evidence that it improves returns.
+It is a correction to what the sizing model believes it is doing, adopted because the belief was
+wrong, not because a number moved.
+
+**The risk is UNINTENDED concentration specifically.** This strategy is deliberately concentrated —
+the selection audit's Part 7 established that momentum ranking's whole edge comes from
+concentrating, at a real drawdown cost, and the slot-count study found its natural equilibrium is
+~12 concurrent positions. None of that is in question. What is wrong is the sizing model holding
+double exposure to one company while believing it holds two independent positions: the concentration
+this system chooses is fine; concentration it cannot see is not.
+
+**Config-gated, defaulting to CURRENT behaviour.** `trading212_invest.share_class_exclusion: false`.
+Shipping the CODE is separate from adopting the BEHAVIOUR, the same pattern as
+`admission_ranking_mode` and the `stock_max_holding_days` sentinel. **Not flipped.**
+
+### The live instance that motivated it
+
+**GOOG and GOOGL were both held, both entered 2026-08-12, at ~£2,531 each — roughly £5,100, about
+10% of the account, in one company, sized as two independent 5% positions.** Their momentum is
+near-identical by construction (+69.7% / +70.7%), so they rank adjacently and are admitted together
+whenever either qualifies. The slot cost is real too, not just the concentration: one of the pair
+displaced a different candidate that may have been better.
+
+The universe treats them as distinct because the S&P 500 index does; VaR sizes each independently;
+nothing checked whether two tickers shared an underlying.
+
+**The currently-open GOOG/GOOGL positions were deliberately NOT touched.** Both ride to their normal
+exits, consistent with the standing decision not to force-exit for a configuration change (see "Stop
+config changes carry a ONE-DAY LAG"). The exclusion applies to future admissions only, and the
+function is never consulted on the exit path at all.
+
+### What it does, and what it explicitly does not
+
+A **candidacy filter only**: admission skips a candidate whose share-class sibling is already held.
+Sizing, ranking, the momentum gate, the entry gate and every exit reason are untouched, and a held
+position is never force-exited because a sibling exists.
+
+**"HELD" INCLUDES POSITIONS ADMITTED EARLIER IN THE SAME WALK, and that is load-bearing rather than
+a detail: the live incident was a SAME-DAY admission, so neither was held when the other was
+evaluated, and a check against only previously-held positions would not have prevented it.**
+
+### The map was derived from the data, not from recollection
+
+`analysis/universe.py:SHARE_CLASS_GROUPS` + `get_share_class_siblings()`. Candidates were generated
+**structurally** from the ticker strings actually present in `price_data` and `universe_membership`
+(dotted class forms `X` / `X.A` / `X.B`, and single-letter class suffixes), then each was
+**confirmed by daily log-return correlation** over its overlapping history — two share classes of
+one company track each other almost exactly; unrelated companies sharing a prefix do not.
+Threshold 0.85. Full detail: `research/share_class_map_2026-08-22/`.
+
+**Confirmed, 4 groups:** GOOGL/GOOG (corr **0.9968**, 4,750 overlapping days), FOXA/FOX (**0.9874**,
+1,793), UAA/UA (**0.9776**, 2,512), NWSA/NWS (**0.9705**, 3,181). Every other structural candidate
+that could be tested scored **≤ 0.72**.
+
+**Controls, checked in both directions before the list was trusted** (the same discipline the
+contiguity adjudication used): the four above were required to be found — all were — and A/AA, C/CA,
+K/KO, V/VZ, T/TA were required to be rejected — all were.
+
+**Deliberately excluded, each with a reason, because a false entry blocks a genuinely independent
+candidate:**
+- **BRK.B and BF.B have full history (4,930 rows each) but NO A-class counterpart exists anywhere in
+  this system** — there is no `BRK` and no `BF` row in either table. A group of one blocks nothing,
+  so no entry is needed. **The form is the dot, not the dash**: this system stores `BRK.B` / `BF.B`,
+  while yfinance expects `BRK-B` / `BF-B`, which is exactly why the earlier sector work could not
+  resolve them. Only 11 dotted tickers exist in total.
+- **HON/HONA** — structurally a candidate, return correlation **0.234** over 36 overlapping days.
+  HONA is a 2026 spin-off, a separate company. Correctly rejected by the method.
+- **PH/PHB** — PHB has one price row and zero overlap.
+- **CMCSA/CMCSK, DISCA/DISCK, VIAB/VIAC** and similar historical pairs — the second symbol has no
+  price data at all, so correlation cannot confirm them and they can never be admitted in any case.
+  Left out rather than added on recollection.
+
+**KNOWN LIMIT, stated rather than implied away:** the structural generator only finds pairs whose
+symbols share a root. A dual-class pair listed under two unrelated symbols would be missed. All four
+pairs live in this universe were found; that is not a proof of completeness.
+
+### One implementation, and Layer 4 forced it to stay that way
+
+`analysis/decision.py:blocking_share_class_siblings()` is the single shared check, called identically
+by live order placement (`brokers/trading212.py:_submit_pending_orders()`) and the backtest engine
+(`analysis/backtest.py:simulate_portfolio_compounding_mtm()`'s `_admit_group()`).
+
+**It returns the blocking siblings rather than a bool, and both structural layers are why.** The
+first version was a bool plus an inline `s in held_share_class_tickers` in live to name the blocker
+in its log/note — **Layer 1's AST scanner flagged that re-derivation immediately**. Splitting it into
+a bool wrapper plus a detail function then left the detail function live-only — **Layer 4 flagged
+that**. Collapsing to one function that returns the tuple satisfies both, with no exemption added and
+no dead code. Both scanners did exactly the job they exist for, on a change small enough that it
+would have been easy to wave through.
+
+### A real defect in this change, caught by Layer 2
+
+The live held-set was first derived from `get_held_research_tickers()`, which requires
+`status='FILLED'`. **A BUY is recorded `PLACED` at submission and only becomes `FILLED` when
+`poll_placed_orders()` next runs (hourly, at :00)** — so a just-placed sibling was invisible, and
+live and the backtest disagreed the moment the exclusion actually bound. The comprehensive replay's
+binding variant caught it; the targeted scenario test did not, because a targeted test only exercises
+the case someone thought to write.
+
+Fixed with `brokers/trading212.py:_intended_holding_tickers()` — FILLED open positions **plus** any
+BUY still at `PLACED` with no later FILLED SELL. Kept as its own function rather than widening
+`get_held_research_tickers()`, whose existing callers want the narrower "actually held" meaning. This
+is a genuine production gap, not only a test artefact: between a 14:30 submission and the following
+poll, a real committed position is invisible to the FILLED-only view.
+
+### Coverage
+
+All four parity layers, none retrofitted:
+- **Layer 1** — scanner keywords `share_class` / `siblings` added (defensive; both call sites
+  correctly route through the shared function).
+- **Layer 2** (`tests/test_comprehensive_replay_parity.py`) — the full ~320-day walk re-run **twice**:
+  once with the flag on and no sibling present (sequence must be unchanged — proves flipping the key
+  breaks nothing else), and once with the two replay tickers declared siblings so the exclusion
+  **actually binds** across a long capacity-sharing walk. The binding variant asserts the sequence
+  genuinely DIFFERS from baseline, so a silent no-op cannot pass as agreement — and it is what caught
+  the `PLACED`/`FILLED` defect above.
+- **Layer 3** (`tests/test_share_class_parity.py`, new) — drives both real paths through the actual
+  incident: two siblings gate-passing on the SAME day with capacity for both. Uses the **real shipped
+  map** with the real GOOGL/GOOG tickers rather than synthetic pairs, so a mistake in the map itself
+  surfaces here. Also covers the sibling-held-from-an-earlier-day case, the `SKIPPED_SHARE_CLASS`
+  resolution note, an unmapped ticker being unaffected, and that **exits are untouched** (both
+  siblings held, exclusion on, zero SELLs).
+- **Layer 4** — the shared function is called by both sides, no exemption.
+
+**Verified to actually fail, two independent ways.** The parity file contains a permanent
+broken-version proof (the backtest's reference to the shared function patched to return "nothing
+blocks", asserting the two sides then disagree). Separately, a defect was injected into the **live**
+side (`if False and held_siblings`) and the suite re-run: **5 tests failed, all of them the
+exclusion-on and parity cases, with the exclusion-off cases still passing** — a localized,
+diagnosable failure rather than a blanket break. Restored, all green.
+
+**Non-vacuity is asserted, not assumed**, per the standing rule: the parity module opens with a guard
+that the pair it relies on really is in the shipped map (without it every assertion could pass by
+admitting both everywhere); the exclusion-off tests are the explicit anchor proving the scenario
+admits both siblings; the Layer 2 binding variant asserts a real behavioural difference; and the unit
+tests assert the shipped map is non-empty, symmetric and self-excluding.
+
+### Deploy note
+
+`share_class_exclusion: false` ships inert — no behaviour changes on deploy. Flipping it to `true` is
+a separate, deliberate decision. There is no one-day lag concern of the kind stop-config changes have
+(see "Stop config changes carry a ONE-DAY LAG"): the check runs at **submission** time against the
+account's real held set, not at decide time, so it takes effect on the very next submission rather
+than the one after.
+
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
 
 **`pending_orders.stop_price` is computed at DECIDE time (21:30 EOD) and used verbatim at SUBMIT time
@@ -3220,6 +3371,7 @@ is favourable.
 - `is_asset_class_enabled(...)` — the ETF/stock trading-enabled switches (ETF path is permanently off; stock path is `stock_trading_enabled`).
 - `is_submission_price_move_blocked(...)` — the submission-time price-sanity check (see below).
 - `resolve_admission_ranking_mode(config)` / `resolve_admission_rank_value(...)` (2026-08-09) — the sort key used to order gate-passing candidates for capacity-constrained admission when more qualify than there is room for; does NOT touch the entry gate, `SIGNAL_OFF`, or any other exit reason, which stay keyed to absolute momentum regardless. `admission_ranking_mode` is **`"relative_rank"` (ADOPTED 2026-08-11)** — the cross-sectional 12-minus-1 rank from `analysis/signals.py:compute_relative_rank_series()`. `"absolute_momentum"` (the trailing-12-month value the entry gate itself uses) was production behaviour until that date and is now the shadowed alternative, still recorded in `admission_ranking_shadow` but no longer the ordering that trades. See "Relative-rank admission ordering ADOPTED" below for the adoption record, the evidence, and the AMAT magnitude caveat.
+- `resolve_share_class_exclusion_enabled(config)` / `blocking_share_class_siblings(*, siblings, held_tickers, enabled)` (2026-08-22) — a CANDIDACY filter only: admission skips a candidate whose share-class sibling (`analysis/universe.py:SHARE_CLASS_GROUPS`/`get_share_class_siblings()` — GOOGL/GOOG, FOXA/FOX, UAA/UA, NWSA/NWS) is already held, INCLUDING one admitted earlier in the same submission walk. Never touches sizing, ranking, the momentum gate or any exit, and never force-exits a held position. **`share_class_exclusion` defaults to `false` — the code ships inert and flipping it is a separate decision.** ADOPTED ON RISK GROUNDS, NOT RETURN EVIDENCE, with no study claimed — see "Share-class exclusion at admission" below.
 
 **Position count is emergent, not a separately-enforced cap** — it falls out of `per_trade_pct` and `max_total_deployed` together. There is no `max_open_positions` or flat `max_position_gbp` any more (both were removed in favour of the percentage-of-current-balance scheme — see history's "Live execution switched to the compounding two-parameter scheme").
 

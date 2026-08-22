@@ -267,6 +267,28 @@ trading212_invest:
   # ADOPTED" section for the adoption record and how forward validation is
   # now framed.
   admission_ranking_mode: "relative_rank"
+
+  # Share-class exclusion (2026-08-22) -- when true, admission skips a
+  # candidate whose share-class sibling (analysis/universe.py:
+  # SHARE_CLASS_GROUPS -- GOOGL/GOOG, FOXA/FOX, UAA/UA, NWSA/NWS) is already
+  # held, INCLUDING one admitted earlier in the same submission walk.
+  #
+  # CANDIDACY FILTER ONLY: sizing, ranking, the momentum gate and every exit
+  # are untouched, and an already-open position is NEVER force-exited because
+  # a sibling exists.
+  #
+  # ADOPTED ON RISK GROUNDS, NOT RETURN EVIDENCE. The affected population is a
+  # handful of dual-class pairs across 19 years -- far below any materiality
+  # floor this project uses -- so this is NOT backtest-testable in any
+  # meaningful way and NO study is claimed. The risk it addresses is
+  # unintended concentration specifically: this strategy is deliberately
+  # concentrated, but the sizing model should know what it holds. Motivating
+  # live instance: GOOG and GOOGL both entered 2026-08-12 at ~£2,531 each,
+  # ~£5,100 (~10% of the account) in one company, sized as two independent 5%
+  # positions. See CLAUDE.md's "Share-class exclusion at admission".
+  #
+  # false is today's behaviour; flipping it is a deliberate, separate decision.
+  share_class_exclusion: false
   # Real, broker-side stop-loss orders (2026-08-04) -- see CLAUDE.md's
   # "Broker-side stop order" sections. brokers/trading212.py:
   # poll_placed_orders() places a genuine T212 POST /equity/orders/stop
