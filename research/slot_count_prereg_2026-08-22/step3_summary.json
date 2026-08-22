@@ -1,0 +1,114 @@
+{
+  "pool2_clean_n14": {
+    "params": {
+      "slot_cap": 14,
+      "per_trade_pct": 0.049999999999999996,
+      "max_risk_pct": 0.009999999999999998,
+      "cash_fraction": 0.25
+    },
+    "trades": 505,
+    "panel_rows": 4930,
+    "admissions": 505,
+    "slot_full_events": 1203,
+    "capacity_rejections": 862392,
+    "runtime_s": 712.9
+  },
+  "pool2_clean_n8": {
+    "params": {
+      "slot_cap": 8,
+      "per_trade_pct": 0.0875,
+      "max_risk_pct": 0.017499999999999998,
+      "cash_fraction": 0.29166666666666663
+    },
+    "trades": 298,
+    "panel_rows": 4930,
+    "admissions": 298,
+    "slot_full_events": 1191,
+    "capacity_rejections": 896786,
+    "runtime_s": 638.7
+  },
+  "pool2_clean_n5": {
+    "params": {
+      "slot_cap": 5,
+      "per_trade_pct": 0.13999999999999999,
+      "max_risk_pct": 0.027999999999999997,
+      "cash_fraction": 0.46666666666666656
+    },
+    "trades": 178,
+    "panel_rows": 4930,
+    "admissions": 178,
+    "slot_full_events": 2255,
+    "capacity_rejections": 608820,
+    "runtime_s": 405.3
+  },
+  "pool2_clean_n3": {
+    "params": {
+      "slot_cap": 3,
+      "per_trade_pct": 0.2333333333333333,
+      "max_risk_pct": 0.04666666666666666,
+      "cash_fraction": 0.7777777777777776
+    },
+    "trades": 84,
+    "panel_rows": 4930,
+    "admissions": 84,
+    "slot_full_events": 2687,
+    "capacity_rejections": 502545,
+    "runtime_s": 329.8
+  },
+  "pool1_n14": {
+    "params": {
+      "slot_cap": 14,
+      "per_trade_pct": 0.049999999999999996,
+      "max_risk_pct": 0.009999999999999998,
+      "cash_fraction": 0.25
+    },
+    "trades": 465,
+    "panel_rows": 4930,
+    "admissions": 465,
+    "slot_full_events": 1011,
+    "capacity_rejections": 803514,
+    "runtime_s": 470.9
+  },
+  "pool1_n8": {
+    "params": {
+      "slot_cap": 8,
+      "per_trade_pct": 0.0875,
+      "max_risk_pct": 0.017499999999999998,
+      "cash_fraction": 0.29166666666666663
+    },
+    "trades": 301,
+    "panel_rows": 4930,
+    "admissions": 301,
+    "slot_full_events": 1414,
+    "capacity_rejections": 751016,
+    "runtime_s": 439.5
+  },
+  "pool1_n5": {
+    "params": {
+      "slot_cap": 5,
+      "per_trade_pct": 0.13999999999999999,
+      "max_risk_pct": 0.027999999999999997,
+      "cash_fraction": 0.46666666666666656
+    },
+    "trades": 180,
+    "panel_rows": 4930,
+    "admissions": 180,
+    "slot_full_events": 2207,
+    "capacity_rejections": 561114,
+    "runtime_s": 339.2
+  },
+  "pool1_n3": {
+    "params": {
+      "slot_cap": 3,
+      "per_trade_pct": 0.2333333333333333,
+      "max_risk_pct": 0.04666666666666666,
+      "cash_fraction": 0.7777777777777776
+    },
+    "trades": 85,
+    "panel_rows": 4930,
+    "admissions": 85,
+    "slot_full_events": 2689,
+    "capacity_rejections": 446611,
+    "runtime_s": 279.9
+  }
+}
