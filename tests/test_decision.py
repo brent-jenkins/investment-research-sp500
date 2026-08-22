@@ -480,3 +480,87 @@ def test_resolve_admission_rank_value_can_return_none_for_either_input():
     assert resolve_admission_rank_value(
         momentum=0.15, relative_rank=None, mode=ADMISSION_RANKING_MODE_RELATIVE_RANK,
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Share-class exclusion (2026-08-22) -- unit coverage of the shared function
+# and the shipped map. The live/backtest parity coverage lives in
+# tests/test_share_class_parity.py; these are the "is the function itself
+# right" tests that a parity test deliberately cannot substitute for.
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+from analysis.decision import (  # noqa: E402
+    blocking_share_class_siblings,
+    resolve_share_class_exclusion_enabled,
+)
+from analysis import universe as _universe  # noqa: E402
+
+
+def test_share_class_exclusion_defaults_to_off_so_shipping_changes_nothing():
+    assert resolve_share_class_exclusion_enabled({}) is False
+    assert resolve_share_class_exclusion_enabled({"trading212_invest": {}}) is False
+    assert resolve_share_class_exclusion_enabled(
+        {"trading212_invest": {"share_class_exclusion": True}}) is True
+
+
+def test_a_held_sibling_blocks_and_names_the_blocker():
+    blocked = blocking_share_class_siblings(
+        siblings=frozenset({"GOOGL"}), held_tickers={"GOOGL", "AAPL"}, enabled=True)
+    assert blocked == ("GOOGL",)
+
+
+def test_no_sibling_held_means_no_change():
+    assert blocking_share_class_siblings(
+        siblings=frozenset({"GOOGL"}), held_tickers={"AAPL", "MSFT"}, enabled=True) == ()
+
+
+def test_a_ticker_with_no_mapping_is_never_blocked():
+    assert _universe.get_share_class_siblings("AAPL") == frozenset()
+    assert blocking_share_class_siblings(
+        siblings=_universe.get_share_class_siblings("AAPL"),
+        held_tickers={"AAPL", "GOOGL", "GOOG"}, enabled=True) == ()
+
+
+def test_disabled_never_blocks_even_when_a_sibling_is_held():
+    assert blocking_share_class_siblings(
+        siblings=frozenset({"GOOGL"}), held_tickers={"GOOGL"}, enabled=False) == ()
+
+
+@pytest.mark.parametrize("siblings,held", [
+    (None, {"GOOGL"}), (frozenset(), {"GOOGL"}),
+    (frozenset({"GOOGL"}), None), (frozenset({"GOOGL"}), set()),
+    (None, None),
+])
+def test_none_and_empty_inputs_mean_unknown_never_blocked(siblings, held):
+    """This module's standing None-tolerance contract: unknown must never
+    trigger a check, and must not rely on falsy coercion by accident."""
+    assert blocking_share_class_siblings(
+        siblings=siblings, held_tickers=held, enabled=True) == ()
+
+
+def test_multiple_held_siblings_are_all_reported_sorted():
+    blocked = blocking_share_class_siblings(
+        siblings=frozenset({"B", "A"}), held_tickers={"A", "B", "C"}, enabled=True)
+    assert blocked == ("A", "B")
+
+
+def test_the_shipped_map_is_symmetric_and_self_excluding():
+    """Every mapped ticker must see its group-mates and never itself --
+    a ticker that returned itself would block its own admission outright."""
+    assert _universe.SHARE_CLASS_GROUPS, "shipped map is empty — every test above is vacuous"
+    seen = set()
+    for group in _universe.SHARE_CLASS_GROUPS:
+        assert len(group) >= 2, f"a group of one blocks nothing: {group}"
+        assert not (group & seen), f"ticker appears in two groups: {group & seen}"
+        seen |= set(group)
+        for ticker in group:
+            sibs = _universe.get_share_class_siblings(ticker)
+            assert ticker not in sibs, f"{ticker} is its own sibling"
+            assert sibs == group - {ticker}
+            for other in sibs:
+                assert ticker in _universe.get_share_class_siblings(other), "asymmetric map"
+
+
+def test_the_shipped_map_contains_the_pair_that_motivated_it():
+    assert _universe.get_share_class_siblings("GOOGL") == frozenset({"GOOG"})

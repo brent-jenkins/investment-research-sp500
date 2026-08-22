@@ -65,6 +65,17 @@ DECISION_SIGNAL_KEYWORDS = (
     # shared is_position_size_viable() -- see analysis/decision.py and
     # CLAUDE.md's "Live and backtest consolidation audit" section).
     "position_gbp",
+    # Added 2026-08-22 with the share-class exclusion -- defensive, the same
+    # proactive-coverage reasoning as the admission-ranking keywords below:
+    # both real call sites correctly call the shared blocking_share_class_siblings()
+    # / resolve_share_class_exclusion_enabled() (analysis/decision.py), so
+    # neither trips this scanner today. These keywords exist so a FUTURE
+    # inline re-derivation ("if ticker in SHARE_CLASS_GROUPS", or a hand-rolled
+    # sibling comparison written directly in either scanned file) would be
+    # caught. Matches as substrings against the real variable names this
+    # change introduced (share_class_exclusion, held_share_class_tickers,
+    # siblings, held_siblings).
+    "share_class", "siblings",
     # Added 2026-08-09 during the relative-ranking study's production
     # promotion -- a defensive addition, not a reaction to a found bug:
     # both real call sites correctly call the shared

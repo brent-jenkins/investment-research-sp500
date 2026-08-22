@@ -158,6 +158,89 @@ _KNOWN_TICKER_RENAMES: dict[str, str] = {"FB": "META"}
 ALL_TICKERS: tuple[str, ...] = tuple(sorted(set(ETF_TICKERS) | set(STOCK_MEMBERSHIP.keys())))
 
 
+# ---------------------------------------------------------------------------
+# Share classes — two listed symbols, one underlying company
+# ---------------------------------------------------------------------------
+# The S&P 500 lists dual-class companies as separate constituents, so this
+# system's universe treats them as independent candidates: VaR sizes each one
+# on its own, and their momentum is near-identical by construction, so they
+# rank adjacently and are admitted together whenever either qualifies. The
+# account then holds ~2x the intended exposure to one company while the sizing
+# model believes it holds two independent positions.
+#
+# ADOPTED ON RISK GROUNDS, NOT RETURN EVIDENCE — see CLAUDE.md's "Share-class
+# exclusion at admission" entry. Consumed by analysis/decision.py:
+# blocking_share_class_siblings(), gated off by default.
+#
+# HOW THIS LIST WAS BUILT (research/share_class_map_2026-08-22/): candidates
+# were generated STRUCTURALLY from the ticker strings present in price_data
+# and universe_membership — dotted class forms (X, X.A, X.B) and single-letter
+# class suffixes (GOOG/GOOGL, FOX/FOXA) — never from recollection, then each
+# candidate was CONFIRMED by daily log-return correlation over its overlapping
+# history. Two share classes of one company track each other almost exactly;
+# unrelated companies sharing a ticker prefix do not. Threshold 0.85; the four
+# entries below scored 0.9705–0.9968 and every other structural candidate that
+# could be tested scored <= 0.72.
+#
+# Controls, checked in both directions before the list was trusted: the four
+# entries below were required to be found (all were), and A/AA, C/CA, K/KO,
+# V/VZ, T/TA were required to be rejected (all were).
+#
+# DELIBERATELY NOT INCLUDED, each for a stated reason — a false entry blocks a
+# genuinely independent candidate, so the bar is confirmation, not suspicion:
+#   * BRK.B and BF.B are present with full history, but their A-class
+#     counterparts do not exist ANYWHERE in this system's data (no "BRK", no
+#     "BF" row in price_data or universe_membership). A group of one blocks
+#     nothing, so no entry is needed. Note the form: this system stores these
+#     as BRK.B / BF.B (dot), not the BRK-B / BF-B that yfinance expects —
+#     which is why the earlier sector work could not resolve them.
+#   * HON/HONA — structurally a candidate, return correlation 0.234 over the
+#     36 overlapping days. HONA is a 2026 spin-off, a separate company.
+#   * PH/PHB — PHB has a single price row and zero overlap with PH.
+#   * CMCSA/CMCSK, DISCA/DISCK, VIAB/VIAC and similar historical pairs — no
+#     price data exists for the second symbol, so correlation cannot confirm
+#     them and they can never be admitted in any case. Left out rather than
+#     added on recollection.
+#
+# KNOWN LIMIT: the structural generator only finds pairs whose symbols share a
+# root (prefix, class suffix, or dotted form). A dual-class pair listed under
+# two unrelated symbols would be missed. All four pairs known to be live in
+# this universe were found, but that is a stated limit, not a proof of
+# completeness.
+SHARE_CLASS_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"GOOGL", "GOOG"}),   # Alphabet          corr 0.9968 over 4,750 days
+    frozenset({"FOXA", "FOX"}),     # Fox Corporation   corr 0.9874 over 1,793 days
+    frozenset({"UAA", "UA"}),       # Under Armour      corr 0.9776 over 2,512 days
+    frozenset({"NWSA", "NWS"}),     # News Corporation  corr 0.9705 over 3,181 days
+)
+
+_SHARE_CLASS_INDEX: dict[str, frozenset[str]] = {
+    ticker: group for group in SHARE_CLASS_GROUPS for ticker in group
+}
+
+
+def get_share_class_siblings(ticker: str) -> frozenset[str]:
+    """Every OTHER listed symbol representing the same underlying company as
+    *ticker*, or an empty frozenset when *ticker* has no known sibling.
+
+    The single shared lookup, called identically by live order placement
+    (brokers/trading212.py) and the backtest engine (analysis/backtest.py) —
+    the same pattern get_max_holding_days() already follows, and required by
+    CLAUDE.md's "exactly one implementation of any given trading decision"
+    invariant.
+
+    Excludes *ticker* itself, so the result is directly usable as "is any of
+    these already held". Returns empty for None/blank rather than raising: an
+    unmapped ticker is the overwhelmingly common case, not an error.
+    """
+    if not ticker:
+        return frozenset()
+    group = _SHARE_CLASS_INDEX.get(ticker)
+    if group is None:
+        return frozenset()
+    return group - {ticker}
+
+
 def _parse_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
