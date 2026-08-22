@@ -1,0 +1,151 @@
+{
+  "Pool 2 CLEAN": [
+    {
+      "threshold": 0.3,
+      "n_reached": 127,
+      "pct_of_positions": 22.48,
+      "pnl_gbp": 435208.3,
+      "share_of_total_pnl_pct": 124.86,
+      "median_days_to_first_cross": 90.0,
+      "median_hold_days": 406.0,
+      "median_giveback_pp": 48.51,
+      "mean_giveback_pp": 60.58,
+      "median_frac_of_peak_kept": 0.4547,
+      "exit_reasons": {
+        "SIGNAL_OFF": 102,
+        "END_OF_DATA": 10,
+        "CRISIS_EXIT": 8,
+        "STOP_LOSS": 7
+      },
+      "MATERIALITY_n_reached_ge_30": true
+    },
+    {
+      "threshold": 0.5,
+      "n_reached": 92,
+      "pct_of_positions": 16.28,
+      "pnl_gbp": 432877.68,
+      "share_of_total_pnl_pct": 124.19,
+      "median_days_to_first_cross": 146.5,
+      "median_hold_days": 579.5,
+      "median_giveback_pp": 58.04,
+      "mean_giveback_pp": 70.73,
+      "median_frac_of_peak_kept": 0.5027,
+      "exit_reasons": {
+        "SIGNAL_OFF": 78,
+        "END_OF_DATA": 10,
+        "CRISIS_EXIT": 3,
+        "STOP_LOSS": 1
+      },
+      "MATERIALITY_n_reached_ge_30": true
+    },
+    {
+      "threshold": 1.0,
+      "n_reached": 55,
+      "pct_of_positions": 9.73,
+      "pnl_gbp": 395809.22,
+      "share_of_total_pnl_pct": 113.56,
+      "median_days_to_first_cross": 356.0,
+      "median_hold_days": 757.0,
+      "median_giveback_pp": 79.34,
+      "mean_giveback_pp": 91.22,
+      "median_frac_of_peak_kept": 0.5681,
+      "exit_reasons": {
+        "SIGNAL_OFF": 45,
+        "END_OF_DATA": 10
+      },
+      "MATERIALITY_n_reached_ge_30": true
+    },
+    {
+      "threshold": 2.0,
+      "n_reached": 29,
+      "pct_of_positions": 5.13,
+      "pnl_gbp": 333576.05,
+      "share_of_total_pnl_pct": 95.7,
+      "median_days_to_first_cross": 617.0,
+      "median_hold_days": 1039.0,
+      "median_giveback_pp": 86.28,
+      "mean_giveback_pp": 108.36,
+      "median_frac_of_peak_kept": 0.6545,
+      "exit_reasons": {
+        "SIGNAL_OFF": 19,
+        "END_OF_DATA": 10
+      },
+      "MATERIALITY_n_reached_ge_30": false
+    }
+  ],
+  "Pool 1": [
+    {
+      "threshold": 0.3,
+      "n_reached": 116,
+      "pct_of_positions": 22.22,
+      "pnl_gbp": 515736.88,
+      "share_of_total_pnl_pct": 120.19,
+      "median_days_to_first_cross": 90.5,
+      "median_hold_days": 448.0,
+      "median_giveback_pp": 46.93,
+      "mean_giveback_pp": 62.22,
+      "median_frac_of_peak_kept": 0.4977,
+      "exit_reasons": {
+        "SIGNAL_OFF": 95,
+        "END_OF_DATA": 10,
+        "CRISIS_EXIT": 8,
+        "STOP_LOSS": 3
+      },
+      "MATERIALITY_n_reached_ge_30": true
+    },
+    {
+      "threshold": 0.5,
+      "n_reached": 87,
+      "pct_of_positions": 16.67,
+      "pnl_gbp": 507516.14,
+      "share_of_total_pnl_pct": 118.27,
+      "median_days_to_first_cross": 170.0,
+      "median_hold_days": 622.0,
+      "median_giveback_pp": 59.21,
+      "mean_giveback_pp": 73.05,
+      "median_frac_of_peak_kept": 0.524,
+      "exit_reasons": {
+        "SIGNAL_OFF": 73,
+        "END_OF_DATA": 9,
+        "CRISIS_EXIT": 4,
+        "STOP_LOSS": 1
+      },
+      "MATERIALITY_n_reached_ge_30": true
+    },
+    {
+      "threshold": 1.0,
+      "n_reached": 54,
+      "pct_of_positions": 10.34,
+      "pnl_gbp": 463184.08,
+      "share_of_total_pnl_pct": 107.94,
+      "median_days_to_first_cross": 387.0,
+      "median_hold_days": 763.0,
+      "median_giveback_pp": 73.82,
+      "mean_giveback_pp": 92.33,
+      "median_frac_of_peak_kept": 0.566,
+      "exit_reasons": {
+        "SIGNAL_OFF": 44,
+        "END_OF_DATA": 9,
+        "CRISIS_EXIT": 1
+      },
+      "MATERIALITY_n_reached_ge_30": true
+    },
+    {
+      "threshold": 2.0,
+      "n_reached": 25,
+      "pct_of_positions": 4.79,
+      "pnl_gbp": 351191.06,
+      "share_of_total_pnl_pct": 81.84,
+      "median_days_to_first_cross": 594.0,
+      "median_hold_days": 997.0,
+      "median_giveback_pp": 105.79,
+      "mean_giveback_pp": 118.13,
+      "median_frac_of_peak_kept": 0.6462,
+      "exit_reasons": {
+        "SIGNAL_OFF": 18,
+        "END_OF_DATA": 7
+      },
+      "MATERIALITY_n_reached_ge_30": false
+    }
+  ]
+}

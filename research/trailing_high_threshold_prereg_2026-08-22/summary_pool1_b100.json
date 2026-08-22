@@ -1,0 +1,32 @@
+{
+  "pool": "pool1",
+  "cell_id": "b100",
+  "stop": "3.0",
+  "hold": "unlimited",
+  "trail": "1.00",
+  "trail_k": 3.0,
+  "n_trades": 732,
+  "total_pnl_gbp": 335958.34,
+  "win_pct": 30.74,
+  "mean_hold_days": 127.77,
+  "total_notional_gbp": 3253112.21,
+  "exit_mix": {
+    "STOP_LOSS": 296,
+    "SIGNAL_OFF": 281,
+    "TRAILING_STOP": 74,
+    "END_OF_DATA": 41,
+    "CRISIS_EXIT": 40
+  },
+  "exit_pnl_by_reason": {
+    "CRISIS_EXIT": -2347.6,
+    "END_OF_DATA": 48924.35,
+    "SIGNAL_OFF": 63465.41,
+    "STOP_LOSS": -175916.89,
+    "TRAILING_STOP": 401833.07
+  },
+  "n_trail_activated": 74,
+  "mean_deployed_pct": 64.028,
+  "mean_n_open": 13.07,
+  "final_equity": 385958.34,
+  "runtime_s": 577.4
+}
