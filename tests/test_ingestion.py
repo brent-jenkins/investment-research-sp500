@@ -17,6 +17,7 @@ from data.ingestion import (
     _fetch_ticker,
     _find_retroactive_restatement,
     _upsert_price_rows,
+    _KNOWN_PRICE_CLIFF_EXCEPTIONS,
     _yf_symbol,
     backfill_price_history,
     check_boundary_contiguity,
@@ -585,20 +586,58 @@ def test_filter_known_exceptions_leaves_unrelated_hits_untouched():
     ]
 
 
-def test_filter_known_exceptions_all_14_are_present():
-    """Every ticker+date from the Phase 1 classification is actually
-    registered -- guards against a typo silently leaving one of the 14
-    still alerting."""
+def test_filter_known_exceptions_every_registered_pair_is_present():
+    """Every classified ticker+date is actually registered -- guards against
+    a typo silently leaving one still alerting.
+
+    Asserts the registry's FULL contents, not just that a listed subset is
+    suppressed: a set-equality check fails on an unrecorded addition as well
+    as on a missing one, so this literal cannot quietly fall behind the dict
+    it describes. (The earlier form asserted only `len(expected) == 14` over
+    its own literal, which would have kept passing untouched no matter how
+    many entries were added -- a check whose stated coverage outruns what it
+    can actually see.)"""
     expected = {
+        # Phase 1 classification, research/split_cliff_remediation_2026-08-08/
         ("AIG", "2008-09-15"), ("APA", "2020-03-09"), ("GL", "2024-04-11"),
         ("HIG", "2008-10-30"), ("HIG", "2008-12-05"), ("OXY", "2020-03-09"),
         ("PCG", "2019-01-14"), ("STT", "2009-01-20"), ("TRGP", "2020-03-09"),
         ("KDP", "2018-07-10"), ("MO", "2008-03-31"), ("WY", "2010-07-20"),
         ("EXPE", "2011-12-21"), ("JCI", "2007-07-02"),
+        # research/mrna_cliff_2026-08-22/
+        ("MRNA", "2026-08-19"),
     }
+    assert set(_KNOWN_PRICE_CLIFF_EXCEPTIONS) == expected
     hits = [{"ticker": t, "date": d} for t, d in expected]
     assert filter_known_price_cliff_exceptions(hits) == []
-    assert len(expected) == 14
+
+
+def test_filter_known_exceptions_suppresses_the_mrna_2026_08_19_cliff():
+    """MRNA 2026-08-19 (close 62.96 -> 174.38, ratio 2.7697) is a confirmed
+    GENUINE_MARKET_MOVE -- the Moderna/Merck Phase 3 INTerpath-001 melanoma
+    readout -- and is the first CURRENT-WINDOW, actively-held entry in the
+    registry. Suppression is deliberate and scoped to the alert only."""
+    hits = [{"ticker": "MRNA", "date_prev": "2026-08-18", "date": "2026-08-19",
+             "close_prev": 62.96, "close": 174.38, "ratio": 2.7697}]
+    assert filter_known_price_cliff_exceptions(hits) == []
+    assert _KNOWN_PRICE_CLIFF_EXCEPTIONS[("MRNA", "2026-08-19")]["classification"] == (
+        "GENUINE_MARKET_MOVE"
+    )
+
+
+def test_filter_known_exceptions_does_not_suppress_a_future_mrna_cliff():
+    """The registry is keyed on (ticker, date), so classifying the 2026-08-19
+    move must NOT blanket-silence MRNA. A later cliff on this now-actively-held
+    ticker still has to reach the alert -- this is the property that makes a
+    current-window entry safe to add at all, so it is asserted directly rather
+    than left implied by the generic same-ticker-different-date test above."""
+    hits = [
+        {"ticker": "MRNA", "date": "2026-08-19"},   # classified -- suppressed
+        {"ticker": "MRNA", "date": "2026-11-03"},   # a future cliff -- MUST alert
+    ]
+    assert filter_known_price_cliff_exceptions(hits) == [
+        {"ticker": "MRNA", "date": "2026-11-03"},
+    ]
 
 
 def test_filter_known_exceptions_empty_input_returns_empty():
