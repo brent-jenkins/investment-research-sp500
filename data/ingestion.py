@@ -1419,6 +1419,33 @@ _KNOWN_PRICE_CLIFF_EXCEPTIONS: dict[tuple[str, str], dict] = {
                     "research. A fresh pull reproduces the identical cliff (same class as the "
                     "confirmed corporate actions), but the classification is not forced.",
     },
+    # The first CURRENT-WINDOW, actively-held entry (added 2026-08-22). Every
+    # other pair above is historical (2007-2024) and was already cosmetic by the
+    # time it was classified; this one sits inside every live 252-day momentum
+    # window and MRNA was an open position when it fired. Recorded deliberately
+    # rather than as routine list maintenance. What is suppressed is the ALERT,
+    # not the signal: MRNA's momentum (+439.72% as of 2026-08-21) is real and
+    # keeps feeding admission ranking unchanged. research/mrna_cliff_2026-08-22/.
+    ("MRNA", "2026-08-19"): {
+        "classification": "GENUINE_MARKET_MOVE",
+        "evidence": "Moderna/Merck Phase 3 INTerpath-001 melanoma readout met its primary "
+                    "recurrence-free-survival endpoint, announced pre-market 2026-08-19; MRNA "
+                    "closed +176.97% and market cap moved $25B -> $69B (confirmed via Motley "
+                    "Fool/Bloomberg/CNBC reporting, not assumed). Three mechanical checks "
+                    "independent of .splits metadata: (1) close_ratio=adj_close_ratio=2.7697 "
+                    "(exact lockstep -- the genuine-move signature, not the adj_close-smooth "
+                    "corporate-action one); (2) intraday range 1.5434x (54.3%) against a 1.0624x "
+                    "median, with the open at 116.02 partway between the two closes -- a "
+                    "corporate-action rebasing scales O/H/L/C by one factor and leaves the range "
+                    "untouched; (3) volume 199.3M vs a 6.18M median = 32.3x UP, where a 1-for-2.77 "
+                    "reverse split divides share count and predicts ~0.36x -- roughly 90x in the "
+                    "wrong direction. The remaining gap is closed by DIRECTION: spinoffs and "
+                    "special dividends (the class yfinance never smooths in `close`, and which may "
+                    "not appear in .splits at all) remove value and can only push price DOWN -- "
+                    "every un-smoothed case in the 2026-08-08 study was a fall (KDP 0.179, MO "
+                    "0.301, WY 0.381). A 2.7697x RISE leaves only a reverse split, which does "
+                    "appear in .splits and does retroactively rebase `close`. No third mechanism.",
+    },
 }
 
 
