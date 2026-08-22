@@ -1,0 +1,182 @@
+{
+  "pool2_clean_baseline": {
+    "n_trades": 565,
+    "n_admissions": 565,
+    "n_joined": 565,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 29,
+      "size_exact_within_rounding_interval": 1
+    },
+    "failures": {}
+  },
+  "pool2_clean_n14": {
+    "n_trades": 505,
+    "n_admissions": 505,
+    "n_joined": 505,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 30,
+      "size_exact_within_rounding_interval": 0
+    },
+    "failures": {}
+  },
+  "pool2_clean_n8": {
+    "n_trades": 298,
+    "n_admissions": 298,
+    "n_joined": 298,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 30,
+      "size_exact_within_rounding_interval": 0
+    },
+    "failures": {}
+  },
+  "pool2_clean_n5": {
+    "n_trades": 178,
+    "n_admissions": 178,
+    "n_joined": 178,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 26,
+      "size_exact_within_rounding_interval": 4
+    },
+    "failures": {}
+  },
+  "pool2_clean_n3": {
+    "n_trades": 84,
+    "n_admissions": 84,
+    "n_joined": 84,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 26,
+      "size_exact_within_rounding_interval": 4
+    },
+    "failures": {}
+  },
+  "pool1_baseline": {
+    "n_trades": 522,
+    "n_admissions": 522,
+    "n_joined": 522,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 29,
+      "size_exact_within_rounding_interval": 1
+    },
+    "failures": {}
+  },
+  "pool1_n14": {
+    "n_trades": 465,
+    "n_admissions": 465,
+    "n_joined": 465,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 29,
+      "size_exact_within_rounding_interval": 1
+    },
+    "failures": {}
+  },
+  "pool1_n8": {
+    "n_trades": 301,
+    "n_admissions": 301,
+    "n_joined": 301,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 30,
+      "size_exact_within_rounding_interval": 0
+    },
+    "failures": {}
+  },
+  "pool1_n5": {
+    "n_trades": 180,
+    "n_admissions": 180,
+    "n_joined": 180,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 29,
+      "size_exact_within_rounding_interval": 1
+    },
+    "failures": {}
+  },
+  "pool1_n3": {
+    "n_trades": 85,
+    "n_admissions": 85,
+    "n_joined": 85,
+    "sample_size": 30,
+    "checks": {
+      "exit_reason": "30/30",
+      "entry_gate": "30/30",
+      "horizon": "30/30",
+      "size": "30/30",
+      "stop": "30/30"
+    },
+    "size_breakdown": {
+      "size_exact_from_rounded": 30,
+      "size_exact_within_rounding_interval": 0
+    },
+    "failures": {}
+  }
+}

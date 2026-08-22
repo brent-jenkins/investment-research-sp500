@@ -1,0 +1,32 @@
+{
+  "pool2_clean": {
+    "usable_tickers": 608,
+    "trades": 565,
+    "total_pnl_gbp": 348548.74,
+    "degenerate_parity_mismatches": 0,
+    "instrumented_parity_mismatches": 0,
+    "clamp_distribution": {
+      "VAR": 378,
+      "CEILING": 187
+    },
+    "cash_bound_admissions": 0,
+    "ceiling_pinned_pct": 33.1,
+    "panel_rows": 4930,
+    "slot_full_events": 0
+  },
+  "pool1": {
+    "usable_tickers": 500,
+    "trades": 522,
+    "total_pnl_gbp": 429108.58,
+    "degenerate_parity_mismatches": 0,
+    "instrumented_parity_mismatches": 0,
+    "clamp_distribution": {
+      "VAR": 328,
+      "CEILING": 194
+    },
+    "cash_bound_admissions": 0,
+    "ceiling_pinned_pct": 37.16,
+    "panel_rows": 4930,
+    "slot_full_events": 0
+  }
+}

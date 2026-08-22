@@ -1728,7 +1728,7 @@ review.
 
 **A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
 
-## A check that reports clean for a reason unrelated to the thing it was checking — a class, not seven incidents (standing requirement, 2026-08-10, extended 2026-08-11 and 2026-08-12)
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not nine incidents (standing requirement, 2026-08-10, extended 2026-08-11, 2026-08-12 and 2026-08-22)
 
 **Five separate findings this week share one shape, and naming the shape is more useful than
 recording them separately.** In each, a check was reasoned about — correctly — for the case its
@@ -1851,6 +1851,30 @@ operational poll loop, and they fail identically.
    reintroducing the `NameError` and confirming the new test fails with the exact production error
    message while the isolation test still passes.
 
+9. **A RATIO guard whose denominator is inflated by the very condition it exists to detect**
+   (slot-count study, 2026-08-22). The single-ticker dominance ceiling —
+   `max_t |Δ_t| / Σ_t |Δ_t|` over per-ticker P&L differences from baseline, ceiling 0.40 — was
+   pre-registered to catch "this arm's advantage is really one name". It **PASSED at 0.244** for an
+   arm whose own P&L was **59.99% a single ticker (NVDA)**. The denominator sums `|Δ_t|` across
+   **227 contributing tickers**, overwhelmingly names *baseline held and the arm did not* — so the
+   more concentrated the arm, the more disjoint the two trade populations, the larger the
+   denominator, and the *smaller* the guard reads. **Concentration inflates the denominator faster
+   than the numerator, so the guard is anti-correlated with the thing it measures over exactly the
+   range where it matters.**
+
+   **What makes this distinct from 1-8: nothing about the guard's domain is wrong, and no
+   precondition gates it.** It computes what it says it computes, on every input, always. The defect
+   is that the *statistic* stops tracking the concept once the two populations being compared differ
+   enough in size — and it was calibrated on a case (the relative-rank/AMAT precedent) where they had
+   thousands of trades in common. A guard can be well-defined, universally applicable, and still
+   silently stop measuring its concept when the comparison's shape changes.
+
+   **The rule: for any guard expressed as a RATIO, ask what moves the denominator, and whether the
+   condition being detected moves it.** If detecting the condition also grows the denominator, the
+   ratio under-reports exactly when it should fire. The countermeasure used here was cheap — pair it
+   with a *within-arm* measure that has no cross-arm denominator at all (top-3 and top-ticker share
+   of that arm's own P&L), which read **71.25%** and **59.99%** where the ratio guard read 0.244.
+
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
 *confident, plausible-looking result* rather than an error or an obvious anomaly. That last property
@@ -1867,6 +1891,12 @@ the check was told IN ADVANCE not to fire, by a written pre-authorisation that w
 The other seven are blind spots discovered after the fact; this one was installed on purpose, which
 is why the countermeasure is procedural (pre-register the distinguishing check, not the acceptable
 value) rather than a better guard.**
+**Instance 9 belongs to the first direction but by a mechanism none of the others share: no domain is
+exceeded and no precondition gates it — the guard's own STATISTIC stops tracking its concept as the
+comparison's shape changes, and it does so monotonically in the direction of the thing being
+detected.** Instances 1-8 are answered by asking "what is this check's domain, and is this input
+inside it"; instance 9 is not, because the input is always inside the domain. It is answered only by
+asking what makes the *denominator* move.
 
 **THE GENERALISATION — passing the case a guard was designed for is not evidence it covers the class
 that case belongs to, and the pass is exactly what stops anyone looking further.** This is the
@@ -2676,6 +2706,138 @@ live path. No database writes. Nothing adopted, nothing merged into the trading 
 deployed.** Perturbation robustness was not run and was not required — it is earned by an arm that
 fires no walk-away clause, and none qualified.
 
+
+## Hard slot-count concentration — pre-registered, tested, NOT ADOPTED (2026-08-22)
+
+**Closes the question the position-count study (2026-08-09) explicitly left open and named the design
+for.** That study tried to reach 5 and 10 concurrent positions by raising `per_trade_pct` to 0.14 and
+0.07, realised ~12 against a baseline of ~14 in both arms, and was correctly reported NOT TESTED; its
+own conclusion was that genuine concentration "would need a design that enforces a hard slot count
+directly ... a different engine design, not a retune". That design has now been built and run. Full
+detail: `research/slot_count_prereg_2026-08-22/PREREGISTRATION.md` / `GATE_REPORT.md` / `REPORT.md`.
+
+**Baseline is the CURRENT LIVE CONFIGURATION** (relative-rank admission, `atr_stop_multiplier 3.0`,
+`stock_max_holding_days 0`, `per_trade_pct 0.05`, `max_total_deployed 0.70`), uncapped; arms cap
+concurrent positions at N in {14, 8, 5, 3}.
+
+**VERDICT: NOT ADOPTED. Cost-adjusted excess return over `^SP500TR` vs baseline, Pool 2 CLEAN: n8
+−2.850pp, n5 −1.582pp, n3 +1.004pp** — against a +1.5pp bar and the measured ~1.08pp noise floor. Two
+arms are worse than baseline outright; the best misses the bar by a third and does not clear the
+floor. Pool 1 agrees on the endpoints (n3 best at +1.244pp, n8/n5 below baseline) and **disagrees on
+the interior ordering**, so no interior optimum is located.
+
+**THE SIZING PROBLEM WAS SOLVED, AND THAT IS THE REUSABLE PART.** A slot cap alone would have
+reproduced the position-count failure through a different mechanism. Three constants were re-derived
+from N, all reducing EXACTLY to the live values at N=14: `per_trade_pct_N = max_total_deployed / N`;
+`max_risk_pct_N = max_risk_pct × (14 / N)` (holding TOTAL portfolio risk budget constant at 0.14);
+and `cash_fraction_N = max(0.25, (max_total_deployed/N) / (1 − max_total_deployed))`.
+
+- **`max_risk_pct` MUST scale too, and this is not obvious.** VaR-implied size is
+  `(balance × max_risk_pct) / |q05 × sqrt(30)|` and **does not depend on N at all** — raising only the
+  ceiling leaves every VaR-bound candidate baseline-sized, so an N=3 arm would deploy ~11%. That is a
+  de-risking test wearing a concentration label. Scaling both by `1/N` also makes the
+  pinned-vs-VaR-bound partition **exactly N-invariant** (a candidate pins iff
+  `|q05| <= 0.14/(0.70*sqrt(30)) = 0.03652` — N cancels), so the arms differ in position COUNT and in
+  nothing else about how a position is sized. Confirmed empirically: pinned share 33.1 -> 36.4 -> 33.6
+  -> 29.8 -> 29.8% across arms.
+- **The `cash × 0.25` clamp, not VaR, was the real hidden concentration limit** — and this appears to
+  be the larger part of why the position-count study failed, which that study did not isolate. The
+  clamp binds iff `d > 1 − 4 × per_trade_pct_N`: at live settings that is `d > 0.80`, unreachable
+  under a 0.70 cap, so it is **provably inert at baseline**; at N=3 it binds above `d > 0.067`, i.e.
+  always. Its equilibrium has a closed form — **`d* = N/(N+3)`**, so 50.0% at N=3 and 62.5% at N=5,
+  against baseline's 65.1%. Left untouched it, not the slot count, would have set the concentration.
+  Relaxing it to the smallest inert value is **not a second treatment variable**: it removes a
+  constraint provably inert in the control so it is inert everywhere. Verified, not assumed:
+  **zero CASH-bound admissions in every arm, both pools**, including N=3 at `cash_fraction 0.7778`.
+
+**Result: deployment parity held at three concurrent positions — 63.50% vs baseline's 65.10%, worst
+divergence anywhere −1.92pp, every arm inside the 2pp "clean" tier.** This is what the earlier attempt
+could not achieve, and it is why the arms genuinely test concentration rather than cash-holding.
+
+**THE DRAWDOWN PRIOR WAS WRONG, and the study's own pre-registration said to expect the opposite.**
+Part 7 of the selection audit established that ranking sits at the 99th percentile of random admission
+on return and the **98th-worst on drawdown**, so a drawdown-driven not-adopted was the predicted
+outcome and Clause B (−60% absolute) was written precisely because Clause A alone would tolerate
+−58.88%. **Neither clause fires anywhere.** Worst is n8 at −48.86%; **n5 and n3 are BETTER than
+baseline in both pools** (+4.40 / +3.03pp on Pool 2). Concentration did not deepen drawdown here.
+Recorded as a genuine refutation, with the reconciliation stated rather than assumed: Part 7 varied
+*which* candidates fill roughly fixed slots, this varied *how many* slots at fixed deployment — two
+different manipulations, and only the first spent drawdown. A low-turnover mechanism (84 vs 565
+positions, riding through drawdowns baseline stops out of) is offered as an untested hypothesis only.
+
+**n3's +1.004pp is not a near-miss: 71.25% of its P&L is three trades and 59.99% is one ticker
+(NVDA), on 84 positions.** n5 also exceeds the 50% top-3 threshold (62.12%). A lottery ticket, not a
+strategy — and the reason the reading should not be chased with a larger sweep.
+
+**"A book capped at N runs at ~0.8N" — a mechanism the pre-registration missed, and it must travel
+with every figure.** Realised means are 6.23 of 8, 4.11 of 5, **2.43 of 3**. Because
+`per_trade_pct_N = max_total_deployed / N` makes both constraints bind at the same nominal point,
+mark-to-market appreciation reaches 70% deployed before the Nth slot fills, so the deployment cap —
+not the slot cap — holds the count below N (measured directly: at n8, 3,360 days blocked by capacity
+only vs 1,183 by the slot cap; only at n3 does the slot cap dominate). The materiality verdicts stand
+(6.23 is far nearer 8 than baseline's 11.78), but "n3" is 2.43 positions, not three.
+
+**n14 is NOT TESTED, and the reason is a corrected arithmetic error worth recording.** The
+pre-registration estimated baseline's realised concurrent count at ~17.1 from
+`565 × 149 / 4,930` — **`holding_days` in this codebase is CALENDAR days, not trading days**, and the
+true figure is **11.78** (confirmed two independent ways: the engine's panel counter and a trading-day
+occupancy derivation from the trades file, agreeing to <=0.005 positions in all ten arms). Baseline
+therefore sits *below* 14, so capping at 14 realises 10.90 — 0.87 from baseline, 3.10 from its own
+target — and cannot test anything. The §2 gate caught this before any return figure existed, which is
+what the gate is for. **Generalisable: deriving mean concurrent positions as
+`trades × mean_hold / trading_days` overstates it by ~45% in this codebase.**
+
+**Verification (all passed before any arm was trusted).** Degenerate parity: with the slot cap
+disabled and live constants, the research engine reproduced raw production
+`simulate_portfolio_compounding_mtm()` **byte-identical on both pools** (Pool 2 CLEAN 565 /
+£348,548.74; Pool 1 522 / £429,108.58), compared on a canonical sort **in memory**, never across a CSV
+round trip. Instrumentation confirmed purely additive. Decision-engine parity per this project's
+standing research-script requirement: **300 sampled decisions × 5 checks, all exact.** The §8 sanity
+gate reproduced the preserved exit-mechanics reference with 0 trade-SET mismatches.
+
+**A verification near-miss handled by TIGHTENING rather than widening.** The sizing check initially
+reported 26–30/30 across five arms, every discrepancy exactly £0.01. Diagnosed as a harness artefact,
+not an engine divergence — the engine LOGS balance rounded to 2dp and the sizing function ROUNDS its
+output to 2dp, so a half-penny boundary flips the last penny — and **proven** by reproducing every
+case exactly at a balance inside its own ±£0.005 rounding interval. The fix demands an EXACT match
+allowing only the known input imprecision, rather than a 1p tolerance that would have left the check
+permanently blind to a real 1p sizing error.
+
+**TWO METHOD FINDINGS OF STANDING RELEVANCE:**
+
+1. **The exact-key paired per-decision instrument is INAPPLICABLE IN PRINCIPLE to any pure
+   admission-count or admission-ordering change** — not merely underpowered. **Every shared trade is
+   byte-identical: 133/133, 57/57, 27/27 (Pool 2); 139/139, 75/75, 28/28 (Pool 1).** A slot cap changes
+   *which* positions are held, never how a held position behaves, so two arms admitting the same
+   ticker on the same date compute the same stop and realise the same `pnl_pct` by construction. The
+   instrument can only ever return "no difference". (Contrast the exit-mechanics sweep, where the
+   max-holding dial moved exit dates on shared keys and the instrument had something to measure.) Any
+   future study of this shape should plan the **disagreement-population comparison** as primary from
+   the start, plus a decision-level instrument valid at any trade count — **rank-at-admission** worked
+   well here and was monotone in both pools (median within-day percentile 4.65 -> 2.04 -> 1.52 ->
+   1.49%), confirming the arms expressed the intended behaviour and failed on outcome, not mechanism.
+2. **The single-ticker dominance guard PASSED for a reason unrelated to what it checks** — recorded as
+   instance 9 of the standing "check that reports clean for a reason unrelated to the thing it was
+   checking" class above. See that entry for the generalisation (ratio guards whose denominator is
+   inflated by the condition being detected).
+
+**Combined with the position-count study, capital deployment AND concentration are now both settled
+levers**: `per_trade_pct` cannot express concentration at all, and a hard slot count expresses it
+cleanly (deployment parity, monotone rank-at-admission, caps enforced exactly) and buys nothing
+detectable. This extends the existing "Capital deployment is not a usable lever in this system"
+synthesis rather than merely sitting alongside it.
+
+**Left open, deliberately.** (a) The drawdown *improvement* at n5/n3 is untested — it was a one-sided
+ceiling here, never a criterion, and promoting it now would be exactly the metric-switching
+pre-registration exists to prevent; a separately pre-registered study would need to solve the
+84-trade sample problem at the design stage. (b) No arm tested a book of *exactly* N positions (see
+the ~0.8N mechanism). (c) Nothing here speaks to N between 8 and baseline's 11.78, where n14 was
+uninformative.
+
+Per the walk-away sentence, the perturbation robustness test is earned only by an arm firing no
+clause; two clauses fire, so it was not run. No changes to `analysis/signals.py`,
+`analysis/decision.py`, `config.yaml`, or any live path. No database writes. Nothing adopted, nothing
+deployed.
 
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
 
