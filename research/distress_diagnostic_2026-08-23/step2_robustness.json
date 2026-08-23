@@ -1,0 +1,1236 @@
+{
+  "pool2_clean": {
+    "below_peak_pct": {
+      "spearman_full": 0.0538,
+      "n_full": 565,
+      "distress_direction": "higher = more distress",
+      "quartile_edges": [
+        -0.0,
+        8.0766,
+        14.3194,
+        23.9603,
+        73.0885
+      ],
+      "buckets_full": {
+        "Q1": {
+          "n": 142,
+          "win_pct": 28.87,
+          "mean": 26.111,
+          "median": -5.506,
+          "mean_ex_top1": 21.172
+        },
+        "Q2": {
+          "n": 141,
+          "win_pct": 19.15,
+          "mean": 8.072,
+          "median": -6.994,
+          "mean_ex_top1": 5.185
+        },
+        "Q3": {
+          "n": 141,
+          "win_pct": 32.62,
+          "mean": 9.072,
+          "median": -3.231,
+          "mean_ex_top1": 4.834
+        },
+        "Q4": {
+          "n": 141,
+          "win_pct": 34.75,
+          "mean": 6.75,
+          "median": -2.647,
+          "mean_ex_top1": 4.907
+        }
+      },
+      "excl_2008": {
+        "spearman": 0.0751,
+        "n": 421,
+        "buckets": {
+          "Q1": {
+            "n": 117,
+            "win_pct": 35.04,
+            "mean": 33.671,
+            "median": -4.83,
+            "mean_ex_top1": 27.732
+          },
+          "Q2": {
+            "n": 107,
+            "win_pct": 23.36,
+            "mean": 11.457,
+            "median": -6.023,
+            "mean_ex_top1": 7.675
+          },
+          "Q3": {
+            "n": 104,
+            "win_pct": 41.35,
+            "mean": 14.782,
+            "median": -1.336,
+            "mean_ex_top1": 9.077
+          },
+          "Q4": {
+            "n": 93,
+            "win_pct": 47.31,
+            "mean": 13.716,
+            "median": 0.0,
+            "mean_ex_top1": 10.987
+          }
+        }
+      },
+      "from_2015": {
+        "spearman": 0.0798,
+        "n": 226,
+        "buckets": {
+          "Q1": {
+            "n": 56,
+            "win_pct": 33.93,
+            "mean": 34.614,
+            "median": -4.853,
+            "mean_ex_top1": 22.105
+          },
+          "Q2": {
+            "n": 57,
+            "win_pct": 19.3,
+            "mean": 15.606,
+            "median": -8.905,
+            "mean_ex_top1": 8.521
+          },
+          "Q3": {
+            "n": 49,
+            "win_pct": 38.78,
+            "mean": 25.503,
+            "median": -3.231,
+            "mean_ex_top1": 13.486
+          },
+          "Q4": {
+            "n": 64,
+            "win_pct": 48.44,
+            "mean": 16.196,
+            "median": 0.0,
+            "mean_ex_top1": 12.25
+          }
+        }
+      },
+      "spearman_vs_momentum_at_entry": -0.2141,
+      "n_vs_momentum": 565,
+      "momentum_quartile_grid": {
+        "M1": {
+          "Q1": {
+            "n": 15,
+            "mean": -4.262
+          },
+          "Q2": {
+            "n": 41,
+            "mean": -0.169
+          },
+          "Q3": {
+            "n": 47,
+            "mean": -2.039
+          },
+          "Q4": {
+            "n": 39,
+            "mean": 1.422
+          }
+        },
+        "M2": {
+          "Q1": {
+            "n": 34,
+            "mean": 32.803
+          },
+          "Q2": {
+            "n": 23,
+            "mean": 25.565
+          },
+          "Q3": {
+            "n": 34,
+            "mean": 26.269
+          },
+          "Q4": {
+            "n": 50,
+            "mean": 5.893
+          }
+        },
+        "M3": {
+          "Q1": {
+            "n": 45,
+            "mean": 29.092
+          },
+          "Q2": {
+            "n": 37,
+            "mean": 4.633
+          },
+          "Q3": {
+            "n": 33,
+            "mean": 5.656
+          },
+          "Q4": {
+            "n": 26,
+            "mean": 14.863
+          }
+        },
+        "M4": {
+          "Q1": {
+            "n": 48,
+            "mean": 28.068
+          },
+          "Q2": {
+            "n": 40,
+            "mean": 9.642
+          },
+          "Q3": {
+            "n": 27,
+            "mean": 10.932
+          },
+          "Q4": {
+            "n": 26,
+            "mean": 8.278
+          }
+        }
+      },
+      "spearman_vs_entry_date": -0.0201,
+      "within_year_spearman": {
+        "2008": {
+          "n": 144,
+          "spearman": 0.153
+        },
+        "2009": {
+          "n": 131,
+          "spearman": 0.111
+        },
+        "2022": {
+          "n": 34,
+          "spearman": 0.0817
+        },
+        "2023": {
+          "n": 38,
+          "spearman": 0.0373
+        }
+      }
+    },
+    "down_up_vol_ratio": {
+      "spearman_full": -0.0646,
+      "n_full": 565,
+      "distress_direction": "higher = more distress",
+      "quartile_edges": [
+        0.3052,
+        0.8384,
+        1.0034,
+        1.1933,
+        3.2681
+      ],
+      "buckets_full": {
+        "Q1": {
+          "n": 142,
+          "win_pct": 27.46,
+          "mean": 21.23,
+          "median": -5.012,
+          "mean_ex_top1": 16.256
+        },
+        "Q2": {
+          "n": 141,
+          "win_pct": 29.79,
+          "mean": 10.234,
+          "median": -3.608,
+          "mean_ex_top1": 7.362
+        },
+        "Q3": {
+          "n": 141,
+          "win_pct": 28.37,
+          "mean": 10.056,
+          "median": -4.372,
+          "mean_ex_top1": 8.348
+        },
+        "Q4": {
+          "n": 141,
+          "win_pct": 29.79,
+          "mean": 8.52,
+          "median": -6.105,
+          "mean_ex_top1": 4.279
+        }
+      },
+      "excl_2008": {
+        "spearman": -0.0466,
+        "n": 421,
+        "buckets": {
+          "Q1": {
+            "n": 123,
+            "win_pct": 31.71,
+            "mean": 26.148,
+            "median": -3.705,
+            "mean_ex_top1": 20.44
+          },
+          "Q2": {
+            "n": 107,
+            "win_pct": 37.38,
+            "mean": 15.999,
+            "median": -1.424,
+            "mean_ex_top1": 12.26
+          },
+          "Q3": {
+            "n": 95,
+            "win_pct": 41.05,
+            "mean": 16.66,
+            "median": -1.45,
+            "mean_ex_top1": 14.186
+          },
+          "Q4": {
+            "n": 96,
+            "win_pct": 36.46,
+            "mean": 15.286,
+            "median": -5.58,
+            "mean_ex_top1": 9.107
+          }
+        }
+      },
+      "from_2015": {
+        "spearman": -0.019,
+        "n": 226,
+        "buckets": {
+          "Q1": {
+            "n": 47,
+            "win_pct": 29.79,
+            "mean": 32.215,
+            "median": -5.28,
+            "mean_ex_top1": 17.207
+          },
+          "Q2": {
+            "n": 50,
+            "win_pct": 32.0,
+            "mean": 20.78,
+            "median": -2.472,
+            "mean_ex_top1": 12.79
+          },
+          "Q3": {
+            "n": 58,
+            "win_pct": 43.1,
+            "mean": 20.918,
+            "median": 0.0,
+            "mean_ex_top1": 16.913
+          },
+          "Q4": {
+            "n": 71,
+            "win_pct": 35.21,
+            "mean": 18.982,
+            "median": -6.336,
+            "mean_ex_top1": 10.649
+          }
+        }
+      },
+      "spearman_vs_momentum_at_entry": 0.05,
+      "n_vs_momentum": 565,
+      "momentum_quartile_grid": {
+        "M1": {
+          "Q1": {
+            "n": 36,
+            "mean": -2.636
+          },
+          "Q2": {
+            "n": 49,
+            "mean": 0.272
+          },
+          "Q3": {
+            "n": 43,
+            "mean": -1.26
+          },
+          "Q4": {
+            "n": 14,
+            "mean": 1.752
+          }
+        },
+        "M2": {
+          "Q1": {
+            "n": 38,
+            "mean": 28.662
+          },
+          "Q2": {
+            "n": 23,
+            "mean": 2.342
+          },
+          "Q3": {
+            "n": 35,
+            "mean": 21.347
+          },
+          "Q4": {
+            "n": 45,
+            "mean": 22.243
+          }
+        },
+        "M3": {
+          "Q1": {
+            "n": 27,
+            "mean": 32.475
+          },
+          "Q2": {
+            "n": 32,
+            "mean": 17.613
+          },
+          "Q3": {
+            "n": 31,
+            "mean": 16.7
+          },
+          "Q4": {
+            "n": 51,
+            "mean": 1.873
+          }
+        },
+        "M4": {
+          "Q1": {
+            "n": 41,
+            "mean": 27.893
+          },
+          "Q2": {
+            "n": 37,
+            "mean": 21.95
+          },
+          "Q3": {
+            "n": 32,
+            "mean": 6.476
+          },
+          "Q4": {
+            "n": 31,
+            "mean": 2.592
+          }
+        }
+      },
+      "spearman_vs_entry_date": -0.003,
+      "within_year_spearman": {
+        "2008": {
+          "n": 144,
+          "spearman": 0.1495
+        },
+        "2009": {
+          "n": 131,
+          "spearman": 0.0881
+        },
+        "2022": {
+          "n": 34,
+          "spearman": -0.0319
+        },
+        "2023": {
+          "n": 38,
+          "spearman": 0.1251
+        }
+      }
+    },
+    "membership_tenure_td": {
+      "spearman_full": 0.2418,
+      "n_full": 565,
+      "distress_direction": "lower = more distress",
+      "quartile_edges": [
+        1.0,
+        336.0,
+        562.0,
+        1187.0,
+        4930.0
+      ],
+      "buckets_full": {
+        "Q1": {
+          "n": 143,
+          "win_pct": 25.87,
+          "mean": 8.875,
+          "median": -8.282,
+          "mean_ex_top1": 4.519
+        },
+        "Q2": {
+          "n": 141,
+          "win_pct": 14.18,
+          "mean": -1.597,
+          "median": -5.254,
+          "mean_ex_top1": -2.97
+        },
+        "Q3": {
+          "n": 140,
+          "win_pct": 34.29,
+          "mean": 7.065,
+          "median": -2.416,
+          "mean_ex_top1": 5.631
+        },
+        "Q4": {
+          "n": 141,
+          "win_pct": 41.13,
+          "mean": 35.771,
+          "median": -1.142,
+          "mean_ex_top1": 30.866
+        }
+      },
+      "excl_2008": {
+        "spearman": 0.1263,
+        "n": 421,
+        "buckets": {
+          "Q1": {
+            "n": 86,
+            "win_pct": 33.72,
+            "mean": 19.874,
+            "median": -7.804,
+            "mean_ex_top1": 12.727
+          },
+          "Q2": {
+            "n": 54,
+            "win_pct": 33.33,
+            "mean": 4.373,
+            "median": -2.436,
+            "mean_ex_top1": 1.995
+          },
+          "Q3": {
+            "n": 140,
+            "win_pct": 34.29,
+            "mean": 7.065,
+            "median": -2.416,
+            "mean_ex_top1": 5.631
+          },
+          "Q4": {
+            "n": 141,
+            "win_pct": 41.13,
+            "mean": 35.771,
+            "median": -1.142,
+            "mean_ex_top1": 30.866
+          }
+        }
+      },
+      "from_2015": {
+        "spearman": 0.2417,
+        "n": 226,
+        "buckets": {
+          "Q1": {
+            "n": 61,
+            "win_pct": 29.51,
+            "mean": 8.048,
+            "median": -8.194,
+            "mean_ex_top1": 3.769
+          },
+          "Q2": {
+            "n": 11,
+            "win_pct": 36.36,
+            "mean": 2.621,
+            "median": -6.036,
+            "mean_ex_top1": -3.803
+          },
+          "Q3": {
+            "n": 38,
+            "win_pct": 26.32,
+            "mean": 2.301,
+            "median": -6.556,
+            "mean_ex_top1": -0.123
+          },
+          "Q4": {
+            "n": 116,
+            "win_pct": 41.38,
+            "mean": 38.853,
+            "median": 0.0,
+            "mean_ex_top1": 32.907
+          }
+        }
+      },
+      "spearman_vs_momentum_at_entry": 0.0564,
+      "n_vs_momentum": 565,
+      "momentum_quartile_grid": {
+        "M1": {
+          "Q1": {
+            "n": 12,
+            "mean": -0.964
+          },
+          "Q2": {
+            "n": 79,
+            "mean": -4.295
+          },
+          "Q3": {
+            "n": 49,
+            "mean": 4.185
+          },
+          "Q4": {
+            "n": 2,
+            "mean": 17.29
+          }
+        },
+        "M2": {
+          "Q1": {
+            "n": 22,
+            "mean": 40.543
+          },
+          "Q2": {
+            "n": 50,
+            "mean": -0.074
+          },
+          "Q3": {
+            "n": 40,
+            "mean": 15.598
+          },
+          "Q4": {
+            "n": 29,
+            "mean": 47.549
+          }
+        },
+        "M3": {
+          "Q1": {
+            "n": 46,
+            "mean": -2.466
+          },
+          "Q2": {
+            "n": 8,
+            "mean": 13.191
+          },
+          "Q3": {
+            "n": 35,
+            "mean": 2.744
+          },
+          "Q4": {
+            "n": 52,
+            "mean": 37.798
+          }
+        },
+        "M4": {
+          "Q1": {
+            "n": 63,
+            "mean": 7.971
+          },
+          "Q2": {
+            "n": 4,
+            "mean": 3.064
+          },
+          "Q3": {
+            "n": 16,
+            "mean": 4.007
+          },
+          "Q4": {
+            "n": 58,
+            "mean": 28.703
+          }
+        }
+      },
+      "spearman_vs_entry_date": 0.4593,
+      "within_year_spearman": {
+        "2008": {
+          "n": 144,
+          "spearman": 0.2274
+        },
+        "2009": {
+          "n": 131,
+          "spearman": 0.1167
+        },
+        "2022": {
+          "n": 34,
+          "spearman": 0.1895
+        },
+        "2023": {
+          "n": 38,
+          "spearman": 0.3
+        }
+      }
+    }
+  },
+  "pool1": {
+    "below_peak_pct": {
+      "spearman_full": 0.0331,
+      "n_full": 522,
+      "distress_direction": "higher = more distress",
+      "quartile_edges": [
+        -0.0,
+        7.0072,
+        13.589,
+        22.4268,
+        64.07
+      ],
+      "buckets_full": {
+        "Q1": {
+          "n": 131,
+          "win_pct": 26.72,
+          "mean": 25.147,
+          "median": -5.548,
+          "mean_ex_top1": 19.782
+        },
+        "Q2": {
+          "n": 130,
+          "win_pct": 23.08,
+          "mean": 8.0,
+          "median": -5.719,
+          "mean_ex_top1": 4.895
+        },
+        "Q3": {
+          "n": 130,
+          "win_pct": 36.92,
+          "mean": 17.557,
+          "median": -2.866,
+          "mean_ex_top1": 13.024
+        },
+        "Q4": {
+          "n": 131,
+          "win_pct": 31.3,
+          "mean": 6.068,
+          "median": -3.425,
+          "mean_ex_top1": 4.077
+        }
+      },
+      "excl_2008": {
+        "spearman": 0.0812,
+        "n": 390,
+        "buckets": {
+          "Q1": {
+            "n": 108,
+            "win_pct": 32.41,
+            "mean": 32.442,
+            "median": -5.187,
+            "mean_ex_top1": 25.992
+          },
+          "Q2": {
+            "n": 96,
+            "win_pct": 29.17,
+            "mean": 11.661,
+            "median": -3.879,
+            "mean_ex_top1": 7.484
+          },
+          "Q3": {
+            "n": 100,
+            "win_pct": 45.0,
+            "mean": 24.806,
+            "median": -0.767,
+            "mean_ex_top1": 18.973
+          },
+          "Q4": {
+            "n": 86,
+            "win_pct": 44.19,
+            "mean": 12.777,
+            "median": 0.0,
+            "mean_ex_top1": 9.812
+          }
+        }
+      },
+      "from_2015": {
+        "spearman": 0.0744,
+        "n": 218,
+        "buckets": {
+          "Q1": {
+            "n": 54,
+            "win_pct": 27.78,
+            "mean": 33.612,
+            "median": -5.395,
+            "mean_ex_top1": 20.612
+          },
+          "Q2": {
+            "n": 50,
+            "win_pct": 26.0,
+            "mean": 16.244,
+            "median": -7.614,
+            "mean_ex_top1": 8.239
+          },
+          "Q3": {
+            "n": 52,
+            "win_pct": 42.31,
+            "mean": 35.681,
+            "median": -2.299,
+            "mean_ex_top1": 24.57
+          },
+          "Q4": {
+            "n": 62,
+            "win_pct": 40.32,
+            "mean": 15.656,
+            "median": 0.0,
+            "mean_ex_top1": 11.571
+          }
+        }
+      },
+      "spearman_vs_momentum_at_entry": -0.1639,
+      "n_vs_momentum": 522,
+      "momentum_quartile_grid": {
+        "M1": {
+          "Q1": {
+            "n": 20,
+            "mean": 1.565
+          },
+          "Q2": {
+            "n": 40,
+            "mean": -2.548
+          },
+          "Q3": {
+            "n": 36,
+            "mean": 2.834
+          },
+          "Q4": {
+            "n": 35,
+            "mean": -1.064
+          }
+        },
+        "M2": {
+          "Q1": {
+            "n": 27,
+            "mean": 36.105
+          },
+          "Q2": {
+            "n": 24,
+            "mean": 11.083
+          },
+          "Q3": {
+            "n": 31,
+            "mean": 24.125
+          },
+          "Q4": {
+            "n": 48,
+            "mean": 12.078
+          }
+        },
+        "M3": {
+          "Q1": {
+            "n": 36,
+            "mean": 38.212
+          },
+          "Q2": {
+            "n": 35,
+            "mean": -0.261
+          },
+          "Q3": {
+            "n": 36,
+            "mean": 31.447
+          },
+          "Q4": {
+            "n": 23,
+            "mean": -1.056
+          }
+        },
+        "M4": {
+          "Q1": {
+            "n": 48,
+            "mean": 19.009
+          },
+          "Q2": {
+            "n": 31,
+            "mean": 28.548
+          },
+          "Q3": {
+            "n": 27,
+            "mean": 11.127
+          },
+          "Q4": {
+            "n": 25,
+            "mean": 11.066
+          }
+        }
+      },
+      "spearman_vs_entry_date": 0.0071,
+      "within_year_spearman": {
+        "2008": {
+          "n": 132,
+          "spearman": 0.0831
+        },
+        "2009": {
+          "n": 125,
+          "spearman": 0.1568
+        },
+        "2022": {
+          "n": 30,
+          "spearman": -0.0042
+        },
+        "2023": {
+          "n": 31,
+          "spearman": -0.1637
+        }
+      }
+    },
+    "down_up_vol_ratio": {
+      "spearman_full": -0.0651,
+      "n_full": 522,
+      "distress_direction": "higher = more distress",
+      "quartile_edges": [
+        0.3052,
+        0.8243,
+        0.9917,
+        1.1852,
+        3.1748
+      ],
+      "buckets_full": {
+        "Q1": {
+          "n": 131,
+          "win_pct": 31.3,
+          "mean": 22.656,
+          "median": -3.231,
+          "mean_ex_top1": 17.272
+        },
+        "Q2": {
+          "n": 130,
+          "win_pct": 27.69,
+          "mean": 10.652,
+          "median": -3.733,
+          "mean_ex_top1": 8.121
+        },
+        "Q3": {
+          "n": 130,
+          "win_pct": 24.62,
+          "mean": 8.847,
+          "median": -5.768,
+          "mean_ex_top1": 5.749
+        },
+        "Q4": {
+          "n": 131,
+          "win_pct": 34.35,
+          "mean": 14.569,
+          "median": -5.154,
+          "mean_ex_top1": 10.048
+        }
+      },
+      "excl_2008": {
+        "spearman": 0.002,
+        "n": 390,
+        "buckets": {
+          "Q1": {
+            "n": 117,
+            "win_pct": 35.04,
+            "mean": 26.537,
+            "median": -2.124,
+            "mean_ex_top1": 20.537
+          },
+          "Q2": {
+            "n": 98,
+            "win_pct": 35.71,
+            "mean": 16.505,
+            "median": -1.8,
+            "mean_ex_top1": 13.199
+          },
+          "Q3": {
+            "n": 88,
+            "win_pct": 32.95,
+            "mean": 14.55,
+            "median": -2.919,
+            "mean_ex_top1": 10.022
+          },
+          "Q4": {
+            "n": 87,
+            "win_pct": 47.13,
+            "mean": 25.285,
+            "median": -1.028,
+            "mean_ex_top1": 18.576
+          }
+        }
+      },
+      "from_2015": {
+        "spearman": 0.0216,
+        "n": 218,
+        "buckets": {
+          "Q1": {
+            "n": 44,
+            "win_pct": 27.27,
+            "mean": 33.417,
+            "median": -4.214,
+            "mean_ex_top1": 17.389
+          },
+          "Q2": {
+            "n": 50,
+            "win_pct": 30.0,
+            "mean": 24.353,
+            "median": -2.74,
+            "mean_ex_top1": 17.968
+          },
+          "Q3": {
+            "n": 57,
+            "win_pct": 28.07,
+            "mean": 14.22,
+            "median": -5.749,
+            "mean_ex_top1": 7.179
+          },
+          "Q4": {
+            "n": 67,
+            "win_pct": 47.76,
+            "mean": 29.176,
+            "median": -2.687,
+            "mean_ex_top1": 20.492
+          }
+        }
+      },
+      "spearman_vs_momentum_at_entry": 0.048,
+      "n_vs_momentum": 522,
+      "momentum_quartile_grid": {
+        "M1": {
+          "Q1": {
+            "n": 36,
+            "mean": -2.462
+          },
+          "Q2": {
+            "n": 46,
+            "mean": 3.097
+          },
+          "Q3": {
+            "n": 31,
+            "mean": -3.471
+          },
+          "Q4": {
+            "n": 18,
+            "mean": 2.662
+          }
+        },
+        "M2": {
+          "Q1": {
+            "n": 32,
+            "mean": 35.126
+          },
+          "Q2": {
+            "n": 26,
+            "mean": 0.943
+          },
+          "Q3": {
+            "n": 26,
+            "mean": 9.065
+          },
+          "Q4": {
+            "n": 46,
+            "mean": 25.744
+          }
+        },
+        "M3": {
+          "Q1": {
+            "n": 23,
+            "mean": 43.846
+          },
+          "Q2": {
+            "n": 28,
+            "mean": 23.599
+          },
+          "Q3": {
+            "n": 37,
+            "mean": 16.599
+          },
+          "Q4": {
+            "n": 42,
+            "mean": 4.546
+          }
+        },
+        "M4": {
+          "Q1": {
+            "n": 40,
+            "mean": 23.103
+          },
+          "Q2": {
+            "n": 30,
+            "mean": 18.57
+          },
+          "Q3": {
+            "n": 36,
+            "mean": 11.33
+          },
+          "Q4": {
+            "n": 25,
+            "mean": 19.417
+          }
+        }
+      },
+      "spearman_vs_entry_date": -0.0015,
+      "within_year_spearman": {
+        "2008": {
+          "n": 132,
+          "spearman": 0.0315
+        },
+        "2009": {
+          "n": 125,
+          "spearman": 0.0329
+        },
+        "2022": {
+          "n": 30,
+          "spearman": 0.1115
+        },
+        "2023": {
+          "n": 31,
+          "spearman": -0.0706
+        }
+      }
+    },
+    "membership_tenure_td": {
+      "spearman_full": 0.2822,
+      "n_full": 522,
+      "distress_direction": "lower = more distress",
+      "quartile_edges": [
+        1.0,
+        398.5,
+        585.5,
+        1441.5,
+        4930.0
+      ],
+      "buckets_full": {
+        "Q1": {
+          "n": 131,
+          "win_pct": 22.9,
+          "mean": 10.709,
+          "median": -8.325,
+          "mean_ex_top1": 5.965
+        },
+        "Q2": {
+          "n": 130,
+          "win_pct": 10.0,
+          "mean": -2.879,
+          "median": -5.437,
+          "mean_ex_top1": -4.378
+        },
+        "Q3": {
+          "n": 130,
+          "win_pct": 43.85,
+          "mean": 11.253,
+          "median": -1.077,
+          "mean_ex_top1": 9.539
+        },
+        "Q4": {
+          "n": 131,
+          "win_pct": 41.22,
+          "mean": 37.556,
+          "median": 0.0,
+          "mean_ex_top1": 32.287
+        }
+      },
+      "excl_2008": {
+        "spearman": 0.1327,
+        "n": 390,
+        "buckets": {
+          "Q1": {
+            "n": 74,
+            "win_pct": 32.43,
+            "mean": 24.982,
+            "median": -4.814,
+            "mean_ex_top1": 16.73
+          },
+          "Q2": {
+            "n": 55,
+            "win_pct": 20.0,
+            "mean": -0.524,
+            "median": -3.705,
+            "mean_ex_top1": -2.214
+          },
+          "Q3": {
+            "n": 130,
+            "win_pct": 43.85,
+            "mean": 11.253,
+            "median": -1.077,
+            "mean_ex_top1": 9.539
+          },
+          "Q4": {
+            "n": 131,
+            "win_pct": 41.22,
+            "mean": 37.556,
+            "median": 0.0,
+            "mean_ex_top1": 32.287
+          }
+        }
+      },
+      "from_2015": {
+        "spearman": 0.194,
+        "n": 218,
+        "buckets": {
+          "Q1": {
+            "n": 51,
+            "win_pct": 29.41,
+            "mean": 16.79,
+            "median": -8.863,
+            "mean_ex_top1": 11.83
+          },
+          "Q2": {
+            "n": 11,
+            "win_pct": 18.18,
+            "mean": -1.31,
+            "median": -8.272,
+            "mean_ex_top1": -8.127
+          },
+          "Q3": {
+            "n": 32,
+            "win_pct": 31.25,
+            "mean": 5.468,
+            "median": -4.832,
+            "mean_ex_top1": 2.927
+          },
+          "Q4": {
+            "n": 124,
+            "win_pct": 38.71,
+            "mean": 35.778,
+            "median": -1.411,
+            "mean_ex_top1": 30.194
+          }
+        }
+      },
+      "spearman_vs_momentum_at_entry": 0.0881,
+      "n_vs_momentum": 522,
+      "momentum_quartile_grid": {
+        "M1": {
+          "Q1": {
+            "n": 9,
+            "mean": -2.8
+          },
+          "Q2": {
+            "n": 75,
+            "mean": -4.033
+          },
+          "Q3": {
+            "n": 41,
+            "mean": 6.495
+          },
+          "Q4": {
+            "n": 6,
+            "mean": 9.261
+          }
+        },
+        "M2": {
+          "Q1": {
+            "n": 31,
+            "mean": 27.571
+          },
+          "Q2": {
+            "n": 37,
+            "mean": -3.144
+          },
+          "Q3": {
+            "n": 34,
+            "mean": 18.069
+          },
+          "Q4": {
+            "n": 28,
+            "mean": 43.419
+          }
+        },
+        "M3": {
+          "Q1": {
+            "n": 42,
+            "mean": -1.198
+          },
+          "Q2": {
+            "n": 11,
+            "mean": 9.948
+          },
+          "Q3": {
+            "n": 28,
+            "mean": 21.681
+          },
+          "Q4": {
+            "n": 49,
+            "mean": 36.9
+          }
+        },
+        "M4": {
+          "Q1": {
+            "n": 49,
+            "mean": 12.729
+          },
+          "Q2": {
+            "n": 7,
+            "mean": -9.262
+          },
+          "Q3": {
+            "n": 27,
+            "mean": -0.92
+          },
+          "Q4": {
+            "n": 48,
+            "mean": 38.343
+          }
+        }
+      },
+      "spearman_vs_entry_date": 0.5053,
+      "within_year_spearman": {
+        "2008": {
+          "n": 132,
+          "spearman": 0.2997
+        },
+        "2009": {
+          "n": 125,
+          "spearman": 0.138
+        },
+        "2022": {
+          "n": 30,
+          "spearman": 0.265
+        },
+        "2023": {
+          "n": 31,
+          "spearman": 0.2786
+        }
+      }
+    }
+  }
+}

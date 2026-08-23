@@ -1,0 +1,48 @@
+{
+  "pool2_clean": {
+    "pct_truncated": 63.7,
+    "truncated_only": {
+      "n": 360,
+      "spearman_vs_pnl": 0.2759,
+      "spearman_vs_entry_date": 0.8937,
+      "median_tenure": 583.5,
+      "mean_pnl": 11.33,
+      "win_pct": 26.11
+    },
+    "genuine_tenure_only": {
+      "n": 205,
+      "spearman_vs_pnl": 0.2702,
+      "spearman_vs_entry_date": 0.266,
+      "median_tenure": 417.0,
+      "mean_pnl": 14.63,
+      "win_pct": 33.66
+    },
+    "calendar_control_days_since_2007": {
+      "spearman_vs_pnl": 0.1839,
+      "n": 565
+    }
+  },
+  "pool1": {
+    "pct_truncated": 66.3,
+    "truncated_only": {
+      "n": 346,
+      "spearman_vs_pnl": 0.3531,
+      "spearman_vs_entry_date": 0.8924,
+      "median_tenure": 609.0,
+      "mean_pnl": 11.48,
+      "win_pct": 28.32
+    },
+    "genuine_tenure_only": {
+      "n": 176,
+      "spearman_vs_pnl": 0.2396,
+      "spearman_vs_entry_date": 0.2631,
+      "median_tenure": 469.0,
+      "mean_pnl": 19.54,
+      "win_pct": 31.82
+    },
+    "calendar_control_days_since_2007": {
+      "spearman_vs_pnl": 0.2259,
+      "n": 522
+    }
+  }
+}

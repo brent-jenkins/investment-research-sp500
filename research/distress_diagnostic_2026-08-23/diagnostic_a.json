@@ -1,0 +1,625 @@
+{
+  "price_data_max_date": "2026-08-07",
+  "pools": {
+    "pool2_clean": {
+      "n_trades": 565,
+      "n_winners": 163,
+      "n_losers": 402,
+      "total_gains_gbp": 449404.94,
+      "total_losses_gbp": 100856.21,
+      "proxies": {
+        "removal_3m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 1,
+          "fires_pct_of_trades": 0.18,
+          "fires_pct_of_winners": 0.61,
+          "fires_pct_of_losers": 0.0,
+          "share_of_total_losses_pct": -0.0,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": 5.32
+        },
+        "removal_6m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 3,
+          "fires_pct_of_trades": 0.53,
+          "fires_pct_of_winners": 0.61,
+          "fires_pct_of_losers": 0.5,
+          "share_of_total_losses_pct": 0.3,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": -297.97
+        },
+        "removal_12m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 9,
+          "fires_pct_of_trades": 1.59,
+          "fires_pct_of_winners": 1.23,
+          "fires_pct_of_losers": 1.74,
+          "share_of_total_losses_pct": 2.57,
+          "share_of_total_gains_pct": 0.01,
+          "net_pnl_of_flagged_gbp": -2535.16
+        },
+        "data_stop_12m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 1,
+          "fires_pct_of_trades": 0.18,
+          "fires_pct_of_winners": 0.0,
+          "fires_pct_of_losers": 0.25,
+          "share_of_total_losses_pct": 0.24,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": -246.31
+        },
+        "vol20_ann": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: vol20_ann >= 71.7125",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 54.6445,
+            "median": 49.3767,
+            "p25": 32.339,
+            "p75": 64.2852
+          },
+          "losers": {
+            "n": 402,
+            "mean": 52.8852,
+            "median": 46.121,
+            "p25": 34.193,
+            "p75": 64.7176
+          },
+          "spearman_vs_pnl_pct": 0.0127,
+          "spearman_n": 565,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 20.86,
+          "fires_pct_of_losers": 19.65,
+          "share_of_total_losses_pct": 13.63,
+          "share_of_total_gains_pct": 25.52,
+          "net_pnl_of_flagged_gbp": 100953.84
+        },
+        "vol60_ann": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: vol60_ann >= 67.2527",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 50.6698,
+            "median": 48.5443,
+            "p25": 35.8924,
+            "p75": 62.3412
+          },
+          "losers": {
+            "n": 402,
+            "mean": 52.6309,
+            "median": 48.252,
+            "p25": 36.7659,
+            "p75": 64.5341
+          },
+          "spearman_vs_pnl_pct": -0.0108,
+          "spearman_n": 565,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 18.4,
+          "fires_pct_of_losers": 20.65,
+          "share_of_total_losses_pct": 13.54,
+          "share_of_total_gains_pct": 26.17,
+          "net_pnl_of_flagged_gbp": 103971.39
+        },
+        "vol_change": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: vol_change >= 0.2218",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 0.0582,
+            "median": 0.0204,
+            "p25": -0.1458,
+            "p75": 0.2353
+          },
+          "losers": {
+            "n": 402,
+            "mean": 0.0069,
+            "median": -0.0102,
+            "p25": -0.1578,
+            "p75": 0.1452
+          },
+          "spearman_vs_pnl_pct": 0.0366,
+          "spearman_n": 565,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 27.61,
+          "fires_pct_of_losers": 16.92,
+          "share_of_total_losses_pct": 18.98,
+          "share_of_total_gains_pct": 22.32,
+          "net_pnl_of_flagged_gbp": 81168.71
+        },
+        "below_peak_pct": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: below_peak_pct >= 25.9472",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 18.3341,
+            "median": 17.4545,
+            "p25": 8.1232,
+            "p75": 26.7058
+          },
+          "losers": {
+            "n": 402,
+            "mean": 16.0203,
+            "median": 13.667,
+            "p25": 8.0869,
+            "p75": 21.7892
+          },
+          "spearman_vs_pnl_pct": 0.0538,
+          "spearman_n": 565,
+          "verdict": "CLEARS the 0.05 threshold",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 26.38,
+          "fires_pct_of_losers": 17.41,
+          "share_of_total_losses_pct": 16.2,
+          "share_of_total_gains_pct": 18.05,
+          "net_pnl_of_flagged_gbp": 64794.09
+        },
+        "worst_day_60": {
+          "group": "II (actionable)",
+          "flag_rule": "bottom quintile: worst_day_60 <= -12.5310",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": -8.9144,
+            "median": -8.0601,
+            "p25": -11.1175,
+            "p75": -5.3408
+          },
+          "losers": {
+            "n": 402,
+            "mean": -9.0329,
+            "median": -7.5946,
+            "p25": -11.4854,
+            "p75": -5.4548
+          },
+          "spearman_vs_pnl_pct": 0.0229,
+          "spearman_n": 565,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 115,
+          "fires_pct_of_trades": 20.35,
+          "fires_pct_of_winners": 20.25,
+          "fires_pct_of_losers": 20.4,
+          "share_of_total_losses_pct": 17.52,
+          "share_of_total_gains_pct": 19.26,
+          "net_pnl_of_flagged_gbp": 68896.09
+        },
+        "down_up_vol_ratio": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: down_up_vol_ratio >= 1.2390",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 1.0554,
+            "median": 1.0107,
+            "p25": 0.8473,
+            "p75": 1.1989
+          },
+          "losers": {
+            "n": 402,
+            "mean": 1.0402,
+            "median": 1.0022,
+            "p25": 0.8377,
+            "p75": 1.1916
+          },
+          "spearman_vs_pnl_pct": -0.0646,
+          "spearman_n": 565,
+          "verdict": "CLEARS the 0.05 threshold",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 20.86,
+          "fires_pct_of_losers": 19.65,
+          "share_of_total_losses_pct": 27.6,
+          "share_of_total_gains_pct": 17.79,
+          "net_pnl_of_flagged_gbp": 52125.85
+        },
+        "entry_price_usd": {
+          "group": "II (actionable)",
+          "flag_rule": "bottom quintile: entry_price_usd <= 17.5407",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 79.8218,
+            "median": 42.21,
+            "p25": 21.7725,
+            "p75": 83.5175
+          },
+          "losers": {
+            "n": 402,
+            "mean": 82.9968,
+            "median": 38.0,
+            "p25": 21.1581,
+            "p75": 77.4425
+          },
+          "spearman_vs_pnl_pct": -0.0363,
+          "spearman_n": 565,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 20.25,
+          "fires_pct_of_losers": 19.9,
+          "share_of_total_losses_pct": 12.09,
+          "share_of_total_gains_pct": 14.31,
+          "net_pnl_of_flagged_gbp": 52129.11
+        },
+        "volume_ratio": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: volume_ratio >= 1.3245",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 1.0999,
+            "median": 1.0145,
+            "p25": 0.8024,
+            "p75": 1.2339
+          },
+          "losers": {
+            "n": 402,
+            "mean": 1.0624,
+            "median": 0.9875,
+            "p25": 0.819,
+            "p75": 1.2508
+          },
+          "spearman_vs_pnl_pct": 0.0174,
+          "spearman_n": 565,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 113,
+          "fires_pct_of_trades": 20.0,
+          "fires_pct_of_winners": 19.63,
+          "fires_pct_of_losers": 20.15,
+          "share_of_total_losses_pct": 18.37,
+          "share_of_total_gains_pct": 19.18,
+          "net_pnl_of_flagged_gbp": 67671.11
+        },
+        "membership_tenure_td": {
+          "group": "II (actionable)",
+          "flag_rule": "bottom quintile: membership_tenure_td <= 257.0000",
+          "n_defined": 565,
+          "winners": {
+            "n": 163,
+            "mean": 1304.6012,
+            "median": 661.0,
+            "p25": 412.0,
+            "p75": 2004.5
+          },
+          "losers": {
+            "n": 402,
+            "mean": 919.4328,
+            "median": 504.0,
+            "p25": 278.75,
+            "p75": 864.0
+          },
+          "spearman_vs_pnl_pct": 0.2418,
+          "spearman_n": 565,
+          "verdict": "CLEARS the 0.05 threshold",
+          "fires_n": 114,
+          "fires_pct_of_trades": 20.18,
+          "fires_pct_of_winners": 17.18,
+          "fires_pct_of_losers": 21.39,
+          "share_of_total_losses_pct": 33.75,
+          "share_of_total_gains_pct": 16.93,
+          "net_pnl_of_flagged_gbp": 42024.83
+        }
+      }
+    },
+    "pool1": {
+      "n_trades": 522,
+      "n_winners": 154,
+      "n_losers": 368,
+      "total_gains_gbp": 526285.48,
+      "total_losses_gbp": 97176.91,
+      "proxies": {
+        "removal_3m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 1,
+          "fires_pct_of_trades": 0.19,
+          "fires_pct_of_winners": 0.0,
+          "fires_pct_of_losers": 0.27,
+          "share_of_total_losses_pct": 0.09,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": -87.88
+        },
+        "removal_6m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 1,
+          "fires_pct_of_trades": 0.19,
+          "fires_pct_of_winners": 0.0,
+          "fires_pct_of_losers": 0.27,
+          "share_of_total_losses_pct": 0.09,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": -87.88
+        },
+        "removal_12m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 2,
+          "fires_pct_of_trades": 0.38,
+          "fires_pct_of_winners": 0.0,
+          "fires_pct_of_losers": 0.54,
+          "share_of_total_losses_pct": 0.28,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": -271.03
+        },
+        "data_stop_12m": {
+          "group": "I (diagnostic only)",
+          "fires_n": 0,
+          "fires_pct_of_trades": 0.0,
+          "fires_pct_of_winners": 0.0,
+          "fires_pct_of_losers": 0.0,
+          "share_of_total_losses_pct": -0.0,
+          "share_of_total_gains_pct": 0.0,
+          "net_pnl_of_flagged_gbp": 0.0
+        },
+        "vol20_ann": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: vol20_ann >= 66.5605",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 49.937,
+            "median": 44.02,
+            "p25": 30.1867,
+            "p75": 59.355
+          },
+          "losers": {
+            "n": 368,
+            "mean": 50.3688,
+            "median": 44.0196,
+            "p25": 32.3351,
+            "p75": 61.5983
+          },
+          "spearman_vs_pnl_pct": -0.044,
+          "spearman_n": 522,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 16.88,
+          "fires_pct_of_losers": 21.47,
+          "share_of_total_losses_pct": 21.0,
+          "share_of_total_gains_pct": 31.69,
+          "net_pnl_of_flagged_gbp": 146376.85
+        },
+        "vol60_ann": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: vol60_ann >= 64.9421",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 47.2471,
+            "median": 44.7238,
+            "p25": 32.8483,
+            "p75": 59.2763
+          },
+          "losers": {
+            "n": 368,
+            "mean": 49.8231,
+            "median": 45.5869,
+            "p25": 33.9433,
+            "p75": 60.4866
+          },
+          "spearman_vs_pnl_pct": -0.0382,
+          "spearman_n": 522,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 17.53,
+          "fires_pct_of_losers": 21.2,
+          "share_of_total_losses_pct": 15.24,
+          "share_of_total_gains_pct": 27.07,
+          "net_pnl_of_flagged_gbp": 127641.25
+        },
+        "vol_change": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: vol_change >= 0.2308",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 0.0489,
+            "median": 0.0079,
+            "p25": -0.1757,
+            "p75": 0.2584
+          },
+          "losers": {
+            "n": 368,
+            "mean": 0.0118,
+            "median": -0.0005,
+            "p25": -0.1622,
+            "p75": 0.1506
+          },
+          "spearman_vs_pnl_pct": -0.0136,
+          "spearman_n": 522,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 26.62,
+          "fires_pct_of_losers": 17.39,
+          "share_of_total_losses_pct": 19.63,
+          "share_of_total_gains_pct": 32.36,
+          "net_pnl_of_flagged_gbp": 151228.46
+        },
+        "below_peak_pct": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: below_peak_pct >= 25.3614",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 16.5063,
+            "median": 15.3297,
+            "p25": 7.9775,
+            "p75": 23.1858
+          },
+          "losers": {
+            "n": 368,
+            "mean": 14.9578,
+            "median": 12.8711,
+            "p25": 6.7094,
+            "p75": 21.5044
+          },
+          "spearman_vs_pnl_pct": 0.0331,
+          "spearman_n": 522,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 21.43,
+          "fires_pct_of_losers": 19.57,
+          "share_of_total_losses_pct": 19.85,
+          "share_of_total_gains_pct": 14.78,
+          "net_pnl_of_flagged_gbp": 58492.58
+        },
+        "worst_day_60": {
+          "group": "II (actionable)",
+          "flag_rule": "bottom quintile: worst_day_60 <= -11.6818",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": -8.2679,
+            "median": -6.5357,
+            "p25": -9.9879,
+            "p75": -5.0109
+          },
+          "losers": {
+            "n": 368,
+            "mean": -8.4537,
+            "median": -7.2192,
+            "p25": -11.1788,
+            "p75": -5.044
+          },
+          "spearman_vs_pnl_pct": 0.0593,
+          "spearman_n": 522,
+          "verdict": "CLEARS the 0.05 threshold",
+          "fires_n": 107,
+          "fires_pct_of_trades": 20.5,
+          "fires_pct_of_winners": 20.13,
+          "fires_pct_of_losers": 20.65,
+          "share_of_total_losses_pct": 20.56,
+          "share_of_total_gains_pct": 24.53,
+          "net_pnl_of_flagged_gbp": 109133.58
+        },
+        "down_up_vol_ratio": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: down_up_vol_ratio >= 1.2262",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 1.0507,
+            "median": 0.9904,
+            "p25": 0.8122,
+            "p75": 1.221
+          },
+          "losers": {
+            "n": 368,
+            "mean": 1.0362,
+            "median": 0.9933,
+            "p25": 0.8295,
+            "p75": 1.177
+          },
+          "spearman_vs_pnl_pct": -0.0651,
+          "spearman_n": 522,
+          "verdict": "CLEARS the 0.05 threshold",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 24.68,
+          "fires_pct_of_losers": 18.21,
+          "share_of_total_losses_pct": 24.84,
+          "share_of_total_gains_pct": 25.03,
+          "net_pnl_of_flagged_gbp": 107564.35
+        },
+        "entry_price_usd": {
+          "group": "II (actionable)",
+          "flag_rule": "bottom quintile: entry_price_usd <= 18.7637",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 97.9313,
+            "median": 37.4655,
+            "p25": 22.3713,
+            "p75": 80.3425
+          },
+          "losers": {
+            "n": 368,
+            "mean": 80.6955,
+            "median": 41.66,
+            "p25": 23.7743,
+            "p75": 76.4225
+          },
+          "spearman_vs_pnl_pct": -0.0265,
+          "spearman_n": 522,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 22.73,
+          "fires_pct_of_losers": 19.02,
+          "share_of_total_losses_pct": 14.65,
+          "share_of_total_gains_pct": 13.25,
+          "net_pnl_of_flagged_gbp": 55476.08
+        },
+        "volume_ratio": {
+          "group": "II (actionable)",
+          "flag_rule": "top quintile: volume_ratio >= 1.2968",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 1.0677,
+            "median": 0.9717,
+            "p25": 0.7851,
+            "p75": 1.2214
+          },
+          "losers": {
+            "n": 368,
+            "mean": 1.0457,
+            "median": 0.9934,
+            "p25": 0.8056,
+            "p75": 1.2489
+          },
+          "spearman_vs_pnl_pct": -0.0327,
+          "spearman_n": 522,
+          "verdict": "NULL (|rho| < 0.05)",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 20.13,
+          "fires_pct_of_losers": 20.11,
+          "share_of_total_losses_pct": 18.09,
+          "share_of_total_gains_pct": 24.25,
+          "net_pnl_of_flagged_gbp": 110029.84
+        },
+        "membership_tenure_td": {
+          "group": "II (actionable)",
+          "flag_rule": "bottom quintile: membership_tenure_td <= 263.2000",
+          "n_defined": 522,
+          "winners": {
+            "n": 154,
+            "mean": 1323.1818,
+            "median": 715.0,
+            "p25": 555.0,
+            "p75": 2106.5
+          },
+          "losers": {
+            "n": 368,
+            "mean": 984.7092,
+            "median": 504.0,
+            "p25": 324.75,
+            "p75": 867.5
+          },
+          "spearman_vs_pnl_pct": 0.2822,
+          "spearman_n": 522,
+          "verdict": "CLEARS the 0.05 threshold",
+          "fires_n": 105,
+          "fires_pct_of_trades": 20.11,
+          "fires_pct_of_winners": 14.29,
+          "fires_pct_of_losers": 22.55,
+          "share_of_total_losses_pct": 34.16,
+          "share_of_total_gains_pct": 17.78,
+          "net_pnl_of_flagged_gbp": 60359.1
+        }
+      }
+    }
+  }
+}
