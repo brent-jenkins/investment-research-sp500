@@ -3973,6 +3973,126 @@ validation. Recording all ~300 gate-passing candidates nightly (rather than only
 gives it both a treated and a control population, and is the only reason the timeline is years rather
 than decades. **It is recorded so the option exists, not because it is close to usable.**
 
+### Roster coverage accelerated to 99.6% in one supervised pass — `catchup_fundamentals.py` (2026-08-23)
+
+**The ~20-night first pass over the roster was artificial delay rather than inherent, and it is now
+closed.** Until the roster was complete the nightly `candidate_fundamentals_snapshot` linked only the
+fraction of each night's candidates falling inside the covered alphabetical prefix, climbing 9.4% →
+50.4% over seven sessions. `catchup_fundamentals.py` (repo root, operator-driven like
+`prewarm_sector_data.py`, **deliberately NOT wired into `data/scheduler.py`**) loops the existing
+`refresh_fundamentals_chunk()` until the roster stops shrinking. **Nothing about the nightly rotation
+changed** — it now simply finds nothing new to fetch and spends its budget refreshing the oldest rows,
+which is its steady-state job anyway. No config change, no scheduler change, no trading-logic change,
+and no backfill.
+
+**Run on the SERVER against the real database, not locally.** The output is a database MUTATION, not a
+computed result, so a local run would have needed a separate apply-and-verify step — the gap that left
+CLAUDE.md asserting a data-quality state production did not have for a full day (see "A research
+script whose output is a database mutation needs an explicit, separate production-apply step").
+Running it where the real database lives removes the transfer step rather than adding a second thing
+to verify. Executed on a **Sunday afternoon**, when `scheduled_eod`, `membership_refresh`,
+`stock_order_submission` and `market_hours_check` are all day-gated off — **zero yfinance
+contention**, the only genuine overlap risk. The script additionally refuses to START a chunk inside
+21:00-22:00 UTC or 14:15-14:45 UTC, waiting rather than aborting, so it is safe to leave running on a
+weekday.
+
+**Execution: 12 chunks (one bounded trial, then 11), 300 attempted, 276 rows written, 24 no-data, 244
+newly covered, ~17.4 minutes at ~3.5s/ticker.** Never-fetched went 246 → 2. The rate limit was
+inherited from `refresh_fundamentals_chunk()`, never reduced, and nothing was parallelised.
+
+**VERIFIED BY DIRECT QUERY ON A FRESH READ-ONLY CONNECTION, not from the script's own summary:**
+
+| check | result |
+|---|---|
+| roster coverage | **501 of 503 live candidates (99.6%)**, up from 257 (51.1%); 0 rows for tickers outside the pool |
+| rows | 501 total, **exactly 1 per ticker** — the append-on-change rule wrote no duplicates |
+| provenance | **`point_in_time` 501/501 — PASS.** No backfill has run and none should be inferred |
+| statement type | **`quarterly` 501/501 — PASS** |
+| `candidate_fundamentals_snapshot` | **2,016 rows, unchanged** — this pass touched only `ticker_fundamentals` |
+
+**Reporting-period distribution — 5 distinct periods, and the spread is fiscal-calendar variation, not
+staleness variation**: 2026-06-30 (425), 2026-04-30 (42), 2026-05-31 (18), 2026-03-31 (15),
+2025-11-30 (1). Field presence 93.0%–100% across the eight stored fields (`shares_outstanding` 100%,
+`revenue`/`net_income` 93.0% — the lowest, as the coverage probe predicted).
+
+**Staleness, days**: reporting lag (period end → `fetched_at`) min 43 / median **54** / p90 107 / max
+262; total staleness (period end → today) min 54 / median **54** / p90 115 / max 266. **The two medians
+coinciding is the substantive result of this pass**: the ~20-night capture lag that previously widened
+the second figure is gone, so the combined figure the entry above requires any future study to quote
+collapses from "roughly 43 + 20 ≈ two months" to essentially the reporting lag alone. The tail is one
+named outlier — **`FDXF` at a 2025-11-30 reporting period, 266 days stale**, a 2026 spinoff with
+little filing history, not a fetch failure.
+
+**Projected snapshot linkage, with its limit stated.** Replaying the most recent candidate list
+(2026-08-21, 284 candidates) against the roster as it now stands links **284 of 284 (100%)** against
+the **143 (50.4%)** it actually managed — **+141**. **A projection, not an observation.** The real
+confirmation is the next EOD's own `candidate_fundamentals_snapshot` row count (Monday 2026-08-24,
+21:30 UTC), and per the verification trap recorded above it must be read against the roster as it
+stands at that moment rather than against this figure.
+
+### `BF.B` and `BRK.B` have been consuming 8% of every night's slots since the recorder shipped
+
+**A real finding, not a rounding error, and it was visible in the stored output the entire time.**
+Every chunk of this pass reported `attempted 25, written 23, no_data 2` — and so has every nightly
+completion record since 2026-08-12, where the fetch cadence reads **25, 25, then 23 every subsequent
+night**. The two are `BF.B` and `BRK.B`: this system stores the dotted form while yfinance expects
+`BF-B`/`BRK-B`.
+
+**The mechanism that makes it permanent rather than a one-off miss: a ticker returning no data has NO
+ROW WRITTEN, so it never leaves the never-fetched set — and the queue is never-fetched-first, so both
+sort to the front of every chunk, forever.** The rotation has therefore been running at 23 effective
+tickers/night against 25 attempted, ~8% of its throughput permanently spent on two tickers that can
+never resolve. **Same shape as `"checked": 40`** (see the standing degenerate-check class, instance
+10): a number present in stored output, uninterpretable without asking what it implied, and read past
+because a 2-ticker shortfall looks like ordinary missing data rather than a permanent
+queue-head occupation.
+
+**The sharper consequence is that this makes the OBVIOUS catch-up implementation non-terminating.**
+"Loop until `never_fetched_remaining == 0`" never ends while any unresolvable ticker exists.
+`catchup_fundamentals.py` therefore terminates on **no progress** — a chunk that fails to SHRINK the
+never-fetched set — which is correct for any permanently-unresolvable ticker rather than just these
+two, and it names the survivors instead of spinning on them. Confirmed in the real run: it stopped at
+chunk 11 and reported `permanently unresolvable (2): BF.B, BRK.B`.
+`tests/test_catchup_fundamentals.py::test_stops_when_a_chunk_covers_nothing_new` is the regression
+guard, **verified to fail against the reintroduced defect** (guard disabled → 2 of 20 tests fail, both
+termination tests, a localized diagnosable failure rather than a blanket break). 20 tests; full suite
+green.
+
+**Not fixed here, deliberately.** The dotted/dashed mismatch itself is untouched — see the standing
+note below.
+
+## The dotted ticker form is one missing boundary normalisation, not three bugs (standing note, 2026-08-23)
+
+**`BRK.B` / `BF.B` have now surfaced independently three times, each diagnosed from scratch, and the
+consequence has been worse every time.** They are not three bugs; they are three consequences of one
+missing normalisation at a single boundary.
+
+1. **Sector lookup** (2026-08-09) — unresolvable at yfinance, so they display `"Uncategorized"`.
+   Cosmetic and self-limiting.
+2. **Share-class map investigation** (2026-08-22) — the dotted form is why the structural generator
+   found them at all, and why that entry had to record "the form is the dot, not the dash" as a
+   standing note. A documentation hazard.
+3. **Fundamentals roster coverage** (2026-08-23, above) — unresolvable at fetch, and because
+   "unresolvable" writes no row it becomes a **permanent queue-head occupation** costing ~8% of the
+   nightly rotation indefinitely, plus a non-termination hazard in any catch-up loop. An ongoing,
+   unbounded cost.
+
+**The escalation is the argument.** A third local fix would close the third symptom and leave the
+fourth to be rediscovered. **Where the fix belongs: at the yfinance boundary specifically — a
+symbol-for-fetch translation — NOT a global rename.** The dotted form is canonical *internally*
+because it is what the membership source uses and what `price_data` is keyed on; changing that would
+touch every stored row and every membership window. Only the outbound symbol handed to yfinance is
+wrong.
+
+**The blast radius is small and enumerable, confirmed by direct query rather than by repeating the
+documented figure: 11 dotted tickers exist in `universe_membership`, and only `BF.B`/`BRK.B` have any
+`price_data` at all or appear in the current live pool** (the other nine — `AFS.A`, `AZA.A`, `CIT.A`,
+`COC.B`, `FTL.A`, `GFS.A`, `LDW.B`, `RDS.A`, `TMC.A` — are historical membership rows with no price
+series). **Not scheduled work** — it is a change to production
+ingestion with its own test surface, not something to fold into an operational catch-up — but it is
+recorded here so a fourth independent diagnosis is not needed to justify it.
+
+
 ## Interactive Brokers unattended authentication — investigated, NOT FEASIBLE as documented (2026-08-11)
 
 **Investigation only — no code, no broker abstraction, no credential handling, no connection attempted,
