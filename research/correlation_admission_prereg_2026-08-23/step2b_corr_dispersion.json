@@ -1,0 +1,38 @@
+{
+  "pool2_clean": {
+    "min": -0.0355,
+    "p10": 0.2072,
+    "p25": 0.2747,
+    "med": 0.341,
+    "p75": 0.3947,
+    "p90": 0.4341,
+    "max": 0.5074,
+    "sd": 0.0897,
+    "iqr": 0.12,
+    "p90_p10": 0.227,
+    "full_range": 0.5429,
+    "days_sampled": 75,
+    "mean_candidates_per_day": 549.2,
+    "raw_corr_per_full_percentile_swing": 0.5429,
+    "raw_corr_per_decile_in_bulk": 0.0284,
+    "interpretation": "At k=1 a candidate at the day's LEAST-correlated extreme gains a full 1.0 of adjusted score over one at the MOST-correlated extreme, and that extreme-to-extreme gap corresponds to 0.543 of raw correlation. A one-decile percentile move -- closer to what the admission boundary actually sees -- corresponds to about 0.0284 of raw correlation."
+  },
+  "pool1": {
+    "min": -0.0215,
+    "p10": 0.2225,
+    "p25": 0.2858,
+    "med": 0.3478,
+    "p75": 0.3999,
+    "p90": 0.4386,
+    "max": 0.5099,
+    "sd": 0.0865,
+    "iqr": 0.1141,
+    "p90_p10": 0.2161,
+    "full_range": 0.5314,
+    "days_sampled": 75,
+    "mean_candidates_per_day": 452.1,
+    "raw_corr_per_full_percentile_swing": 0.5314,
+    "raw_corr_per_decile_in_bulk": 0.027,
+    "interpretation": "At k=1 a candidate at the day's LEAST-correlated extreme gains a full 1.0 of adjusted score over one at the MOST-correlated extreme, and that extreme-to-extreme gap corresponds to 0.531 of raw correlation. A one-decile percentile move -- closer to what the admission boundary actually sees -- corresponds to about 0.0270 of raw correlation."
+  }
+}

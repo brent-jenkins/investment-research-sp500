@@ -1,0 +1,45 @@
+{
+  "pool2_clean": {
+    "usable": 608,
+    "prod_trades": 565,
+    "prod_pnl": 348548.74,
+    "k0_trades": 565,
+    "k0_pnl": 348548.74,
+    "degenerate_parity_mismatches": 0,
+    "share_class_control": {
+      "GOOG/GOOGL": 0.9952,
+      "FOX/FOXA": 0.9855,
+      "UA/UAA": 0.9937,
+      "NWS/NWSA": 0.9678
+    },
+    "unrelated_control": {
+      "AAPL/XOM": -0.2143,
+      "MSFT/KO": -0.0783,
+      "JPM/NEM": 0.2367
+    },
+    "order_days_checked": 50,
+    "order_moved_days": 50,
+    "sanity_mismatches": 0
+  },
+  "pool1": {
+    "usable": 500,
+    "prod_trades": 522,
+    "prod_pnl": 429108.58,
+    "k0_trades": 522,
+    "k0_pnl": 429108.58,
+    "degenerate_parity_mismatches": 0,
+    "share_class_control": {
+      "GOOG/GOOGL": 0.9952,
+      "FOX/FOXA": 0.9855,
+      "NWS/NWSA": 0.9678
+    },
+    "unrelated_control": {
+      "AAPL/XOM": -0.2143,
+      "MSFT/KO": -0.0783,
+      "JPM/NEM": 0.2367
+    },
+    "order_days_checked": 50,
+    "order_moved_days": 50,
+    "sanity_mismatches": 0
+  }
+}

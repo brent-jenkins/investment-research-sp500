@@ -1,0 +1,44 @@
+{
+  "pool1_baseline": {
+    "k": 0.0,
+    "trades": 522,
+    "admissions": 522,
+    "runtime_s": 582.7
+  },
+  "pool1_D1": {
+    "k": 0.25,
+    "trades": 535,
+    "admissions": 535,
+    "runtime_s": 756.3
+  },
+  "pool1_D2": {
+    "k": 0.5,
+    "trades": 541,
+    "admissions": 541,
+    "runtime_s": 725.9
+  },
+  "pool1_D3": {
+    "k": 1.0,
+    "trades": 563,
+    "admissions": 563,
+    "runtime_s": 606.6
+  },
+  "pool1_R1": {
+    "k": -0.25,
+    "trades": 551,
+    "admissions": 551,
+    "runtime_s": 605.2
+  },
+  "pool1_R2": {
+    "k": -0.5,
+    "trades": 567,
+    "admissions": 567,
+    "runtime_s": 609.5
+  },
+  "pool1_R3": {
+    "k": -1.0,
+    "trades": 550,
+    "admissions": 550,
+    "runtime_s": 589.9
+  }
+}
