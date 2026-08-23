@@ -3285,6 +3285,83 @@ false reassurance, worse than no reporting, because it looks like the question i
 
 Full suite 1,248 passing.
 
+### FLIPPED 2026-08-23 — `stale_price_gate_trading_days: 0 → 3`
+
+Deployed inert first, confirmed nothing moved (server `HEAD` matching, all three services active,
+zero errors, 20 open positions unchanged, 0 BUYs and 0 SELLs on the day, and EA's `PENDING` row
+byte-identical), then flipped as a separate step — the same pattern as the last three adoptions.
+
+**Effect is IMMEDIATE, not next-day, and that distinguishes it from the stop-multiplier lag.** This
+gate runs in the DECIDE phase, so it takes effect on the first EOD after deploy rather than the one
+after that. There is no queued-decision lag to plan around (see "Stop config changes carry a ONE-DAY
+LAG" for the case where there is).
+
+**THE FLIP DOES NOT CLOSE THE EXISTING EXPOSURE, and assuming otherwise would be the natural
+mistake.** EA's `PENDING` row decided 2026-08-21 predates the gate. A decide-phase gate only stops
+NEW decisions being queued; it does not retract one already made. That row is re-evaluated at
+submission on capacity as usual, so **EA can still be admitted if a slot frees before it resolves**.
+What the flip guarantees is that no FURTHER EA decision is queued.
+
+**Confirmation after the first EOD, checkable in one query**: EA has no new `pending_orders` row for
+that decide date, while the rest of the queue is its normal size (~280–310). A queue that collapses
+would mean the gate is firing far more widely than the 6-in-341,432 measurement predicts.
+
+### Two verification instruments that could not measure what they appeared to (2026-08-22/23)
+
+Recorded together because they are the same shape two days apart, and because **both were caught by
+reading the OUTPUT rather than the exit status** — neither would have been caught by a green result.
+
+1. **Mocked anchor** (2026-08-23). Five live tests named the staleness gate's one safety property —
+   the anchor is the pool's high-water mark, never wall clock. All five passed when the anchor's body
+   was replaced with `date.today()`, because every one of them mocked `_pool_max_price_date()` and
+   supplied the anchor itself. See the sub-shape note in the standing degenerate-check class entry.
+
+2. **`grep` standing in for a config read** (2026-08-23, during the post-deploy verification of this
+   very change). Checking the deployed gate value with
+   `grep -A1 'stale_price_gate_trading_days' config.yaml | tail -1` printed **an unrelated comment
+   about broker-side stop orders**, because the key's own comment block is longer than one line. It
+   was one step from being reported as the gate's value. Re-done with a real YAML parse, which
+   returned `0` correctly.
+
+   This is the `atr_stop_multiplier` lesson recurring — reading a config with the wrong instrument
+   and believing the result — except it happened *while actively verifying a deploy*, which is
+   precisely when the check is trusted most. **The parse is the check; the grep was theatre.**
+
+**The generalisation across both: an instrument that appears to measure the thing and structurally
+cannot.** A mock that supplies the answer under test, and a text search that can match anything near
+the key rather than the key's value. Neither fails loudly; both return a plausible result. The
+cheap defence in both cases is the same and is already this project's standing practice — inject the
+defect and confirm the instrument notices — extended with: **when verifying a config value, parse the
+config; when verifying a computed property, do not mock the component that computes it.**
+
+### Correction: `DEPLOY_MAX_BLACKOUT_WAIT_SECONDS` is 6000, not 1800
+
+CLAUDE.md's deploy section documents a 1800s (30-minute) blackout-deferral cap. **The live value is
+6000s (100 minutes)** — observed directly in the webhook listener's own log during this deploy
+(`waited 3420s of 6000s cap`). The documented figure was repeated in conversation without being
+checked against the running system, which is the same accurate-in-one-place/stale-in-another shape as
+the `ORDER BY momentum_pct` references.
+
+**Worth recording how it surfaced: only because the log happened to print the real cap next to the
+elapsed time.** A number that becomes checkable only when something incidentally prints both halves
+together is not being verified by anything. A documented constant that matters operationally should
+be read from the running system when it is quoted, not from the document that describes it.
+
+**Checked the obvious consequence rather than stopping at the correction, and it is clean.** The
+2026-08-05 incident (see "Three real bugs the Actions rollout's own staged verification caught",
+bug 3) turned on `DEPLOY_LOCK_MAX_WAIT_SECONDS` being SHORTER than the blackout cap, letting a lock
+waiter steal a lock from a process still legitimately deferring. If the cap had been raised from 1800
+to 6000 on its own, that bug would be back. **It was not: the live defaults are
+`DEPLOY_MAX_BLACKOUT_WAIT_SECONDS=6000` and `DEPLOY_LOCK_MAX_WAIT_SECONDS=7200`** — raised together,
+ordering preserved, and `tests/test_deploy_server_side_blackout.py::
+test_lock_max_wait_default_exceeds_blackout_max_wait_default` enforces the relationship structurally
+so neither can be tuned without the other. That test is why the pair stayed consistent while the
+prose describing them went stale: **the invariant was guarded in code, only the documentation drifted**
+— which is the right way round, and an argument for guarding relationships rather than documenting
+values. The bug-3 narrative's own "1800s"/"3600s" figures are left as the historical record of what
+was true then, per this file's convention.
+
+
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
 
 **`pending_orders.stop_price` is computed at DECIDE time (21:30 EOD) and used verbatim at SUBMIT time
@@ -3810,7 +3887,7 @@ The app runs as three systemd services behind a Caddy HTTPS reverse proxy: `inve
 - **07:45–09:15 UTC, Sundays only** — `weekly_summary` (09:00 Europe/London, which is 07:00–08:00 UTC depending on BST/GMT) window.
 - **Minutes :55 through :10 of every hour, every day** — `market_hours_check` (:00) and `account_state_refresh` (:05) both make real T212 API calls.
 
-**Blackout-window handling — resolved explicitly, not left open, and the same for every deploy path.** `deploy.sh` never has a human guaranteed to be present to answer a y/N prompt (the webhook listener certainly doesn't, and even a manual break-glass SSH run shouldn't require standing at a terminal for up to 30 minutes), so `deploy.sh` (when NOT invoked with `DEPLOY_SKIP_BLACKOUT_CHECK=1`) instead **defers**: it polls the blackout-window check every `DEPLOY_BLACKOUT_POLL_INTERVAL_SECONDS` (default 60s) and, if still inside a window, waits and rechecks — up to a `DEPLOY_MAX_BLACKOUT_WAIT_SECONDS` cap (default 1800s / 30 minutes), after which it proceeds with the deploy regardless, logging that the cap was hit. This guarantees a real push is never silently lost or queued forever just because it happened to land inside a blackout window, while still giving a window that's about to end (e.g. a push landing 3 minutes into the 60-minute EOD window) a real chance to clear first. `DEPLOY_SKIP_BLACKOUT_CHECK=1` remains available as a deliberate manual override for a genuinely urgent break-glass deploy, but nothing sets it automatically — an earlier design had an interactive local/dev mode that prompted first and set this automatically once confirmed; both were removed 2026-08-05 as redundant once the webhook path already handled the same problem for the deploys that actually matter (routine ones, triggered by a push). Verified directly, not just described: `tests/test_deploy_server_side_blackout.py` drives the actual script end-to-end (via `DEPLOY_TEST_NOW_HM`/`_MIN`/`_DOW` clock overrides and a short poll/cap for test speed) and confirms (a) a deploy outside any window runs immediately, (b) a deploy inside a window that never clears still completes once the cap is hit, with real elapsed wall-clock time proving the wait actually happened, (c) the defer loop genuinely rechecks more than once rather than sleeping once, and (d) `DEPLOY_SKIP_BLACKOUT_CHECK=1` bypasses the wait entirely when a human deliberately sets it.
+**Blackout-window handling — resolved explicitly, not left open, and the same for every deploy path.** `deploy.sh` never has a human guaranteed to be present to answer a y/N prompt (the webhook listener certainly doesn't, and even a manual break-glass SSH run shouldn't require standing at a terminal for up to 30 minutes), so `deploy.sh` (when NOT invoked with `DEPLOY_SKIP_BLACKOUT_CHECK=1`) instead **defers**: it polls the blackout-window check every `DEPLOY_BLACKOUT_POLL_INTERVAL_SECONDS` (default 60s) and, if still inside a window, waits and rechecks — up to a `DEPLOY_MAX_BLACKOUT_WAIT_SECONDS` cap (**6000s / 100 minutes as actually running, 2026-08-23** (documented 1800s was stale)), after which it proceeds with the deploy regardless, logging that the cap was hit. This guarantees a real push is never silently lost or queued forever just because it happened to land inside a blackout window, while still giving a window that's about to end (e.g. a push landing 3 minutes into the 60-minute EOD window) a real chance to clear first. `DEPLOY_SKIP_BLACKOUT_CHECK=1` remains available as a deliberate manual override for a genuinely urgent break-glass deploy, but nothing sets it automatically — an earlier design had an interactive local/dev mode that prompted first and set this automatically once confirmed; both were removed 2026-08-05 as redundant once the webhook path already handled the same problem for the deploys that actually matter (routine ones, triggered by a push). Verified directly, not just described: `tests/test_deploy_server_side_blackout.py` drives the actual script end-to-end (via `DEPLOY_TEST_NOW_HM`/`_MIN`/`_DOW` clock overrides and a short poll/cap for test speed) and confirms (a) a deploy outside any window runs immediately, (b) a deploy inside a window that never clears still completes once the cap is hit, with real elapsed wall-clock time proving the wait actually happened, (c) the defer loop genuinely rechecks more than once rather than sleeping once, and (d) `DEPLOY_SKIP_BLACKOUT_CHECK=1` bypasses the wait entirely when a human deliberately sets it.
 
 **A real incident hit during the webhook migration's own staged rollout (2026-08-05), and the fix.** The first genuine GitHub-triggered deploy through the new listener was silently truncated: `deploy_steps()` restarts `investment-research-webhook` as its own last restart step, and `webhook_listener.py`'s `trigger_deploy()` spawns `bash deploy.sh` as a direct child process of that same systemd unit. Under systemd's default `KillMode=control-group`, the unit restarting itself kills its entire cgroup — including the still-running `deploy.sh` process that issued the restart — so the deploy never reached its `systemctl status` output or, critically, `verify_deploy.sh`, even though the underlying git pull and service restarts had genuinely succeeded. Caught directly from `journalctl` (the log stopped mid-`"Restarting services..."` with no `"Server-side deploy complete"` line), not inferred. Fixed with `KillMode=process` on `investment-research-webhook.service` (targets only the unit's own tracked PID, leaving the child `deploy.sh` — now reparented — free to finish; accepted trade-off: a crashed listener's stray children are no longer auto-reaped by systemd, acceptable since this listener only ever spawns the one `deploy.sh` child). Confirmed working via a second real GitHub-triggered deploy immediately after: systemd logged `"Found left-over process ... in control group while starting unit. Ignoring."` (direct proof the child survived) and the run completed end-to-end, all 7 `verify_deploy.sh` checks passing. `tests/test_deploy_hook_systemd_parity.py::test_webhook_service_uses_kill_mode_process` guards this going forward.
 
