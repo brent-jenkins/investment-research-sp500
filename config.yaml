@@ -314,7 +314,7 @@ trading212_invest:
   # queued decisions over ten days at a frozen momentum of 0.28848 and a
   # frozen price of 209.70 -- one still PENDING at £2,611.90. Only a full book
   # prevented admission. See CLAUDE.md's "EA / membership staleness" entry.
-  stale_price_gate_trading_days: 0
+  stale_price_gate_trading_days: 3   # ENABLED 2026-08-23 -- see CLAUDE.md
   # Real, broker-side stop-loss orders (2026-08-04) -- see CLAUDE.md's
   # "Broker-side stop order" sections. brokers/trading212.py:
   # poll_placed_orders() places a genuine T212 POST /equity/orders/stop
