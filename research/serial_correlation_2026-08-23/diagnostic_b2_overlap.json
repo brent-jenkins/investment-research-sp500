@@ -1,0 +1,30 @@
+{
+  "pool2_clean": {
+    "consecutive_pairs": 564,
+    "pairs_overlapping_in_time": 535,
+    "pct_pairs_overlapping": 94.9,
+    "mean_overlap_days_consecutive_pairs": 64.4,
+    "lag1_corr_ALL_pairs": 0.2115,
+    "lag1_corr_NON_OVERLAPPING_pairs": 0.1056,
+    "n_non_overlapping": 29,
+    "unconditional_win_pct": 28.85,
+    "win_pct_after_loss_nonoverlap": 3.85,
+    "n_after_loss_nonoverlap": 26,
+    "win_pct_after_win_nonoverlap": 33.33,
+    "n_after_win_nonoverlap": 3
+  },
+  "pool1": {
+    "consecutive_pairs": 521,
+    "pairs_overlapping_in_time": 485,
+    "pct_pairs_overlapping": 93.1,
+    "mean_overlap_days_consecutive_pairs": 70.7,
+    "lag1_corr_ALL_pairs": 0.2531,
+    "lag1_corr_NON_OVERLAPPING_pairs": -0.2844,
+    "n_non_overlapping": 36,
+    "unconditional_win_pct": 29.5,
+    "win_pct_after_loss_nonoverlap": 18.52,
+    "n_after_loss_nonoverlap": 27,
+    "win_pct_after_win_nonoverlap": 0.0,
+    "n_after_win_nonoverlap": 9
+  }
+}
