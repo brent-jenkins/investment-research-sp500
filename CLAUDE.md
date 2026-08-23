@@ -1730,6 +1730,43 @@ review.
 
 ## A check that reports clean for a reason unrelated to the thing it was checking — a class, not ten incidents (standing requirement, 2026-08-10, extended 2026-08-11, 2026-08-12, 2026-08-22 and 2026-08-23)
 
+**THE UNIFYING PROPERTY, and the one thing to read if you read nothing else here: every instrument
+in this entry MEASURED SOMETHING ADJACENT TO ITS CLAIM AND RETURNED A CONFIDENT ANSWER FROM THE
+ADJACENT THING.** Not a wrong answer, not an error, not an anomaly anyone would investigate — a
+plausible answer to a slightly different question, presented as the answer to the intended one.
+That is what makes the class expensive: a crash gets looked at, an implausible number gets looked
+at, and a confident clean result gets believed.
+
+**THE INSTANCES BELOW ARE EXAMPLES, NOT A TAXONOMY. Do not read them as the set to check against.**
+The adjacency is different every time. On the record so far it has been: a domain narrower than the
+justification implied; a degenerate input collapsing an ordering; a guard measuring a quantity
+invariant to the failure; a precondition gating the guard out of the very episode it was built for;
+a comparison instrument structurally unable to represent the dimension under test; a ratio whose
+denominator grows with the condition it detects; a result pre-authorised as benign before it
+occurred; a poll loop with no reachable true-branch; a detector iterating a different population
+from the one it protects; a test mocking the component that decides the property it names; and a
+text search standing in for reading a value. **Eleven adjacencies, and the next one will not be on
+this list** — enumerating them converts an open question into a checklist a reviewer completes and
+then stops.
+
+**SO THE REVIEW QUESTION STAYS OPEN-ENDED, and this is the actual tool:**
+
+> **What would have to be true for this check to report clean — and is that the same as the thing
+> being clean?**
+
+If the two can come apart, the check is measuring an adjacency, and the write-up must say what it
+actually measures rather than what it is named for. The companion mechanical test, cheap and already
+this project's standing practice, is to **inject the defect the check is named after and confirm it
+notices** — which is what caught the mocked anchor and the `grep`, and what nothing caught in the
+cases that shipped.
+
+**This synthesis was itself written wrong once, in the same shape, which is worth recording rather
+than quietly fixing.** A first version generalised from the three most recent instances — population,
+mock, parse method — and asserted those were the majority. They are three of eleven. That summary was
+confident, plausible, and adjacent to its evidence, and had it shipped it would have handed future
+reviewers a three-item checklist that misses the other eight. A summary of this class is subject to
+this class.
+
 **Five separate findings this week share one shape, and naming the shape is more useful than
 recording them separately.** In each, a check was reasoned about — correctly — for the case its
 author had in mind, shipped with that reasoning written down as a justification, and then reported
