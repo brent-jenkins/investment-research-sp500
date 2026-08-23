@@ -366,6 +366,16 @@ def _membership_health_lines(data: dict) -> list[str]:
         return ["Membership health: not computed yet — this appears after the next membership refresh."]
     if h.get("error"):
         return [f"Membership health: last check reported a problem — {h['error']}."]
+    # COMPLETENESS MARKER. A blob that is present but incomplete (a partial
+    # write, a schema change, a truncated value) would otherwise render three
+    # "none." lines and read as CLEAN -- the exact false-reassurance case this
+    # whole section was ordered to avoid, and the reason the email must
+    # distinguish "no disagreements found" from "no usable data". pool_max_date
+    # is the marker because compute_membership_health() sets it only after
+    # successfully reading price data, so every meaningful result carries one
+    # and no meaningful result lacks one.
+    if not h.get("pool_max_date"):
+        return ["Membership health: last check did not complete — no usable result to report."]
 
     dangerous = h.get("dangerous") or []
     lag = h.get("source_lag") or []

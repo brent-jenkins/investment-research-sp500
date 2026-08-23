@@ -1538,3 +1538,35 @@ def test_membership_health_is_not_a_second_table_in_the_html_body():
     html_out = _weekly_summary_html(data)
     assert html_out.count("<table") == 2, html_out.count("<table")
     assert "EA" in html_out and "2026-06-30" in html_out
+
+
+@pytest.mark.parametrize("blob", [
+    {"computed_at": "x"},                                        # present, no keys at all
+    {"dangerous": [], "source_lag": [], "untracked": []},        # keys, but no anchor
+    {"dangerous": [], "pool_max_date": None},                    # anchor explicitly null
+])
+def test_membership_health_incomplete_blob_never_reads_as_clean(blob):
+    """A present-but-incomplete blob must NOT render three 'none.' lines.
+
+    Found by asking the question directly rather than assuming: before this,
+    a malformed blob produced "price data as of unknown" followed by three
+    "none." lines -- which reads as a clean bill of health. That is precisely
+    the false-reassurance case the ordering constraint (rescope before email)
+    was imposed to prevent, arriving through a different door.
+    """
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines({"membership_health": blob}))
+    assert "none." not in text, text
+    assert "did not complete" in text, text
+
+
+def test_membership_health_distinguishes_no_data_from_no_disagreements():
+    """The three states must be distinguishable at a glance."""
+    from output.briefing import _membership_health_lines
+    no_data = "\n".join(_membership_health_lines({}))
+    incomplete = "\n".join(_membership_health_lines({"membership_health": {"dangerous": []}}))
+    clean = "\n".join(_membership_health_lines({"membership_health": _MH_CLEAN}))
+    assert "not computed yet" in no_data and "none." not in no_data
+    assert "did not complete" in incomplete and "none." not in incomplete
+    assert "none." in clean and "2026-08-21" in clean
+    assert len({no_data, incomplete, clean}) == 3
