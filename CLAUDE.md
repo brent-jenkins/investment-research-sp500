@@ -1893,7 +1893,12 @@ operational poll loop, and they fail identically.
    **The tell was in the stored output the whole time and was read past: `"checked": 40`.** A count
    is only interpretable against its denominator; 40 looks like a healthy number until you know the
    pool is 503. Any check that reports a coverage count should report it as a fraction of the
-   population it claims to cover, not as a bare integer.
+   population it claims to cover, not as a bare integer. **Better still, a detector should report WHAT
+   it iterated over, not merely how many** — `check_wikipedia_lag()` now records `our_pool_size` and
+   `wikipedia_pool_size` alongside `checked`, so the scope is legible at a glance instead of being an
+   integer a reader has to know the denominator to interpret. Pair this with the standing question
+   above: naming the two populations makes the mismatch checkable AT REVIEW TIME rather than
+   discoverable afterwards.
 
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
@@ -1922,6 +1927,28 @@ pointed at the wrong POPULATION.** It is answered by neither of the questions ab
 fine and the statistic is fine; what is wrong is the set being iterated. The question that catches it
 is a third one: **name the population the check protects and the population it iterates, and confirm
 they are the same set.**
+
+**A SUB-SHAPE OF THIS CLASS, IN THE TESTS RATHER THAN THE CHECK: A TEST THAT MOCKS THE MECHANISM IT
+CLAIMS TO VERIFY CAN ONLY CONFIRM THE MOCK (2026-08-23).** The price-staleness gate's safety rests
+entirely on ONE property — the staleness anchor is the pool's own high-water mark, never wall clock,
+so an ingestion outage cannot read as 503 simultaneous delistings. Five live tests were written
+naming that property, including one called
+`test_stale_gate_does_not_fire_when_the_whole_pool_is_equally_stale`. **Replacing the anchor
+function's body with `date.today()` — the exact defect they exist to prevent — passed all five**,
+because every one of them mocked `_pool_max_price_date()` and supplied the anchor itself. The tests
+verified the *consumer's arithmetic* and never the *anchor*, while reading as though they covered
+both. Found only by injecting the defect; two direct tests of the anchor were then added and the
+injection fails them.
+
+This is the sibling of instance 8's finding — *a test that mirrors the code under test can only
+confirm the mirror* — with mocking in place of re-implementation, and it is the more common of the
+two because mocking is normal, correct practice everywhere else. **The rule: when a test's name
+asserts a property, check which component actually decides that property, and confirm that component
+is NOT the one being mocked.** If the mock supplies the answer the test claims to check, the test is
+scaffolding, not coverage. Cheap to detect — inject the defect the test is named after and confirm it
+fails — and this project's standing "verify a new test genuinely fails against the reintroduced bug"
+discipline already prescribes exactly that; the gap here was running it against the consumer's logic
+and not against the anchor.
 
 **THE GENERALISATION — passing the case a guard was designed for is not evidence it covers the class
 that case belongs to, and the pass is exactly what stops anyone looking further.** This is the
