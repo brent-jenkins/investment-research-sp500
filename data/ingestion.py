@@ -133,6 +133,32 @@ def _yf_symbol(ticker: str) -> str:
     Only the outgoing yfinance call is converted; every other use of the
     ticker (DB storage, logging, decision logic) keeps the dot form so it
     still matches universe_membership and existing stored rows.
+
+    THIS IS THE SINGLE YFINANCE-BOUNDARY NORMALISATION POINT. Every
+    yf.Ticker()/yf.download() call in production code must pass its ticker
+    through here -- enforced structurally by
+    tests/test_provider_symbol.py::test_no_production_yfinance_call_passes_a_raw_ticker,
+    which AST-scans for the call sites rather than relying on anyone
+    remembering. That guard exists because the dotted form surfaced
+    independently THREE times before anyone treated it as one problem: the
+    sector lookup (BF.B/BRK.B displaying "Uncategorized"), the share-class map
+    investigation, and the fundamentals recorder -- where an unresolvable
+    ticker writes no row, never leaves the never-fetched-first queue, and so
+    consumed 2 of 25 nightly slots every night from 2026-08-12 until this fix.
+
+    T212 IS DELIBERATELY NOT ROUTED THROUGH HERE, and that is a finding rather
+    than an omission. T212 needs no format rule because it has no consistent
+    format: across four instruments of the identical shape its own instrument
+    ids render the dot three different ways -- BRK.B -> BRK_B_US_EQ
+    (underscore), BF.B -> BFB_US_EQ (removed), BRK.A -> BRK/A_US_EQ (slash) --
+    while every one of their shortName fields is the plain dotted form. Any
+    format rule would therefore be wrong for at least two of the four.
+    resolve_instrument_candidate()'s existing shortName fallback already
+    resolves both live dotted tickers correctly (confirmed on production:
+    BF.B -> BFB_US_EQ and BRK.B -> BRK_B_US_EQ, both VERIFIED, both with a
+    note recording that the naming convention did not match). The TPR
+    _EQ_US case is likewise a per-ticker resolution row, not a format rule --
+    see CLAUDE.md's "TPR instrument mapping" entry.
     """
     return ticker.replace(".", "-")
 
@@ -937,7 +963,7 @@ def fetch_ticker_sector(ticker: str) -> Optional[str]:
     error -- the caller (get_or_fetch_sector()) caches None just as
     durably as a real value, so this is never re-attempted on every call."""
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = yf.Ticker(_yf_symbol(ticker)).info or {}
     except Exception:
         return None
     sector = info.get("sector")
@@ -1575,7 +1601,7 @@ def fetch_ticker_fundamentals(ticker: str) -> Optional[dict]:
     decision beside it. Returns None only when nothing usable came back.
     """
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(_yf_symbol(ticker))
         stmts = {"balance": t.quarterly_balance_sheet,
                  "income": t.quarterly_financials,
                  "cash": t.quarterly_cashflow}
@@ -1694,7 +1720,7 @@ def fetch_ticker_fundamentals_history(ticker: str, max_quarters: int = 12) -> li
     written with provenance='restated'. Never raises.
     """
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(_yf_symbol(ticker))
         stmts = {"balance": t.quarterly_balance_sheet,
                  "income": t.quarterly_financials,
                  "cash": t.quarterly_cashflow}
