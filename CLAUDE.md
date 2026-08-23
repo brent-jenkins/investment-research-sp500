@@ -1744,10 +1744,10 @@ invariant to the failure; a precondition gating the guard out of the very episod
 a comparison instrument structurally unable to represent the dimension under test; a ratio whose
 denominator grows with the condition it detects; a result pre-authorised as benign before it
 occurred; a poll loop with no reachable true-branch; a detector iterating a different population
-from the one it protects; a test mocking the component that decides the property it names; and a
-text search standing in for reading a value. **Eleven adjacencies, and the next one will not be on
-this list** — enumerating them converts an open question into a checklist a reviewer completes and
-then stops.
+from the one it protects; a test mocking the component that decides the property it names; a text
+search standing in for reading a value; and a statistic whose unit of observation was not the unit
+its claim was about. **Twelve adjacencies, and the next one will not be on this list** —
+enumerating them converts an open question into a checklist a reviewer completes and then stops.
 
 **SO THE REVIEW QUESTION STAYS OPEN-ENDED, and this is the actual tool:**
 
@@ -1937,6 +1937,40 @@ operational poll loop, and they fail identically.
    above: naming the two populations makes the mismatch checkable AT REVIEW TIME rather than
    discoverable afterwards.
 
+11. **A statistic whose UNIT OF OBSERVATION was not the unit its claim was about** (Diagnostic B —
+   trade-outcome serial correlation, 2026-08-23). Lag-1 autocorrelation of trade `pnl_pct` ordered by
+   exit date reads **+0.2115 (Pool 2 CLEAN) / +0.2531 (Pool 1)**, and win rate conditioned on losing
+   runs falls monotonically to **12.44% after five losses** against 28.85% unconditional, with the
+   mirror-image rise after winning runs — a clean, symmetric, both-pools-replicated signature of a
+   sequence effect, and the natural evidence base for a rule pausing admissions after a losing run.
+   **94.9% of "consecutive" pairs overlap in time, by a mean of 64.4 days.** At ~12 concurrent
+   positions and a 149-day mean hold, adjacency in the trade list is not adjacency in time: the
+   statistic is substantially the observation that two positions held across the same two months
+   performed similarly. Restricted to genuinely non-overlapping pairs it falls to **+0.1056 on n=29**
+   and **flips to −0.2844 on Pool 1's n=36**.
+
+   **What distinguishes this from every prior instance: nothing about the computation is wrong.** No
+   domain is exceeded, no precondition gates it, no population is mis-scoped, no denominator misleads,
+   and the statistic tracks its own definition exactly. The defect is that the *unit of observation* —
+   a pair of trades adjacent in an ordered list — is not the unit the claim is about — a pair of
+   trades occurring one after the other. **Lag-k autocorrelation is defined on an index, and an index
+   is a proxy for time only when the observations do not overlap.**
+
+   **The question that catches it is a fifth distinct one: what is this statistic's unit of
+   observation, and is it the unit the claim is about?** Cheap to run — the overlap fraction is one
+   comparison of date ranges against data already loaded — and here it inverted the reading
+   completely. **Generalised for this codebase: at ~12 concurrent positions almost ANY sequential
+   statistic inherits this artefact, so any future proposal keyed to runs, streaks, or
+   "after a loss" conditioning must have its overlap fraction checked before its conditional table is
+   believed.**
+
+   **One more property worth stating, because it changes what the finding licenses:** the honest
+   conclusion is not "there is no sequence effect" but **"the trade record structurally cannot measure
+   one"** — the non-overlapping subset is too small and sign-unstable to support either answer. A
+   statistic on the wrong unit does not merely give a wrong answer; it can leave the question
+   unanswerable from that data at all, which is a different and more useful thing to know.
+
+
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
 *confident, plausible-looking result* rather than an error or an obvious anomaly. That last property
@@ -1964,6 +1998,12 @@ pointed at the wrong POPULATION.** It is answered by neither of the questions ab
 fine and the statistic is fine; what is wrong is the set being iterated. The question that catches it
 is a third one: **name the population the check protects and the population it iterates, and confirm
 they are the same set.**
+**Instance 11 is the only one where the check is correct in every respect except what it is a check
+OF**: domain fine, precondition fine, statistic fine, population fine, and the computation matches its
+own definition exactly. What fails is the correspondence between the statistic's UNIT OF OBSERVATION
+and the unit the claim is about — lag-k autocorrelation is defined on an index, and an index proxies
+time only when observations do not overlap. The question is a fifth one: **what is the unit of
+observation, and is it the unit the claim is about?**
 
 **A SUB-SHAPE OF THIS CLASS, IN THE TESTS RATHER THAN THE CHECK: A TEST THAT MOCKS THE MECHANISM IT
 CLAIMS TO VERIFY CAN ONLY CONFIRM THE MOCK (2026-08-23).** The price-staleness gate's safety rests
@@ -3397,6 +3437,170 @@ prose describing them went stale: **the invariant was guarded in code, only the 
 — which is the right way round, and an argument for guarding relationships rather than documenting
 values. The bug-3 narrative's own "1800s"/"3600s" figures are left as the historical record of what
 was true then, per this file's convention.
+
+
+## Correlation-aware admission ordering — pre-registered, tested, NOT ADOPTED (2026-08-23)
+
+**Tests whether the correlation of a candidate against the book already held should adjust its
+admission priority — in BOTH directions, since the prior was genuinely uncertain.** Motivated by Part
+5 of the selection audit (capacity-rejected candidates are not obviously worse than admitted ones, so
+the ranking is choosing among near-equivalents on return grounds alone) and Part 7 (ranking beats
+random admission at the 99th percentile on return and is 98th-WORST on drawdown — it concentrates).
+Twelve arms: `adjusted = rank_pct − k × corr_pct` at k ∈ {+0.25, +0.50, +1.00} (diversifying, D1–D3)
+and k ∈ {−0.25, −0.50, −1.00} (reinforcing, R1–R3), both pools. Full detail:
+`research/correlation_admission_prereg_2026-08-23/PREREGISTRATION.md` / `REPORT.md`.
+
+**VERDICT: NOT ADOPTED — every one of the twelve arms is worse than baseline, in both directions, at
+every k, in both pools.** Not one clears the +1.5pp bar; not one is positive. Damage runs **−1.348pp
+to −4.795pp**, outside the ~1.08pp noise floor in ten of twelve combinations, and on the decisive pool
+it is **monotone in |k| in both directions**. **This is the strongest form a null can take: not "no
+effect detected" but "baseline sits at a local optimum in this dimension, and moving either way
+costs."**
+
+**THE MECHANISTIC EXPLANATION, and it is the transferable part: both directions spend rank quality.**
+The §5 instrument was pre-registered predicting that diversifying would admit from further DOWN the
+raw momentum-rank list and reinforcing from further UP, monotonically in k. **The prediction is wrong,
+and being wrong is what explains the result** — mean raw rank percentile at admission is an
+**inverted U peaking at k = 0** (Pool 2 CLEAN: 0.7856 / 0.7879 / 0.7966 / **0.7953** / 0.7947 / 0.7907
+/ 0.7681 across R3→D3), because high-correlation candidates are not the same population as high-rank
+candidates. **Any departure from pure rank ordering spends raw rank quality, and raw rank quality is
+what Part 7 located this system's edge in.** Corroborated independently: the arm's own unique
+admissions are worse on mean P&L than baseline's own unique admissions in **12 of 12** combinations.
+
+**The mechanism engaged perfectly and still lost — which is what makes the null clean rather than
+inconclusive.** Realised book correlation moved 0.354 → 0.263 (D3) or 0.465 (R3); admission
+correlation percentile 0.500 → 0.287 or 0.732. Nothing failed to fire.
+
+**A prediction made at the gate, before any return figure existed, and confirmed by the returns.**
+The §3 gate found diversification **saturates** (book correlation 0.354 → 0.287 at k=0.25, then only
+to 0.263 at k=1.00) while concentration does not (0.425 → 0.458 → 0.465). D3 is duly the worst arm in
+the study, buying **0.024 of further decorrelation over D1 for 0.56pp of extra damage** — a floor
+effect, since a book of momentum leaders is selected for having risen together. **D3's
+underperformance relative to D1 is therefore the mechanism, not evidence against diversification in
+general.**
+
+**MY PRIOR WAS RIGHT ON DIRECTION AND WRONG WHERE IT MATTERED, which is the calibration lesson.** §9
+predicted reinforcing would beat diversifying, reasoning from Part 7's concentration finding. **It
+holds at every matched |k| on the decisive pool** (R1 −1.348 vs D1 −3.737; R2 −2.288 vs D2 −3.056; R3
+−3.101 vs D3 −4.292) **and produced no positive result whatsoever.** §9 itself had flagged that Part 7
+varied *which* candidates fill roughly fixed slots while this varies their *correlation structure* —
+the flag was right and the reasoning still gave a confident direction that lost to doing nothing.
+**An adjacent finding can tell you which of two wrong answers is less wrong.**
+
+**§4.2's asymmetry clause was load-bearing, exactly as written.** Diversifying improved drawdown in
+all six arm/pool combinations (+0.58 to +5.06pp); Clause A and Clause B never bound. **D2 on Pool 1
+improves drawdown 5.06pp and block-pass 12/16 → 13/16 while losing 1.438pp of return** — without the
+pre-registered clause that writes up as a qualified win; with it, it is diversification doing what
+diversification does, priced at 1.438pp/yr rather than free. Same reasoning as the momentum-smoothness
+study's refusal to promote a monotone +15.07pp drawdown improvement.
+
+**§4.4 — correlation and sector concentration genuinely dissociate, and reporting only the latter
+would have inverted the description.** Held-day-weighted sector Herfindahl, Pool 2 CLEAN: baseline
+0.1256, diversifying 0.113–0.116, reinforcing **0.110–0.129**. **R3 raised book correlation to 0.465
+while LOWERING sector HHI to 0.110** (Technology 26.4% → 19.4%, Industrials rising to 16.2%) —
+correlation picks up common factor exposure crossing sector labels. Coverage caveat stated not buried:
+the preserved sector map covers 193 of 238 baseline tickers and 13.4% of Pool 2 held-days are
+Unmapped, so the HHI values are not exact.
+
+**Two caveats bind every claim above.** (1) **Portfolio-level only** — the split-half test measured
+0.49 Spearman agreement between adjacent 60-day halves, with per-estimate noise of 0.072 raw
+correlation, **2.54× a one-decile move**; individual candidate orderings are roughly half noise, so
+**no per-candidate reading is supported.** The defensible claim is exactly: *books built at 0.26 or
+0.46 mean correlation both underperform one built at 0.35 by momentum rank alone.* (2) **One measure
+at one window.** A 252-day window would roughly halve estimation noise at the cost of a staler book —
+the one genuinely open variant, recorded as open and **not** as promising, since correlation in either
+direction cost money and the failure is not obviously an estimation-quality failure.
+
+**This does NOT overturn the share-class exclusion** (2026-08-22): that is a hard exclusion over four
+hand-verified pairs at 0.97–0.99 correlation — the degenerate extreme — adopted on risk grounds with
+no return claim. **This null is a statement about the gradient, not about the twin**, as §0
+pre-registered.
+
+**Verification, and one unplanned cross-check worth keeping.** §6.1 degenerate parity at k=0: **0
+mismatches on both pools** (565 / £348,548.74 and 522 / £429,108.58) byte-identical to raw production
+**while running the entire new path** — correlations computed, percentiles taken, adjusted sort
+applied. §6.2 confirmed **both halves**: 50/50 sampled days reorder at k=1 and 50/50 are unchanged at
+k=0, because parity alone is equally consistent with a mechanism that never engages. §6.3 recovered
+all four share-class control pairs (GOOG/GOOGL 0.9952, UA/UAA 0.9937, FOX/FOXA 0.9855, NWS/NWSA
+0.9678) against unrelated pairs at −0.214 to +0.237 — **and the 120-day measure's GOOG/GOOGL 0.9952
+agrees to 0.0016 with the share-class study's independent full-history 0.9968**, different window,
+different estimator path, neither aware of the other. §7 sanity gate: 0 trade-SET mismatches.
+
+**`step4_gate.py` contains no code capable of producing a return figure** — a structural guarantee
+that the gate was read before the returns existed, stronger than the ordering discipline it replaces,
+and worth copying into future staged studies.
+
+**Two walk-away clauses fire** (§3 primary criterion; §7 rank-monotonicity). No perturbation
+robustness test was run — it is earned only by an arm firing no clause. No changes to
+`analysis/signals.py`, `analysis/decision.py`, `config.yaml`, or any live path. No database writes.
+Nothing adopted, nothing deployed.
+
+**Combined with the slot-count and position-count studies, the accumulating picture is that the
+admission mechanism — relative-rank ordering into a capacity-constrained daily clock — sits at a local
+optimum across every dimension tested so far: how many positions, how much capital, and now which
+candidates by correlation.**
+
+## Diagnostic B — are trade outcomes serially correlated? Read-only, PAUSING RULE CLOSED (2026-08-23)
+
+**Answers a proposal to pause new admissions after a run of losses, which only makes sense if outcomes
+are serially correlated.** Read-only: no arms, no engine, no pre-registration, no adoption, no
+database writes. Full detail: `research/serial_correlation_2026-08-23/REPORT.md`.
+
+**THE PRE-COMMITTED EXPECTATION WAS WRONG — recorded plainly rather than smoothed over.** Both the
+user's stated prior and the diagnostic's own were "no meaningful serial correlation, which closes the
+pausing idea without a study." **There is plenty of serial correlation.** Lag-1 Pearson **+0.2115
+(Pool 2 CLEAN) / +0.2531 (Pool 1)**, positive out to lag 5, nowhere near the `|ρ| < 0.05` null; and
+conditioning is strong, monotone in run length, and symmetric in both directions:
+
+| Pool 2 CLEAN (unconditional win 28.85%) | after 1 | after 2 | after 3 | after 5 |
+|---|---|---|---|---|
+| win rate after N **losses** | 19.45% | 14.91% | 12.77% | **12.44%** |
+| win rate after N **wins** | 52.15% | 57.65% | 65.31% | **63.64%** |
+
+Pool 1 replicates the shape. Taken alone this reads as overwhelming support for a pausing rule.
+
+**THE OVERLAP TEST IS DECISIVE AND IS THE FINDING WORTH CARRYING: 94.9% of "consecutive" pairs OVERLAP
+IN TIME, by a mean of 64.4 days** (Pool 1: 93.1%, 70.7 days). At ~12 concurrent positions and a
+149-day mean hold, "the next trade" is almost never next in anything but index order — the statistic
+is substantially the observation that two positions held across the same two months performed
+similarly. Restricted to genuinely non-overlapping pairs, lag-1 falls to **+0.1056 on n=29** and
+**flips to −0.2844 on Pool 1's n=36**. A regression control corroborates without deciding: beta 2.54
+on the concurrent `^GSPC` return over each trade's own holding period, **R² 0.534**, residual lag-1
+0.2115 → 0.1579 (~25% of it). Recorded as **instance 11 of the standing degenerate-check class** — see
+that entry for the generalisation (a statistic whose unit of observation is not the unit its claim is
+about).
+
+**What this licenses is narrower and more honest than "no sequence effect": the trade record
+STRUCTURALLY CANNOT MEASURE one.** The non-overlapping subset is too small and sign-unstable to
+support either answer.
+
+**THE PORTFOLIO-LEVEL TEST IS WHAT ACTUALLY CLOSES THE PROPOSAL, because a pausing rule acts on
+portfolio state rather than trade sequence — and it has no overlap problem.** Forward equity-curve
+return after a drawdown from peak, Pool 2 CLEAN:
+
+| condition | % of days | fwd-30 mean | fwd-90 mean | fwd-90 median |
+|---|---|---|---|---|
+| unconditional | 100.0 | +0.968 | **+2.992** | +3.305 |
+| drawdown ≥ 10% | 39.0 | +0.806 | +2.416 | +2.637 |
+| **drawdown ≥ 20%** | 14.4 | +1.215 | **+3.562** | **+4.629** |
+| drawdown ≥ 30% | 8.8 | +0.619 | +2.316 | +3.630 |
+
+**No monotone relationship, no meaningful gap, and the deepest-drawdown bucket a rule would act on
+most confidently shows the HIGHEST forward return of any condition.** Pool 1 agrees (unconditional
+fwd-90 +3.235; ≥20% +3.127; ≥30% +2.311). The concern that pausing would systematically miss
+recoveries is confirmed **directly on this system's own equity curve**, not by appeal to general
+momentum-crash literature.
+
+**BOTH HALVES WERE NECESSARY AND NEITHER ALONE WOULD HAVE SETTLED IT** — the portfolio test alone
+leaves the striking trade-level table unexplained and available to be re-argued; the overlap test alone
+says what cannot be measured without saying what happens after drawdowns. This is the design property
+worth reusing, not just the result.
+
+**Method note:** autocorrelation CIs are moving-block bootstrap (block 20, 2,000 draws), not iid — an
+iid CI is far too narrow here, since the series is not independent even under the null of no sequence
+effect. Sources: the preserved trade sets and panels for the current live configuration
+(`research/exit_mechanics_prereg_2026-08-11/`, cell `s3.0`: Pool 2 CLEAN 565 / £348,548.74, Pool 1 522
+/ £429,108.58) and `^GSPC` from `price_data` through 2026-08-07.
 
 
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
