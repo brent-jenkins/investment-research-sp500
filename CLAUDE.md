@@ -2499,6 +2499,12 @@ predict individual trade outcome in this system, and the weak bucket-level signa
 twice now pointed the OPPOSITE way from the intuition that motivated looking.** Absent a strong prior
 reason, a fourth entry feature should be expected to behave the same way.
 
+**That prediction was tested and held — see "Diagnostic A" below (2026-08-23), which is the fourth
+feature and came back the same way. It also supplies the MECHANISM this paragraph could only assert:
+entry-time price behaviour is the input to the ranking that selected these names, so the admitted
+population has already been filtered on it and the interesting variation is gone before the trade
+exists. Read "three" above as the count at the time of writing, not as current.**
+
 **The only negative sub-pattern found anywhere in the diagnostic**: positions whose trailing peak was
 more than 126 trading days ago (half the lookback) — 278 trades, win rate **37.05%**, mean −0.203%, net
 **−£292** against a £166,830 total. Real, consistent, and immaterial.
@@ -3539,6 +3545,88 @@ Nothing adopted, nothing deployed.
 admission mechanism — relative-rank ordering into a capacity-constrained daily clock — sits at a local
 optimum across every dimension tested so far: how many positions, how much capital, and now which
 candidates by correlation.**
+
+## Diagnostic A — do losing trades contain identifiable distress at entry? Read-only, NO (2026-08-23)
+
+**Answers whether the system's losses are concentrated in companies that were already in trouble at
+entry — the premise behind any "screen out the distressed names" proposal.** Read-only: no arms, no
+engine, no adoption, no fix proposed, no database writes. Full detail:
+`research/distress_diagnostic_2026-08-23/REPORT.md`. Dataset is the preserved current-live trade sets
+(`research/exit_mechanics_prereg_2026-08-11/`, cell `s3.0`: Pool 2 CLEAN 565 trades / £449,405 gains /
+£100,856 losses; Pool 1 522 alongside), used exactly as preserved, no backtest re-run.
+
+**THE ANSWER COMES FROM THE POPULATION, NOT FROM A CORRELATION, AND THAT IS WHY IT IS DECISIVE.**
+Index removal within 12 months of exit touches **1.6% of trades and 2.57% of total losses** (Pool 1:
+0.4% / 0.28%); the price series ceasing within 12 months touches **0.2% / 0.24%** (Pool 1: zero
+trades). **There is no distress population in the loss book to detect** — the losses are ordinary
+momentum reversals in companies that continued existing and continued being index members. **This
+conclusion does not depend on any proxy being well-chosen**, which every correlation below does.
+
+**THE HONEST LIMIT, and it is not rhetorical.** No historical filings data exists in this project — no
+leverage, coverage, going-concern, or ratings — so every entry-time measure is PROXIED from stored
+price and membership data. **A null closes the question for these proxies, not the question.** A
+company can be in genuine distress with an unremarkable share price and nothing here would see it.
+The point-in-time fundamentals recorder (2026-08-12) is the only route to the real version, on its own
+multi-year timeline and with its own ~two-month combined reporting-plus-capture lag.
+
+**Nine proxies, all defined in the script's docstring before any was computed**, split into Group I
+(uses post-entry information — diagnostic only, can never support a filter: the two above) and Group
+II (computable at entry: 20/60-day realised volatility, volatility change, `below_peak_pct` on the
+stale-peak diagnostic's exact definition, worst single-day return in 60 days, downside/upside
+semi-deviation ratio, entry price level, volume ratio, membership tenure). **Six of nine are NULL at
+|Spearman| < 0.05 and were not sliced**, per the pre-committed rule. The winners-vs-losers medians say
+it without a correlation: losers are not more volatile (48.25 vs 48.54 annualised), not cheaper
+(38.00 vs 42.21), not carrying worse recent shocks (−7.59 vs −8.06 — the *winners* are marginally
+worse), not entered on a volume spike (0.988 vs 1.014).
+
+**THE VOLATILITY INVERSION IS THE USEFUL SECONDARY FINDING — VaR SIZING VISIBLE IN OUTCOMES RATHER
+THAN IN THE CONFIG.** The top-volatility quintile at entry carries **25.5% of all gains against 13.6%
+of all losses**, and flagging it out would remove **£100,954 of net profit**. The mechanism is already
+documented (a volatile name is sized smaller — SNDK at £828 against a £2,564 ceiling is the worked
+example under "Candidate Queue ordering" above) but had never been observed in the outcome data.
+**Worth recording because "volatile names are riskier" is the intuition anyone would bring to this
+system, and its own sizing already inverts it**: the volatility never becomes a large loss, while the
+right tail still pays. **Every continuous proxy's flagged bucket is net profitable**, including both
+that clear the correlation threshold — a stronger statement than "nothing correlates", and the reason
+no filter is proposed from any of them.
+
+**Three proxies cleared 0.05 and got the stale-peak diagnostic's four robustness checks.**
+- **`below_peak_pct` (+0.054 Pool 2, +0.033 Pool 1)** — clears on one pool, and the sign means deeper
+  below the trailing peak → BETTER outcome, the reverse of the hypothesis. Strengthens excluding 2008
+  and from 2015; not a momentum proxy (−0.214). **A third independent replication of the stale-peak
+  result, on a different trade set** (that study used the 4,876-trade relative-rank set).
+- **`down_up_vol_ratio` (−0.065 both pools)** — the one that initially looked genuine, with a
+  consistent cross-pool sign. **Excluding 2008 takes Pool 1 to +0.002 and flips its sign** (Pool 2 to
+  −0.047); 2015-onwards leaves both inside the null band. A downside-skewed return distribution
+  predicted worse outcomes *in 2008*, which is close to tautological, and predicts nothing outside it.
+- **`membership_tenure_td` (+0.242 / +0.282)** — clears every check. See below.
+
+**A FIFTH CHECK WAS ADDED FOR TENURE, STATED AS AN ADDITION RATHER THAN FOLDED IN WITH THE FOUR,
+because the variable is a calendar suspect: it is mechanically bounded by how long the dataset has
+existed.** It was needed — Spearman(tenure, entry date) = **+0.46 / +0.51**, **63.7% of trades have
+tenure truncated at the data start** (so for those it is literally "trading days since 2007-01-03"),
+the shortest-tenure quartile is 40% 2008 entries while the longest contains zero trades from
+2008–2010, excluding 2008 halves the effect, and the bare calendar control (days since 2007 against
+`pnl_pct`) is itself +0.18 / +0.23. **The split is nevertheless decisive against dismissing it**: on
+the subset where tenure is genuine (membership window starting strictly after the ticker's first price
+row), its calendar correlation collapses to **+0.266** while its outcome correlation **holds at +0.270
+/ +0.240**. Recently-added index members really do perform worse here, and it is not a crisis artefact.
+
+**It is still not distress, and no filter is proposed from it.** A company just promoted into the S&P
+500 is not a failing one — size, index-inclusion crowding, or a short operating record are all likelier
+mechanisms and nothing here separates them. The flagged quintile carries 2.0× its share of losses and
+**still nets +£42,025**. A separately pre-registered study on its own terms, or nothing.
+
+**THE MECHANISM BEHIND THE FOURTH NULL IS THE PART WORTH KEEPING, because it is a reason rather than a
+tally.** Momentum magnitude (selection audit Part 2, Spearman −0.033), path smoothness (NOT ADOPTED),
+peak drawdown at entry (−0.028, replicated here) and now distress proxies have all come back the same
+way. **Entry-time price behaviour is the INPUT to the ranking that selected these names, so the
+admitted population has already been filtered on it by construction — the interesting variation is
+largely gone before the trade exists.** That explains why the next price-derived entry feature will
+also come back null, and it is a positive argument for looking somewhere else (exit mechanics, which
+produced a 6.4pp swing; or genuinely non-price data, which does not exist here yet) rather than a
+weary observation that nothing works.
+
 
 ## Diagnostic B — are trade outcomes serially correlated? Read-only, PAUSING RULE CLOSED (2026-08-23)
 
