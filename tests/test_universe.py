@@ -477,22 +477,19 @@ def test_is_membership_refresh_stale_handles_tz_aware_last_success():
 # ---------------------------------------------------------------------------
 
 def test_check_wikipedia_lag_flags_genuine_disagreement(db_engine, mocker):
-    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": [], "MISSING": []})
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=["AAPL", "MISSING"])
     mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
-    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: True)  # our data: both are members
 
     result = v2u.check_wikipedia_lag()
 
-    assert result["checked"] == 2
     assert result["error"] is None
     assert [d["ticker"] for d in result["disagreements"]] == ["MISSING"]
     assert result["disagreements"][0] == {"ticker": "MISSING", "our_member": True, "wikipedia_member": False}
 
 
 def test_check_wikipedia_lag_no_disagreement_when_they_match(db_engine, mocker):
-    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": [], "GONE": []})
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=["AAPL"])
     mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
-    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: t == "AAPL")
 
     result = v2u.check_wikipedia_lag()
 
@@ -512,15 +509,89 @@ def test_check_wikipedia_lag_note_labels_it_as_a_lag_detector_not_verification(d
     """Critical framing requirement -- must never read as independent
     verification, since agreement here proves nothing about whether
     Wikipedia's own current-members list is itself correct."""
-    mocker.patch.object(v2u, "STOCK_MEMBERSHIP", {"AAPL": []})
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=["AAPL"])
     mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
-    mocker.patch.object(v2u, "is_member", side_effect=lambda t, d: True)
 
     result = v2u.check_wikipedia_lag()
 
     note = result["note"].lower()
     assert "lag detector" in note
     assert "not independent verification" in note
+
+
+# ---------------------------------------------------------------------------
+# SCOPE (2026-08-23). The check iterated STOCK_MEMBERSHIP -- the frozen
+# 40-ticker research universe -- and so was blind to 92% of live candidates,
+# reporting "0 disagreements" while Wikipedia had already removed EA. These
+# tests pin the LIVE-POOL scope and the two-direction categorisation.
+#
+# Deliberately built on a FROZEN FIXTURE, not on the seven real tickers the
+# 2026-08-23 investigation found by hand (AVB/CBOE/EA/EQR stale,
+# FERG/RDDT/VMRK untracked). Those seven are correct only until fja05680
+# publishes its next snapshot; pinning them in CI would turn a routine
+# upstream update into a red test that means nothing. The one-off live check
+# against the real seven is recorded in
+# research/ea_membership_2026-08-23/acceptance_live_check.txt instead.
+# ---------------------------------------------------------------------------
+
+def test_lag_check_scope_is_the_live_pool_not_the_frozen_forty(db_engine, mocker):
+    """The regression this whole change exists for: a ticker outside
+    STOCK_MEMBERSHIP but inside the live pool MUST be compared."""
+    outside_the_forty = "ZZZZ_NOT_IN_STOCK_MEMBERSHIP"
+    assert outside_the_forty not in v2u.STOCK_MEMBERSHIP, "fixture ticker must be outside the frozen 40"
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=["AAPL", outside_the_forty])
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"AAPL"})
+
+    result = v2u.check_wikipedia_lag()
+
+    assert result["stale_members"] == [outside_the_forty], (
+        "a live candidate outside the frozen 40 was not compared -- the exact "
+        "blindness that let EA rank on frozen data for ten days"
+    )
+
+
+def test_lag_check_separates_stale_members_from_untracked_entrants(db_engine, mocker):
+    """The two directions are not symmetric and must not be conflated: one is
+    a ticker we may still ADMIT, the other one we simply do not carry."""
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=["KEEP", "STALE_A", "STALE_B"])
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value={"KEEP", "NEW_A"})
+
+    result = v2u.check_wikipedia_lag()
+
+    assert result["stale_members"] == ["STALE_A", "STALE_B"]
+    assert result["untracked_entrants"] == ["NEW_A"]
+    assert result["our_pool_size"] == 3
+    assert result["wikipedia_pool_size"] == 2
+    assert len(result["disagreements"]) == 3
+    ours_flag = {d["ticker"]: d["our_member"] for d in result["disagreements"]}
+    assert ours_flag == {"STALE_A": True, "STALE_B": True, "NEW_A": False}
+
+
+def test_lag_check_reports_a_pool_sized_checked_count(db_engine, mocker):
+    """`checked: 40` was itself the tell that the scope was wrong, so the
+    count must now reflect the real comparison population."""
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=[f"T{i}" for i in range(500)])
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members",
+                        return_value={f"T{i}" for i in range(500)})
+
+    result = v2u.check_wikipedia_lag()
+
+    assert result["checked"] == 500, result["checked"]
+    assert result["disagreements"] == []
+
+
+def test_lag_check_is_non_vacuous_when_wikipedia_returns_nothing(db_engine, mocker):
+    """Degenerate case, stated rather than discovered: an empty Wikipedia
+    result must NOT read as 'every live candidate is stale'. It reports the
+    whole pool as disagreeing, which is loud and obviously wrong -- the
+    failure mode to avoid is silence."""
+    mocker.patch.object(v2u, "get_live_stock_candidates", return_value=["AAPL", "MSFT"])
+    mocker.patch.object(v2u, "_fetch_wikipedia_current_members", return_value=set())
+
+    result = v2u.check_wikipedia_lag()
+
+    assert result["wikipedia_pool_size"] == 0
+    assert result["stale_members"] == ["AAPL", "MSFT"]
 
 
 def test_check_wikipedia_lag_persists_result_to_metadata(db_engine, mocker):

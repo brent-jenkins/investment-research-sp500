@@ -803,14 +803,46 @@ def check_wikipedia_lag(check_date: Optional[date] = None) -> dict:
             logger.warning("check_wikipedia_lag: could not persist result — %s", meta_exc)
         return result
 
-    for ticker in STOCK_MEMBERSHIP:
+    # SCOPE: the LIVE CANDIDATE POOL, in both directions.
+    #
+    # This iterated STOCK_MEMBERSHIP -- the frozen 40-ticker curated research
+    # universe -- until 2026-08-23. That made it structurally blind to 463 of
+    # 503 live candidates (92%), and it reported "0 disagreements" on exactly
+    # the case it exists to catch: EA (Electronic Arts) had already been
+    # removed by Wikipedia, was still listed by fja05680/sp500 (whose own
+    # snapshot was 53 days stale), and was still a live candidate ranking on a
+    # frozen price series. See CLAUDE.md's "check_wikipedia_lag() was scoped to
+    # the frozen 40" entry -- the eighth recorded instance of a check reporting
+    # clean for a reason unrelated to the thing it was checking.
+    #
+    # Both directions are needed, and they are NOT symmetric:
+    #   * ours - theirs  -- we still treat as eligible, Wikipedia has removed.
+    #     These tickers ARE in our universe, so they have price data and can be
+    #     ranked and admitted.
+    #   * theirs - ours  -- Wikipedia lists, our source has never heard of.
+    #     These are NOT in our universe at all, so they have NO price data and
+    #     cannot be queried the same way. A missed opportunity, not a risk.
+    ours = set(get_live_stock_candidates(as_of=check_date))
+    result["our_pool_size"] = len(ours)
+    result["wikipedia_pool_size"] = len(wiki_members)
+
+    for ticker in sorted(ours - wiki_members):
         result["checked"] += 1
-        ours = is_member(ticker, check_date)
-        theirs = ticker in wiki_members
-        if ours != theirs:
-            result["disagreements"].append(
-                {"ticker": ticker, "our_member": ours, "wikipedia_member": theirs}
-            )
+        result["disagreements"].append(
+            {"ticker": ticker, "our_member": True, "wikipedia_member": False}
+        )
+    for ticker in sorted(wiki_members - ours):
+        result["checked"] += 1
+        result["disagreements"].append(
+            {"ticker": ticker, "our_member": False, "wikipedia_member": True}
+        )
+    # `checked` counts tickers actually COMPARED and found to disagree plus the
+    # agreeing majority -- reported explicitly so a future reader can tell a
+    # narrow scope from a wide one at a glance, which is precisely what the
+    # bare "checked: 40" above failed to convey.
+    result["checked"] = len(ours | wiki_members)
+    result["stale_members"] = sorted(ours - wiki_members)
+    result["untracked_entrants"] = sorted(wiki_members - ours)
 
     if result["disagreements"]:
         logger.warning(
@@ -831,3 +863,129 @@ def check_wikipedia_lag(check_date: Optional[date] = None) -> dict:
         logger.warning("check_wikipedia_lag: could not persist result — %s", exc)
 
     return result
+
+
+MEMBERSHIP_HEALTH_METADATA_KEY = "membership_health"
+STALE_PRICE_TRADING_DAYS = 3
+
+
+def trading_days_between(start_date: date, end_date: date, calendar: str = "NYSE") -> int:
+    """NYSE sessions strictly after *start_date* up to and including
+    *end_date*. Returns 0 when end_date <= start_date.
+
+    The SINGLE shared trading-day-gap helper: consumed by
+    compute_membership_health() below and by live's price-staleness gate
+    (brokers/trading212.py), so the two can never disagree on what "3 trading
+    days behind" means. Never raises -- a calendar failure returns a
+    conservative 0 (i.e. "not stale"), because the alternative, defaulting to
+    a large number, would let a calendar outage block live candidates.
+    """
+    if end_date is None or start_date is None or end_date <= start_date:
+        return 0
+    try:
+        import pandas_market_calendars as mcal
+        sched = mcal.get_calendar(calendar).schedule(
+            start_date=start_date.strftime("%Y-%m-%d"),
+            end_date=end_date.strftime("%Y-%m-%d"),
+        )
+        return sum(1 for d in sched.index if d.date() > start_date)
+    except Exception as exc:  # pragma: no cover - calendar unavailable
+        logger.warning("trading_days_between: calendar lookup failed — %s", exc)
+        return 0
+
+
+def compute_membership_health(as_of: Optional[date] = None) -> dict:
+    """Three-way membership/price health report for the live candidate pool.
+
+    The three categories have GENUINELY DIFFERENT CONSEQUENCES and are kept
+    separate deliberately -- conflating them loses the distinction that the
+    2026-08-23 EA investigation turned on:
+
+      dangerous  -- a live candidate whose PRICE DATA has stopped updating.
+                    Its trailing momentum is frozen while every other
+                    candidate's moves, so it can rank and be admitted on a
+                    stale number, and the submission-time price-sanity check
+                    compares against that same stale close so it would not
+                    catch it. THIS is the risk category. EA was here.
+      source_lag -- our membership source still lists it, Wikipedia has
+                    removed it, but it is STILL TRADING. Momentum is live and
+                    correct; it will drop out when the source catches up.
+                    Informational. AVB/CBOE/EQR were here.
+      untracked  -- Wikipedia lists it, our source has never carried it, so it
+                    has no price data and cannot be a candidate at all. A
+                    missed opportunity, not a risk. FERG/RDDT/VMRK were here.
+
+    `dangerous` is NOT a subset of `source_lag`: a ticker can be price-frozen
+    while BOTH sources still list it, which is exactly why the staleness
+    signal defends against a lagging source rather than depending on one.
+    A ticker appears in at most one category, dangerous taking precedence.
+
+    STALENESS IS MEASURED RELATIVE TO THE POOL'S OWN MAX DATE, NOT WALL CLOCK,
+    and that is a deliberate divergence from main.py's Data Coverage panel
+    (which is wall-clock anchored, correctly, since its job is to tell a human
+    that ingestion has stopped). Anchoring here to wall clock would make an
+    ingestion outage look like 503 simultaneous delistings. Anchored to the
+    pool's own high-water mark, an outage leaves every ticker equally stale --
+    gap 0 -- and flags nothing, while a single ticker going quiet stands out.
+    The THRESHOLD (3 trading days) is shared with that panel deliberately, so
+    the system has one notion of "stale", just two anchors for two jobs.
+
+    Read-only. Never raises.
+    """
+    as_of = as_of or date.today()
+    out: dict = {
+        "computed_at": datetime.utcnow().isoformat(),
+        "dangerous": [], "source_lag": [], "untracked": [],
+        "pool_max_date": None, "source_high_water_mark": None,
+        "stale_threshold_trading_days": STALE_PRICE_TRADING_DAYS,
+        "error": None,
+    }
+    try:
+        pool = set(get_live_stock_candidates(as_of=as_of))
+        out["pool_size"] = len(pool)
+
+        with get_engine().connect() as conn:
+            rows = conn.execute(text(
+                "SELECT ticker, MAX(date) FROM price_data GROUP BY ticker")).fetchall()
+        latest = {}
+        for tkr, raw in rows:
+            if raw is None:
+                continue
+            d = raw.date() if hasattr(raw, "date") else datetime.fromisoformat(str(raw)).date()
+            latest[tkr] = d
+        pool_dates = [latest[t] for t in pool if t in latest]
+        if not pool_dates:
+            out["error"] = "no price data for any live candidate"
+            return out
+        pool_max = max(pool_dates)
+        out["pool_max_date"] = pool_max.isoformat()
+
+        for ticker in sorted(pool):
+            last = latest.get(ticker)
+            if last is None:
+                continue
+            gap = trading_days_between(last, pool_max)
+            if gap > STALE_PRICE_TRADING_DAYS:
+                out["dangerous"].append({
+                    "ticker": ticker, "last_bar": last.isoformat(), "stale_trading_days": gap,
+                })
+
+        dangerous_tickers = {d["ticker"] for d in out["dangerous"]}
+        try:
+            wiki = _fetch_wikipedia_current_members()
+            out["source_lag"] = sorted((pool - wiki) - dangerous_tickers)
+            out["untracked"] = sorted(wiki - pool)
+        except Exception as exc:
+            out["error"] = f"wikipedia fetch failed: {exc}"
+
+        try:
+            csv_text = _fetch_source_csv()
+            lines = [ln for ln in csv_text.splitlines() if ln.strip()]
+            if len(lines) > 1:
+                out["source_high_water_mark"] = lines[-1].split(",")[0].strip()
+        except Exception as exc:
+            out["error"] = (out["error"] or "") + f" source fetch failed: {exc}"
+    except Exception as exc:
+        logger.warning("compute_membership_health failed — %s", exc)
+        out["error"] = str(exc)
+    return out

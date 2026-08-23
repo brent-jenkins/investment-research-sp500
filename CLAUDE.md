@@ -1728,7 +1728,7 @@ review.
 
 **A function that reads as one query is not proof it only issues one query — this is the SECOND time this exact blind spot has produced a real, measured render-path cost, not a one-off.** The original UI-blocking audit (see CLAUDE_HISTORY.md's "UI render-path blocking audit" entry) scored both Backtest's `live_universe_snapshot()` (Finding 8: "bounded local DB work... currently just two `SELECT DISTINCT` queries") and the Status page's duplicate `get_live_stock_candidates()` call (Finding 9: "local DB only, pure inefficiency") as cheap — both corrected in that same history entry (see its "Correction to Findings 8 and 9" section, added the same day) once cold measurement showed one of those "two `SELECT DISTINCT` queries" was actually ~1,205 of them. This is the identical shape as "UI render-path blocking audit, finding 4 — Dashboard open-position cards, missed by the original audit" above: that audit's risk categories (yfinance calls, T212 calls, long full-universe *computations*) had no slot for "a call that reads as one database query in isolation but internally fans out into hundreds of sequential per-ticker round trips, cheap only once an in-process cache happens to already be warm." Neither miss was catchable by reading a one-line description of what a function does, or by re-checking against the specific symptom an earlier fix already closed (the same gap "Data-quality backstop was silently broken since deploy" and other sections above have already named for different mechanisms) — only by tracing into the callee's own internals or measuring cold. **Standing lesson for any future audit or performance claim in this codebase**: "it's just a DB read" is a claim about what a function returns, not about how many round trips it costs to compute it — verify the latter by measuring, not by reading a call site in isolation, whenever a function's own internals aren't already known to be a single query.
 
-## A check that reports clean for a reason unrelated to the thing it was checking — a class, not nine incidents (standing requirement, 2026-08-10, extended 2026-08-11, 2026-08-12 and 2026-08-22)
+## A check that reports clean for a reason unrelated to the thing it was checking — a class, not ten incidents (standing requirement, 2026-08-10, extended 2026-08-11, 2026-08-12, 2026-08-22 and 2026-08-23)
 
 **Five separate findings this week share one shape, and naming the shape is more useful than
 recording them separately.** In each, a check was reasoned about — correctly — for the case its
@@ -1875,6 +1875,26 @@ operational poll loop, and they fail identically.
    with a *within-arm* measure that has no cross-arm denominator at all (top-3 and top-ticker share
    of that arm's own P&L), which read **71.25%** and **59.99%** where the ratio guard read 0.244.
 
+10. **A detector scoped to the wrong universe entirely** (EA / membership staleness,
+   2026-08-23). `check_wikipedia_lag()` exists to detect "our membership copy has fallen behind its
+   upstream". It iterated **`STOCK_MEMBERSHIP` — the frozen 40-ticker curated research universe —
+   not the 503-ticker live pool**, so it was structurally blind to **463 of 503 live candidates
+   (92%)** and reported **"0 disagreements"** while Wikipedia had already removed EA, a delisted
+   company that then ranked on a frozen momentum figure for ten days and sat `PENDING` at £2,611.90.
+   A correctly-scoped detector flags four stale members, not zero.
+
+   **This is the same mechanism as instances already recorded for `scan_unverified_tickers()` and
+   `detect_price_cliffs()` — a check applied to a different population than the one it is protecting
+   — and it is now the third occurrence, which makes it the most-repeated shape in this class.**
+   Worth stating as a standing question rather than a case: **for any detector, name the population
+   it protects and the population it iterates, and confirm they are the same set.** Those are two
+   different things and this codebase has now conflated them three times.
+
+   **The tell was in the stored output the whole time and was read past: `"checked": 40`.** A count
+   is only interpretable against its denominator; 40 looks like a healthy number until you know the
+   pool is 503. Any check that reports a coverage count should report it as a fraction of the
+   population it claims to cover, not as a bare integer.
+
 **The common structure**: each check is valid over a domain, the domain is narrower than the check's
 stated justification implies (or, in instance 5, empty), and the out-of-domain case produces a
 *confident, plausible-looking result* rather than an error or an obvious anomaly. That last property
@@ -1897,6 +1917,11 @@ comparison's shape changes, and it does so monotonically in the direction of the
 detected.** Instances 1-8 are answered by asking "what is this check's domain, and is this input
 inside it"; instance 9 is not, because the input is always inside the domain. It is answered only by
 asking what makes the *denominator* move.
+**Instance 10 is the first direction again, by the most repeated mechanism in this class: a detector
+pointed at the wrong POPULATION.** It is answered by neither of the questions above — the domain is
+fine and the statistic is fine; what is wrong is the set being iterated. The question that catches it
+is a third one: **name the population the check protects and the population it iterates, and confirm
+they are the same set.**
 
 **THE GENERALISATION — passing the case a guard was designed for is not evidence it covers the class
 that case belongs to, and the pass is exactly what stops anyone looking further.** This is the
@@ -3083,6 +3108,155 @@ during this investigation triggered three back-offs and then a failure. **Cache-
 default**; the 2026-08-08 cached pull
 (`research/sleeve_allocation_prereg_2026-08-08/t212_instruments_2026-08-08.json`) answered the whole
 investigation, with the live pull used once at the end to confirm it still held.
+
+## EA / membership staleness — check_wikipedia_lag() was scoped to the frozen 40 (2026-08-23)
+
+**A delisted company stayed a live candidate for ten days, ranking on a frozen momentum figure, and
+the detector built to notice reported "0 disagreements" the whole time — because it was iterating the
+wrong universe.** Full investigation: `research/ea_membership_2026-08-23/`.
+
+### What happened
+
+EA (Electronic Arts) completed a take-private. yfinance legitimately has nothing new to return, so
+its price series froze at **2026-08-10** while the rest of the pool moved on. Its trailing 12-month
+momentum therefore stayed **fixed at 0.28848** while every other candidate's changed, and the
+submission-time price-sanity check compares against that *same* stale close, so it structurally
+cannot catch this.
+
+**This was not theoretical. EA produced eight queued decisions between 2026-08-12 and 2026-08-21, all
+at an identical frozen momentum and a frozen price of 209.70 — six `REJECTED_CAPACITY`, and one still
+`PENDING` at £2,611.90.** It survived the ranking cut for ten days and escaped admission only because
+the book was full.
+
+**Frozen is not inert, and this is the sharpest detail:** as other candidates' 12-month windows roll
+forward, a frozen ticker *drifts* in relative rank rather than holding a fixed position. It is not
+even stably wrong.
+
+### THE REAL FINDING — instance 8 of the standing degenerate-check class
+
+`analysis/universe.py:check_wikipedia_lag()` iterated **`STOCK_MEMBERSHIP` — the frozen 40-ticker
+curated research universe — not the 503-ticker live pool.** It was therefore structurally blind to
+**463 of 503 live candidates (92%)**, and it reported clean on exactly the case it exists to catch:
+**Wikipedia had already removed EA.** A correctly-scoped detector would have flagged it, and would
+have flagged three more besides.
+
+Same shape as `scan_unverified_tickers()` being scoped wrongly, and as `detect_price_cliffs()` scoping
+to live tickers while the historical population went unchecked. The tell was visible in the stored
+output the whole time — `"checked": 40` — and nobody read 40 as "of 503".
+
+**Rescoped to the live pool in both directions.** `checked` went **40 → 506**. The two directions are
+not symmetric and must not be conflated: `ours − theirs` are tickers we may still ADMIT, `theirs −
+ours` are tickers we do not carry at all (no price data, cannot be candidates).
+
+### The four-stale / three-untracked split, and why it decided the fix
+
+| | fja05680 (our source, snapshot **2026-06-30**, 53 days old) | Wikipedia (current) |
+|---|---|---|
+| constituents | 503 | 502 |
+| stale — we treat as eligible, Wikipedia has removed | **AVB, CBOE, EA, EQR** | — |
+| entrants we do not track at all | — | **FERG, RDDT, VMRK** |
+
+**Only EA is dangerous, and the distinction is the whole argument.** AVB, CBOE and EQR still have
+current price data — removed from the *index*, still *trading*, momentum live and correct. They need
+the membership path and would be **wrongly blocked** by a staleness gate. EA needs the staleness gate,
+and the membership path would have arrived weeks late.
+
+**A membership fix depends on the source catching up; a price-staleness gate does not.** These are
+complementary, not alternatives.
+
+### What was built
+
+**1. `check_wikipedia_lag()` rescoped** to `get_live_stock_candidates()`, reporting `stale_members`
+and `untracked_entrants` separately.
+
+**2. `compute_membership_health()`** — three categories by *consequence*, computed by the
+`membership_refresh` job and stored; nothing recomputes at render.
+- `dangerous` — live candidate whose PRICE DATA stopped updating. The risk category.
+- `source_lag` — source still lists, Wikipedia removed, **still trading**. Informational.
+- `untracked` — Wikipedia lists, our source never carried. Missed opportunity, not risk.
+
+**`dangerous` is deliberately NOT a subset of `source_lag`**: a ticker can be price-frozen while both
+sources still list it, which is precisely the case a source-dependent fix cannot reach. A ticker
+appears in at most one category, `dangerous` taking precedence.
+
+**3. Weekly email section**, one shared wording for the text and HTML bodies, compact, not a second
+table (asserted: exactly 2 `<table>` elements survive).
+
+**4. `stale_price_gate_trading_days` — a candidacy gate, shipped OFF (`0`).** A candidate more than N
+trading days behind is skipped at admission. Decide path only; `maybe_exit_positions()` calls
+`_ticker_state()` too and is deliberately **not** gated — a held position whose data goes quiet rides
+to its normal exit.
+
+### ONE THRESHOLD, TWO ANCHORS — do not harmonise them
+
+The threshold is **3 trading days**, shared with `main.py`'s Data Coverage panel. The **anchor
+differs, deliberately**:
+
+- The **panel** measures against **wall clock**, because its job is to tell a human that ingestion has
+  stopped. **It should shout during an outage.**
+- The **gate** measures against **the pool's own high-water mark**, because its job is to keep trading
+  correct. **It must not fire during one.**
+
+Anchored to wall clock, an ingestion outage would make all 503 candidates stale simultaneously and
+halt trading — 503 apparent delistings. Anchored to the pool, an outage leaves every ticker equally
+stale (gap 0) and blocks nothing, while a single ticker going quiet stands out immediately.
+
+**One notion of staleness, one number, two reference points because the two consumers have opposite
+requirements during the same event.** A test pins both the shared constant and the panel's own
+`_FRESH_TD = 3`, so they cannot drift apart — and this paragraph exists so nobody later "fixes" the
+apparent inconsistency and reintroduces the failure mode.
+
+### Regression check — the stopping condition was not met
+
+The agreed condition: if enabling the gate materially moves a 19-year backtest, it is firing on
+ordinary data gaps and the change stops.
+
+**A literal backtest diff cannot be run, and that is a design property, not an omission.** The gate is
+live-only because `simulate_portfolio_compounding_mtm()` builds its event stream from each ticker's
+OWN rows — a ticker whose data stops simply stops being a candidate there. Enabling the gate cannot
+change a backtest by construction (verified directly, and recorded as the `EXEMPT_LIVE_ONLY` reason).
+
+Measured directly instead, on the population the gate applies to:
+
+| | |
+|---|---|
+| window | 2024-01-01 → 2026-08-21, 688 sessions |
+| (candidate, day) pairs evaluated | **341,432** |
+| pairs the gate would have fired | **6 (0.0018%)** |
+| distinct live candidates ever gated | **1 of 503 — EA** |
+
+It fires on the one ticker it was built for and nothing else in two and a half years. Across all 798
+tickers in `price_data` (including the delisted population that cannot trade) it fires 1,722 times on
+45 symbols — the gate correctly identifying frozen series in a population live admission never draws
+from.
+
+### Two process findings worth more than the fix
+
+**The report nearly published a reassuring blank from stale state.** The first health run used the
+local DB copy, whose `price_data` ends **2026-08-07 — earlier than EA's last bar of 2026-08-10**. The
+staleness gap computed to **zero** and `dangerous` rendered **empty**: a clean-looking result caused
+entirely by stale derived state, which is the same failure shape being fixed. Caught only because
+`pool_max_date` was visible in the output. **That is why the anchor date is printed in the email and
+tested as load-bearing** — if the section ever renders against stale state, the date makes it visible
+instead of reporting nothing.
+
+**Injection testing found a real hole in the new tests.** Two defects were injected: ignoring the
+gate's result (**caught** — one specific failure) and replacing the pool anchor with `date.today()`
+(**NOT caught** — all five live tests passed). Every live test *mocked* `_pool_max_price_date()`, so
+nothing exercised the anchor itself — the single property that makes the gate safe to enable. Two
+direct tests were added; the wall-clock injection now fails both. Had the injection not been run, a
+wall-clock anchor could have shipped behind a green suite.
+
+### Status
+
+Shipped **inert**: `stale_price_gate_trading_days: 0`. The rescope and the email section are active
+(visibility, not behaviour). Flipping the gate to `3` is a separate, deliberate decision.
+
+**Ordering constraint, honoured and worth restating:** the email section must never ship ahead of the
+rescope. A section fed by the blind detector would have printed "no disagreements" every week —
+false reassurance, worse than no reporting, because it looks like the question is being monitored.
+
+Full suite 1,248 passing.
 
 ## Stop config changes carry a ONE-DAY LAG — a known architectural property, not a bug (2026-08-12)
 

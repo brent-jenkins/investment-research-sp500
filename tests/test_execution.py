@@ -5418,3 +5418,157 @@ def test_backfill_leaves_an_already_populated_rank_value_untouched(db_engine):
     assert len(rows) == 1
     assert rows[0]["admission_rank_value"] == 0.99
     assert rows[0]["momentum_pct"] == 0.10
+
+
+# ---------------------------------------------------------------------------
+# Price-staleness candidacy gate (2026-08-23) -- live wiring. The pure
+# threshold logic is unit-tested in tests/test_decision.py; these drive the
+# real decide phase. See CLAUDE.md's "EA / membership staleness" entry.
+# ---------------------------------------------------------------------------
+
+def _stale_frames():
+    """FRESH is current; STALE's last bar is 9 trading days behind it --
+    the real EA gap (last bar 2026-08-10 against a pool at 2026-08-21)."""
+    import pandas as pd, numpy as np
+    n = 400
+    end = pd.Timestamp("2026-08-21")
+    def frame(last_day):
+        dates = pd.bdate_range(end=last_day, periods=n)
+        closes = 100.0 * np.cumprod(np.r_[1.0, np.full(n - 1, 1.002)])
+        return pd.DataFrame({"date": dates, "open": closes, "high": closes * 1.01,
+                             "low": closes * 0.99, "close": closes})
+    return {"FRESH": frame(end), "STALE": frame(pd.Timestamp("2026-08-10")),
+            "^GSPC": frame(end)}
+
+
+def _stale_mapping():
+    return {"FRESH": {"t212_instrument_id": "FRESH_US_EQ", "currency": "USD", "is_etf": False},
+            "STALE": {"t212_instrument_id": "STALE_US_EQ", "currency": "USD", "is_etf": False}}
+
+
+def _run_decide_with_gate(gate_days, db_engine, mocker, v2_mocks):
+    frames = _stale_frames()
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    cfg = _config(_stale_mapping(), mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["stale_price_gate_trading_days"] = gate_days
+    # The gate's anchor is the pool's own high-water mark, never wall clock.
+    mocker.patch("brokers.trading212._pool_max_price_date",
+                 return_value=frames["FRESH"]["date"].iloc[-1].date())
+    from brokers.trading212 import maybe_place_orders
+    maybe_place_orders(cfg, run_type="full")
+    from sqlalchemy import text as sa_text
+    with db_engine.connect() as conn:
+        return {r[0] for r in conn.execute(sa_text("SELECT ticker FROM pending_orders"))}
+
+
+def test_stale_gate_disabled_queues_the_stale_candidate(db_engine, v2_mocks, mocker):
+    """Today's shipped default, and the non-vacuity anchor for the test below:
+    proves the scenario really does queue BOTH, so the gated result is a
+    genuine change rather than an empty run."""
+    queued = _run_decide_with_gate(0, db_engine, mocker, v2_mocks)
+    assert queued == {"FRESH", "STALE"}, queued
+
+
+def test_stale_gate_enabled_skips_the_frozen_candidate_only(db_engine, v2_mocks, mocker):
+    queued = _run_decide_with_gate(3, db_engine, mocker, v2_mocks)
+    assert "FRESH" in queued, queued
+    assert "STALE" not in queued, queued
+
+
+def test_stale_gate_does_not_fire_when_the_whole_pool_is_equally_stale(db_engine, v2_mocks, mocker):
+    """The ingestion-outage property, driven through the REAL decide path: if
+    the pool's own high-water mark is the stale ticker's own last bar (which
+    is what a total ingestion stop looks like), nothing is gated."""
+    import pandas as pd
+    frames = _stale_frames()
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    cfg = _config(_stale_mapping(), mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["stale_price_gate_trading_days"] = 3
+    mocker.patch("brokers.trading212._pool_max_price_date",
+                 return_value=pd.Timestamp("2026-08-10").date())
+    from brokers.trading212 import maybe_place_orders
+    maybe_place_orders(cfg, run_type="full")
+    from sqlalchemy import text as sa_text
+    with db_engine.connect() as conn:
+        queued = {r[0] for r in conn.execute(sa_text("SELECT ticker FROM pending_orders"))}
+    assert queued == {"FRESH", "STALE"}, (
+        "an ingestion outage must block nothing -- this is the property that "
+        "makes the pool-relative anchor safe"
+    )
+
+
+def test_stale_gate_fails_open_when_the_anchor_is_unavailable(db_engine, v2_mocks, mocker):
+    """A failed anchor read must never stop live trading."""
+    frames = _stale_frames()
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    cfg = _config(_stale_mapping(), mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["stale_price_gate_trading_days"] = 3
+    mocker.patch("brokers.trading212._pool_max_price_date", return_value=None)
+    from brokers.trading212 import maybe_place_orders
+    maybe_place_orders(cfg, run_type="full")
+    from sqlalchemy import text as sa_text
+    with db_engine.connect() as conn:
+        queued = {r[0] for r in conn.execute(sa_text("SELECT ticker FROM pending_orders"))}
+    assert queued == {"FRESH", "STALE"}, queued
+
+
+def test_stale_gate_never_force_exits_a_held_position(db_engine, v2_mocks, mocker):
+    """The gate is candidacy-only. A position whose data goes quiet must ride
+    to its normal exit -- maybe_exit_positions() calls _ticker_state() too and
+    is deliberately NOT gated."""
+    from sqlalchemy import text as sa_text
+    frames = _stale_frames()
+    _mock_price_data(mocker, frames)
+    mocker.patch("analysis.universe.is_member", return_value=True)
+    with db_engine.begin() as conn:
+        conn.execute(sa_text("""
+            INSERT INTO invest_orders (ticker, t212_ticker, direction, quantity, status,
+                                       order_id, fill_price, filled_quantity, filled_at, created_at)
+            VALUES ('STALE','STALE_US_EQ','BUY',10,'FILLED','seed-1',100.0,10,
+                    '2026-08-01T14:30:00','2026-08-01T14:30:00')
+        """))
+    v2_mocks.get_positions.return_value = [{"ticker": "STALE_US_EQ", "quantity": 10}]
+    cfg = _config(_stale_mapping(), mocker=mocker, db_engine=db_engine)
+    cfg["trading212_invest"]["stale_price_gate_trading_days"] = 3
+    from brokers.trading212 import maybe_exit_positions
+    maybe_exit_positions(cfg)
+    with db_engine.connect() as conn:
+        sells = {r[0] for r in conn.execute(
+            sa_text("SELECT ticker FROM invest_orders WHERE direction='SELL'"))}
+    assert sells == set(), f"gate must never force an exit, got {sells}"
+
+
+def test_pool_max_price_date_is_the_pool_high_water_mark_not_today(db_engine):
+    """Closes a real gap found by injection: every test above MOCKS
+    _pool_max_price_date(), so replacing its body with `date.today()` passed
+    all five. Nothing exercised the anchor itself. This does.
+
+    The wall-clock/pool distinction is the single property that makes the gate
+    safe to enable, so it needs a test that fails when the anchor is wrong.
+    """
+    from datetime import date, datetime
+    from sqlalchemy import text as sa_text
+    from brokers.trading212 import _pool_max_price_date
+
+    with db_engine.begin() as conn:
+        for ticker, d in (("AAA", "2026-08-21"), ("BBB", "2026-08-10"), ("CCC", "2026-07-01")):
+            conn.execute(sa_text(
+                "INSERT INTO price_data (ticker, date, open, high, low, close, adj_close, volume) "
+                "VALUES (:t, :d, 1, 1, 1, 1, 1, 1)"), {"t": ticker, "d": f"{d} 00:00:00.000000"})
+
+    got = _pool_max_price_date()
+    assert got == date(2026, 8, 21), got
+    assert got != datetime.utcnow().date(), (
+        "the anchor returned today's date rather than the pool's own high-water "
+        "mark -- a wall-clock anchor turns an ingestion outage into a "
+        "system-wide trading halt"
+    )
+
+
+def test_pool_max_price_date_returns_none_on_empty_price_data(db_engine):
+    """Fails open: no data means no anchor, and the caller then gates nothing."""
+    from brokers.trading212 import _pool_max_price_date
+    assert _pool_max_price_date() is None

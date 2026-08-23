@@ -289,6 +289,32 @@ trading212_invest:
   #
   # false is today's behaviour; flipping it is a deliberate, separate decision.
   share_class_exclusion: false
+
+  # Price-staleness candidacy gate (2026-08-23). 0 = disabled (today's
+  # behaviour). Set to 3 to enable, matching main.py's Data Coverage panel --
+  # ONE threshold and one notion of "stale" across the system.
+  #
+  # A candidate whose most recent price bar is more than this many trading
+  # days behind THE POOL'S OWN high-water mark is skipped at admission,
+  # because its trailing momentum is frozen while every other candidate's
+  # moves, and the submission-time price-sanity check compares against that
+  # same stale close so it cannot catch it.
+  #
+  # THE ANCHOR IS THE POOL, NOT WALL CLOCK, and that is what makes it safe:
+  # if ingestion stops, the pool's high-water mark stops advancing too, every
+  # candidate's gap stays 0 and NOTHING is blocked. Anchored to wall clock an
+  # outage would look like 503 simultaneous delistings and halt all trading.
+  # The Data Coverage panel uses the same threshold against wall clock on
+  # purpose -- the panel should shout during an outage, the gate must not
+  # fire. One threshold, two anchors, two jobs; do not harmonise them.
+  #
+  # Candidacy only: no sizing, ranking or exit change, and a held position is
+  # never force-exited because its data went quiet. Motivating live instance:
+  # EA (Electronic Arts) went private, last bar 2026-08-10, and produced eight
+  # queued decisions over ten days at a frozen momentum of 0.28848 and a
+  # frozen price of 209.70 -- one still PENDING at £2,611.90. Only a full book
+  # prevented admission. See CLAUDE.md's "EA / membership staleness" entry.
+  stale_price_gate_trading_days: 0
   # Real, broker-side stop-loss orders (2026-08-04) -- see CLAUDE.md's
   # "Broker-side stop order" sections. brokers/trading212.py:
   # poll_placed_orders() places a genuine T212 POST /equity/orders/stop

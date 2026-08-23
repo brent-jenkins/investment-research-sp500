@@ -86,6 +86,12 @@ def _called_function_names(path: Path, candidates: set[str]) -> set[str]:
 # decision (matching Layer 1's own whitelist discipline), not a way to
 # silence this test.
 EXEMPT_LIVE_ONLY: dict[str, str] = {
+    "resolve_stale_price_gate_days": (
+        "The backtest engine CANNOT EXHIBIT the condition this gates, verified directly rather than assumed (2026-08-23): simulate_portfolio_compounding_mtm() builds its event stream per ticker row (`for dt in frame.index: events.append(...)`) and derives each day's candidates from `flat_before_today`, which comes from that day's own events -- so a ticker whose price data stops simply generates no further events and stops being a candidate on subsequent dates. There is no path by which a backtest candidate is ranked on a FROZEN trailing momentum figure. Live is different because _ticker_state() reads the latest stored row regardless of its age, which is exactly how EA (last bar 2026-08-10, taken private) produced eight queued decisions over ten days at an identical frozen momentum. Wiring this into the backtest would add a check that can never fire there. See CLAUDE.md's 'EA / membership staleness' entry."
+    ),
+    "is_stale_price_blocked": (
+        "The backtest engine CANNOT EXHIBIT the condition this gates, verified directly rather than assumed (2026-08-23): simulate_portfolio_compounding_mtm() builds its event stream per ticker row (`for dt in frame.index: events.append(...)`) and derives each day's candidates from `flat_before_today`, which comes from that day's own events -- so a ticker whose price data stops simply generates no further events and stops being a candidate on subsequent dates. There is no path by which a backtest candidate is ranked on a FROZEN trailing momentum figure. Live is different because _ticker_state() reads the latest stored row regardless of its age, which is exactly how EA (last bar 2026-08-10, taken private) produced eight queued decisions over ten days at an identical frozen momentum. Wiring this into the backtest would add a check that can never fire there. See CLAUDE.md's 'EA / membership staleness' entry."
+    ),
     "is_asset_class_enabled": (
         "Genuinely called by both sides, but not inside analysis/backtest.py "
         "itself — analysis/validation.py:run_full_validation() calls it "

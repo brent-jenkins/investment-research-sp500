@@ -1429,3 +1429,112 @@ def test_gather_weekly_data_admission_shadow_review_none_when_no_shadow_data(db_
 
     data = _gather_weekly_data({})
     assert data["admission_shadow_review"]["review_date"] is None
+
+
+# ---------------------------------------------------------------------------
+# Membership health section (2026-08-23). Three categories with genuinely
+# different consequences, rendered from STORED state only. See
+# analysis/universe.py:compute_membership_health() and CLAUDE.md's
+# "check_wikipedia_lag() was scoped to the frozen 40" entry.
+# ---------------------------------------------------------------------------
+
+_MH_REAL = {
+    "dangerous": [{"ticker": "EA", "last_bar": "2026-08-10", "stale_trading_days": 9}],
+    "source_lag": ["AVB", "CBOE", "EQR"],
+    "untracked": ["FERG", "RDDT", "VMRK"],
+    "pool_max_date": "2026-08-21",
+    "source_high_water_mark": "2026-06-30",
+    "error": None,
+}
+_MH_CLEAN = {
+    "dangerous": [], "source_lag": [], "untracked": [],
+    "pool_max_date": "2026-08-21", "source_high_water_mark": "2026-08-20", "error": None,
+}
+
+
+def test_membership_health_keeps_the_three_categories_distinct():
+    """Conflating them would lose the distinction that matters: a price-frozen
+    candidate can be admitted on a stale momentum number, a source-lagging one
+    is still trading correctly, an untracked entrant cannot be traded at all."""
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines({"membership_health": _MH_REAL}))
+
+    assert "EA" in text and "2026-08-10" in text and "9 trading days" in text
+    assert "AVB, CBOE, EQR" in text
+    assert "FERG, RDDT, VMRK" in text
+    # EA must appear ONCE -- dangerous takes precedence over source_lag
+    assert text.count("EA:") == 1
+    assert "EA" not in text.split("still lists")[1].split("\n")[0]
+
+
+def test_membership_health_always_shows_the_anchor_dates():
+    """Load-bearing, not decoration: this report was nearly published from a
+    stale local database whose price_data ended BEFORE the frozen ticker's
+    last bar, which made the gap compute to zero and the dangerous category
+    render EMPTY. Printing the anchor makes a stale render visible instead of
+    a reassuring blank."""
+    from output.briefing import _membership_health_lines
+    for blob in (_MH_REAL, _MH_CLEAN):
+        text = "\n".join(_membership_health_lines({"membership_health": blob}))
+        assert blob["pool_max_date"] in text, "price-data anchor date missing"
+        assert blob["source_high_water_mark"] in text, "source high-water mark missing"
+
+
+def test_membership_health_all_clear_still_reports_the_anchor():
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines({"membership_health": _MH_CLEAN}))
+    assert "none." in text
+    assert "2026-08-21" in text
+
+
+def test_membership_health_absent_blob_says_so_rather_than_reporting_clean():
+    """A missing blob must never render as 'no problems found' -- that is the
+    false-reassurance failure this section exists to avoid."""
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines({}))
+    assert "not computed yet" in text
+    assert "none." not in text
+
+
+def test_membership_health_surfaces_a_computation_error():
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines(
+        {"membership_health": {"error": "wikipedia fetch failed: boom"}}))
+    assert "boom" in text
+    assert "none." not in text
+
+
+def test_membership_health_respects_the_email_tone_standard():
+    """Conveys the meaning without the words this project's weekly email has
+    always banned -- the same resolution the admission-shadow line uses. The
+    category is 'price data stopped updating', never 'DANGEROUS'/'risk'."""
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines({"membership_health": _MH_REAL})).lower()
+    for word in _FORBIDDEN_WORDS:
+        assert word not in text, f"forbidden tone word {word!r} in membership health section"
+
+
+def test_membership_health_render_path_makes_no_network_call(mocker):
+    """Same guarantee and same test pattern as the sector, crisis-banner and
+    T212-snapshot work: reads the stored blob, never recomputes."""
+    import analysis.universe as _u
+    mocker.patch.object(_u, "_fetch_wikipedia_current_members",
+                        side_effect=AssertionError("render path fetched Wikipedia"))
+    mocker.patch.object(_u, "_fetch_source_csv",
+                        side_effect=AssertionError("render path fetched the source CSV"))
+    mocker.patch.object(_u, "compute_membership_health",
+                        side_effect=AssertionError("render path recomputed health"))
+    from output.briefing import _membership_health_lines
+    text = "\n".join(_membership_health_lines({"membership_health": _MH_REAL}))
+    assert "EA" in text
+
+
+def test_membership_health_is_not_a_second_table_in_the_html_body():
+    """Must stay a compact block, not a table competing with Open Positions --
+    the same assertion the sector section already carries."""
+    from output.briefing import _weekly_summary_html
+    data = _sample_weekly_data(1.0)
+    data["membership_health"] = _MH_REAL
+    html_out = _weekly_summary_html(data)
+    assert html_out.count("<table") == 2, html_out.count("<table")
+    assert "EA" in html_out and "2026-06-30" in html_out

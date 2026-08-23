@@ -224,6 +224,7 @@ def _gather_weekly_data(config: dict) -> dict:
         # Benchmark-relative spread (2026-08-10, reporting only) -- a pure
         # read of rows the EOD job computed; no network call from here.
         "benchmark_spread": compute_benchmark_spread(get_benchmark_comparison_history()),
+        "membership_health": _load_membership_health(),
         "total_value_gbp": total_value_gbp,
         "closed_this_week": closed_this_week,
         "realized_pnl_gbp": realized_pnl_gbp,
@@ -323,6 +324,76 @@ def _admission_shadow_review_line(data: dict) -> str:
     )
 
 
+def _load_membership_health() -> dict:
+    """Read the stored membership-health blob. A pure metadata read -- never
+    recomputes, never touches the network or price_data at render time."""
+    try:
+        from analysis.universe import MEMBERSHIP_HEALTH_METADATA_KEY
+        from data.database import get_metadata_str
+        raw = get_metadata_str(MEMBERSHIP_HEALTH_METADATA_KEY)
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _membership_health_lines(data: dict) -> list[str]:
+    """The three membership/price-health categories, as a few compact lines.
+
+    ONE wording, rendered by both the plain-text and HTML bodies, so a reader
+    cannot get a differently-hedged version depending on where they saw it --
+    the same single-source rule benchmark_spread_caveat() already follows.
+
+    THREE CATEGORIES, KEPT SEPARATE ON PURPOSE. They have different
+    consequences and conflating them loses the distinction the 2026-08-23 EA
+    investigation turned on: a price-frozen candidate can be ADMITTED on a
+    stale momentum number, a source-lagging one is still trading correctly and
+    will drop out on its own, and an untracked entrant is a missed opportunity
+    rather than a risk. See analysis/universe.py:compute_membership_health().
+
+    THE ANCHOR DATE IS ALWAYS SHOWN, and that is deliberate rather than
+    decorative: this report was itself nearly published from a stale local
+    database whose price_data ended BEFORE the frozen ticker's last bar, which
+    made the staleness gap compute to zero and the dangerous category render
+    EMPTY -- a reassuring blank produced by stale state, the same failure
+    shape this section exists to surface. Printing the anchor makes that
+    visible instead of silent.
+
+    Reads STORED state only -- the blob the membership_refresh job computed
+    and persisted. No network call, no price query, at render time.
+    """
+    h = data.get("membership_health") or {}
+    if not h:
+        return ["Membership health: not computed yet — this appears after the next membership refresh."]
+    if h.get("error"):
+        return [f"Membership health: last check reported a problem — {h['error']}."]
+
+    dangerous = h.get("dangerous") or []
+    lag = h.get("source_lag") or []
+    untracked = h.get("untracked") or []
+    anchor_date = h.get("pool_max_date") or "unknown"
+    hwm = h.get("source_high_water_mark") or "unknown"
+
+    out = [f"Membership health (price data as of {anchor_date}; membership source dated {hwm}):"]
+    if dangerous:
+        out.append(f"  Price data stopped updating ({len(dangerous)}) — these rank on a frozen momentum figure:")
+        for d in dangerous:
+            out.append(
+                f"    {d['ticker']}: last bar {d['last_bar']}, "
+                f"{d['stale_trading_days']} trading days behind the rest of the pool"
+            )
+    else:
+        out.append("  Price data stopped updating: none.")
+    out.append(
+        f"  Membership source still lists, Wikipedia has removed ({len(lag)})"
+        + (f": {', '.join(lag)} — still trading, momentum current." if lag else ": none.")
+    )
+    out.append(
+        f"  In Wikipedia, not yet in our source ({len(untracked)})"
+        + (f": {', '.join(untracked)} — not held or ranked." if untracked else ": none.")
+    )
+    return out
+
+
 def _weekly_summary_text(data: dict) -> str:
     """Plain-text body -- a calm, factual record. Every line states what
     happened; none of them are worded differently depending on whether the
@@ -389,6 +460,9 @@ def _weekly_summary_text(data: dict) -> str:
         lines.append("Crisis override: did not fire this week.")
 
     lines.append("")
+    lines.extend(_membership_health_lines(data))
+
+    lines.append("")
     refresh_text = _fmt_uk(data["last_full_refresh"]) if data["last_full_refresh"] else "unknown"
     status_text = "no unresolved errors" if not data["unresolved_error"] else f"unresolved error recorded: {data['unresolved_error']}"
     ok_text = "system healthy" if data["eod_recent"] and not data["unresolved_error"] else "system status uncertain"
@@ -453,6 +527,15 @@ def _weekly_summary_html(data: dict) -> str:
         f'<p style="color:{_NEUTRAL};font-size:13px">{esc(_benchmark_spread_line(data))}</p>'
     )
 
+    # Same shared renderer as the plain-text body -- one wording, one source,
+    # deliberately NOT a second table competing with Open Positions.
+    _mh = _membership_health_lines(data)
+    membership_health_line = (
+        f'<p style="color:{_NEUTRAL};font-size:13px">'
+        + "<br>".join(esc(line).replace("  ", "&nbsp;&nbsp;") for line in _mh)
+        + "</p>"
+    ) if _mh else ""
+
     admission_shadow_line = (
         f'<p style="color:{_NEUTRAL};font-size:13px">{esc(_admission_shadow_review_line(data))}</p>'
     )
@@ -492,6 +575,7 @@ def _weekly_summary_html(data: dict) -> str:
       </table>
       {sector_line}
       {benchmark_spread_line}
+      {membership_health_line}
       {admission_shadow_line}
 
       <h3 style="color:{_NEUTRAL}">Closed This Week ({len(data['closed_this_week'])})</h3>

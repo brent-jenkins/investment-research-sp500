@@ -489,6 +489,7 @@ def test_resolve_admission_rank_value_can_return_none_for_either_input():
 # right" tests that a parity test deliberately cannot substitute for.
 # ---------------------------------------------------------------------------
 
+import pathlib  # noqa: E402
 import pytest  # noqa: E402
 from analysis.decision import (  # noqa: E402
     blocking_share_class_siblings,
@@ -564,3 +565,70 @@ def test_the_shipped_map_is_symmetric_and_self_excluding():
 
 def test_the_shipped_map_contains_the_pair_that_motivated_it():
     assert _universe.get_share_class_siblings("GOOGL") == frozenset({"GOOG"})
+
+
+# ---------------------------------------------------------------------------
+# Price-staleness candidacy gate (2026-08-23). Candidacy only; disabled by
+# default. See CLAUDE.md's "EA / membership staleness" entry.
+# ---------------------------------------------------------------------------
+
+from analysis.decision import (  # noqa: E402
+    is_stale_price_blocked,
+    resolve_stale_price_gate_days,
+)
+
+
+def test_stale_price_gate_defaults_to_disabled_so_shipping_changes_nothing():
+    assert resolve_stale_price_gate_days({}) == 0
+    assert resolve_stale_price_gate_days({"trading212_invest": {}}) == 0
+    assert resolve_stale_price_gate_days(
+        {"trading212_invest": {"stale_price_gate_trading_days": 3}}) == 3
+
+
+@pytest.mark.parametrize("bad", [None, "", "abc", -5])
+def test_stale_price_gate_malformed_config_fails_safe_to_disabled(bad):
+    assert resolve_stale_price_gate_days(
+        {"trading212_invest": {"stale_price_gate_trading_days": bad}}) == 0
+
+
+def test_disabled_gate_never_blocks_however_stale():
+    assert is_stale_price_blocked(stale_trading_days=9999, max_stale_trading_days=0) is False
+
+
+def test_gate_blocks_only_beyond_the_threshold():
+    assert is_stale_price_blocked(stale_trading_days=4, max_stale_trading_days=3) is True
+    assert is_stale_price_blocked(stale_trading_days=3, max_stale_trading_days=3) is False
+    assert is_stale_price_blocked(stale_trading_days=0, max_stale_trading_days=3) is False
+
+
+def test_unknown_gap_is_never_treated_as_stale():
+    """Standing None-tolerance contract: unknown must not trigger a check."""
+    assert is_stale_price_blocked(stale_trading_days=None, max_stale_trading_days=3) is False
+
+
+def test_the_ea_case_the_gate_was_built_for():
+    """EA: last bar 2026-08-10, pool at 2026-08-21 -- 9 trading days behind."""
+    assert is_stale_price_blocked(stale_trading_days=9, max_stale_trading_days=3) is True
+
+
+def test_an_ingestion_outage_blocks_nothing():
+    """THE property that makes the gate safe to enable. Anchored to the pool's
+    own high-water mark, a total ingestion stop leaves every candidate equally
+    stale -- gap 0 -- so nothing is blocked. Anchored to wall clock the same
+    outage would look like 503 simultaneous delistings and halt all trading."""
+    for _ticker in range(503):
+        assert is_stale_price_blocked(stale_trading_days=0, max_stale_trading_days=3) is False
+
+
+def test_the_two_anchors_share_one_threshold():
+    """One notion of staleness, two reference points, on purpose: the Data
+    Coverage panel measures it against wall clock because it should shout
+    during an outage; this gate measures it against the pool because it must
+    not fire during one. The THRESHOLD must stay the same number."""
+    import analysis.universe as _u
+    assert _u.STALE_PRICE_TRADING_DAYS == 3
+    src = (pathlib.Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
+    assert "_FRESH_TD = 3" in src, (
+        "the Data Coverage panel's threshold moved -- the gate's shared notion "
+        "of 'stale' must move with it, or they are two definitions again"
+    )
