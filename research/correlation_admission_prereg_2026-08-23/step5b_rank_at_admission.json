@@ -1,0 +1,90 @@
+{
+  "pool2_clean": {
+    "baseline": {
+      "mean_rank_pct": 0.7953,
+      "median_rank_pct": 0.9872,
+      "mean_corr_pct": 0.5,
+      "mean_corr_raw": null
+    },
+    "D1": {
+      "mean_rank_pct": 0.7947,
+      "median_rank_pct": 0.9546,
+      "mean_corr_pct": 0.3782,
+      "mean_corr_raw": 0.2967
+    },
+    "D2": {
+      "mean_rank_pct": 0.7907,
+      "median_rank_pct": 0.9324,
+      "mean_corr_pct": 0.3289,
+      "mean_corr_raw": 0.2839
+    },
+    "D3": {
+      "mean_rank_pct": 0.7681,
+      "median_rank_pct": 0.9091,
+      "mean_corr_pct": 0.2869,
+      "mean_corr_raw": 0.2779
+    },
+    "R1": {
+      "mean_rank_pct": 0.7966,
+      "median_rank_pct": 0.959,
+      "mean_corr_pct": 0.6789,
+      "mean_corr_raw": 0.4532
+    },
+    "R2": {
+      "mean_rank_pct": 0.7879,
+      "median_rank_pct": 0.9464,
+      "mean_corr_pct": 0.7005,
+      "mean_corr_raw": 0.4723
+    },
+    "R3": {
+      "mean_rank_pct": 0.7856,
+      "median_rank_pct": 0.9167,
+      "mean_corr_pct": 0.7318,
+      "mean_corr_raw": 0.4807
+    }
+  },
+  "pool1": {
+    "baseline": {
+      "mean_rank_pct": 0.7998,
+      "median_rank_pct": 0.9865,
+      "mean_corr_pct": 0.5,
+      "mean_corr_raw": null
+    },
+    "D1": {
+      "mean_rank_pct": 0.8013,
+      "median_rank_pct": 0.9511,
+      "mean_corr_pct": 0.3707,
+      "mean_corr_raw": 0.3025
+    },
+    "D2": {
+      "mean_rank_pct": 0.7805,
+      "median_rank_pct": 0.9314,
+      "mean_corr_pct": 0.3309,
+      "mean_corr_raw": 0.2865
+    },
+    "D3": {
+      "mean_rank_pct": 0.7684,
+      "median_rank_pct": 0.8982,
+      "mean_corr_pct": 0.2843,
+      "mean_corr_raw": 0.27
+    },
+    "R1": {
+      "mean_rank_pct": 0.8069,
+      "median_rank_pct": 0.9577,
+      "mean_corr_pct": 0.6809,
+      "mean_corr_raw": 0.4434
+    },
+    "R2": {
+      "mean_rank_pct": 0.7931,
+      "median_rank_pct": 0.9328,
+      "mean_corr_pct": 0.7036,
+      "mean_corr_raw": 0.4633
+    },
+    "R3": {
+      "mean_rank_pct": 0.7633,
+      "median_rank_pct": 0.9041,
+      "mean_corr_pct": 0.7285,
+      "mean_corr_raw": 0.4823
+    }
+  }
+}
