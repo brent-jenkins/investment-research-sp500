@@ -4150,6 +4150,41 @@ their own test as passing through untouched.
 
 Neither is automatic, and neither should be inferred from "the fix shipped".
 
+**BOTH COMPLETED 2026-08-23, and the roster reached 503/503 for the first time.** Deploy `b39718f`
+landed 21:12:08 (7/7 verification checks PASS). The two cached-NULL `ticker_sector` rows were deleted
+under a guard that refuses unless each row is present AND `sector IS NULL` — so a second run after the
+pre-warm reports rather than destroying a real value. The pre-warm then fetched exactly those two (503
+candidates, 501 already cached, 2 resolved, 0 unresolved, 0 errors, 13.3s), and one catch-up chunk
+picked up the fundamentals.
+
+**Verified on a fresh read-only connection, not from any script's summary: `ticker_fundamentals` 503 of
+503 live candidates (100%), 503 rows, `point_in_time` 503/503, `quarterly` 503/503, nothing
+uncovered.** `BF.B` → reporting period 2026-04-30 (Brown-Forman's real April fiscal quarter), `BRK.B` →
+2026-06-30. `ticker_sector` 503 rows, both dotted tickers now `Consumer Defensive` and `Financial
+Services`.
+
+**The chunk log is the cleanest single proof the fix worked: `attempted 25, written 25, no_data 0`.**
+Every chunk since the recorder shipped had read `written 23, no_data 2`; this is the first with no
+no-data at all, and never-fetched went 2 → 0.
+
+**A counting subtlety worth stating so the log is not misread: `written` counts successful write calls,
+not new rows.** The chunk took the 2 never-fetched plus 23 oldest-`fetched_at` refreshes, and total
+rows moved 501 → 503 — exactly 2 added. The other 23 re-fetches returned identical values and wrote
+nothing, which is the append-on-change rule behaving correctly rather than a discrepancy.
+
+**One NULL sector remains, and it is the SAME anomaly Part 2 flagged independently: `FISV`.** yfinance
+serves price history and fundamentals for it but no sector, consistent with Fiserv's live ticker being
+`FI` while the membership source still lists `FISV` as a current member. Two unrelated investigations
+converging on one ticker is corroboration that the FISV/FI reversion is real and not a source glitch —
+recorded, not acted on.
+
+**A deliberate limitation, recorded so it does not read as an oversight: `catchup_fundamentals.py`'s
+blackout guard is time-based and NOT day-aware**, so it deferred for a full 48 minutes on a Sunday when
+no EOD was ever going to fire (2,908s elapsed, ~90s of it actual fetching). That is the conservative
+direction and is left as-is: the cost is idle time on a script nobody waits on, and the alternative is
+duplicating the scheduler's day-gating in a second place — precisely the kind of divergence this
+project has been bitten by repeatedly.
+
 ## Rename / alias — investigated, NOTHING BUILT, no alias map recommended (2026-08-23)
 
 **A format mismatch fails LOUDLY (no data, a FAILED row, a ticker that never leaves the queue); a
