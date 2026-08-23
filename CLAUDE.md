@@ -4088,9 +4088,138 @@ wrong.
 documented figure: 11 dotted tickers exist in `universe_membership`, and only `BF.B`/`BRK.B` have any
 `price_data` at all or appear in the current live pool** (the other nine — `AFS.A`, `AZA.A`, `CIT.A`,
 `COC.B`, `FTL.A`, `GFS.A`, `LDW.B`, `RDS.A`, `TMC.A` — are historical membership rows with no price
-series). **Not scheduled work** — it is a change to production
-ingestion with its own test surface, not something to fold into an operational catch-up — but it is
-recorded here so a fourth independent diagnosis is not needed to justify it.
+series). Recorded here so a fourth independent diagnosis is not needed to justify it — and **fixed
+the same day, see below**; the "not scheduled work" framing above was written before the fix and is
+kept as the reasoning that justified it, not as current status.
+
+
+### FIXED 2026-08-23 — three call sites routed, and the fix is verified by OUTCOME
+
+**`_yf_symbol()` (`data/ingestion.py`) is now THE single yfinance-boundary normalisation point, and a
+structural guard enforces it.** The helper already existed and already covered the price path; what was
+missing was that three later-added call sites bypassed it — `fetch_ticker_sector()`,
+`fetch_ticker_fundamentals()` and `fetch_ticker_fundamentals_history()`. **`verify_ticker_identity()`
+was already routed** (checked, not assumed, before being listed as a gap), as were `_fetch_ticker()`,
+`brokers/trading212.py`'s live price fetch, and `main.py`'s Yahoo URL.
+
+**VERIFIED BY OUTCOME, not by string equality.** A test asserting `_yf_symbol("BRK.B") == "BRK-B"`, or
+that a MOCKED `yf.Ticker` received `"BRK-B"`, proves ROUTING and not OUTCOME — per this file's own
+mocked-anchor sub-shape, a test that mocks the mechanism it names can only confirm the mock. Real
+yfinance calls through the real production functions, before and after
+(`research/ticker_format_2026-08-23/verify_outcome.py`):
+
+| | sector | fundamentals | history |
+|---|---|---|---|
+| `BF.B` before | `None` | none | 0 quarters |
+| **`BF.B` after** | **`'Consumer Defensive'`** | **2026-04-30** | **4 quarters** |
+| `BRK.B` before | `None` | none | 0 quarters |
+| **`BRK.B` after** | **`'Financial Services'`** | **2026-06-30** | **3 quarters** |
+| `AAPL` (control) | `'Technology'` both | unchanged | unchanged |
+
+**T212 IS DELIBERATELY NOT ROUTED THROUGH IT, and that is a finding rather than an omission.** T212
+needs no format rule because it has no consistent format: across four instruments of identical shape
+its own ids render the dot three different ways — **`BRK.B` → `BRK_B_US_EQ` (underscore), `BF.B` →
+`BFB_US_EQ` (removed), `BRK.A` → `BRK/A_US_EQ` (slash)** — while every one of their `shortName` fields
+is the plain dotted form. **Any format rule would be wrong for at least two of the four.**
+`resolve_instrument_candidate()`'s existing shortName fallback already resolves both live dotted
+tickers correctly — confirmed on production: `BF.B → BFB_US_EQ`, `BRK.B → BRK_B_US_EQ`, both
+`VERIFIED`, both carrying a note recording that the naming convention did not match. The TPR `_EQ_US`
+case likewise stays a per-ticker resolution row, not a format rule.
+
+**THE GUARD IS STRUCTURAL, because a per-call-site test protects only today's call sites.**
+`tests/test_provider_symbol.py::test_no_production_yfinance_call_passes_a_raw_ticker` AST-scans every
+production module for `yf.Ticker()`/`yf.download()` and fails on any whose first argument does not go
+through `_yf_symbol()`. Paired with `test_the_guard_is_not_vacuous`, which asserts the scanner is
+actually finding the known call sites — a guard that reports clean because it matched nothing is this
+project's most-repeated failure shape. Fail-verified: reintroducing one bypass fails exactly 2 of 13
+(the structural guard plus that call site's own routing test), a localized diagnosable failure rather
+than a blanket break. Full suite **1,285 passing**.
+
+**No config gate, and the reason is stated rather than assumed.** This changes behaviour only for
+tickers containing a dot, and only from "no data" to "data" — it fixes failures rather than altering a
+working path, which is exactly the case a gate is not for. The 501 dotless live tickers are pinned by
+their own test as passing through untouched.
+
+**TWO POST-DEPLOY STEPS ARE REQUIRED — the code fix alone does not close either symptom.**
+1. **`ticker_sector` holds `BF.B` and `BRK.B` as `sector = NULL`.** A cached NULL means "fetched,
+   yfinance had nothing" and is deliberately never re-fetched — that is the design that stops an
+   unresolvable ticker being re-queried forever. So the Dashboard keeps showing `"Uncategorized"` for
+   both until those two rows are cleared and `prewarm_sector_data.py` is re-run.
+2. **`ticker_fundamentals` still has no row for either**, and they will keep occupying two
+   never-fetched slots until one `catchup_fundamentals.py` chunk runs after this deploys.
+
+Neither is automatic, and neither should be inferred from "the fix shipped".
+
+## Rename / alias — investigated, NOTHING BUILT, no alias map recommended (2026-08-23)
+
+**A format mismatch fails LOUDLY (no data, a FAILED row, a ticker that never leaves the queue); a
+rename would fail SILENTLY — same company, new symbol, historical prices stranded under the old one,
+nothing raising.** That asymmetry is why it was worth checking separately. Read-only throughout, no
+database writes. Full detail: `research/rename_alias_2026-08-23/REPORT.md`.
+
+**THE HYPOTHESIS WAS WRONG IN THE DIRECTION THAT MAKES THE PROBLEM SMALLER. Yahoo backfills the
+company's ENTIRE pre-rename history under the new symbol**, so a renamed ticker arrives with a full
+series, not a truncated one:
+
+| pair | old symbol | new symbol |
+|---|---|---|
+| UTX → RTX | 0 rows, window closed 2020-03-03 | **4,930 rows from 2007-01-03**, window opens 2020-04-03 |
+| ANTM → ELV | 0 rows, closed 2022-06-21 | **4,930 rows from 2007-01-03** |
+| WLTW → WTW | 0 rows, closed 2021-12-20 | **4,930 rows from 2007-01-03** |
+| ABC → COR | 0 rows, closed 2023-08-25 | **4,929 rows from 2007-01-03** |
+| FB → META | 0 rows | 3,575 rows from 2012-05-18 (Facebook's real IPO — complete for its listed life) |
+
+The old symbol goes dataless and out of the pool, the new one carries the history, and the membership
+source closes one window as it opens the other — so **eligibility follows the rename automatically,
+without the system knowing a rename occurred.**
+
+**(a) 11 rename events since 2007**, derived from the cached Wikipedia changes table (386 rows dated
+2007+) by selecting rows whose `reason` text explicitly describes a rename or ticker change. **A
+structural derivation was attempted FIRST and failed loudly — 308 candidate pairs, a cross-product** —
+because "new symbol's price history predates its own membership window" is true of almost any
+established company joining the index. Kept in the report, because the failure is the argument for
+name-based evidence over structure, the same conclusion the `NEEDS_REVIEW` adjudication reached.
+
+**(c) `_MAX_ANCHOR_GAP_DAYS` does NOT catch it, confirmed rather than assumed** — that guard tests for
+a GAPPED trailing window, and a renamed symbol's series is contiguous. **What actually protects the
+system is a different mechanism: fewer than 252 rows makes `shift(252)` NaN, momentum NaN, and the
+signal `False`.** Fail-safe — a missed opportunity, never a wrong trade — but by accident of the
+row-count requirement, not because the staleness guard did its job. Worth knowing, because it means
+the guard's coverage should not be cited as protection against this.
+
+**(d) `verify_ticker_identity()` cannot see a rename**, also confirmed by running it: it is per-symbol
+with no cross-symbol notion, so it quarantines the retired symbol (`UTX`, `ANTM` → `quoteType 'NONE'`)
+and passes the new one CLEAN, never recording that they are the same company. **Incidentally
+confirmed: `FB` has been RECYCLED — it now resolves to a ProShares ETF, and the recycled-symbol check
+catches it exactly as designed.**
+
+**(e) IMPACT IS IMMATERIAL AND MEASURED. 3 of 565 trades involve any rename-affected symbol — all
+`BMS`, Jan–Jul 2009 — totalling −£28.58 against £348,548.74 (−0.01%); Pool 1 has zero. All three had
+507 / 615 / 624 rows available at entry, so none was truncated.** Current exposure is nil: of 503
+live-pool tickers, **0 have no price data** and **490 have history starting at or before their
+membership did**; the 13 exceptions are genuine listing events (`Q`, `SNDK`, `CEG`, `DOW`, `FOXA`,
+`FOX`, `IR`, `DELL`, `HLT`, `HCA`, `KMI`, `DG`), not renames.
+
+**RECOMMENDATION: do not build an alias map.** It would address 11 events over 19 years worth −0.01%
+of P&L across 3 untruncated trades with zero current exposure. **If rename handling is ever revisited,
+the trigger should be "a live-pool ticker with fewer than 252 rows"** — the only condition under which
+a rename could cost anything, and directly checkable, unlike a rename itself.
+
+**The larger thing this sits inside, and it is NOT new.** Scanning every membership window found **292
+windows with more than 200 member-days of missing price data, 230 of them with none at all** —
+including `BK`, `MMC`, `K`, `IPG`, `WBA`, `HES`, `JNPR`, `MRO`, `DFS`, `CMA`. **This is the already-
+documented survivorship gap** (the 370 tickers the 2026-08-06 remediation could not recover): yfinance
+stops serving a symbol once the company is acquired, delisted or renamed away. Every one of those
+windows is closed — only `FOXA`, `IR` and `FOX` remain open and in the pool, all three with full recent
+series. **A backtest-coverage problem, not a live-trading one**, and renames are its better-behaved
+subset, because the company's history survives under the new symbol instead of vanishing.
+
+**One anomaly recorded rather than resolved: `FISV`.** It has 4,928 rows through 2026-08-06 and is a
+CURRENT member (windows `2001-04-02→2023-05-16` and `2025-11-11→2099-12-31`), while `FI` has 0 rows and
+a closed window `2023-06-07→2025-11-04` — i.e. the source shows the symbol reverting after ~2.5 years.
+Not investigated further (it is stable, has data, and is in the pool), but it is the one case here that
+does not fit the clean one-way pattern, and it is recorded so a future reader meets a known case rather
+than a mystery.
 
 
 ## Interactive Brokers unattended authentication — investigated, NOT FEASIBLE as documented (2026-08-11)

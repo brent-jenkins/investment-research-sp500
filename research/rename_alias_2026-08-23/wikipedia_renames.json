@@ -1,0 +1,112 @@
+[
+  {
+    "date": "2010-06-30",
+    "old": "STR",
+    "new": "QEP",
+    "old_rows": 0,
+    "new_rows": 0,
+    "new_first": null,
+    "new_in_pool": false,
+    "reason": "Company split. QEP retained, but ticker changed."
+  },
+  {
+    "date": "2012-10-02",
+    "old": "KFT",
+    "new": "MDLZ",
+    "old_rows": 0,
+    "new_rows": 4930,
+    "new_first": "2007-01-03",
+    "new_in_pool": true,
+    "reason": "Old Kraft Foods renamed Mondelez<ref>{{cite web|url=https://www.mondel"
+  },
+  {
+    "date": "2016-01-05",
+    "old": "FOSL",
+    "new": "WLTW",
+    "old_rows": 4930,
+    "new_rows": 0,
+    "new_first": null,
+    "new_in_pool": false,
+    "reason": "WSH merges with TW (and renames to WLTW)"
+  },
+  {
+    "date": "2017-09-01",
+    "old": "DOW",
+    "new": "DWDP",
+    "old_rows": 1856,
+    "new_rows": 0,
+    "new_first": null,
+    "new_in_pool": false,
+    "reason": "The Dow Chemical Company renamed to DowDuPont Inc. and ticker changed "
+  },
+  {
+    "date": "2017-11-15",
+    "old": "Q",
+    "new": "IQV",
+    "old_rows": 196,
+    "new_rows": 3332,
+    "new_first": "2013-05-09",
+    "new_in_pool": true,
+    "reason": "QuintilesIMS changed its name to IQVIA and ticker symbol from Q to IQV"
+  },
+  {
+    "date": "2019-06-11",
+    "old": "BMS",
+    "new": "AMCR",
+    "old_rows": 3130,
+    "new_rows": 3578,
+    "new_first": "2012-05-15",
+    "new_in_pool": true,
+    "reason": "BMS changed to AMCR post merger with Amcor; subsequently renamed to Am"
+  },
+  {
+    "date": "2020-03-02",
+    "old": "XEC",
+    "new": "IR",
+    "old_rows": 0,
+    "new_rows": 2322,
+    "new_first": "2017-05-12",
+    "new_in_pool": true,
+    "reason": "Gardner Denver acquired Ingersoll Rand's industrial businesses then ch"
+  },
+  {
+    "date": "2022-01-10",
+    "old": "WLTW",
+    "new": "WTW",
+    "old_rows": 0,
+    "new_rows": 4930,
+    "new_first": "2007-01-03",
+    "new_in_pool": true,
+    "reason": "Willis Towers Watson changed its ticker symbol from WLTW to WTW."
+  },
+  {
+    "date": "2023-07-10",
+    "old": "RE",
+    "new": "EG",
+    "old_rows": 0,
+    "new_rows": 4930,
+    "new_first": "2007-01-03",
+    "new_in_pool": true,
+    "reason": "Everest Re Group renamed to Everest Group and changed its ticker symbo"
+  },
+  {
+    "date": "2024-02-01",
+    "old": "CDAY",
+    "new": "DAY",
+    "old_rows": 0,
+    "new_rows": 0,
+    "new_first": null,
+    "new_in_pool": false,
+    "reason": "Ceridian changed its ticker symbol from CDAY to DAY."
+  },
+  {
+    "date": "2024-03-25",
+    "old": "FLT",
+    "new": "CPAY",
+    "old_rows": 0,
+    "new_rows": 3933,
+    "new_first": "2010-12-15",
+    "new_in_pool": true,
+    "reason": "FLEETCOR Technologies changed its name to Corpay and ticker symbol fro"
+  }
+]

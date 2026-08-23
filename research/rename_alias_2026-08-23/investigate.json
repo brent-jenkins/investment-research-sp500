@@ -1,0 +1,308 @@
+{
+  "pairs": {
+    "FB->META": {
+      "why": "Facebook -> Meta Platforms, 2022-06",
+      "FB": {
+        "rows": 0,
+        "first": null,
+        "last": null,
+        "windows": [],
+        "in_live_pool": false,
+        "in_known_tickers": false
+      },
+      "META": {
+        "rows": 3575,
+        "first": "2012-05-18",
+        "last": "2026-08-07",
+        "windows": [
+          [
+            "2013-12-23",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      }
+    },
+    "UTX->RTX": {
+      "why": "United Technologies -> Raytheon Technologies, 2020-04",
+      "UTX": {
+        "rows": 0,
+        "first": null,
+        "last": null,
+        "windows": [
+          [
+            "1996-01-02",
+            "2020-03-03"
+          ]
+        ],
+        "in_live_pool": false,
+        "in_known_tickers": true
+      },
+      "RTX": {
+        "rows": 4930,
+        "first": "2007-01-03",
+        "last": "2026-08-07",
+        "windows": [
+          [
+            "2020-04-03",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      }
+    },
+    "ANTM->ELV": {
+      "why": "Anthem -> Elevance Health, 2022-06",
+      "ANTM": {
+        "rows": 0,
+        "first": null,
+        "last": null,
+        "windows": [
+          [
+            "2002-07-25",
+            "2022-06-21"
+          ]
+        ],
+        "in_live_pool": false,
+        "in_known_tickers": true
+      },
+      "ELV": {
+        "rows": 4930,
+        "first": "2007-01-03",
+        "last": "2026-08-07",
+        "windows": [
+          [
+            "2022-06-28",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      }
+    },
+    "WLTW->WTW": {
+      "why": "Willis Towers Watson plc rebrand, 2022-01",
+      "WLTW": {
+        "rows": 0,
+        "first": null,
+        "last": null,
+        "windows": [
+          [
+            "2016-01-05",
+            "2021-12-20"
+          ]
+        ],
+        "in_live_pool": false,
+        "in_known_tickers": true
+      },
+      "WTW": {
+        "rows": 4930,
+        "first": "2007-01-03",
+        "last": "2026-08-07",
+        "windows": [
+          [
+            "2022-01-10",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      }
+    },
+    "ABC->COR": {
+      "why": "AmerisourceBergen -> Cencora, 2023-08",
+      "ABC": {
+        "rows": 0,
+        "first": null,
+        "last": null,
+        "windows": [
+          [
+            "2001-08-30",
+            "2023-08-25"
+          ]
+        ],
+        "in_live_pool": false,
+        "in_known_tickers": true
+      },
+      "COR": {
+        "rows": 4929,
+        "first": "2007-01-03",
+        "last": "2026-08-06",
+        "windows": [
+          [
+            "2023-08-30",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      }
+    },
+    "FISV->FI": {
+      "why": "Fiserv ticker change, 2023-06",
+      "FISV": {
+        "rows": 4928,
+        "first": "2007-01-03",
+        "last": "2026-08-06",
+        "windows": [
+          [
+            "2001-04-02",
+            "2023-05-16"
+          ],
+          [
+            "2025-11-11",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      },
+      "FI": {
+        "rows": 0,
+        "first": null,
+        "last": null,
+        "windows": [
+          [
+            "2023-06-07",
+            "2025-11-04"
+          ]
+        ],
+        "in_live_pool": false,
+        "in_known_tickers": true
+      }
+    },
+    "CBE->ETN": {
+      "why": "Cooper Industries -> Eaton, 2012-11 (acquisition, control)",
+      "CBE": {
+        "rows": 2772,
+        "first": "2007-01-03",
+        "last": "2018-01-30",
+        "windows": [
+          [
+            "1996-01-02",
+            "2009-09-08"
+          ],
+          [
+            "2011-11-23",
+            "2012-11-27"
+          ]
+        ],
+        "in_live_pool": false,
+        "in_known_tickers": true
+      },
+      "ETN": {
+        "rows": 4930,
+        "first": "2007-01-03",
+        "last": "2026-08-07",
+        "windows": [
+          [
+            "1996-01-02",
+            "2099-12-31"
+          ]
+        ],
+        "in_live_pool": true,
+        "in_known_tickers": true
+      }
+    }
+  },
+  "identity": {
+    "FB": {
+      "ticker": "FB",
+      "status": "QUARANTINED",
+      "reason": "membership window never closed (or unknown) -- Check B not applicable, decided by Check A alone (quote_type='ETF', exchange='BTS', long_name='ProShares S&P 500 Dynamic Daily Buffer ETF')",
+      "sentinel_case": false,
+      "evidence": {
+        "quote_type": "ETF",
+        "exchange": "BTS",
+        "long_name": "ProShares S&P 500 Dynamic Daily Buffer ETF",
+        "info_error": null,
+        "date_overrun_days": null,
+        "check_b_applicable": false,
+        "last_membership_end": null,
+        "boundary_gap_days": null
+      }
+    },
+    "META": {
+      "ticker": "META",
+      "status": "CLEAN",
+      "reason": "membership window never closed (or unknown) -- Check B not applicable, decided by Check A alone (quote_type='EQUITY', exchange='NMS', long_name='Meta Platforms, Inc.')",
+      "sentinel_case": true,
+      "evidence": {
+        "quote_type": "EQUITY",
+        "exchange": "NMS",
+        "long_name": "Meta Platforms, Inc.",
+        "info_error": null,
+        "date_overrun_days": null,
+        "check_b_applicable": false,
+        "last_membership_end": "2099-12-31",
+        "boundary_gap_days": null
+      }
+    },
+    "UTX": {
+      "ticker": "UTX",
+      "status": "QUARANTINED",
+      "reason": "membership window never closed (or unknown) -- Check B not applicable, decided by Check A alone (quote_type='NONE', exchange=None, long_name=None)",
+      "sentinel_case": false,
+      "evidence": {
+        "quote_type": "NONE",
+        "exchange": null,
+        "long_name": null,
+        "info_error": null,
+        "date_overrun_days": null,
+        "check_b_applicable": false,
+        "last_membership_end": "2020-03-03",
+        "boundary_gap_days": null
+      }
+    },
+    "RTX": {
+      "ticker": "RTX",
+      "status": "CLEAN",
+      "reason": "membership window never closed (or unknown) -- Check B not applicable, decided by Check A alone (quote_type='EQUITY', exchange='NYQ', long_name='RTX Corporation')",
+      "sentinel_case": true,
+      "evidence": {
+        "quote_type": "EQUITY",
+        "exchange": "NYQ",
+        "long_name": "RTX Corporation",
+        "info_error": null,
+        "date_overrun_days": null,
+        "check_b_applicable": false,
+        "last_membership_end": "2099-12-31",
+        "boundary_gap_days": null
+      }
+    },
+    "ANTM": {
+      "ticker": "ANTM",
+      "status": "QUARANTINED",
+      "reason": "membership window never closed (or unknown) -- Check B not applicable, decided by Check A alone (quote_type='NONE', exchange=None, long_name=None)",
+      "sentinel_case": false,
+      "evidence": {
+        "quote_type": "NONE",
+        "exchange": null,
+        "long_name": null,
+        "info_error": null,
+        "date_overrun_days": null,
+        "check_b_applicable": false,
+        "last_membership_end": "2022-06-21",
+        "boundary_gap_days": null
+      }
+    },
+    "ELV": {
+      "ticker": "ELV",
+      "status": "CLEAN",
+      "reason": "membership window never closed (or unknown) -- Check B not applicable, decided by Check A alone (quote_type='EQUITY', exchange='NYQ', long_name='Elevance Health, Inc.')",
+      "sentinel_case": true,
+      "evidence": {
+        "quote_type": "EQUITY",
+        "exchange": "NYQ",
+        "long_name": "Elevance Health, Inc.",
+        "info_error": null,
+        "date_overrun_days": null,
+        "check_b_applicable": false,
+        "last_membership_end": "2099-12-31",
+        "boundary_gap_days": null
+      }
+    }
+  }
+}
