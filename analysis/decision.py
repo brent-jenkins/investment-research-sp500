@@ -769,3 +769,75 @@ def blocking_share_class_siblings(
     if not siblings or not held_tickers:
         return ()
     return tuple(sorted(s for s in siblings if s in held_tickers))
+
+
+def resolve_stale_price_gate_days(config: dict) -> int:
+    """Trading-day threshold beyond which a candidate's price data is treated
+    as frozen and the candidate is skipped at admission. 0 (the default, and
+    today's actual behaviour) disables the gate entirely.
+
+    Same config-driven pattern as resolve_admission_ranking_mode() and the
+    stock_max_holding_days sentinel: shipping the CODE is separable from
+    adopting the BEHAVIOUR, so a config written before this key existed
+    behaves byte-identically to before.
+
+    The intended enabled value is 3, matching main.py's Data Coverage panel --
+    ONE threshold and one notion of "stale" across the system.
+    """
+    t212_cfg = config.get("trading212_invest", {}) or {}
+    try:
+        return max(0, int(t212_cfg.get("stale_price_gate_trading_days", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_stale_price_blocked(
+    *,
+    stale_trading_days,
+    max_stale_trading_days: int,
+) -> bool:
+    """True if this candidate's most recent price bar is far enough behind the
+    rest of the pool that its trailing momentum should be treated as frozen
+    rather than current.
+
+    A CANDIDACY FILTER ONLY. Nothing here touches sizing, ranking, the entry
+    gate or any exit; a position already open is never force-exited because
+    its data went quiet.
+
+    WHY: a delisted or suspended ticker keeps a fixed trailing return while
+    every other candidate's moves, so it can rank into the top handful and be
+    admitted on a stale number -- and the submission-time price-sanity check
+    compares against that SAME stale close, so it cannot catch it. Confirmed
+    live: EA (Electronic Arts) went private, its last bar was 2026-08-10, and
+    it produced eight queued decisions over ten days at an identical frozen
+    momentum of 0.28848 and a frozen price of 209.70, one of them still
+    PENDING at GBP 2,611.90. Only a full book prevented admission.
+
+    Frozen is not inert: as other candidates' 12-month windows roll forward, a
+    frozen ticker DRIFTS in relative rank rather than holding a fixed
+    position, so it is not even stably wrong.
+
+    THE CALLER MUST MEASURE stale_trading_days RELATIVE TO THE POOL'S OWN MAX
+    PRICE DATE, NEVER WALL CLOCK. This is the single most important property
+    of the gate and the reason it is safe to enable: anchored to wall clock,
+    an ingestion outage would make every candidate stale at once and halt all
+    trading -- 503 simultaneous apparent delistings. Anchored to the pool's own
+    high-water mark, an outage leaves every ticker equally stale (gap 0) and
+    blocks nothing, while a single ticker going quiet stands out immediately.
+
+    ONE THRESHOLD, TWO ANCHORS, DELIBERATELY -- and this is not an
+    inconsistency to be harmonised away: main.py's Data Coverage panel measures
+    the same 3-trading-day threshold against WALL CLOCK because its job is to
+    tell a human that ingestion has stopped, and it SHOULD shout during an
+    outage. This gate measures it against the pool because its job is to keep
+    trading correct, and it MUST NOT fire during one. The panel should shout;
+    the gate must not.
+
+    None-tolerant per this module's standing contract: an unknown gap means
+    "don't trigger this check", never a block.
+    """
+    if max_stale_trading_days <= 0:
+        return False
+    if stale_trading_days is None:
+        return False
+    return int(stale_trading_days) > int(max_stale_trading_days)

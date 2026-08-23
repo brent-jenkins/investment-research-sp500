@@ -81,6 +81,7 @@ from analysis.decision import (
     evaluate_exit_reason,
     is_asset_class_enabled,
     is_position_size_viable,
+    is_stale_price_blocked,
     is_submission_price_move_blocked,
     passes_entry_gate,
     passes_momentum_floor,
@@ -91,6 +92,7 @@ from analysis.decision import (
     resolve_min_momentum_floor,
     resolve_reentry_cooldown_days,
     resolve_share_class_exclusion_enabled,
+    resolve_stale_price_gate_days,
     resolve_var_horizon_days,
 )
 from analysis.universe import get_max_holding_days
@@ -1861,6 +1863,33 @@ def _ticker_state(ticker: str, config: dict, gspc_close: pd.Series) -> Optional[
         "entry_blocked": crisis.is_entry_blocked(gspc_close, latest_dt),
         "close_series": close,
     }
+
+
+def _pool_max_price_date():
+    """The freshest price bar anywhere in price_data -- the ANCHOR the
+    staleness gate measures each candidate against.
+
+    Deliberately the pool's own high-water mark rather than wall clock: if
+    ingestion stops, this stops advancing too, every candidate's gap stays 0
+    and the gate blocks nothing. Anchored to wall clock an outage would look
+    like 503 simultaneous delistings and halt trading. See
+    analysis/decision.py:is_stale_price_blocked() for the full reasoning.
+
+    Returns None on any failure, which the caller treats as "unknown, do not
+    gate" -- failing open, because a read failing must never stop live
+    trading.
+    """
+    try:
+        from sqlalchemy import text as sa_text
+        from data.database import get_engine
+        with get_engine().connect() as conn:
+            raw = conn.execute(sa_text("SELECT MAX(date) FROM price_data")).scalar()
+        if raw is None:
+            return None
+        return raw.date() if hasattr(raw, "date") else datetime.fromisoformat(str(raw)).date()
+    except Exception as exc:
+        logger.warning("_pool_max_price_date: query failed: %s", exc)
+        return None
 
 
 def _load_gspc_close() -> pd.Series:
@@ -3872,6 +3901,11 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
 
     orders_queued = 0
 
+    # Price-staleness gate (2026-08-23) -- candidacy only, disabled by default
+    # (stale_price_gate_trading_days: 0). Anchor resolved ONCE per run.
+    stale_gate_days = resolve_stale_price_gate_days(config)
+    pool_max_date = _pool_max_price_date() if stale_gate_days > 0 else None
+
     # No max_total_deployed enforcement in this loop — unlike the old
     # immediate-submission design, queuing a decision commits no cash and
     # opens no position, so there is nothing yet for that cap to protect
@@ -3906,6 +3940,40 @@ def maybe_place_orders(config: dict, run_type: str = "full") -> None:
             state = _ticker_state(ticker, config, gspc_close)
             if state is None:
                 continue
+
+            # Price-staleness gate -- the SHARED check
+            # (analysis/decision.py:is_stale_price_blocked()). A candidate
+            # whose price data has stopped updating ranks on a FROZEN trailing
+            # momentum figure, and the submission-time price-sanity check
+            # compares against that same stale close so it cannot catch it.
+            # Measured against the pool's own high-water mark, never wall
+            # clock -- see that function's docstring for why that distinction
+            # is what makes the gate safe to enable.
+            #
+            # DECIDE PATH ONLY. maybe_exit_positions() calls _ticker_state()
+            # too and is deliberately NOT gated: a held position whose data
+            # goes quiet must never be force-exited by this.
+            #
+            # LIVE-ONLY BY CONSTRUCTION, recorded in
+            # tests/test_one_sided_decision_rules.py: the backtest builds its
+            # event stream from each ticker's OWN rows, so a ticker whose data
+            # stops simply stops being a candidate and can never be admitted
+            # on a frozen figure. Verified directly, not assumed.
+            if stale_gate_days > 0 and pool_max_date is not None:
+                _last_bar = state["close_series"].index[-1]
+                _gap = universe.trading_days_between(
+                    _last_bar.date() if hasattr(_last_bar, "date") else _last_bar,
+                    pool_max_date,
+                )
+                if is_stale_price_blocked(
+                    stale_trading_days=_gap, max_stale_trading_days=stale_gate_days,
+                ):
+                    logger.info(
+                        "%s: price data %d trading days behind the pool (last bar %s, "
+                        "pool %s) — skipping, momentum would be frozen.",
+                        ticker, _gap, _last_bar, pool_max_date,
+                    )
+                    continue
 
             # Entry gate — the single shared implementation
             # (analysis/decision.py:passes_entry_gate()), also called by

@@ -1,0 +1,78 @@
+Wikipedia lag check (lag detector only, NOT independent verification): 7 ticker(s) disagree with our stored membership — [{'ticker': 'AVB', 'our_member': True, 'wikipedia_member': False}, {'ticker': 'CBOE', 'our_member': True, 'wikipedia_member': False}, {'ticker': 'EA', 'our_member': True, 'wikipedia_member': False}, {'ticker': 'EQR', 'our_member': True, 'wikipedia_member': False}, {'ticker': 'FERG', 'our_member': False, 'wikipedia_member': True}, {'ticker': 'RDDT', 'our_member': False, 'wikipedia_member': True}, {'ticker': 'VMRK', 'our_member': False, 'wikipedia_member': True}]
+ACCEPTANCE: one-off LIVE check of the rescoped check_wikipedia_lag()
+run 2026-08-23 against a copy of the production database.
+
+Recorded here rather than asserted in CI: the seven tickers below are
+correct only until fja05680/sp500 publishes its next snapshot, so
+pinning them as a test would turn a routine upstream update into a red
+test that means nothing. The categorisation LOGIC is pinned instead by
+frozen-fixture tests in tests/test_universe.py.
+
+checked              : 506      (was 40 -- the frozen STOCK_MEMBERSHIP scope)
+our_pool_size        : 503
+wikipedia_pool_size  : 502
+stale_members        : ['AVB', 'CBOE', 'EA', 'EQR']
+untracked_entrants   : ['FERG', 'RDDT', 'VMRK']
+
+matches Part 1's hand-found stale members ['AVB', 'CBOE', 'EA', 'EQR']: True
+matches Part 1's hand-found entrants      ['FERG', 'RDDT', 'VMRK']: True
+
+PASS
+
+--------------------------------------------------------------------------
+compute_membership_health() -- three-way split, run against the REAL
+PRODUCTION database over SSH (read-only), 2026-08-23.
+
+Recorded separately from the run above because the first attempt used the
+local research DB copy, whose price_data ends 2026-08-07 -- EARLIER than EA's
+last bar (2026-08-10). Against that copy EA's staleness gap was 0 and the
+DANGEROUS category came back EMPTY: a clean-looking result produced by stale
+derived state rather than by a healthy system. Exactly the trap CLAUDE.md's
+"derived state living in one place while work happens in another" entry
+describes, hit again here. The figures below are production's.
+
+  pool_size         : 503
+  pool_max_date     : 2026-08-21
+  source_high_water : 2026-06-30      (53 days behind)
+  error             : None
+
+  DANGEROUS  : EA, last bar 2026-08-10, 9 trading days behind the pool
+  SOURCE_LAG : AVB, CBOE, EQR         (EA correctly excluded -- precedence)
+  UNTRACKED  : FERG, RDDT, VMRK
+
+Matches Part 1's hand-found seven exactly, split into the three categories
+by consequence. EA appears in DANGEROUS only, confirming the precedence rule.
+
+--------------------------------------------------------------------------
+REGRESSION CHECK -- does the staleness gate fire on ordinary data gaps?
+
+The stopping condition agreed was: if enabling the gate materially moves a
+19-year backtest, it is firing on ordinary data gaps and the change stops.
+
+A literal backtest diff CANNOT be run, and that is a property of the design
+rather than an omission. The gate is live-only because the backtest engine
+builds its event stream from each ticker's OWN rows -- a ticker whose data
+stops simply stops being a candidate there, so enabling the gate cannot
+change a backtest by construction (verified directly; recorded as the
+EXEMPT_LIVE_ONLY reason in tests/test_one_sided_decision_rules.py).
+
+The spirit of the check was measured directly instead, against real
+production price history, on the population the gate actually applies to.
+
+  window                          : 2024-01-01 -> 2026-08-21 (688 sessions)
+  live candidates evaluated       : 503
+  (candidate, day) pairs evaluated: 341,432
+  pairs the gate would have fired :       6   (0.0018%)
+  distinct candidates ever gated  :       1 of 503
+
+      EA   6 days, first 2026-08-14, max gap 9 trading days
+
+The gate fires on exactly the one ticker it was built for and on nothing
+else in two and a half years. It does not fire on ordinary data gaps. The
+stopping condition is NOT met.
+
+For contrast, the same measurement across ALL 798 tickers in price_data
+(i.e. including the delisted/historical population that is NOT eligible to
+trade) fires 1,722 times on 45 tickers -- CHIR, SMI, GSX, DDR and similar
+long-dead symbols. That is the gate correctly identifying frozen series; it
+is simply not the population live admission draws from.

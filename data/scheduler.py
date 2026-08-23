@@ -1537,6 +1537,29 @@ def _membership_refresh_job() -> None:
     except Exception as exc:
         logger.warning("Wikipedia membership lag check failed: %s", exc)
 
+    # Membership health (2026-08-23) -- the three-category report the weekly
+    # email renders. COMPUTED HERE, in the scheduler, and stored; the email
+    # and any UI read the stored blob, so no render path ever makes a network
+    # call (same guarantee as the sector, crisis-banner and T212-snapshot
+    # work). Wrapped so a failure can never affect the refresh above.
+    try:
+        from analysis.universe import (  # noqa: PLC0415
+            MEMBERSHIP_HEALTH_METADATA_KEY,
+            compute_membership_health,
+        )
+        from data.database import set_metadata  # noqa: PLC0415
+        health = compute_membership_health()
+        set_metadata(MEMBERSHIP_HEALTH_METADATA_KEY, json.dumps(health))
+        logger.info(
+            "Membership health: %d price-frozen, %d source-lag, %d untracked "
+            "(pool anchor %s, source high-water %s).",
+            len(health.get("dangerous", [])), len(health.get("source_lag", [])),
+            len(health.get("untracked", [])), health.get("pool_max_date"),
+            health.get("source_high_water_mark"),
+        )
+    except Exception as exc:
+        logger.warning("Membership health computation failed: %s", exc)
+
 
 def _weekly_summary_job() -> None:
     """Sunday 09:00 Europe/London (genuinely UK local time — see
