@@ -2,7 +2,7 @@
 
 A self-hosted Streamlit application running a single, validated trading strategy — 12-month price momentum, long/flat, with a rare-firing crisis circuit breaker — against the full, dynamically-refreshed S&P 500, with automated Trading212 Invest order placement.
 
-Live at [platform.example.com](https://platform.example.com) (password protected).
+Live at [sp500.example.com](https://sp500.example.com) (password protected).
 
 ---
 
