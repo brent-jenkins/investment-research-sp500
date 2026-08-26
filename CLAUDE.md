@@ -110,6 +110,89 @@ None of these three was caught by a test — the test suite at the time tested e
 
 **How to apply this going forward.** Any future single-variable sweep or comparison should ask this question explicitly, in the write-up itself, for every cost this project has ever deferred (FX conversion, idle-cash interest, and any other cost identified in the future): does this vary across the arms being compared? If yes, model it for those arms specifically, using real trade-level data where available rather than a proxy — this sweep's own `cost_adjustment.py` is a template (Σ(real position_gbp) × the real T212 fee, real realised-idle-% × the real mean ^IRX rate, both expressed as an annualised % of mean account balance and netted against the reported CAGR) for how to do this cheaply once full trade-level output already exists, which it should per this file's own "preserve full trade-level output" standing requirement above.
 
+## The 0.15% T212 FX fee is CONFIRMED, observed directly in the broker's own cost breakdown (2026-08-22)
+
+**`FX_ROUND_TRIP_FEE = 0.0030` — the 0.15%/leg, 0.30%/round-trip figure underpinning every
+cost-adjusted result in this project — is confirmed against a real T212 order cost breakdown, not
+merely against published terms.** Prior basis was the 2026-08-06 FX denomination audit's quotation of
+T212's help centre; this is the first observation of the charge actually being applied to a real
+order. Full audit: `research/fx_fee_audit_2026-08-22/REPORT.md`.
+
+**Observed** — T212 practice-mode **Invest** app, order cost breakdown for a Moderna market buy,
+40 shares, shares value **~£4,278.36**, displayed FX rate 0.7336, account default buying/selling
+currency **GBP**:
+
+| | |
+|---|---|
+| Entry — commission | **£0.00** |
+| Entry — **FX fee** | **~£6.40** |
+| Ongoing — custody / platform (3-year holding period) | **£0.00** / **£0.00** |
+| Exit — commission | **£0.00** |
+| Exit — **FX fee** | **~£6.42** |
+| Exit — SEC fee | ~£0.09 |
+| Exit — FINRA fee | ~£0.01 |
+| Other — third-party inducements | **£0.00** |
+
+**£6.40 / £4,278.36 = 0.1496%, i.e. 0.15% to rounding, and it is charged on BOTH legs** (the exit
+leg's £6.42 is the same 0.15% of the projected exit value). Round trip ≈ **0.30% of notional** —
+exactly what the models charge. **Every cost-adjusted figure in this project stands as computed.**
+
+**THE OPEN QUESTION FROM THE AUDIT'S §8 IS CLOSED — in the LESS FAVOURABLE direction, which is worth
+stating plainly because the audit left it open in a way that could have improved every result.** That
+section raised T212 Invest's multi-currency wallet: an account holding a USD balance trades US stocks
+without converting, so the per-trade fee would not apply and the models would be **overstating** FX
+cost. **It does not apply to this account.** The default buying/selling currency is **GBP**, so every
+trade converts and the fee is charged per leg, exactly as modelled. **The models do not overstate FX
+cost, no cost-adjusted figure improves, and the "beats buy-and-hold" arithmetic does not move** — the
+exit-mechanics sweep clearing `^SP500TR` at only one of seven end dates stands as reported.
+
+**TWO CHARGES THE COST MODELS DO NOT INCLUDE — recorded as a deliberate decision, not an oversight,
+so a future reader finding them does not have to wonder whether the model was incomplete.** The exit
+leg also carries a **SEC fee (~£0.09)** and a **FINRA fee (~£0.01)** — US regulatory charges on sales
+only, ~£0.10 combined on this trade, or **~0.23 bp of notional**, roughly **1/128th of the £12.82
+round-trip FX charge**. **Judged immaterial and deliberately NOT added to the models.** Adding them
+would move a cost-adjusted CAGR by well under a hundredth of a percentage point — far inside the
+measured ~1.08pp noise floor — at the cost of complicating every cost script for no change in any
+verdict.
+
+**CONFIRMED ZERO for this account: commission, custody fee, platform fee, and third-party
+inducements.** Together with the above, **FX is effectively the entire cost structure** — which is
+why it is the one cost this project models per-arm rather than deferring, and why getting its
+magnitude right mattered.
+
+**METHOD NOTE — the transferable part, and the reason this took a UI observation rather than a
+query.** The audit established two things that together make this question **underivable from stored
+data**: (1) T212's API exposes **no fee, commission, charge or conversion-rate field anywhere** —
+confirmed against `/equity/account/info`, `/equity/account/cash`, `/equity/account/summary` and the
+raw positions snapshot, and by a codebase-wide grep returning zero hits; and (2) the GBP amounts in
+`invest_orders.estimated_value_gbp` and `pnl.pnl_gbp` are **not broker figures** — both are computed
+by this system via `_to_gbp()`, whose rate comes from `_fx_rates()`, which reads
+`SELECT close FROM price_data WHERE ticker='GBPUSD=X' ORDER BY date DESC LIMIT 1`. **Deriving an
+implied rate from them and comparing it to `GBPUSD=X` compares the series to itself.** Proven
+empirically as well as by code reading: all 40 legs on 2026-08-12 share one implied rate to six
+decimal places (worst within-day spread across every trade date: **0.096 bp**, against a 15 bp fee),
+and BUY and SELL legs on that date coincide to **0.0018 bp** when a real per-conversion fee would
+force them ~30 bp apart in *opposite* directions.
+
+**So: when a broker-fee question arises, go to the broker's own order cost breakdown in the app
+first.** Stored order data cannot answer it, and re-deriving that fact costs a full investigation. The
+generalisation beyond fees — **a field this system computed and stored is not evidence about the
+outside world, however authoritative its name** (`estimated_value_gbp` is written at fill time from a
+variable literally called `actual_value`) — is the same shape as this file's standing
+"check that reports clean for a reason unrelated to the thing it was checking" class.
+
+**Scope and caveats.** Observed in **practice mode**, which is confirmed to mirror **Invest** (T212's
+API is available only for Invest accounts in practice mode, and the key is generated from the Invest
+account's own Settings → API; every endpoint this system calls sits under `/equity/`, ruling out CFD
+and its entirely different spread-plus-overnight-funding cost model). Whether a funded live account
+bills identically is untested — but the breakdown is T212's own pre-trade disclosure of what it will
+charge, which is materially stronger evidence than anything derivable here. `trading212_invest.live`
+remains `false`.
+
+**No code, config, database or live-path change accompanied this** — `FX_ROUND_TRIP_FEE = 0.0030`
+appears only in research scripts and needed no edit, because it was already right.
+
+
 ## Dual-provenance validation for any provisional-universe research (standing requirement, 2026-08-07)
 
 **Why this exists.** The stop-loss reconfiguration study (`research/stop_loss_reconfiguration_2026-08-07/`) ran every arm against two pools deliberately — Pool 1 (`get_live_stock_candidates()`, survivorship-biased but zero confirmed corruption) and Pool 2 (`get_research_stock_candidates()`, the provisional post-quarantine universe) — specifically so the two could be checked against each other, not merged into one blended figure. That check surfaced a real cross-pool disagreement on peak-relative drawdown (Pool 2's raw numbers showed Arm B beating Arm A on drawdown; Pool 1 showed the opposite) precisely in the tail statistic (worst-episode drawdown), not the aggregate, where both pools' CAGR and block-pass rankings agreed throughout.
