@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily prune of obsolete investment_research DB snapshots
+
+[Timer]
+# 03:30 UTC: clear of the hourly :55-:10 T212 window, the 14:30 order
+# submission and the 21:30 EOD job. Persistent so a missed run catches up.
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

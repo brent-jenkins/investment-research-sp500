@@ -1,0 +1,9 @@
+[Unit]
+Description=Prune obsolete investment_research DB snapshots
+Documentation=file:/root/prune_db_backups.sh
+
+[Service]
+Type=oneshot
+ExecStart=/root/prune_db_backups.sh --apply
+Nice=10
+IOSchedulingClass=idle

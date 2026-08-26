@@ -4615,6 +4615,75 @@ systemctl status investment-research investment-research-scheduler investment-re
 systemctl restart investment-research-scheduler   # after a config-only change, e.g.
 ```
 
+## Database snapshot pruning — 17 GB reclaimed, and a daily timer so it stays reclaimed (2026-08-26)
+
+**47 hand-made `investment_research.db` snapshots had accumulated to 17 GB in
+`database/`, taking the VM to 83% full (6.4 G free on a 38 G disk). All 47 removed; disk
+now 35%.** The timer below keeps it that way.
+
+**They are NOT produced by the application or by the test suite, and this was checked rather
+than assumed** — `tests/conftest.py` uses `sqlite:///:memory:` exclusively, no test references
+the real DB path, and nothing anywhere in the repo copies a `.db`. The filenames map one-to-one
+onto this file's own manual change history (`pre-xlk-fix`, `pre-v1-removal`,
+`pre-broker-stop-order`, `pre-wikipedia-fix`, `pre-claudemd-split`) and stop dead on 2026-08-08,
+which is when the project moved to worktrees and local research. They are "snapshot before a
+risky change" copies from interactive server sessions.
+
+**THE GENERALISABLE PART: a snapshot of this database decays through SCHEMA drift, not merely
+data staleness, and it does so far faster than intuition suggests.** The newest snapshot was
+19 days old and already unrestorable — it was missing **five tables that exist now**
+(`admission_ranking_shadow`, `benchmark_comparison`, `ticker_fundamentals`,
+`candidate_fundamentals_snapshot`, `ticker_sector`), four of which were created within *four
+days* of it being taken. Restoring it would have destroyed the forward shadow-comparison record
+and the point-in-time fundamentals — **neither of which is regenerable by construction**, since
+one accrues only forward from the 2026-08-11 flip and the other is only meaningful as captured.
+It also carried 49 orders against live's 98 and 1 `pnl` row against 26. **A stale snapshot here
+is not a weak fallback, it is a liability**, and that was established by diffing its schema
+against live before deleting anything — not inferred from its age.
+
+**The prune — `ops/prune_db_backups.sh`, on a daily systemd timer.** 03:30 UTC, deliberately
+clear of every window in the blackout table above (the hourly `:55`–`:10` T212 window, the 14:30
+submission, the 21:30 EOD). `Persistent=true`, so a missed run catches up. Retention **14 days**,
+and it **always keeps the single newest snapshot regardless of age**, so it can never leave zero
+fallback. Four guards, each verified in a sandbox to produce *both* of its answers rather than
+only the safe one:
+1. The live DB and its `-wal`/`-shm` are never candidates (name-excluded, not age-excluded).
+2. Aborts outright if the live DB is missing or implausibly small — proven against both a
+   removed and a truncated live DB, deleting nothing in either case.
+3. Keep-newest and the age cutoff were proven **independently**, on separate fixture files, so
+   neither passes for the other's reason.
+4. Dry-run unless `--apply`; the dry run was confirmed genuinely inert.
+
+It logs the **population it scanned**, not just the count it acted on
+(`scanned dir=… snapshots=N … prunable=N`), so a run that found nothing is distinguishable from
+a run that scanned nothing — per the standing degenerate-check class, instance 10, where
+`"checked": 40` was read past for exactly this reason.
+
+**It lives in server ops rather than in the scheduler on purpose**: these files are made by
+humans, not by the app, so bounding them is not app behaviour — and a timer still fires when the
+app is down, which is precisely when a full disk bites.
+
+**TWO COPIES EXIST AND THE REPO IS NOT THE ONE THAT RUNS — stated plainly because this is the
+duplication hazard this file documents repeatedly.** `ops/` is the canonical, reviewable source;
+`/root/prune_db_backups.sh` and the two unit files under `/etc/systemd/system/` are what
+actually execute. **`deploy.sh` does not install them** — it pulls the repo and restarts
+services, and knows nothing about systemd timers. Editing `ops/` changes nothing on the server
+until re-installed by hand:
+
+```bash
+scp ops/prune_db_backups.sh root@<host>:/root/prune_db_backups.sh
+scp ops/prune-db-backups.{service,timer} root@<host>:/etc/systemd/system/
+ssh root@<host> 'chmod +x /root/prune_db_backups.sh && systemctl daemon-reload \
+  && systemctl enable --now prune-db-backups.timer && /root/prune_db_backups.sh'   # dry-run
+```
+
+**Also on the VM, NOT removed, flagged for a decision: ~1.8 GB of stale research clones** —
+`hysteresis-cadence-verify` (989 M), `archived_server_hygiene_2026-08-08` (311 M),
+`vol-shock-r11` (311 M), `xbrl-tag-investigation` (149 M), last modified 2026-07-31 to 08-07.
+They sit against the standing "research runs locally, not on the server" practice, but may hold
+trade-level output preserved nowhere else — deleting them blind would violate this file's own
+preserve-full-trade-level-output requirement, so they need a look first, not a sweep.
+
 **Before any local research/backtest sweep**, verify the local environment is current — don't assume it (a fresh, coverage-checked copy of the production database; current code; the DB file confirmed gitignored). See "Experimental/research work runs locally, not on the server" below for the full standing practice, including the multi-session git-worktree requirement.
 
 `config.yaml` is git-tracked (not gitignored) — secret fields (`notifications.email.smtp_password`) are committed as blank placeholders; real values come only from the server's systemd secrets drop-in or the `T212_API_KEY`/`T212_API_SECRET`/`SMTP_PASSWORD`/`ADMIN_PASSWORD_HASH` env vars. `ADMIN_PASSWORD_HASH` (see "Authentication" above) is a bcrypt hash, not a secret in the traditional sense — it is only ever read once, by `_seed_default_admin()`, to bootstrap the first `admin` account on an empty `users` table; it is safe to leave in the secrets drop-in indefinitely (later runs are a no-op once the table is non-empty), but it plays no role in day-to-day authentication after that first run.
