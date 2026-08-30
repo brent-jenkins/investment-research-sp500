@@ -1,5 +1,37 @@
 # CLAUDE.md
 
+> ## ⚠️ Archived — decommissioned 2026-08-30
+>
+> **This project is no longer running.** The three systemd services
+> (`investment-research`, `-scheduler`, `-webhook`), the Caddy site block for
+> `sp500.example.com`, the nightly DB-pruning timer, and the entire
+> `/root/investment-research` tree were removed from the VM on 2026-08-30 to
+> free those resources for a different project. No scheduler fires, no orders
+> are placed, and the dashboard is not reachable at any URL.
+>
+> **Nothing was lost to the teardown except the runtime database.**
+> `database/investment_research.db` was gitignored and was deliberately not
+> preserved — the bulk of it (3.48M rows) was regenerable `price_data`, and
+> the non-regenerable remainder (the `admission_ranking_shadow` forward
+> comparison, the point-in-time `ticker_fundamentals` capture, and the demo
+> account's 98-order / 26-trade record) was judged not worth carrying forward.
+> Every research report, pre-registration, and trade-level CSV under
+> `research/` is tracked in git and is fully intact here.
+>
+> Trading was **always demo-only** — `trading212_invest.live` was `false` for
+> the system's entire life, and `Trading212Client` raised on `live=True`
+> regardless. No real money was ever at stake. The demo account's 20 open
+> positions and their resting broker-side stop orders were deliberately left
+> in place.
+>
+> The GitHub Actions deploy workflow was removed in this same commit, since it
+> pointed at a server that no longer exists. It remains in git history.
+>
+> Everything below this line describes the system as it ran, and is preserved
+> unedited as a record of that.
+
+---
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 **This is the short, current-state file.** It holds the standing invariants a session must never violate, a technical summary of the system as it actually is right now, and the practical day-to-day operational material (tests, deployment, server commands). For the full chronological build log — every dated investigation, incident, fix, and rejected experiment that led to today's system, preserved verbatim — see **`CLAUDE_HISTORY.md`** in the project root. This file (`CLAUDE.md`) was split from a single ~8,300-line file on 2026-08-04 specifically so the material a session needs most doesn't have to be found by scrolling past thousands of lines of historical detail; nothing was deleted, corrected, or summarized in the split — `CLAUDE_HISTORY.md` is the original narrative, unedited, and this file's standing-invariant sections below are moved from it verbatim. Everything else in this file (the architecture summary and the operational sections) is freshly written, verified directly against the current codebase at split time, not copied from the old file's own scattered "reference-looking" sections — several of those were checked directly against the current code while planning this split and found to describe defunct V1-era modules, removed config keys, and a superseded scheduler layout, which is exactly the kind of drift a single continuously-growing chronological file makes easy to miss. Treat anything in `CLAUDE_HISTORY.md` as a record of what was true *when it was written*, not as current fact, unless cross-checked against this file or the real code.
