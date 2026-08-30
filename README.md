@@ -1,8 +1,40 @@
 # SP500Invest
 
+> ## ⚠️ Archived — decommissioned 2026-08-30
+>
+> **This project is no longer running.** The three systemd services
+> (`investment-research`, `-scheduler`, `-webhook`), the Caddy site block for
+> `sp500.example.com`, the nightly DB-pruning timer, and the entire
+> `/root/investment-research` tree were removed from the VM on 2026-08-30 to
+> free those resources for a different project. No scheduler fires, no orders
+> are placed, and the dashboard is not reachable at any URL.
+>
+> **Nothing was lost to the teardown except the runtime database.**
+> `database/investment_research.db` was gitignored and was deliberately not
+> preserved — the bulk of it (3.48M rows) was regenerable `price_data`, and
+> the non-regenerable remainder (the `admission_ranking_shadow` forward
+> comparison, the point-in-time `ticker_fundamentals` capture, and the demo
+> account's 98-order / 26-trade record) was judged not worth carrying forward.
+> Every research report, pre-registration, and trade-level CSV under
+> `research/` is tracked in git and is fully intact here.
+>
+> Trading was **always demo-only** — `trading212_invest.live` was `false` for
+> the system's entire life, and `Trading212Client` raised on `live=True`
+> regardless. No real money was ever at stake. The demo account's 20 open
+> positions and their resting broker-side stop orders were deliberately left
+> in place.
+>
+> The GitHub Actions deploy workflow was removed in this same commit, since it
+> pointed at a server that no longer exists. It remains in git history.
+>
+> Everything below this line describes the system as it ran, and is preserved
+> unedited as a record of that.
+
+---
+
 A self-hosted Streamlit application running a single, validated trading strategy — 12-month price momentum, long/flat, with a rare-firing crisis circuit breaker — against the full, dynamically-refreshed S&P 500, with automated Trading212 Invest order placement.
 
-Live at [sp500.example.com](https://sp500.example.com) (password protected).
+Formerly live at `sp500.example.com` (password protected); **taken offline 2026-08-30**, see the notice above.
 
 ---
 
