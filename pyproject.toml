@@ -1,2 +1,10 @@
+[project]
+name = "investment-research-sp500"
+version = "2.0.0"
+description = "A long-only S&P 500 momentum strategy, its backtest engine and research record. Archived."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,6 +27,19 @@
 > The GitHub Actions deploy workflow was removed in this same commit, since it
 > pointed at a server that no longer exists. It remains in git history.
 >
+> **Superseded.** The project was closed after the experiments summarised in
+> FINDINGS.md, and its work continued in
+> [investment-research-cfd](https://github.com/brent-jenkins/investment-research-cfd), which tested a short-horizon CFD
+> strategy instead. That project closed on 2026-11-04, also without finding
+> an edge.
+>
+> **What it found** is summarised in [FINDINGS.md](FINDINGS.md). The code is
+> MIT-licensed; see [LICENSE](LICENSE).
+>
+> **Want to restart or extend it?** Start with
+> [CONTRIBUTING.md](CONTRIBUTING.md): how to rebuild the data, the rules
+> that keep results honest, and the few places something might remain.
+>
 > Everything below this line describes the system as it ran, and is preserved
 > unedited as a record of that.
 

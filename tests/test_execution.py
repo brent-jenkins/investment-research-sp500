@@ -5519,17 +5519,22 @@ def test_stale_gate_never_force_exits_a_held_position(db_engine, v2_mocks, mocke
     """The gate is candidacy-only. A position whose data goes quiet must ride
     to its normal exit -- maybe_exit_positions() calls _ticker_state() too and
     is deliberately NOT gated."""
+    from datetime import datetime, timedelta
     from sqlalchemy import text as sa_text
     frames = _stale_frames()
     _mock_price_data(mocker, frames)
     mocker.patch("analysis.universe.is_member", return_value=True)
+    # Entered an hour ago, relative to the real clock. A fixed calendar date
+    # here aged past the holding cap once the wall clock moved on, so the
+    # test failed on a MAX_HOLDING exit that had nothing to do with the gate.
+    entered = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
     with db_engine.begin() as conn:
         conn.execute(sa_text("""
             INSERT INTO invest_orders (ticker, t212_ticker, direction, quantity, status,
                                        order_id, fill_price, filled_quantity, filled_at, created_at)
             VALUES ('STALE','STALE_US_EQ','BUY',10,'FILLED','seed-1',100.0,10,
-                    '2026-08-01T14:30:00','2026-08-01T14:30:00')
-        """))
+                    :entered, :entered)
+        """), {"entered": entered})
     v2_mocks.get_positions.return_value = [{"ticker": "STALE_US_EQ", "quantity": 10}]
     cfg = _config(_stale_mapping(), mocker=mocker, db_engine=db_engine)
     cfg["trading212_invest"]["stale_price_gate_trading_days"] = 3

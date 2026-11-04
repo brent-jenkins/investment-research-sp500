@@ -29,12 +29,12 @@ toolbarMode = "minimal"
 
 [general]
 # Reserved for future general-level settings. The browser tab title/icon
-# come from st.set_page_config(page_title="SP500Invest", page_icon="Z") in
+# come from st.set_page_config(page_title="SP500Invest", page_icon="📈") in
 # main.py, not from a config.toml key — Streamlit has no [general] title
 # option — so this section is intentionally left empty for now.
 
 [theme]
-# SP500Invest dark navy brand theme — matches example.com and the pitch deck.
+# SP500Invest dark navy theme.
 # This drives the global background, sidebar background, input fields,
 # buttons, and primary accent colour automatically; custom inline HTML
 # elsewhere in main.py (cards, tables, badges) is colour-matched to these

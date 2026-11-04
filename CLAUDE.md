@@ -27,6 +27,28 @@
 > The GitHub Actions deploy workflow was removed in this same commit, since it
 > pointed at a server that no longer exists. It remains in git history.
 >
+> **Superseded (recorded 2026-11-04).** This project was closed after the
+> experiments recorded below, and the research stream continued in
+> [investment-research-cfd](https://github.com/brent-jenkins/investment-research-cfd), a short-horizon CFD trend follower.
+> The resources freed on 2026-08-30 went to that project. It closed on
+> 2026-11-04, also without finding an edge.
+>
+> **Outside accounts closed (recorded 2026-11-04).** On the owner's word, the
+> FRED API key and the Brevo SMTP account have been closed and every cloud VM
+> this project used has been shut down. Nothing here can reach a server, send
+> an email or fetch from FRED with the old credentials.
+>
+> **This is the public copy.** Before publication its history was rewritten
+> with git-filter-repo to remove those two credentials, which had sat in
+> config.yaml in two early commits, together with the SMTP login, a personal
+> address, the server's IP and SSH key filename, the hosting provider's name,
+> local user paths and a former brand name. Placeholders such as example.com
+> and 203.0.113.10 stand in for the originals, so some sentences below read
+> slightly generically. Every commit hash changed; the hashes quoted below were
+> remapped to the rewritten history. A summary for newcomers is in
+> [FINDINGS.md](FINDINGS.md), and a restart guide in
+> [CONTRIBUTING.md](CONTRIBUTING.md).
+>
 > Everything below this line describes the system as it ran, and is preserved
 > unedited as a record of that.
 

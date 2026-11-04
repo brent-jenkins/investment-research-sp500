@@ -2792,7 +2792,7 @@ def _render_backtest_page(config: dict) -> None:
 def main() -> None:
     st.set_page_config(
         page_title="SP500Invest",
-        page_icon="Z",
+        page_icon="📈",
         layout="wide",
         initial_sidebar_state="expanded",
     )
