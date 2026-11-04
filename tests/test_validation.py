@@ -131,7 +131,7 @@ def test_block_passes_no_sp_dd_data_defaults_dd_leg_to_pass():
 # make_blocks boundaries -- pinned exactly, so a future change can't
 # silently shift which real-world dates each block index refers to.
 # Confirmed unchanged (byte-identical, same start/end anchors) since the
-# very first V2 commit (afa7794) that introduced make_blocks() — a boundary
+# very first V2 commit (2fa0ca2) that introduced make_blocks() — a boundary
 # mismatch was explicitly ruled out as the cause of the pass/fail
 # discrepancy reconciled above, this just makes that permanent.
 # ---------------------------------------------------------------------------

@@ -39,7 +39,7 @@ analysis.validation.run_full_validation(config, mark_to_market=True,
 live_universe=True) -- the one engine confirmed to genuinely match live
 execution. Run FRESH here (not reused from the sibling investigations'
 saved JSON) because production code changed since those runs (notably
-d1a067a, "Fix silent BRK.B/BF.B ticker bug and rolling-window start-date
+3496224, "Fix silent BRK.B/BF.B ticker bug and rolling-window start-date
 drift", committed 2026-08-05 19:31, AFTER both sibling investigations'
 runs at 12:xx/14:xx) -- reusing stale trade output would risk silently
 re-testing against a bug that has since been fixed, exactly what CLAUDE.md's

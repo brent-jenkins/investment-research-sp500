@@ -2,7 +2,7 @@
 now-permanent, corrected (realistic intraday-touch STOP_LOSS fill)
 engine. Both prior exports tonight (full_trade_export_2026-08-06,
 full_trade_export_enriched_2026-08-06) were generated BEFORE that fix
-landed (commit 4c8c95d) -- they reflect the old, now-known-overstated
+landed (commit 0abd27c) -- they reflect the old, now-known-overstated
 3,161-trade population, not the corrected, permanent-default 3,436-trade
 one. Same specification, same column set, same methodology as the
 enriched export -- this is a straight re-run, not a redesign.

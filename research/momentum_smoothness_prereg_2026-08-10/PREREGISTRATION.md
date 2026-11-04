@@ -341,7 +341,7 @@ data. Any diff is diagnosed row by row and recorded in the report; an unexplaine
 counts and the `price_data` max date recorded in the report, per the derived-state standing rule (a
 worktree's DB copy is not current merely because some copy somewhere was refreshed).
 
-> **CORRECTION, 2026-08-10, made after commit `68326ac` but before any arm ran.** This section
+> **CORRECTION, 2026-08-10, made after commit `f69e68f` but before any arm ran.** This section
 > originally named `get_research_stock_candidates()` as Pool 2 CLEAN. That is a **different pool** —
 > it returns `get_all_known_stock_tickers() − get_quarantined_tickers()` = **1,017** tickers
 > (including `NEEDS_REVIEW` and never-screened names), whereas the relative-ranking study's "Pool 2

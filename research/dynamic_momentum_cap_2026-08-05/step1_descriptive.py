@@ -25,7 +25,7 @@ mark_to_market=True, live_universe=True)), the same config.yaml, the same
 date window (2007-01-01 to 2026-08-03), and the same code -- confirmed
 directly before use: `git status --short` at the start of this task showed
 no local modifications to any production file relative to the commit that
-produced that trade set (e45e363, the very next commit after the sibling
+produced that trade set (7261e54, the very next commit after the sibling
 run), so re-running would reproduce byte-identical trades at the cost of
 several minutes of runtime for zero new information. The file itself is
 verified below (trade count, exit-reason breakdown) to match the sibling

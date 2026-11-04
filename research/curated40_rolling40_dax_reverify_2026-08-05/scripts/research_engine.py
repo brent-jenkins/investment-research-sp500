@@ -1,5 +1,5 @@
 """Standalone DB shim for the resurrected analysis/market_cap.py (deleted
-from production 2026-08-02, commit 5fceed7 "Remove market_cap.py/ETF-audit
+from production 2026-08-02, commit 0753cc6 "Remove market_cap.py/ETF-audit
 dead code"). Points market_cap_research.py's get_engine()/MarketCapHistory
 at this investigation's OWN isolated working copy of the production DB
 (research/curated40_rolling40_dax_reverify_2026-08-05/work.db), never
@@ -22,7 +22,7 @@ Base = declarative_base()
 
 class MarketCapHistory(Base):
     """Reconstructed schema, matching the deleted production table exactly
-    (see git show b1f2678~1:data/database.py) -- one row per
+    (see git show 140ca37~1:data/database.py) -- one row per
     (ticker, period_end_date), sourced fresh from SEC EDGAR XBRL for this
     investigation."""
 

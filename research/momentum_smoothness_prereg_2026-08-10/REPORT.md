@@ -11,7 +11,7 @@ pools**, by up to 15pp, at a cost in return. That was a one-sided ceiling in the
 not a criterion, and it is reported below as an observation motivating a differently-specified future
 study — explicitly not promoted to a finding this study is entitled to claim.
 
-Pre-registration committed at `68326ac` before any result existed. Engine/verification at `ec07fbe`.
+Pre-registration committed at `f69e68f` before any result existed. Engine/verification at `70a33d0`.
 
 ---
 

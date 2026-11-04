@@ -218,7 +218,7 @@ revisited, this is the better of the two mechanisms tried so far.
 
 ## Universe caveat — effective 501, not 503
 
-Every run above was executed **before** commit `d1a067a` ("Fix silent
+Every run above was executed **before** commit `3496224` ("Fix silent
 BRK.B/BF.B ticker bug…") landed. At the time, `BRK.B` and `BF.B` had no price
 data locally — yfinance needs hyphen notation (`BRK-B`) and the codebase
 passed the dot form straight through — so both were silently absent from the
@@ -232,10 +232,10 @@ reverse. It applies symmetrically to baseline and variant, and the baseline
 still reproduced the published figures exactly (19.29% / -27.56% / 14-16
 blocks), which suggests those published figures were themselves generated
 without these two tickers — production had them frozen at 2026-07-31 per
-`d1a067a`'s own commit message.
+`3496224`'s own commit message.
 
 **Confirmation re-run completed** on the now-complete 503-ticker universe
-(after `d1a067a` was merged and both tickers backfilled — 4,927 rows each,
+(after `3496224` was merged and both tickers backfilled — 4,927 rows each,
 exactly the NYSE session count). Recorded in `results/confirm_503/`:
 
 | 16-block mean | 501: raw | 501: risk-adj | 503: raw | 503: risk-adj |

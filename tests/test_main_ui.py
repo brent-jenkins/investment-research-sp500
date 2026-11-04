@@ -347,7 +347,7 @@ def test_instruments_page_converts_dot_notation_tickers_to_yahoo_hyphen_form(db_
     """BRK.B and BF.B are real S&P 500 dot share-class tickers -- Yahoo
     Finance's own URLs only resolve the hyphen form (BRK-B, BF-B), the
     identical conversion data/ingestion.py:_yf_symbol() already applies to
-    outgoing yfinance calls (see its docstring, and commit d1a067a). This
+    outgoing yfinance calls (see its docstring, and commit 3496224). This
     page's link construction must reuse that same shared function rather
     than assume the raw dot-notation ticker is directly usable in a Yahoo
     Finance URL -- it wasn't, until this test/fix.

@@ -19,7 +19,7 @@ Every real usage of the two rates lives in exactly two places, both currency-con
 
 ## 2. Confirmation the backtest was run fresh, current code
 
-- **Re-run from scratch, not reused from any of tonight's saved trade JSONs** — necessary because `d1a067a` ("Fix silent BRK.B/BF.B ticker bug and rolling-window start-date drift") landed partway through tonight's session, after several earlier investigations' own trade-generation runs.
+- **Re-run from scratch, not reused from any of tonight's saved trade JSONs** — necessary because `3496224` ("Fix silent BRK.B/BF.B ticker bug and rolling-window start-date drift") landed partway through tonight's session, after several earlier investigations' own trade-generation runs.
 - **Engine: `analysis.backtest.simulate_portfolio_compounding_mtm()`**, invoked via `analysis.validation.run_full_validation(CONFIG, start=2007-01-01, end=2026-08-03, mark_to_market=True, live_universe=True)` — unmodified, the real engine, no custom harness, no monkeypatching, no custom candidate pool.
 - **Result, matching tonight's established baseline exactly**: `total_trades=3161`, exit-reason breakdown `MAX_HOLDING=1796 (56.8%)`, `STOP_LOSS=1169`, `SIGNAL_OFF=131`, `CRISIS_EXIT=35`, `END_OF_DATA=30` — identical to the figures independently reproduced by every investigation tonight, and (as established in a companion investigation earlier this session) confirmed unaffected by the BRK.B fix, which changes live daily ingestion behavior, not already-stored historical `price_data`.
 - Reference series confirmed to span the full window: `^GSPC` 2007-01-03→2026-08-03 (4,925 rows), `GBPUSD=X` 2007-01-01→2026-08-03 (5,092 rows), `EURUSD=X` 2007-01-01→2026-08-03 (5,078 rows).

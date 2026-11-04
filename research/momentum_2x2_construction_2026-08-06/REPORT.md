@@ -96,7 +96,7 @@ catch it), and is a real gap worth its own triage. See
 **Preconditions (per task spec, checked before running anything):**
 - Task A's fix (`_find_retroactive_restatement()`) and Task B's corrected
   docstrings are present in the code this study ran against (worktree
-  based on origin/main `59138df`).
+  based on origin/main `4b7e644`).
 - `adj_close` coverage: 0 rows null/non-positive (of 3,331,647), and
   `close != adj_close` on 77.9% of rows — re-derived directly in this
   study, not just cited from the earlier pre-check. The "if equal

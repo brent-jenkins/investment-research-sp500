@@ -33,7 +33,7 @@ total_trades=3161, exit_reason breakdown MAX_HOLDING=1796/STOP_LOSS=1169/
 SIGNAL_OFF=131/CRISIS_EXIT=35/END_OF_DATA=30, matching the exact figures
 FOUR separate investigations tonight (concentration_risk, momentum_horizon,
 dynamic_momentum_cap, stop_cluster_coordination) independently reproduced,
-AND confirmed identical after the d1a067a BRK.B/rolling-window fix landed
+AND confirmed identical after the 3496224 BRK.B/rolling-window fix landed
 (that fix affects live ingestion, not stored historical price_data). Not
 re-run from scratch here since nothing about the engine, config, or
 database changed between that run (earlier tonight, same session) and now.

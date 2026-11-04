@@ -21,7 +21,7 @@ there for my read." Approvals recorded:
 
 Local DB copy refreshed from the just-merged `data-quality` work (`ticker_data_quality` table
 present, 116 CLEAN / 162 QUARANTINED / 130 NEEDS_REVIEW, matching the merged commit exactly).
-Code is current — `data-quality` merged into `main` locally (commit `de7f167`), nothing pushed.
+Code is current — `data-quality` merged into `main` locally (commit `d1f336f`), nothing pushed.
 `database/investment_research.db` confirmed gitignored.
 
 ## 1. Pass/fail criterion — unchanged from house standard, not invented for this study

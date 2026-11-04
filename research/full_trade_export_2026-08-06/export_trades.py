@@ -16,7 +16,7 @@ execution. No custom harness, no monkeypatching, no custom candidate pool.
 
 RE-RUN FRESH, not reused from any of tonight's saved trade JSONs -- this
 needs to reflect the CURRENT implementation specifically, and a real
-production fix (d1a067a, "Fix silent BRK.B/BF.B ticker bug and rolling-
+production fix (3496224, "Fix silent BRK.B/BF.B ticker bug and rolling-
 window start-date drift") landed partway through tonight's session, after
 several earlier investigations' own trade-generation runs.
 
@@ -96,7 +96,7 @@ def main():
     print("=== Full 2007-2026 trade-history CSV export ===", flush=True)
 
     # ------------------------------------------------------------------
-    # 1. Real backtest run -- FRESH, current code (post d1a067a).
+    # 1. Real backtest run -- FRESH, current code (post 3496224).
     # ------------------------------------------------------------------
     print("Running real backtest (simulate_portfolio_compounding_mtm, "
           "live_universe=True, continuous walk 2007-2026)...", flush=True)

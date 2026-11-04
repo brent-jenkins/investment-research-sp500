@@ -191,7 +191,7 @@ the data. Separately, `IAC` exposed a real logic bug: a gracefully-handled yfina
 no raised exception) was scored identically to a real, populated, confirmed-different-identity
 response, auto-quarantining on zero evidence.
 
-**Three fixes shipped** (`data/ingestion.py`, `data/scheduler.py`, commit `0a170ca`, 953 tests
+**Three fixes shipped** (`data/ingestion.py`, `data/scheduler.py`, commit `665bc89`, 953 tests
 passing): (1) `scan_unverified_tickers()` scoped to `analysis.universe.get_all_known_stock_tickers()`
 only. (2) Chunked at 50 tickers/call (~2min at the rate limit), self-resuming with no new progress
 table (a screened ticker drops out of the next call's own unscreened-ticker query). (3) Explicit
